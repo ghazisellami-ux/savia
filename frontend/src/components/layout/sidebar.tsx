@@ -1,0 +1,91 @@
+'use client';
+// ==========================================
+// 📌 Sidebar Navigation — Savia
+// ==========================================
+import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+import { useAuth } from '@/lib/auth-context';
+import {
+  BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
+  Wrench, ClipboardList, CalendarDays, Cog, FileText,
+  ClipboardCheck, ShieldCheck, Settings, Building, LogOut,
+} from 'lucide-react';
+import { clsx } from 'clsx';
+
+const NAV_ITEMS = [
+  { key: 'dashboard', label: 'Dashboard', href: '/dashboard', icon: BarChart3 },
+  { key: 'supervision', label: 'Supervision', href: '/supervision', icon: Monitor },
+  { key: 'equipements', label: 'Équipements', href: '/equipements', icon: Hospital },
+  { key: 'predictions', label: 'Prédictions', href: '/predictions', icon: TrendingUp },
+  { key: 'base_connaissances', label: 'Base de Connaissances', href: '/knowledge', icon: BookOpen },
+  { key: 'sav', label: 'SAV & Interventions', href: '/sav', icon: Wrench },
+  { key: 'demandes', label: "Demandes d'Intervention", href: '/demandes', icon: ClipboardList },
+  { key: 'planning', label: 'Planning', href: '/planning', icon: CalendarDays },
+  { key: 'pieces', label: 'Pièces de Rechange', href: '/pieces', icon: Cog },
+  { key: 'reports', label: 'Rapports', href: '/reports', icon: FileText },
+  { key: 'contrats', label: 'Contrats & SLA', href: '/contrats', icon: ClipboardCheck },
+  { key: 'conformite', label: 'QHSE Conformité', href: '/conformite', icon: ShieldCheck },
+  { key: 'admin', label: 'Administration', href: '/admin', icon: Settings },
+  { key: 'clients_savia', label: 'Clients SAVIA', href: '/clients', icon: Building },
+];
+
+const ROLE_EMOJI: Record<string, string> = {
+  Admin: '👑', Manager: '💼', 'Responsable Technique': '🎯',
+  'Gestionnaire de stock': '📦', Technicien: '🔧', Lecteur: '👁️',
+};
+
+export default function Sidebar() {
+  const pathname = usePathname();
+  const { user, logout } = useAuth();
+
+  if (!user) return null;
+
+  return (
+    <aside className="fixed left-0 top-0 bottom-0 w-64 bg-savia-surface border-r border-savia-border flex flex-col z-40">
+      {/* Logo */}
+      <div className="p-4 text-center border-b border-savia-border">
+        <div className="text-2xl font-black gradient-text tracking-tight">
+          📡 SAVIA
+        </div>
+        <div className="text-xs text-savia-text-dim mt-1">
+          {ROLE_EMOJI[user.role] || '❓'} {user.nom} · {user.role}
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+        {NAV_ITEMS.map((item) => {
+          const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.key}
+              href={item.href}
+              className={clsx(
+                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
+                isActive
+                  ? 'bg-gradient-to-r from-savia-accent/15 to-savia-accent-blue/10 text-savia-accent font-bold'
+                  : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'
+              )}
+            >
+              <Icon className={clsx('w-4 h-4 flex-shrink-0', isActive ? 'text-savia-accent' : '')} />
+              <span className="truncate">{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="p-3 border-t border-savia-border">
+        <button
+          onClick={logout}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-savia-text-muted
+                     hover:text-savia-danger hover:bg-red-500/10 transition-all cursor-pointer"
+        >
+          <LogOut className="w-4 h-4" />
+          Déconnexion
+        </button>
+      </div>
+    </aside>
+  );
+}
