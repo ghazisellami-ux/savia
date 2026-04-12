@@ -1,0 +1,78 @@
+# ============================================
+# Savia — .gitignore (Version Zéro)
+# ============================================
+
+# ---- Sécurité & Configuration locale ----
+.env
+.env.*
+!.env.example
+license.key
+.streamlit/secrets.toml
+
+# ---- Base de données ----
+*.db
+*.db-journal
+*.db-wal
+*.sqlite3
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ---- Environnement virtuel ----
+venv/
+env/
+.venv/
+
+# ---- Logs ----
+logs/
+*.log
+*.elg2
+
+# ---- Backups & données générées ----
+backups/
+backup_complet.json
+data/backup_complet.json
+
+# ---- Rapports générés ----
+reports/*.pdf
+
+# ---- Fichiers binaires / présentations ----
+SIC_Radiologie_Pitch.pptx
+*.zip
+
+# ---- Scripts d'archives (obsolètes) ----
+z_archives_scripts/
+
+# ---- Scripts utilitaires locaux ----
+lancer.bat
+lancer.vbs
+start_hidden.py
+get_chat_id.py
+get_vps_models.py
+list_models.py
+test_gemini.py
+test_global.py
+deploy_key.py
+
+# ---- IDE & Outils ----
+.qodo/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Docker (runtime) ----
+docker-compose.override.yml

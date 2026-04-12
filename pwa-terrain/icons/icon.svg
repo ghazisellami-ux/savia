@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <g transform="translate(256,256)">
+    <!-- Cross -->
+    <rect x="-30" y="-100" width="60" height="200" rx="12" fill="#3b82f6"/>
+    <rect x="-100" y="-30" width="200" height="60" rx="12" fill="#3b82f6"/>
+    <!-- Wrench -->
+    <g transform="rotate(-45)">
+      <rect x="-12" y="-10" width="24" height="130" rx="8" fill="#f1f5f9" opacity="0.9"/>
+      <circle cx="0" cy="-30" r="35" fill="none" stroke="#f1f5f9" stroke-width="14" opacity="0.9"/>
+      <rect x="-18" y="100" width="36" height="30" rx="6" fill="#f1f5f9" opacity="0.9"/>
+    </g>
+  </g>
+</svg>

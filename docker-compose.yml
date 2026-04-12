@@ -1,0 +1,26 @@
+# ==========================================
+# 🐳 Docker Compose — SIC Terrain
+# ==========================================
+# Usage:
+#   docker compose up -d        # Démarrer
+#   docker compose down         # Arrêter
+#   docker compose logs -f      # Voir les logs
+#   docker compose up --build   # Reconstruire après modif
+
+services:
+  sic-terrain:
+    build: .
+    container_name: sic-terrain
+    ports:
+      - "5000:5000"
+    environment:
+      - JWT_SECRET=sic-terrain-docker-secret-2025
+      - PORT=5000
+    volumes:
+      # Persistance de la base SQLite sur le PC
+      - sic-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  sic-data:
+    driver: local

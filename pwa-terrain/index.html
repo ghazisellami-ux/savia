@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <base href="/terrain/">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="SIC Radiologie — Tablette Terrain pour techniciens">
+    <title>SIC Terrain</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+    <link rel="apple-touch-icon" href="icons/icon.svg">
+    <link rel="stylesheet" href="css/app.css">
+    <script src="js/config.js"></script>
+</head>
+
+<body>
+    <!-- Barre de statut réseau -->
+    <div id="offline-banner" class="offline-banner hidden">
+        ⚡ Mode Hors-Ligne — Les données seront synchronisées au retour du réseau
+    </div>
+
+    <!-- Header -->
+    <header id="app-header" class="app-header hidden">
+        <div class="header-left">
+            <span class="header-logo">🔧</span>
+            <span class="header-title">SIC Terrain</span>
+            <span style="font-size:0.6rem; opacity:0.5; margin-left:4px;">v2.2.0</span>
+        </div>
+        <div class="header-right">
+            <button id="btn-notifs" class="btn-icon notif-bell" title="Notifications" style="position:relative;font-size:1.3rem;">
+                🔔
+                <span id="notif-badge" class="notif-badge hidden">0</span>
+            </button>
+            <span id="sync-badge" class="sync-badge hidden" title="Opérations en attente">0</span>
+            <span id="user-name" class="user-name"></span>
+            <button id="btn-logout" class="btn-icon" title="Déconnexion">⏻</button>
+        </div>
+    </header>
+
+    <!-- Contenu principal -->
+    <main id="app-content">
+        <!-- LOGIN -->
+        <section id="page-login" class="page active">
+            <div class="login-container">
+                <div class="login-logo">🔧</div>
+                <h1>SIC Terrain</h1>
+                <p class="login-subtitle">Interface Technicien</p>
+                <form id="login-form" autocomplete="on">
+                    <div class="form-group">
+                        <label for="login-user">Identifiant</label>
+                        <input type="text" id="login-user" name="username" required autocomplete="username"
+                            placeholder="votre identifiant">
+                    </div>
+                    <div class="form-group">
+                        <label for="login-pass">Mot de passe</label>
+                        <input type="password" id="login-pass" name="password" required autocomplete="current-password"
+                            placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-full">
+                        Se Connecter
+                    </button>
+                    <p id="login-error" class="error-msg hidden"></p>
+                </form>
+                <p style="text-align:center; font-size:0.7rem; color:#94a3b8; margin-top:16px;">v2.2.0 — Photo & Validation</p>
+            </div>
+        </section>
+
+        <!-- LISTE INTERVENTIONS -->
+        <section id="page-list" class="page hidden">
+            <div class="page-header">
+                <h2>📋 Mes Interventions</h2>
+                <button id="btn-new-interv" class="btn btn-primary">+ Nouvelle</button>
+            </div>
+            <div class="filter-bar">
+                <select id="filter-statut">
+                    <option value="" selected>Tous les statuts</option>
+                    <option value="En cours">En cours</option>
+                    <option value="En attente de piece">En attente de pièce</option>
+                    <option value="Cloturee">Clôturée</option>
+                </select>
+            </div>
+            <div id="interventions-list" class="card-list">
+                <!-- Filled by JS -->
+            </div>
+        </section>
+
+        <!-- FORMULAIRE INTERVENTION -->
+        <section id="page-form" class="page hidden">
+            <div class="page-header">
+                <button id="btn-back" class="btn btn-ghost">← Retour</button>
+                <h2 id="form-title">Nouvelle Intervention</h2>
+            </div>
+            <form id="intervention-form">
+                <input type="hidden" id="form-id" value="">
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="form-client">🏢 Client</label>
+                        <select id="form-client" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-machine">🏥 Machine</label>
+                        <select id="form-machine" required></select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-technicien">👤 Technicien(s)</label>
+                    <select id="form-technicien" multiple class="select-multiple">
+                        <!-- Options filled by JS -->
+                    </select>
+                    <small style="color:var(--text-muted); font-size:0.75rem;">Maintenez Ctrl (ou tap long sur mobile)
+                        pour sélectionner plusieurs techniciens.</small>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="form-type">Type</label>
+                        <select id="form-type" required>
+                            <option value="Corrective">Corrective</option>
+                            <option value="Préventive">Préventive</option>
+                            <!-- Formation et Installation supprimées -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-statut">Statut</label>
+                        <select id="form-statut">
+                            <option value="En cours">En cours</option>
+                            <option value="En attente de piece">En attente de pièce</option>
+                            <option value="Cloturee">Clôturée</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-description">📝 Description</label>
+                    <textarea id="form-description" rows="3" placeholder="Décrivez le problème..."></textarea>
+                </div>
+
+                <!-- Section diagnostic (visible si Corrective) -->
+                <div id="diagnostic-section">
+                    <h3>🔍 Diagnostic</h3>
+                    <div class="form-group">
+                        <label for="form-probleme">Problème constaté</label>
+                        <textarea id="form-probleme" rows="2" placeholder="Symptômes observés..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-cause">Cause racine</label>
+                        <textarea id="form-cause" rows="2" placeholder="Analyse de la cause..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="form-solution">Solution appliquée</label>
+                        <textarea id="form-solution" rows="2" placeholder="Actions correctives..."></textarea>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="form-duree">⏱ Durée (heures)</label>
+                        <input type="number" id="form-duree" min="0" step="0.5" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="form-deplacement">🚗 Déplacement (heures)</label>
+                        <input type="number" id="form-deplacement" min="0" step="0.5" value="0">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-code-erreur">Code Erreur</label>
+                    <input type="text" id="form-code-erreur" placeholder="Ex: 0x3F, E102...">
+                </div>
+
+                <div class="form-group">
+                    <label for="form-type-erreur">📌 Type d'erreur</label>
+                    <select id="form-type-erreur">
+                        <option value="">— Aucun —</option>
+                        <option value="Hardware">Hardware</option>
+                        <option value="Software">Software</option>
+                        <option value="Réseau">Réseau</option>
+                        <option value="Calibration">Calibration</option>
+                        <option value="Mécanique">Mécanique</option>
+                        <option value="Électrique">Électrique</option>
+                        <option value="Autre">Autre</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-priorite">🚨 Priorité</label>
+                    <select id="form-priorite">
+                        <option value="">— Aucune —</option>
+                        <option value="Haute">Haute</option>
+                        <option value="Moyenne">Moyenne</option>
+                        <option value="Basse">Basse</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-pieces">🔩 Pièces utilisées</label>
+                    <select id="form-pieces" multiple class="select-multiple">
+                        <!-- Options filled by JS -->
+                    </select>
+                    <small style="color:var(--text-muted); font-size:0.75rem;">Maintenez Ctrl (ou tap long sur mobile)
+                        pour sélectionner plusieurs pièces.</small>
+                    <div id="pieces-qty-container" style="margin-top:8px;">
+                        <!-- Quantity inputs generated dynamically by JS -->
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="form-notes">Notes</label>
+                    <textarea id="form-notes" rows="2" placeholder="Observations complémentaires..."></textarea>
+                </div>
+
+                <!-- 📸 Fiche d'intervention signée (obligatoire pour clôture) -->
+                <div id="photo-section" class="form-group" style="display:none;">
+                    <label>📸 Fiche d'intervention signée *</label>
+                    <p style="font-size:0.8rem; color:var(--text-muted); margin:4px 0 8px;">
+                        Prenez en photo la fiche d'intervention avec la signature du client.
+                    </p>
+                    <input type="file" id="form-photo" accept="image/*" capture="environment"
+                           style="display:none;">
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button type="button" id="btn-take-photo" class="btn"
+                                style="background:var(--primary); color:#fff; flex:1; min-width:140px;"
+                                onclick="document.getElementById('form-photo').click()">
+                            📷 Prendre une photo
+                        </button>
+                        <button type="button" id="btn-remove-photo" class="btn"
+                                style="background:#ef4444; color:#fff; display:none;"
+                                onclick="removePhoto()">
+                            🗑️
+                        </button>
+                    </div>
+                    <div id="photo-preview" style="margin-top:10px; display:none;">
+                        <img id="photo-preview-img" src="" alt="Aperçu"
+                             style="max-width:100%; max-height:200px; border-radius:8px;
+                                    border:2px solid var(--primary); object-fit:contain;">
+                        <p id="photo-status" style="color:#22c55e; font-size:0.8rem; margin-top:4px;">
+                            ✅ Photo jointe
+                        </p>
+                    </div>
+                </div>
+
+                <!-- ✅ Validation Client -->
+                <div id="validation-section" class="form-group" style="display:none;">
+                    <label for="form-validation-client">✅ Validation Client</label>
+                    <select id="form-validation-client">
+                        <option value="En attente">⏳ En attente</option>
+                        <option value="Validée">✅ Validée</option>
+                    </select>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary btn-full">
+                        💾 Enregistrer
+                    </button>
+                </div>
+            </form>
+        </section>
+    <!-- NOTIFICATIONS PANEL -->
+        <section id="page-notifs" class="page hidden">
+            <div class="page-header">
+                <h2>🔔 Notifications</h2>
+            </div>
+            <div id="notifs-list" class="card-list">
+                <!-- Filled by JS -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Bottom Nav -->
+    <nav id="bottom-nav" class="bottom-nav hidden">
+        <button class="nav-item active" data-page="list">
+            <span class="nav-icon">📝</span>
+            <span class="nav-label">Interventions</span>
+        </button>
+        <button class="nav-item" data-page="notifs" id="nav-notifs">
+            <span class="nav-icon" style="position:relative;">🔔<span id="nav-notif-badge" class="notif-badge-nav hidden">0</span></span>
+            <span class="nav-label">Alertes</span>
+        </button>
+        <button class="nav-item" data-page="form" id="nav-new">
+            <span class="nav-icon">➕</span>
+            <span class="nav-label">Nouvelle</span>
+        </button>
+    </nav>
+
+    <!-- Scripts -->
+    <script src="js/db.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/sync.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/app.js?v=20260403"></script>
+</body>
+
+</html>

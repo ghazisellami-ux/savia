@@ -1,0 +1,51 @@
+# ============================================
+# Savia — .dockerignore
+# ============================================
+
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.qodo/
+.vscode/
+.idea/
+.devcontainer/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+
+# Database & Data
+*.db
+*.db-journal
+*.db-wal
+backup_complet.json
+data/backup_complet.json
+backups/
+
+# Logs & Reports
+logs/
+reports/*.pdf
+
+# Archives & Local scripts
+z_archives_scripts/
+lancer.bat
+lancer.vbs
+start_hidden.py
+SIC_Radiologie_Pitch.pptx
+*.zip
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore

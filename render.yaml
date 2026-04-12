@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sic-terrain
+    runtime: python
+    buildCommand: pip install -r requirements-pwa.txt
+    startCommand: gunicorn api_server:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: DATABASE_URL
+        sync: false  # À configurer manuellement dans le dashboard Render
