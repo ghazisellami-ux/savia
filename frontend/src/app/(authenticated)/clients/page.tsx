@@ -1,18 +1,50 @@
 'use client';
 import { SectionCard } from '@/components/ui/cards';
-import { Search, Building2, Users, Wrench } from 'lucide-react';
-import { useState } from 'react';
+import { Search, Building2, Users, Wrench, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { clients as clientsApi } from '@/lib/api';
 
-const DEMO_CLIENTS = [
-  { nom: 'Clinique El Manar', ville: 'Tunis', contact: 'Dr. Ben Ali', tel: '+216 71 888 000', machines: 3, contrat: 'Full Omnium', interventions: 15, healthMoyen: 75 },
-  { nom: 'Hôpital Charles Nicolle', ville: 'Tunis', contact: 'Dr. Mansouri', tel: '+216 71 578 000', machines: 4, contrat: 'Pièces & MO', interventions: 22, healthMoyen: 82 },
-  { nom: 'Centre Imagerie Lac', ville: 'Les Berges du Lac', contact: 'M. Bouazizi', tel: '+216 71 960 000', machines: 2, contrat: 'Maint. Préventive', interventions: 8, healthMoyen: 91 },
-  { nom: 'Polyclinique Ennasr', ville: 'Ariana', contact: 'Mme Gharbi', tel: '+216 71 750 000', machines: 1, contrat: 'Full Omnium', interventions: 4, healthMoyen: 98 },
-];
+interface Client {
+  nom: string; ville: string; contact: string; tel: string; machines: number; contrat: string; interventions: number; healthMoyen: number;
+}
 
 export default function ClientsPage() {
   const [search, setSearch] = useState('');
-  const filtered = DEMO_CLIENTS.filter(c => !search || c.nom.toLowerCase().includes(search.toLowerCase()));
+  const [data, setData] = useState<Client[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await clientsApi.list();
+        const mapped = res.map((item: any) => ({
+          nom: item.Nom || item.nom || '',
+          ville: item.Ville || item.ville || 'Tunis',
+          contact: item.Contact || item.contact || 'N/A',
+          tel: item.Telephone || item.tel || '',
+          machines: item.nb_machines || item.machines || 0,
+          contrat: item.Type_Contrat || item.contrat || 'Standard',
+          interventions: item.nb_interventions || item.interventions || 0,
+          healthMoyen: item.health_moyen || item.healthMoyen || 80,
+        }));
+        setData(mapped);
+      } catch (err) {
+        console.error("Failed to fetch clients", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  const filtered = data.filter(c => !search || c.nom.toLowerCase().includes(search.toLowerCase()));
+  const totalMachines = data.reduce((a, c) => a + c.machines, 0);
+  const totalInterv = data.reduce((a, c) => a + c.interventions, 0);
+  const avgHealth = data.length > 0 ? Math.round(data.reduce((a, c) => a + c.healthMoyen, 0) / data.length) : 0;
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -22,10 +54,10 @@ export default function ClientsPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{DEMO_CLIENTS.length}</div><div className="text-xs text-savia-text-muted mt-1">Clients actifs</div></div>
-        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-blue-400">{DEMO_CLIENTS.reduce((a, c) => a + c.machines, 0)}</div><div className="text-xs text-savia-text-muted mt-1">Machines gérées</div></div>
-        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{DEMO_CLIENTS.reduce((a, c) => a + c.interventions, 0)}</div><div className="text-xs text-savia-text-muted mt-1">Interventions totales</div></div>
-        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{Math.round(DEMO_CLIENTS.reduce((a, c) => a + c.healthMoyen, 0) / DEMO_CLIENTS.length)}%</div><div className="text-xs text-savia-text-muted mt-1">Santé moyenne</div></div>
+        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{data.length}</div><div className="text-xs text-savia-text-muted mt-1">Clients actifs</div></div>
+        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-blue-400">{totalMachines}</div><div className="text-xs text-savia-text-muted mt-1">Machines gérées</div></div>
+        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{totalInterv}</div><div className="text-xs text-savia-text-muted mt-1">Interventions totales</div></div>
+        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{avgHealth}%</div><div className="text-xs text-savia-text-muted mt-1">Santé moyenne</div></div>
       </div>
 
       <div className="relative">
@@ -62,3 +94,4 @@ export default function ClientsPage() {
     </div>
   );
 }
+

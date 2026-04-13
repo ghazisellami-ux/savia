@@ -26,7 +26,7 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     ...options.headers,
   };
   
-  if (token) {
+  if (token && token !== 'undefined' && token !== 'null') {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -82,16 +82,25 @@ export const interventions = {
 // --- Équipements ---
 export const equipements = {
   list: () => request<Array<Record<string, unknown>>>('/api/equipements'),
+  create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/equipements', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'PUT', body: data }),
+  delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
 };
 
 // --- Techniciens ---
 export const techniciens = {
   list: () => request<Array<Record<string, unknown>>>('/api/techniciens'),
+  create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/techniciens', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/techniciens/${id}`, { method: 'PUT', body: data }),
+  delete: (id: number) => request<{ok: boolean}>(`/api/techniciens/${id}`, { method: 'DELETE' }),
 };
 
 // --- Pièces ---
 export const pieces = {
   list: () => request<Array<Record<string, unknown>>>('/api/pieces'),
+  create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/pieces', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'PUT', body: data }),
+  delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
 };
 
 // --- Demandes ---
@@ -102,5 +111,44 @@ export const demandes = {
   },
 };
 
+// --- Autres modules ---
+export const contrats = {
+  list: (client?: string) => {
+    const qs = client ? `?client=${client}` : '';
+    return request<Array<Record<string, unknown>>>(`/api/contrats${qs}`);
+  },
+};
+
+export const conformite = {
+  list: (client?: string) => {
+    const qs = client ? `?client=${client}` : '';
+    return request<Array<Record<string, unknown>>>(`/api/conformite${qs}`);
+  },
+};
+
+export const planning = {
+  list: (params?: { machine?: string; statut?: string }) => {
+    const qs = new URLSearchParams(params as Record<string, string>).toString();
+    return request<Array<Record<string, unknown>>>(`/api/planning?${qs}`);
+  },
+};
+export const knowledge = {
+  list: () => request<Array<Record<string, unknown>>>('/api/knowledge'),
+};
+
+export const clients = {
+  list: () => request<Array<Record<string, unknown>>>('/api/clients'),
+};
+
+export const admin = {
+  users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
+};
+
+// --- AI Engine ---
+export const ai = {
+  analyzePerformance: (kpis: Record<string, unknown>, sym: string = "EUR") => 
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
+};
+
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes };
+export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai };

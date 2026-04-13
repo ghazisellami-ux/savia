@@ -1,21 +1,61 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SectionCard } from '@/components/ui/cards';
-import { Plus, Search, FileText, AlertTriangle } from 'lucide-react';
+import { Plus, Search, FileText, AlertTriangle, Loader2 } from 'lucide-react';
+import { contrats } from '@/lib/api';
 
-const DEMO_CONTRATS = [
-  { id: 'CTR-001', client: 'Clinique El Manar', type: 'Full Omnium', debut: '2024-01-01', fin: '2025-12-31', machines: 3, montant: 45000, statut: 'Actif' },
-  { id: 'CTR-002', client: 'Hôpital Charles Nicolle', type: 'Pièces & MO', debut: '2024-06-01', fin: '2025-05-31', machines: 4, montant: 78000, statut: 'Actif' },
-  { id: 'CTR-003', client: 'Centre Imagerie Lac', type: 'Maintenance Préventive', debut: '2024-03-15', fin: '2025-03-14', machines: 2, montant: 18000, statut: 'Expiration proche' },
-  { id: 'CTR-004', client: 'Polyclinique Ennasr', type: 'Full Omnium', debut: '2023-09-01', fin: '2025-08-31', machines: 1, montant: 12000, statut: 'Actif' },
-  { id: 'CTR-005', client: 'Clinique Les Oliviers', type: 'Pièces uniquement', debut: '2023-01-01', fin: '2024-12-31', machines: 2, montant: 8500, statut: 'Expiré' },
-];
+interface Contrat {
+  id: string;
+  client: string;
+  type: string;
+  debut: string;
+  fin: string;
+  machines: number;
+  montant: number;
+  statut: string;
+}
 
 export default function ContratsPage() {
   const [search, setSearch] = useState('');
-  const filtered = DEMO_CONTRATS.filter(c => !search || c.client.toLowerCase().includes(search.toLowerCase()) || c.id.toLowerCase().includes(search.toLowerCase()));
-  const actifs = DEMO_CONTRATS.filter(c => c.statut === 'Actif').length;
-  const totalRevenu = DEMO_CONTRATS.reduce((a, b) => a + b.montant, 0);
+  const [data, setData] = useState<Contrat[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await contrats.list();
+        const mapped = res.map((item: any) => ({
+          id: String(item.id || item.Ref_Contrat || ''),
+          client: item.Client || '',
+          type: item.Type_Contrat || 'Standard',
+          debut: item.Date_Debut ? item.Date_Debut.substring(0, 10) : 'N/A',
+          fin: item.Date_Fin ? item.Date_Fin.substring(0, 10) : 'N/A',
+          machines: item.nb_machines || item.equipement || 1, // Fallback if nb_machines is missing
+          montant: item.Montant_Annuel || item.montant || 0,
+          statut: item.Statut || 'Actif',
+        }));
+        setData(mapped);
+      } catch (err) {
+        console.error("Failed to fetch contrats", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  const filtered = data.filter(c => !search || c.client.toLowerCase().includes(search.toLowerCase()) || c.id.toLowerCase().includes(search.toLowerCase()));
+  const actifs = data.filter(c => c.statut === 'Actif' || c.statut.toLowerCase().includes('actif')).length;
+  const expirations = data.filter(c => c.statut.toLowerCase().includes('expiration') || c.statut.toLowerCase().includes('proche')).length;
+  const totalRevenu = data.reduce((a, b) => a + b.montant, 0);
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -31,9 +71,9 @@ export default function ContratsPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Total contrats', value: DEMO_CONTRATS.length, color: 'text-savia-accent' },
+          { label: 'Total contrats', value: data.length, color: 'text-savia-accent' },
           { label: 'Actifs', value: actifs, color: 'text-green-400' },
-          { label: 'Expirations proches', value: DEMO_CONTRATS.filter(c => c.statut === 'Expiration proche').length, color: 'text-yellow-400' },
+          { label: 'Expirations proches', value: expirations, color: 'text-yellow-400' },
           { label: 'Revenu annuel', value: `${(totalRevenu/1000).toFixed(0)}K€`, color: 'text-savia-accent' },
         ].map(k => (
           <div key={k.label} className="glass rounded-xl p-4 text-center">
@@ -60,7 +100,7 @@ export default function ContratsPage() {
                 </div>
                 <p className="text-sm text-savia-text-muted mt-1">{c.type} — {c.machines} machine(s)</p>
               </div>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${c.statut === 'Actif' ? 'bg-green-500/10 text-green-400' : c.statut === 'Expiration proche' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-red-500/10 text-red-400'}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${c.statut.toLowerCase().includes('actif') ? 'bg-green-500/10 text-green-400' : c.statut.toLowerCase().includes('proche') ? 'bg-yellow-500/10 text-yellow-400' : 'bg-red-500/10 text-red-400'}`}>
                 {c.statut}
               </span>
             </div>

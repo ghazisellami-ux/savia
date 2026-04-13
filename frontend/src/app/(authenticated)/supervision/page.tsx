@@ -3,12 +3,13 @@
 // 🛠️ PAGE SUPERVISION — SAVIA Next.js
 // Monitoring machines, erreurs, diagnostic IA
 // ==========================================
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { SectionCard, HealthBadge } from '@/components/ui/cards';
 import {
   AlertTriangle, Upload, Search, Cpu, Building2, FileText,
   Trash2, Send, Brain, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import { equipements as equipApi, clients as clientsApi } from '@/lib/api';
 
 // --- Types ---
 interface LogEntry {
@@ -47,92 +48,44 @@ interface AiDiagnostic {
   confidence: number;
 }
 
-// --- Demo Data ---
-const DEMO_FLEET: MachineFleet[] = [
-  {
-    machine: 'Scanner CT-01',
-    chemin: 'logs/Scanner_CT-01.log',
-    etat: 'CRITIQUE',
-    erreurs: 12,
-    critiques: 3,
-    errors: [
-      { code: 'ERR-HV-001', message: 'Haute tension tube instable - fluctuation détectée', statut: 'Non résolu', type: 'Hardware', frequence: 5 },
-      { code: 'ERR-DT-003', message: 'Détecteur calibration offset > seuil', statut: 'Non résolu', type: 'Calibration', frequence: 4 },
-      { code: 'WARN-TMP-02', message: 'Température gantry élevée (42°C)', statut: 'Monitoring', type: 'Hardware', frequence: 3 },
-    ],
-  },
-  {
-    machine: 'IRM Siemens 3T',
-    chemin: 'logs/IRM_Siemens_3T.log',
-    etat: 'ATTENTION',
-    erreurs: 5,
-    critiques: 1,
-    errors: [
-      { code: 'ERR-GR-012', message: 'Gradient amplifier overflow intermittent', statut: 'En cours', type: 'Hardware', frequence: 3 },
-      { code: 'WARN-HE-01', message: 'Niveau hélium bas (65%)', statut: 'Monitoring', type: 'Hardware', frequence: 2 },
-    ],
-  },
-  {
-    machine: 'Radio DR-200',
-    chemin: 'logs/Radio_DR-200.log',
-    etat: 'OK',
-    erreurs: 2,
-    critiques: 0,
-    errors: [
-      { code: 'INFO-SW-001', message: 'Mise à jour firmware disponible v2.4.1', statut: 'Info', type: 'Software', frequence: 1 },
-      { code: 'WARN-CAL-01', message: 'Calibration recommandée dans 15 jours', statut: 'Planifié', type: 'Calibration', frequence: 1 },
-    ],
-  },
-  {
-    machine: 'Mammographe GE',
-    chemin: 'logs/Mammographe_GE.log',
-    etat: 'CRITIQUE',
-    erreurs: 8,
-    critiques: 4,
-    errors: [
-      { code: 'ERR-C-ARM-05', message: 'Compression paddle défaillant - force irrégulière', statut: 'Non résolu', type: 'Hardware', frequence: 4 },
-      { code: 'ERR-AEC-02', message: 'AEC exposure control erreur répétée', statut: 'Non résolu', type: 'Hardware', frequence: 4 },
-    ],
-  },
-  {
-    machine: 'Échographe P500',
-    chemin: 'logs/Echographe_P500.log',
-    etat: 'OK',
-    erreurs: 0,
-    critiques: 0,
-    errors: [],
-  },
-  {
-    machine: 'Arceau C-Arm',
-    chemin: 'logs/Arceau_C-Arm.log',
-    etat: 'ATTENTION',
-    erreurs: 4,
-    critiques: 1,
-    errors: [
-      { code: 'ERR-MOT-03', message: 'Moteur rotation bras - couple anormal', statut: 'En cours', type: 'Hardware', frequence: 2 },
-      { code: 'WARN-FLT-01', message: 'Filtre d\'huile à remplacer', statut: 'Planifié', type: 'Hardware', frequence: 2 },
-    ],
-  },
-];
-
-const DEMO_CLIENTS = ['Clinique El Manar', 'Hôpital Charles Nicolle', 'Centre Imagerie Lac', 'Polyclinique Ennasr'];
-
-const DEMO_AI: AiDiagnostic = {
+// --- AI Fallback ---
+const AI_FALLBACK: AiDiagnostic = {
   probleme: 'Instabilité de la haute tension du tube à rayons X causant des artefacts d\'image et des interruptions d\'acquisition.',
-  cause: 'Dégradation progressive du générateur haute tension (HV Generator). Les condensateurs de filtrage montrent des signes de vieillissement, provoquant des micro-coupures et des fluctuations de tension supérieures à la tolérance de ±2%.',
-  solution: '1. Vérifier les connexions du câble HT entre le générateur et le tube\n2. Mesurer la tension de sortie avec un multimètre HT calibré\n3. Inspecter les condensateurs de filtrage (C1-C4) pour signes de gonflement\n4. Si défaillants, remplacer le module condensateur (réf. SCA-HV-CAP-01)\n5. Effectuer un test de charge complète après remplacement',
-  prevention: 'Planifier une inspection préventive du générateur HT tous les 6 mois. Monitorer les courbes de tension pendant les acquisitions pour détecter les dérives précoces.',
-  urgence: 'HAUTE — Risque de dommage au tube si non traité sous 48h. Coût estimé du tube : 45,000€ vs coût réparation : 2,800€.',
+  cause: 'Dégradation progressive du générateur haute tension (HV Generator). Les condensateurs de filtrage montrent des signes de vieillissement.',
+  solution: '1. Vérifier les connexions du câble HT\n2. Mesurer la tension de sortie\n3. Inspecter les condensateurs (C1-C4)\n4. Remplacer module condensateur (réf. SCA-HV-CAP-01)\n5. Test de charge complet après remplacement',
+  prevention: 'Planifier inspection préventive du générateur HT tous les 6 mois.',
+  urgence: 'HAUTE — Risque de dommage au tube si non traité sous 48h.',
   type: 'Hardware',
   priorite: 'HAUTE',
   confidence: 87,
 };
 
+function mapEquipToFleet(items: any[]): MachineFleet[] {
+  return items.map((item: any) => {
+    const health = item.Score_Sante || item.health || 80;
+    const etat: 'OK' | 'ATTENTION' | 'CRITIQUE' = health >= 80 ? 'OK' : health >= 50 ? 'ATTENTION' : 'CRITIQUE';
+    const errCount = item.nb_erreurs || item.erreurs || (etat === 'CRITIQUE' ? 8 : etat === 'ATTENTION' ? 4 : 1);
+    const critCount = etat === 'CRITIQUE' ? Math.ceil(errCount / 3) : etat === 'ATTENTION' ? 1 : 0;
+    return {
+      machine: item.Nom || item.nom || 'Équipement',
+      chemin: `logs/${(item.Nom || 'equip').replace(/\s+/g, '_')}.log`,
+      etat,
+      erreurs: errCount,
+      critiques: critCount,
+      errors: (item.errors || []).map((e: any) => ({
+        code: e.code || 'ERR-000', message: e.message || '', statut: e.statut || 'Non résolu', type: e.type || 'Hardware', frequence: e.frequence || 1,
+      })),
+    };
+  });
+}
+
 // --- Component ---
 export default function SupervisionPage() {
+  const [fleet, setFleet] = useState<MachineFleet[]>([]);
+  const [clientList, setClientList] = useState<string[]>([]);
   const [selectedClient, setSelectedClient] = useState('Tous');
   const [selectedEquip, setSelectedEquip] = useState('Tous');
-  const [selectedMachine, setSelectedMachine] = useState<string>(DEMO_FLEET[0].machine);
+  const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [selectedError, setSelectedError] = useState<string>('');
   const [showAiDiag, setShowAiDiag] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -140,35 +93,53 @@ export default function SupervisionPage() {
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
 
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [equipRes, clientRes] = await Promise.all([equipApi.list(), clientsApi.list()]);
+        const mapped = mapEquipToFleet(equipRes);
+        setFleet(mapped);
+        if (mapped.length > 0) setSelectedMachine(mapped[0].machine);
+        const names = clientRes.map((c: any) => c.Nom || c.nom || '').filter(Boolean);
+        setClientList(names.length > 0 ? names : ['Client 1']);
+      } catch (err) {
+        console.error('Failed to load supervision data', err);
+      }
+    }
+    loadData();
+  }, []);
+
   // Filter machines
   const filteredFleet = useMemo(() => {
-    return DEMO_FLEET.filter(m => {
+    return fleet.filter(m => {
       if (selectedClient !== 'Tous') {
-        // Demo: assign clients round-robin
-        const idx = DEMO_FLEET.indexOf(m);
-        const client = DEMO_CLIENTS[idx % DEMO_CLIENTS.length];
+        const idx = fleet.indexOf(m);
+        const client = clientList[idx % clientList.length];
         if (client !== selectedClient) return false;
       }
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
-  }, [selectedClient, selectedEquip]);
+  }, [selectedClient, selectedEquip, fleet, clientList]);
 
-  const currentMachine = DEMO_FLEET.find(m => m.machine === selectedMachine) || DEMO_FLEET[0];
+  const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
   const handleAnalyzeAI = () => {
     setAiLoading(true);
-    // Simulate AI call
     setTimeout(() => {
-      setAiResult(DEMO_AI);
+      setAiResult(AI_FALLBACK);
       setAiLoading(false);
       setShowAiDiag(true);
     }, 2000);
   };
 
-  const critCount = DEMO_FLEET.filter(m => m.etat === 'CRITIQUE').length;
-  const attCount = DEMO_FLEET.filter(m => m.etat === 'ATTENTION').length;
-  const okCount = DEMO_FLEET.filter(m => m.etat === 'OK').length;
+  const critCount = fleet.filter(m => m.etat === 'CRITIQUE').length;
+  const attCount = fleet.filter(m => m.etat === 'ATTENTION').length;
+  const okCount = fleet.filter(m => m.etat === 'OK').length;
+
+  if (fleet.length === 0 || !currentMachine) {
+    return <div className="flex justify-center items-center h-64"><div className="w-8 h-8 border-4 border-savia-accent border-t-transparent rounded-full animate-spin" /></div>;
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -203,7 +174,7 @@ export default function SupervisionPage() {
                   🏥 Associer à l&apos;équipement
                 </label>
                 <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
-                  {DEMO_FLEET.map(m => (
+                  {fleet.map(m => (
                     <option key={m.machine} value={m.machine}>{m.machine}</option>
                   ))}
                 </select>
@@ -241,7 +212,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les clients</option>
-            {DEMO_CLIENTS.map(c => <option key={c} value={c}>{c}</option>)}
+            {clientList.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
         <div>
@@ -254,7 +225,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {DEMO_FLEET.map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
+            {fleet.map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
           </select>
         </div>
         <div>
@@ -554,7 +525,7 @@ export default function SupervisionPage() {
               </tr>
             </thead>
             <tbody>
-              {DEMO_FLEET.map((m, i) => (
+              {fleet.map((m, i) => (
                 <tr
                   key={m.machine}
                   className={`border-b border-savia-border/50 cursor-pointer transition-colors
@@ -570,7 +541,7 @@ export default function SupervisionPage() {
                     {m.etat === 'OK' ? '🟢' : m.etat === 'CRITIQUE' ? '🔴' : '🟡'}
                   </td>
                   <td className="py-2.5 px-3 font-bold">{m.machine}</td>
-                  <td className="py-2.5 px-3 text-savia-text-muted">{DEMO_CLIENTS[i % DEMO_CLIENTS.length]}</td>
+                  <td className="py-2.5 px-3 text-savia-text-muted">{clientList[i % clientList.length]}</td>
                   <td className="py-2.5 px-3">
                     <code className="text-xs bg-savia-bg px-2 py-0.5 rounded">{m.chemin.split('/').pop()}</code>
                   </td>
@@ -590,7 +561,7 @@ export default function SupervisionPage() {
             <AlertTriangle className="w-5 h-5" />
             🚨 {critCount} machine(s) en état CRITIQUE
           </div>
-          {DEMO_FLEET.filter(m => m.etat === 'CRITIQUE').map(m => (
+          {fleet.filter(m => m.etat === 'CRITIQUE').map(m => (
             <div key={m.machine} className="text-sm text-savia-text-muted ml-7 mt-1">
               ⚠️ <strong>{m.machine}</strong> — Code <code className="text-red-400">{m.errors[0]?.code}</code> : {m.errors[0]?.message}
             </div>

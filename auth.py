@@ -7,7 +7,10 @@ Rôles : Admin, Manager, Responsable Technique, Gestionnaire de stock, Technicie
 """
 import bcrypt
 import logging
-import streamlit as st
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 from db_engine import get_db, log_audit
 
 logger = logging.getLogger("auth")
@@ -116,7 +119,7 @@ def authentifier_par_username(username: str):
 
 def deconnecter():
     """Déconnecte l'utilisateur actuel."""
-    if "user" in st.session_state:
+    if st and hasattr(st, "session_state") and "user" in st.session_state:
         username = st.session_state["user"].get("username", "?")
         log_audit(username, "LOGOUT", "Déconnexion")
         del st.session_state["user"]
@@ -124,7 +127,9 @@ def deconnecter():
 
 def get_current_user():
     """Retourne l'utilisateur connecté ou None."""
-    return st.session_state.get("user")
+    if st and hasattr(st, "session_state"):
+        return st.session_state.get("user")
+    return None
 
 
 def require_role(*roles):

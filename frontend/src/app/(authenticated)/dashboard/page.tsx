@@ -2,7 +2,7 @@
 // ==========================================
 // 📊 Dashboard Page — SAVIA
 // ==========================================
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
@@ -10,6 +10,8 @@ import {
   PieChart, Pie, Cell, RadialBarChart, RadialBar, Legend,
   AreaChart, Area,
 } from 'recharts';
+import { dashboard, interventions as interventionsApi } from '@/lib/api';
+import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock } from 'lucide-react';
 
 // --- Types ---
 interface KpiData {
@@ -28,28 +30,6 @@ interface HealthScore {
   tendance: string;
   pannes: number;
 }
-
-// --- Demo data (till backend API is ready) ---
-const DEMO_KPIS: KpiData = {
-  nb_equipements: 12,
-  nb_critiques: 2,
-  disponibilite: 96.8,
-  mtbf: 720,
-  mttr: 2.4,
-  cout_total: 15400,
-  nb_interventions: 34,
-};
-
-const DEMO_HEALTH: HealthScore[] = [
-  { machine: 'Scanner CT-01', score: 92, tendance: 'stable', pannes: 1 },
-  { machine: 'IRM Siemens 3T', score: 78, tendance: 'baisse', pannes: 3 },
-  { machine: 'Radio DR-200', score: 88, tendance: 'hausse', pannes: 2 },
-  { machine: 'Mammographe GE', score: 45, tendance: 'baisse', pannes: 5 },
-  { machine: 'Échographe P500', score: 95, tendance: 'stable', pannes: 0 },
-  { machine: 'Arceau C-Arm', score: 62, tendance: 'stable', pannes: 4 },
-  { machine: 'Table Télécommandée', score: 25, tendance: 'baisse', pannes: 8 },
-  { machine: 'Panoramique OPG', score: 85, tendance: 'hausse', pannes: 1 },
-];
 
 const DEMO_MONTHLY = [
   { mois: 'Jan', corrective: 5, preventive: 3 },
@@ -79,11 +59,33 @@ const CHART_STYLE = {
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [kpis] = useState<KpiData>(DEMO_KPIS);
-  const [healthScores] = useState<HealthScore[]>(DEMO_HEALTH);
-  const [mounted, setMounted] = useState(false);
+  const [kpis, setKpis] = useState<KpiData>({
+    nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0
+  });
+  const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
+  const [recentInterv, setRecentInterv] = useState<any[]>([]);
+  const [showAnomalies, setShowAnomalies] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [kpiData, healthData, intervData] = await Promise.all([
+          dashboard.kpis(),
+          dashboard.healthScores(),
+          interventionsApi.list(),
+        ]);
+        setKpis(kpiData as any);
+        setHealthScores(healthData);
+        setRecentInterv((intervData || []).sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10));
+      } catch (err) {
+        console.error("Failed to load dashboard data", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
 
   // Computed values
   const scoreGlobal = useMemo(() => {
@@ -102,7 +104,13 @@ export default function DashboardPage() {
   // Gauge data for RadialBarChart
   const gaugeData = [{ name: 'Santé', value: scoreGlobal, fill: scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444' }];
 
-  if (!mounted) return null;
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -157,11 +165,70 @@ export default function DashboardPage() {
               🥇 Niveau : Pro
             </div>
             <div className="text-savia-text-dim text-xs mt-1">
-              📊 Record mensuel : {kpis.nb_interventions} | 🔥 Performance exceptionnelle !
+              📊 Total réalisé: {kpis.nb_interventions} | 🔥 Belle performance !
             </div>
           </div>
         </SectionCard>
       </div>
+
+      {/* 🚨 Anomalies Detected */}
+      {healthScores.filter(h => h.score < 40).length > 0 && (
+        <div className="bg-red-500/5 border border-red-500/20 rounded-xl overflow-hidden">
+          <button onClick={() => setShowAnomalies(!showAnomalies)} className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-red-500/5 transition-colors">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-400" />
+              <span className="font-bold text-red-400">🚨 {healthScores.filter(h => h.score < 40).length} anomalie(s) détectée(s)</span>
+            </div>
+            {showAnomalies ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+          </button>
+          {showAnomalies && (
+            <div className="px-4 pb-4 space-y-2">
+              {healthScores.filter(h => h.score < 40).map(h => (
+                <div key={h.machine} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
+                  <div>
+                    <span className="font-bold text-sm">{h.machine}</span>
+                    <span className="text-xs text-slate-400 ml-2">Score: {h.score}% — {h.pannes} pannes</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-500/20 text-red-400">
+                    {h.score < 15 ? '🔴 Critique' : '🟠 Dégradé'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 📅 Timeline des Interventions Récentes */}
+      <SectionCard title="📅 Timeline des Interventions Récentes">
+        {recentInterv.length === 0 ? (
+          <div className="text-center text-slate-400 py-4">Aucune intervention récente</div>
+        ) : (
+          <div className="relative pl-6">
+            <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-gradient-to-b from-savia-accent via-blue-500 to-purple-500" />
+            {recentInterv.map((interv: any, i: number) => {
+              const isCompleted = (interv.statut || '').toLowerCase().includes('tur');
+              return (
+                <div key={interv.id || i} className="relative mb-4 ml-4">
+                  <div className={`absolute -left-[22px] top-1 w-3 h-3 rounded-full border-2 ${isCompleted ? 'bg-green-400 border-green-300' : 'bg-yellow-400 border-yellow-300'}`} />
+                  <div className="glass rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-sm">{interv.machine}</span>
+                      <span className="text-xs text-slate-400">{(interv.date || '').substring(0, 10)}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${(interv.type_intervention || '').toLowerCase().includes('correct') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>{interv.type_intervention}</span>
+                      <span className="text-xs text-slate-400">👤 {interv.technicien || 'N/A'}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isCompleted ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>{interv.statut}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
+
 
       {/* Health Animation Banner */}
       <div className="glass rounded-xl p-4 flex items-center gap-5">

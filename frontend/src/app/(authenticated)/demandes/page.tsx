@@ -1,22 +1,62 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SectionCard } from '@/components/ui/cards';
-import { Plus, Search, Clock, CheckCircle, AlertTriangle, Send } from 'lucide-react';
+import { Plus, Search, Clock, CheckCircle, AlertTriangle, Send, Loader2 } from 'lucide-react';
+import { demandes } from '@/lib/api';
 
-const DEMO_DEMANDES = [
-  { id: 'DEM-001', date: '2025-03-18', machine: 'Scanner CT-01', client: 'Clinique El Manar', demandeur: 'Dr. Ben Ali', urgence: 'Haute', statut: 'En attente', description: 'Tube RX instable — acquisitions interrompues' },
-  { id: 'DEM-002', date: '2025-03-17', machine: 'Mammographe GE', client: 'Clinique El Manar', demandeur: 'Mme Trabelsi', urgence: 'Haute', statut: 'Assignée', description: 'Paddle compression ne maintient pas la pression' },
-  { id: 'DEM-003', date: '2025-03-16', machine: 'IRM Siemens 3T', client: 'Hôpital Charles Nicolle', demandeur: 'Dr. Khelifi', urgence: 'Moyenne', statut: 'En cours', description: 'Niveau hélium en baisse continue' },
-  { id: 'DEM-004', date: '2025-03-15', machine: 'Arceau C-Arm', client: 'Hôpital Charles Nicolle', demandeur: 'Dr. Mansouri', urgence: 'Basse', statut: 'Résolue', description: 'Bruit anormal moteur rotation' },
-  { id: 'DEM-005', date: '2025-03-14', machine: 'Radio DR-200', client: 'Centre Imagerie Lac', demandeur: 'M. Bouazizi', urgence: 'Basse', statut: 'Résolue', description: 'Demande mise à jour firmware' },
-];
+interface Demande {
+  id: string;
+  date: string;
+  machine: string;
+  client: string;
+  demandeur: string;
+  urgence: string;
+  statut: string;
+  description: string;
+}
 
 export default function DemandesPage() {
   const [search, setSearch] = useState('');
-  const enAttente = DEMO_DEMANDES.filter(d => d.statut === 'En attente').length;
-  const enCours = DEMO_DEMANDES.filter(d => d.statut === 'En cours' || d.statut === 'Assignée').length;
+  const [data, setData] = useState<Demande[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const filtered = DEMO_DEMANDES.filter(d => !search || d.machine.toLowerCase().includes(search.toLowerCase()) || d.id.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await demandes.list();
+        const mapped = res.map((item: any) => ({
+          id: String(item.id || item.Ref_Interne || ''),
+          date: item.Date_Demande ? item.Date_Demande.substring(0, 10) : (item.date || 'N/A'),
+          machine: item.Equipement || item.machine || 'Générique',
+          client: item.Client || item.client || '',
+          demandeur: item.Demandeur || 'Non renseigné',
+          urgence: item.Urgence || 'Moyenne',
+          statut: item.Statut || 'En attente',
+          description: item.Description || item.probleme || '',
+        }));
+        setData(mapped);
+      } catch (err) {
+        console.error("Failed to fetch demandes", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  const enAttente = data.filter(d => d.statut === 'En attente' || d.statut.toLowerCase().includes('attente')).length;
+  const enCours = data.filter(d => d.statut === 'En cours' || d.statut === 'Assignée' || d.statut.toLowerCase().includes('cours')).length;
+  const resolues = data.filter(d => d.statut === 'Résolue' || d.statut.toLowerCase().includes('tur') || d.statut.toLowerCase().includes('termin')).length;
+
+  const filtered = data.filter(d => !search || d.machine.toLowerCase().includes(search.toLowerCase()) || d.id.toLowerCase().includes(search.toLowerCase()));
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -33,7 +73,7 @@ export default function DemandesPage() {
       <div className="grid grid-cols-3 gap-4">
         <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-red-400">{enAttente}</div><div className="text-xs text-savia-text-muted mt-1">⏳ En attente</div></div>
         <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{enCours}</div><div className="text-xs text-savia-text-muted mt-1">🔄 En cours</div></div>
-        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{DEMO_DEMANDES.filter(d => d.statut === 'Résolue').length}</div><div className="text-xs text-savia-text-muted mt-1">✅ Résolues</div></div>
+        <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{resolues}</div><div className="text-xs text-savia-text-muted mt-1">✅ Résolues</div></div>
       </div>
 
       <div className="relative">
@@ -47,11 +87,11 @@ export default function DemandesPage() {
             <div className="flex items-start justify-between mb-2">
               <div className="flex items-center gap-3">
                 <span className="font-mono text-savia-accent font-bold">{d.id}</span>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${d.urgence === 'Haute' ? 'bg-red-500/10 text-red-400' : d.urgence === 'Moyenne' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${d.urgence === 'Haute' || d.urgence === 'Critique' ? 'bg-red-500/10 text-red-400' : d.urgence === 'Moyenne' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
                   ⚡ {d.urgence}
                 </span>
               </div>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${d.statut === 'Résolue' ? 'bg-green-500/10 text-green-400' : d.statut === 'En attente' ? 'bg-red-500/10 text-red-400' : 'bg-yellow-500/10 text-yellow-400'}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${d.statut === 'Résolue' || d.statut.toLowerCase().includes('termin') ? 'bg-green-500/10 text-green-400' : d.statut === 'En attente' ? 'bg-red-500/10 text-red-400' : 'bg-yellow-500/10 text-yellow-400'}`}>
                 {d.statut}
               </span>
             </div>

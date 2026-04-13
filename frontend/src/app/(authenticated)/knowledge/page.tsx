@@ -1,27 +1,60 @@
 'use client';
 import { SectionCard } from '@/components/ui/cards';
-import { Search } from 'lucide-react';
-import { useState } from 'react';
+import { Search, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { knowledge } from '@/lib/api';
 
-const KNOWLEDGE = [
-  { code: 'ERR-HV-001', message: 'Haute tension tube instable', cause: 'Condensateurs HV dégradés', solution: 'Remplacer module condensateur SCA-HV-CAP-01', type: 'Hardware', priorite: 'HAUTE' },
-  { code: 'ERR-DT-003', message: 'Détecteur calibration offset > seuil', cause: 'Dérive thermique du détecteur', solution: 'Recalibrer le détecteur après 30min de warmup', type: 'Calibration', priorite: 'MOYENNE' },
-  { code: 'ERR-GR-012', message: 'Gradient amplifier overflow', cause: 'Surchauffe amplificateur gradient', solution: 'Vérifier ventilation, remplacer pâte thermique', type: 'Hardware', priorite: 'HAUTE' },
-  { code: 'ERR-C-ARM-05', message: 'Compression paddle défaillant', cause: 'Usure mécanique du ressort', solution: 'Remplacer ensemble paddle réf. GE-MAMMO-PAD-02', type: 'Hardware', priorite: 'HAUTE' },
-  { code: 'ERR-MOT-03', message: 'Moteur rotation bras — couple anormal', cause: 'Roulement à billes usé', solution: 'Remplacer roulement SKF-6205 + lubrification', type: 'Hardware', priorite: 'MOYENNE' },
-  { code: 'WARN-HE-01', message: 'Niveau hélium bas', cause: 'Fuite micro au niveau du coldhead', solution: 'Inspecter joints coldhead, recharger hélium', type: 'Hardware', priorite: 'HAUTE' },
-  { code: 'INFO-SW-001', message: 'Mise à jour firmware disponible', cause: 'Nouvelle version disponible', solution: 'Planifier MAJ pendant maintenance préventive', type: 'Software', priorite: 'BASSE' },
-];
+interface KnowledgeItem {
+  code: string;
+  message: string;
+  cause: string;
+  solution: string;
+  type: string;
+  priorite: string;
+}
 
 export default function KnowledgePage() {
   const [search, setSearch] = useState('');
-  const filtered = KNOWLEDGE.filter(k => !search || k.code.toLowerCase().includes(search.toLowerCase()) || k.message.toLowerCase().includes(search.toLowerCase()) || k.solution.toLowerCase().includes(search.toLowerCase()));
+  const [data, setData] = useState<KnowledgeItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const res = await knowledge.list();
+        const mapped = res.map((item: any) => ({
+          code: item.Code_Erreur || item.code || '',
+          message: item.Message || item.message || '',
+          cause: item.Cause || item.cause || '',
+          solution: item.Solution || item.solution || '',
+          type: item.Type || item.type || 'Hardware',
+          priorite: item.Priorite || item.priorite || 'MOYENNE',
+        }));
+        setData(mapped);
+      } catch (err) {
+        console.error("Failed to fetch knowledge", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  const filtered = data.filter(k => !search || k.code.toLowerCase().includes(search.toLowerCase()) || k.message.toLowerCase().includes(search.toLowerCase()) || k.solution.toLowerCase().includes(search.toLowerCase()));
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-black gradient-text">📚 Base de Connaissances</h1>
-        <p className="text-savia-text-muted text-sm mt-1">{KNOWLEDGE.length} solutions documentées</p>
+        <p className="text-savia-text-muted text-sm mt-1">{data.length} solutions documentées</p>
       </div>
 
       <div className="relative">
