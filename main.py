@@ -919,7 +919,7 @@ except ImportError:
 
 
 @app.get("/api/logs")
-def api_list_logs(machine: Optional[str] = None, user=Depends(get_current_user)):
+def api_list_logs(machine: Optional[str] = None, user=Depends(_verify_token)):
     """List all logs from S3, optionally filtered by machine name."""
     if not s3_storage or not s3_storage.S3_AVAILABLE:
         s3_storage and s3_storage._init_s3()
@@ -935,7 +935,7 @@ def api_list_logs(machine: Optional[str] = None, user=Depends(get_current_user))
 
 
 @app.delete("/api/logs")
-def api_delete_log(key: str = Query(..., description="S3 key of the log to delete"), user=Depends(get_current_user)):
+def api_delete_log(key: str = Query(..., description="S3 key of the log to delete"), user=Depends(_verify_token)):
     """Delete a specific log file from S3 by its key."""
     if not s3_storage:
         raise HTTPException(status_code=503, detail="S3 storage not available")
@@ -950,7 +950,7 @@ def api_delete_log(key: str = Query(..., description="S3 key of the log to delet
 
 
 @app.delete("/api/logs/machine/{machine_name}")
-def api_delete_machine_logs(machine_name: str, user=Depends(get_current_user)):
+def api_delete_machine_logs(machine_name: str, user=Depends(_verify_token)):
     """Delete ALL log files for a given machine from S3."""
     if not s3_storage:
         raise HTTPException(status_code=503, detail="S3 storage not available")
