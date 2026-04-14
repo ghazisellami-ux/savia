@@ -15,7 +15,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, status
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -516,6 +516,77 @@ def get_knowledge(user: dict = Depends(_verify_token)):
             "priorite": sol.get("Priorité", ""),
         })
     return results
+
+
+@app.post("/api/knowledge/import")
+async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+    """Import error codes from an uploaded Excel/CSV file."""
+    import io
+    filename = file.filename or ""
+    content = await file.read()
+
+    try:
+        if filename.endswith(".csv"):
+            import csv
+            text = content.decode("utf-8", errors="replace")
+            reader = csv.DictReader(io.StringIO(text))
+            rows = list(reader)
+        elif filename.endswith((".xlsx", ".xls")):
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+            ws = wb.active
+            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                rows.append({headers[i]: (str(v) if v else "") for i, v in enumerate(row) if i < len(headers)})
+        else:
+            raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV ou XLSX.")
+
+        # Auto-detect column mapping
+        col_map = {}
+        for h in (rows[0].keys() if rows else []):
+            hl = h.lower().strip()
+            if "code" in hl: col_map["code"] = h
+            elif "message" in hl or "msg" in hl: col_map["message"] = h
+            elif "type" in hl: col_map["type"] = h
+            elif "cause" in hl: col_map["cause"] = h
+            elif "solution" in hl: col_map["solution"] = h
+            elif "priorit" in hl: col_map["priorite"] = h
+
+        if "code" not in col_map:
+            raise HTTPException(status_code=400, detail="Colonne 'Code' non trouvée dans le fichier.")
+
+        imported = 0
+        with get_db() as conn:
+            for row in rows:
+                code = row.get(col_map.get("code", ""), "").strip()
+                if not code:
+                    continue
+                msg = row.get(col_map.get("message", ""), "")
+                typ = row.get(col_map.get("type", ""), "Hardware")
+                cause = row.get(col_map.get("cause", ""), "")
+                solution = row.get(col_map.get("solution", ""), "")
+                priorite = row.get(col_map.get("priorite", ""), "MOYENNE")
+
+                # Insert or update codes_erreurs
+                conn.execute(
+                    "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
+                    (code, msg, typ)
+                )
+                # Insert or update solutions
+                conn.execute(
+                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (code) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
+                    (code, cause, solution, priorite)
+                )
+                imported += 1
+
+        return {"ok": True, "imported": imported, "message": f"{imported} codes importés avec succès."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur d'import: {str(e)}")
 
 
 # ==========================================
