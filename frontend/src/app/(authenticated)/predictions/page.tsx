@@ -8,7 +8,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import {
   Brain, TrendingUp, AlertTriangle, Clock, Server, Activity,
   CheckCircle2, Target, RefreshCw, ThumbsUp, ThumbsDown, Calendar,
-  History, Loader2, Sparkles, ShieldCheck, Zap, ClipboardList
+  History, Loader2, Sparkles, ShieldCheck, Zap, ClipboardList,
+  CircleDot, DollarSign, Wrench
 } from 'lucide-react';
 import { dashboard, ai as aiApi, equipements as equipApi, interventions } from '@/lib/api';
 
@@ -48,7 +49,7 @@ const COMPOSANTS = [
 export default function PredictionsPage() {
   const [predictions, setPredictions] = useState<PredictionItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [aiAnalysis, setAiAnalysis] = useState<string>('');
+  const [aiAnalysis, setAiAnalysis] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [selectedFeedbackMachine, setSelectedFeedbackMachine] = useState('');
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackEntry[]>([]);
@@ -144,13 +145,12 @@ export default function PredictionsPage() {
       };
       const res = await aiApi.analyzePerformance(kpis, 'TND');
       if (res?.ok && res.result) {
-        const r = res.result as any;
-        setAiAnalysis(r.analyse || r.analysis || r.text || JSON.stringify(r, null, 2));
+        setAiAnalysis(res.result);
       } else {
-        setAiAnalysis(generateFallbackAnalysis());
+        setAiAnalysis({ analyse: generateFallbackAnalysis() });
       }
     } catch {
-      setAiAnalysis(generateFallbackAnalysis());
+      setAiAnalysis({ analyse: generateFallbackAnalysis() });
     } finally {
       setAiLoading(false);
     }
@@ -317,20 +317,122 @@ export default function PredictionsPage() {
         </button>
 
         {aiAnalysis && (
-          <div className="bg-savia-bg/50 rounded-xl p-5 border border-savia-border/50">
-            <div className="flex items-center gap-2 mb-3 text-purple-400 font-semibold text-sm">
-              <Brain className="w-4 h-4" /> Résultat de l&apos;analyse IA
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-1 text-purple-400 font-semibold text-sm">
+              <ClipboardList className="w-4 h-4" /> Résultat de l&apos;Analyse IA Prédictive
             </div>
-            <div className="text-sm text-savia-text whitespace-pre-wrap leading-relaxed">
-              {aiAnalysis.split('\n').map((line, i) => {
-                if (line.startsWith('##')) return <h3 key={i} className="text-base font-bold text-savia-accent mt-3 mb-1">{line.replace(/^#+\s*/, '')}</h3>;
-                if (line.startsWith('###')) return <h4 key={i} className="text-sm font-bold text-savia-text mt-2">{line.replace(/^#+\s*/, '')}</h4>;
-                if (line.startsWith('- ')) return <div key={i} className="ml-3 text-savia-text-muted">{line}</div>;
-                if (line.match(/^\d+\./)) return <div key={i} className="ml-3 text-savia-text-muted">{line}</div>;
-                if (line.startsWith('**')) return <p key={i} className="font-semibold text-savia-text">{line.replace(/\*\*/g, '')}</p>;
-                return <p key={i}>{line}</p>;
-              })}
-            </div>
+
+            {/* Alertes critiques */}
+            {aiAnalysis.alertes_critiques?.length > 0 && (
+              <div className="bg-red-500/5 rounded-xl p-5 border border-red-500/20">
+                <div className="flex items-center gap-2 mb-3 text-red-400 font-bold text-sm">
+                  <AlertTriangle className="w-4 h-4" /> Alertes critiques
+                </div>
+                <p className="text-xs text-savia-text-dim mb-3 italic">Risque de rupture de soins imminent ou dégradation critique.</p>
+                <div className="space-y-3">
+                  {aiAnalysis.alertes_critiques.map((a: any, i: number) => (
+                    <div key={i} className="bg-savia-bg/60 rounded-lg p-3 border-l-3 border-red-500">
+                      <div className="font-bold text-sm text-savia-text">{i+1}. {a.machine} : <span className="text-red-400">SCORE {a.score_sante}%</span>. Panne prévue sous <span className="text-red-400">{a.jours_avant_panne} jours</span>. {a.nb_interventions && `${a.nb_interventions} interventions.`}</div>
+                      {a.risque && <div className="text-xs text-red-300 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Risque : {a.risque}</div>}
+                      {a.action_immediate && <div className="text-xs text-yellow-300 mt-1 flex items-center gap-1"><Wrench className="w-3 h-3" /> Action immédiate : {a.action_immediate}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Machines stables */}
+            {aiAnalysis.machines_stables?.length > 0 && (
+              <div className="bg-green-500/5 rounded-xl p-5 border border-green-500/20">
+                <div className="flex items-center gap-2 mb-3 text-green-400 font-bold text-sm">
+                  <CheckCircle2 className="w-4 h-4" /> Machines stables
+                </div>
+                <p className="text-xs text-savia-text-dim mb-3 italic">Équipements présentant une haute résilience ou une gestion de maintenance efficace.</p>
+                <div className="space-y-2">
+                  {aiAnalysis.machines_stables.map((m: any, i: number) => (
+                    <div key={i} className="bg-savia-bg/60 rounded-lg p-3 border-l-3 border-green-500">
+                      <div className="font-bold text-sm text-savia-text">{i+1}. {m.machine} : <span className="text-green-400">Score {m.score_sante}%</span></div>
+                      <div className="text-xs text-savia-text-muted mt-1">{m.commentaire}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Plan maintenance */}
+            {aiAnalysis.plan_maintenance?.length > 0 && (
+              <div className="bg-blue-500/5 rounded-xl p-5 border border-blue-500/20">
+                <div className="flex items-center gap-2 mb-3 text-blue-400 font-bold text-sm">
+                  <Calendar className="w-4 h-4" /> Plan de maintenance recommandé
+                </div>
+                <p className="text-xs text-savia-text-dim mb-3 italic">Calendrier d&apos;intervention pour la semaine.</p>
+                <div className="space-y-2">
+                  {aiAnalysis.plan_maintenance.map((p: any, i: number) => (
+                    <div key={i} className="bg-savia-bg/60 rounded-lg p-3">
+                      <div className="font-bold text-sm text-blue-300 flex items-center gap-1"><CircleDot className="w-3 h-3" /> {p.jour}</div>
+                      <div className="text-xs text-savia-text-muted mt-1"><span className="font-semibold text-savia-text">Cibles :</span> {p.cibles}</div>
+                      <div className="text-xs text-savia-text-muted mt-0.5"><span className="font-semibold text-savia-text">Action :</span> {p.action}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Estimation coûts */}
+            {aiAnalysis.estimation_couts && (
+              <div className="bg-yellow-500/5 rounded-xl p-5 border border-yellow-500/20">
+                <div className="flex items-center gap-2 mb-3 text-yellow-400 font-bold text-sm">
+                  <DollarSign className="w-4 h-4" /> Estimation des coûts
+                </div>
+                <p className="text-xs text-savia-text-dim mb-3 italic">Analyse comparative des coûts (TND).</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-savia-bg/60 rounded-lg p-3 text-center">
+                    <div className="text-xs text-savia-text-dim">Curatif historique</div>
+                    <div className="text-lg font-bold text-red-400">{Number(aiAnalysis.estimation_couts.cout_curatif_historique).toLocaleString()} TND</div>
+                  </div>
+                  <div className="bg-savia-bg/60 rounded-lg p-3 text-center">
+                    <div className="text-xs text-savia-text-dim">Préventif proposé</div>
+                    <div className="text-lg font-bold text-green-400">{Number(aiAnalysis.estimation_couts.cout_preventif_propose).toLocaleString()} TND</div>
+                  </div>
+                  <div className="bg-savia-bg/60 rounded-lg p-3 text-center">
+                    <div className="text-xs text-savia-text-dim">Gain potentiel</div>
+                    <div className="text-lg font-bold text-blue-400">{Number(aiAnalysis.estimation_couts.gain_potentiel).toLocaleString()} TND</div>
+                  </div>
+                </div>
+                {aiAnalysis.estimation_couts.detail_preventif && <p className="text-xs text-savia-text-muted mt-2">{aiAnalysis.estimation_couts.detail_preventif}</p>}
+                {aiAnalysis.estimation_couts.ratio && <p className="text-xs text-green-300 mt-1 font-semibold">{aiAnalysis.estimation_couts.ratio}</p>}
+              </div>
+            )}
+
+            {/* Tendances */}
+            {aiAnalysis.tendances?.length > 0 && (
+              <div className="bg-purple-500/5 rounded-xl p-5 border border-purple-500/20">
+                <div className="flex items-center gap-2 mb-3 text-purple-400 font-bold text-sm">
+                  <TrendingUp className="w-4 h-4" /> Tendances observées
+                </div>
+                <div className="space-y-2">
+                  {aiAnalysis.tendances.map((t: string, i: number) => (
+                    <div key={i} className="text-sm text-savia-text-muted flex items-start gap-2">
+                      <span className="text-purple-400 mt-0.5">{i+1}.</span> {t}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Conclusion */}
+            {aiAnalysis.conclusion && (
+              <div className="bg-savia-bg/50 rounded-xl p-4 border border-savia-border/50">
+                <p className="text-sm font-semibold text-savia-accent"><ShieldCheck className="w-4 h-4 inline mr-1" />Conclusion : {aiAnalysis.conclusion}</p>
+              </div>
+            )}
+
+            {/* Fallback: if only 'analyse' key exists (old format) */}
+            {aiAnalysis.analyse && !aiAnalysis.alertes_critiques && (
+              <div className="bg-savia-bg/50 rounded-xl p-5 border border-savia-border/50">
+                <p className="text-sm text-savia-text whitespace-pre-wrap">{aiAnalysis.analyse}</p>
+              </div>
+            )}
           </div>
         )}
       </SectionCard>
