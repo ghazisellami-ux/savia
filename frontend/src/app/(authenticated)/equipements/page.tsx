@@ -49,6 +49,7 @@ export default function EquipementsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Equipment | null>(null);
+  const [editingEquip, setEditingEquip] = useState<Equipment | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
@@ -93,6 +94,31 @@ export default function EquipementsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  const startEdit = (eq: Equipment) => {
+    setEditingEquip(eq);
+    setForm({
+      Nom: eq.nom,
+      Type: eq.type || 'Scanner CT',
+      Fabricant: eq.marque,
+      Modele: eq.modele,
+      NumSerie: eq.numSerie,
+      Client: eq.client,
+      MatriculeFiscale: eq.matriculeFiscale || '',
+      Notes: eq.localisation,
+      Statut: eq.statut || 'Opérationnel',
+      DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : new Date().toISOString().split('T')[0],
+      DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],
+    });
+    setShowAddForm(true);
+  };
+
+  const cancelForm = () => {
+    setShowAddForm(false);
+    setEditingEquip(null);
+    setForm(emptyForm);
+    setDocFiles([]);
+  };
+
   const handleSave = async () => {
     if (!form.Nom.trim() || !form.Client.trim()) return;
     setIsSaving(true);
@@ -101,10 +127,15 @@ export default function EquipementsPage() {
       if (docFiles.length > 0) {
         (payload as any).DocumentTechnique = docFiles.map(f => f.name).join(', ');
       }
-      await equipements.create(payload);
+      if (editingEquip) {
+        await equipements.update(Number(editingEquip.id), payload);
+      } else {
+        await equipements.create(payload);
+      }
       setForm(emptyForm);
       setDocFiles([]);
       setShowAddForm(false);
+      setEditingEquip(null);
       await loadData();
     } catch (err) {
       console.error("Save failed", err);
@@ -185,15 +216,15 @@ export default function EquipementsPage() {
         </p>
       </SectionCard>
 
-      {/* Add Equipment Form (Collapsible) */}
+      {/* Add/Edit Equipment Form (Collapsible) */}
       <div className="glass rounded-xl overflow-hidden">
         <button
-          onClick={() => setShowAddForm(!showAddForm)}
+          onClick={() => { if (showAddForm) { cancelForm(); } else { setEditingEquip(null); setForm(emptyForm); setShowAddForm(true); } }}
           className="w-full flex items-center justify-between p-4 hover:bg-savia-surface-hover/30 transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-3">
-            <Plus className="w-5 h-5 text-savia-accent" />
-            <span className="font-semibold">Ajouter un nouvel équipement</span>
+            {editingEquip ? <Edit2 className="w-5 h-5 text-blue-400" /> : <Plus className="w-5 h-5 text-savia-accent" />}
+            <span className="font-semibold">{editingEquip ? `Modifier — ${editingEquip.nom}` : 'Ajouter un nouvel équipement'}</span>
           </div>
           {showAddForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
         </button>
@@ -386,7 +417,7 @@ export default function EquipementsPage() {
             {/* Save / Cancel buttons */}
             <div className="flex justify-end gap-3 pt-4 border-t border-savia-border/50">
               <button
-                onClick={() => { setShowAddForm(false); setForm(emptyForm); setDocFiles([]); }}
+                onClick={cancelForm}
                 className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer"
               >
                 Annuler
@@ -397,7 +428,7 @@ export default function EquipementsPage() {
                 className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
               >
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Sauvegarder
+                {editingEquip ? 'Mettre à jour' : 'Sauvegarder'}
               </button>
             </div>
           </div>
@@ -467,7 +498,7 @@ export default function EquipementsPage() {
                 </span>
               </div>
               <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                <button onClick={() => startEdit(eq)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
                 <button onClick={() => setConfirmDelete(eq)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>
             </div>
