@@ -718,6 +718,7 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token)):
     kpis = body.get("kpis", {})
     sym = body.get("sym", "EUR")
 
+    # Build tech detail if available
     tech_detail = ""
     for ts in kpis.get("tech_stats", []):
         tech_detail += (
@@ -726,34 +727,58 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token)):
             f"cout={ts.get('cout_total', 0)}\n"
         )
 
-    prompt = f"""Agis en tant que Directeur du Service Technique pour une entreprise d'équipements d'imagerie médicale.
-Ton rôle est d'analyser ces métriques d'équipe pour le mois en cours.
+    # Build prediction risk detail if available
+    risk_detail = ""
+    for r in kpis.get("top_risques", []):
+        risk_detail += (
+            f"  - {r.get('machine', '?')}: risque {r.get('risque_panne_pct', 0)}%, "
+            f"pièce={r.get('composant_a_risque', '?')}, "
+            f"panne dans {r.get('jours_avant_panne', '?')}j, "
+            f"confiance IA={r.get('confiance_ia_pct', 0)}%, "
+            f"santé={r.get('score_sante', 0)}%, tendance={r.get('tendance', '?')}\n"
+        )
 
-KPIs de l'équipe :
-- Interventions totales : {kpis.get('nb_total', 0)}
-- Taux de résolution : {kpis.get('taux_resolution', 0)}%
-- MTTR : {kpis.get('mttr_h', 0)}h
-- Coût moyen : {kpis.get('cout_moyen', 0)} {sym}
-- Coût total : {kpis.get('cout_total', 0)} {sym}
-- Ratio correctif : {kpis.get('ratio_correctif_pct', 0)}%
-- Score global : {kpis.get('score_global', 0)}/100
+    prompt = f"""Agis en tant que Directeur du Service Technique pour une entreprise d'équipements d'imagerie médicale en Tunisie.
+Ton rôle est d'analyser ces métriques pour générer un diagnostic prédictif et un plan de maintenance.
+
+=== DONNÉES DU PARC ===
+- Nombre total d'équipements : {kpis.get('nb_equipements', kpis.get('total_machines_surveillees', 0))}
+- Interventions totales enregistrées : {kpis.get('nb_interventions', kpis.get('nb_total', 0))}
+- Interventions correctives : {kpis.get('interventions_correctives', 0)}
+- Interventions préventives : {kpis.get('interventions_preventives', 0)}
+- Interventions calibration : {kpis.get('interventions_calibration', 0)}
+- Disponibilité du parc : {kpis.get('disponibilite', 0)}%
+- MTBF (temps moyen entre pannes) : {kpis.get('mtbf', 0)}h
+- MTTR (temps moyen de réparation) : {kpis.get('mttr', kpis.get('mttr_h', 0))}h
+- Coût total maintenance : {kpis.get('cout_total', 0)} {sym}
+- Équipements critiques : {kpis.get('nb_critiques', kpis.get('machines_critiques', 0))}
+
+=== ANALYSE PRÉDICTIVE ===
+- Machines en risque critique (≥70%) : {kpis.get('machines_critiques', 0)}
+- Machines en attention (40-70%) : {kpis.get('machines_attention', 0)}
+- Précision moyenne de l'IA : {kpis.get('precision_ia_moyenne', 0)}%
+
+Machines à risque de panne :
+{risk_detail if risk_detail else 'Aucune machine à risque détectée'}
 
 Performance par technicien :
-{tech_detail if tech_detail else 'Aucune donnée par technicien'}
+{tech_detail if tech_detail else 'Données par technicien non fournies'}
 
-Donne-moi un rapport exécutif exigeant et constructif. Réponds en JSON avec cette structure EXACTE :
+Contexte : {kpis.get('contexte', '')}
+
+Donne-moi un rapport exécutif structuré, exigeant et constructif basé sur ces données RÉELLES. Réponds en JSON avec cette structure EXACTE :
 {{
-  "analyse": "Résumé exécutif",
-  "points_forts": ["pt1", "pt2"],
-  "points_faibles": ["pt1", "pt2"],
+  "analyse": "Résumé exécutif de 3-5 phrases basé sur les données ci-dessus",
+  "points_forts": ["point fort 1", "point fort 2"],
+  "points_faibles": ["point faible 1", "point faible 2"],
   "recommandations": [
     {{
-      "titre": "Directives",
-      "description": "Action précise",
+      "titre": "Directive prioritaire",
+      "description": "Action précise à entreprendre",
       "impact": "HAUT"
     }}
   ],
-  "objectifs": ["objectif 1", "objectif 2"]
+  "objectifs": ["objectif mesurable 1", "objectif mesurable 2"]
 }}"""
 
     raw = _call_ia(prompt, timeout=60, is_json=True)
