@@ -160,5 +160,17 @@ export const ai = {
     request<{ok: boolean, result: any}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
 };
 
+// --- Logs / S3 ---
+export const logs = {
+  list: (machine?: string) => {
+    const qs = machine ? `?machine=${encodeURIComponent(machine)}` : '';
+    return request<Array<{ key: string; size: number; last_modified: string }>>(`/api/logs${qs}`);
+  },
+  delete: (key: string) =>
+    request<{ ok: boolean; message: string }>(`/api/logs?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  deleteMachine: (machineName: string) =>
+    request<{ ok: boolean; deleted: number; message: string }>(`/api/logs/machine/${encodeURIComponent(machineName)}`, { method: 'DELETE' }),
+};
+
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai };
+export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };

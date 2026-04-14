@@ -10,7 +10,7 @@ import {
   Trash2, Send, Brain, ChevronDown, ChevronUp, Server, Activity, 
   CheckCircle2, Database, Settings, ShieldAlert, Folder, Zap, Save, Lightbulb
 } from 'lucide-react';
-import { equipements as equipApi, clients as clientsApi, ai as aiApi } from '@/lib/api';
+import { equipements as equipApi, clients as clientsApi, ai as aiApi, logs as logsApi } from '@/lib/api';
 
 // --- Types ---
 interface LogEntry {
@@ -118,6 +118,32 @@ export default function SupervisionPage() {
   const [importLoading, setImportLoading] = useState(false);
   const [importSuccess, setImportSuccess] = useState('');
   const [rawLogContent, setRawLogContent] = useState<string>('');
+  const [deletingLog, setDeletingLog] = useState<string>('');
+
+  // Delete log handler
+  const handleDeleteLog = async (machine: MachineFleet) => {
+    const confirmed = window.confirm(`Supprimer tous les logs de "${machine.machine}" ?\n\nCette action est irréversible.`);
+    if (!confirmed) return;
+
+    setDeletingLog(machine.machine);
+    try {
+      const result = await logsApi.deleteMachine(machine.machine);
+      // Remove from local fleet state
+      setFleet(prev => prev.filter(m => m.machine !== machine.machine));
+      if (selectedMachine === machine.machine) {
+        setSelectedMachine('');
+        setSelectedError('');
+        setAiResult(null);
+        setShowAiDiag(false);
+      }
+      alert(`✓ ${result.message}`);
+    } catch (err) {
+      console.error('Delete log failed', err);
+      alert('Erreur lors de la suppression des logs.');
+    } finally {
+      setDeletingLog('');
+    }
+  };
 
   useEffect(() => {
     async function loadData() {
@@ -677,7 +703,7 @@ export default function SupervisionPage() {
         >
           <div className="flex items-center gap-3">
             <FileText className="w-5 h-5 text-savia-text-muted" />
-            <span className="font-semibold">📄 Voir les logs bruts</span>
+            <span className="font-semibold">Voir les logs bruts</span>
           </div>
           {expandLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
@@ -703,16 +729,16 @@ export default function SupervisionPage() {
         {/* Mini KPIs */}
         <div className="flex gap-3 mb-4">
           <div className="flex-1 text-center p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-            <div className="text-2xl font-black text-savia-danger">{critCount}</div>
-            <div className="text-xs text-red-300">🔴 Critique</div>
+          <div className="text-2xl font-black text-savia-danger">{critCount}</div>
+            <div className="text-xs text-red-300 flex items-center justify-center gap-1"><AlertTriangle className="w-3 h-3" /> Critique</div>
           </div>
           <div className="flex-1 text-center p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
             <div className="text-2xl font-black text-savia-warning">{attCount}</div>
-            <div className="text-xs text-yellow-300">🟡 Attention</div>
+            <div className="text-xs text-yellow-300 flex items-center justify-center gap-1"><Activity className="w-3 h-3" /> Attention</div>
           </div>
           <div className="flex-1 text-center p-3 rounded-lg bg-green-500/10 border border-green-500/20">
             <div className="text-2xl font-black text-savia-success">{okCount}</div>
-            <div className="text-xs text-green-300">🟢 OK</div>
+            <div className="text-xs text-green-300 flex items-center justify-center gap-1"><CheckCircle2 className="w-3 h-3" /> OK</div>
           </div>
         </div>
 
@@ -727,6 +753,7 @@ export default function SupervisionPage() {
                 <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><FileText className="w-3 h-3 inline mr-1 -mt-0.5" /> Fichier</th>
                 <th className="text-center py-2 px-3 text-savia-text-muted font-semibold"><AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" /> Err.</th>
                 <th className="text-center py-2 px-3 text-savia-text-muted font-semibold"><AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5 text-red-500" /> Crit.</th>
+                <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -743,7 +770,7 @@ export default function SupervisionPage() {
                   }}
                 >
                   <td className="py-2.5 px-3 text-center text-lg">
-                    {m.etat === 'OK' ? '🟢' : m.etat === 'CRITIQUE' ? '🔴' : '🟡'}
+                    {m.etat === 'OK' ? <CheckCircle2 className="w-5 h-5 mx-auto text-green-400" /> : m.etat === 'CRITIQUE' ? <AlertTriangle className="w-5 h-5 mx-auto text-red-500" /> : <Activity className="w-5 h-5 mx-auto text-yellow-400" />}
                   </td>
                   <td className="py-2.5 px-3 font-bold">{m.machine}</td>
                   <td className="py-2.5 px-3 text-savia-text-muted">{clientList[i % clientList.length]}</td>
@@ -752,6 +779,21 @@ export default function SupervisionPage() {
                   </td>
                   <td className="py-2.5 px-3 text-center font-mono font-bold">{m.erreurs}</td>
                   <td className="py-2.5 px-3 text-center font-mono font-bold text-red-400">{m.critiques}</td>
+                  <td className="py-2.5 px-3 text-center">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteLog(m); }}
+                      disabled={deletingLog === m.machine}
+                      title={`Supprimer les logs de ${m.machine}`}
+                      className="p-1.5 rounded-lg text-savia-text-muted hover:text-red-400 hover:bg-red-500/10
+                                 transition-all disabled:opacity-30 cursor-pointer"
+                    >
+                      {deletingLog === m.machine ? (
+                        <div className="w-4 h-4 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -764,11 +806,11 @@ export default function SupervisionPage() {
         <div className="rounded-xl p-4 bg-red-500/10 border border-red-500/20">
           <div className="flex items-center gap-2 text-red-400 font-bold mb-2">
             <AlertTriangle className="w-5 h-5" />
-            🚨 {critCount} machine(s) en état CRITIQUE
+            {critCount} machine(s) en état CRITIQUE
           </div>
           {fleet.filter(m => m.etat === 'CRITIQUE').map(m => (
             <div key={m.machine} className="text-sm text-savia-text-muted ml-7 mt-1">
-              ⚠️ <strong>{m.machine}</strong> — Code <code className="text-red-400">{m.errors[0]?.code}</code> : {m.errors[0]?.message}
+              <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5 text-red-400" /> <strong>{m.machine}</strong> — Code <code className="text-red-400">{m.errors[0]?.code}</code> : {m.errors[0]?.message}
             </div>
           ))}
         </div>
