@@ -518,6 +518,69 @@ def get_knowledge(user: dict = Depends(_verify_token)):
     return results
 
 
+def _parse_text_to_rows(text: str) -> list:
+    """Parse unstructured text (from PDF/Word) into error code rows using AI or regex."""
+    import re
+    rows = []
+
+    # Try AI extraction first
+    try:
+        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
+        if AI_AVAILABLE and len(text) > 50:
+            prompt = f"""Extrais les codes d'erreur de ce texte technique. 
+Pour chaque code trouvé, donne: code, message, type (Hardware/Software/Network), cause, solution, priorite (HAUTE/MOYENNE/BASSE).
+Texte (extrait): {text[:4000]}
+
+Réponds en JSON: [{{"code":"ERR001","message":"...","type":"Hardware","cause":"...","solution":"...","priorite":"MOYENNE"}}]"""
+            raw = _call_ia(prompt, timeout=30, is_json=True)
+            if raw:
+                result = clean_json_response(raw)
+                if isinstance(result, list) and len(result) > 0:
+                    return result
+    except Exception:
+        pass
+
+    # Fallback: regex-based extraction
+    # Common patterns: "ERR-001", "E001", "0x1234", "ERROR 001"
+    patterns = [
+        r'((?:ERR|ERROR|E|WARN|W|FAULT|F|CODE)[_\-\s]?\d{2,5})',
+        r'(0x[0-9A-Fa-f]{4,8})',
+        r'((?:H|S|N)\d{4})',
+    ]
+    for pattern in patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            code = match.group(1).strip()
+            # Get surrounding context (100 chars)
+            start = max(0, match.start() - 20)
+            end = min(len(text), match.end() + 200)
+            context = text[start:end].replace('\n', ' ').strip()
+            if code not in [r.get('code') for r in rows]:
+                rows.append({
+                    "code": code,
+                    "message": context[:120],
+                    "type": "Hardware",
+                    "cause": "",
+                    "solution": "",
+                    "priorite": "MOYENNE",
+                })
+
+    if not rows:
+        # If no codes found, store the document text as a single entry
+        lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 10]
+        for i, line in enumerate(lines[:50]):
+            rows.append({
+                "code": f"DOC-{i+1:03d}",
+                "message": line[:200],
+                "type": "Documentation",
+                "cause": "",
+                "solution": "",
+                "priorite": "BASSE",
+            })
+
+    return rows
+
+
 @app.post("/api/knowledge/import")
 async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import error codes from an uploaded Excel/CSV file."""
@@ -539,8 +602,30 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
             rows = []
             for row in ws.iter_rows(min_row=2, values_only=True):
                 rows.append({headers[i]: (str(v) if v else "") for i, v in enumerate(row) if i < len(headers)})
+        elif filename.endswith(".pdf"):
+            # Parse PDF text using PyMuPDF (fitz)
+            try:
+                import fitz
+                doc = fitz.open(stream=content, filetype="pdf")
+                full_text = "\n".join(page.get_text() for page in doc)
+            except Exception:
+                full_text = content.decode("utf-8", errors="replace")
+            rows = _parse_text_to_rows(full_text)
+        elif filename.endswith((".docx", ".doc")):
+            # Parse Word text
+            try:
+                import docx
+                doc = docx.Document(io.BytesIO(content))
+                full_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                # Also check tables
+                for table in doc.tables:
+                    for row in table.rows:
+                        full_text += "\n" + " | ".join(cell.text for cell in row.cells)
+            except Exception:
+                full_text = content.decode("utf-8", errors="replace")
+            rows = _parse_text_to_rows(full_text)
         else:
-            raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV ou XLSX.")
+            raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV, XLSX, PDF ou DOCX.")
 
         # Auto-detect column mapping
         col_map = {}

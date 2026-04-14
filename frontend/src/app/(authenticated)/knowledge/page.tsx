@@ -25,6 +25,8 @@ export default function KnowledgePage() {
   const [importLoading, setImportLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pdfRef = useRef<HTMLInputElement>(null);
+  const wordRef = useRef<HTMLInputElement>(null);
 
   const loadData = async () => {
     try {
@@ -201,18 +203,78 @@ export default function KnowledgePage() {
         )}
 
         {activeTab === 'pdf' && (
-          <div className="text-center p-8 text-savia-text-dim">
-            <FileText className="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">Import PDF technique — bientôt disponible</p>
-            <p className="text-xs mt-1">L&apos;IA extraira automatiquement les codes d&apos;erreur des manuels techniques</p>
+          <div>
+            <p className="text-sm text-savia-text-muted mb-2">
+              Importez un fichier PDF technique contenant des codes d&apos;erreur.
+            </p>
+            <p className="text-xs text-savia-text-dim mb-4">
+              L&apos;IA extraira automatiquement les codes d&apos;erreur, causes et solutions des manuels techniques.
+            </p>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}
+              className={`border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer ${
+                dragOver ? 'border-red-400 bg-red-500/5' : 'border-savia-border/50 hover:border-red-400/40'
+              }`}
+              onClick={() => pdfRef.current?.click()}
+            >
+              <input ref={pdfRef} type="file" accept=".pdf" onChange={onFileChange} className="hidden" />
+              {importLoading ? (
+                <div className="flex items-center justify-center gap-2 text-savia-accent">
+                  <Loader2 className="w-5 h-5 animate-spin" /> Extraction IA en cours...
+                </div>
+              ) : (
+                <>
+                  <Upload className="w-8 h-8 mx-auto text-red-400/60 mb-2" />
+                  <p className="text-savia-text-muted text-sm">Drag and drop file here</p>
+                  <p className="text-xs text-savia-text-dim mt-1">Limit 200MB per file • PDF</p>
+                </>
+              )}
+            </div>
+            {importMsg && (
+              <div className={`mt-3 p-3 rounded-lg text-sm ${importMsg.startsWith('\u2713') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {importMsg}
+              </div>
+            )}
           </div>
         )}
 
         {activeTab === 'word' && (
-          <div className="text-center p-8 text-savia-text-dim">
-            <FileType className="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">Import Word (.docx) — bientôt disponible</p>
-            <p className="text-xs mt-1">Importation de documentation technique au format Word</p>
+          <div>
+            <p className="text-sm text-savia-text-muted mb-2">
+              Importez un fichier Word (.docx) contenant de la documentation technique.
+            </p>
+            <p className="text-xs text-savia-text-dim mb-4">
+              Le système extraira les codes d&apos;erreur et les informations techniques du document.
+            </p>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}
+              className={`border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer ${
+                dragOver ? 'border-blue-400 bg-blue-500/5' : 'border-savia-border/50 hover:border-blue-400/40'
+              }`}
+              onClick={() => wordRef.current?.click()}
+            >
+              <input ref={wordRef} type="file" accept=".docx,.doc" onChange={onFileChange} className="hidden" />
+              {importLoading ? (
+                <div className="flex items-center justify-center gap-2 text-savia-accent">
+                  <Loader2 className="w-5 h-5 animate-spin" /> Extraction en cours...
+                </div>
+              ) : (
+                <>
+                  <Upload className="w-8 h-8 mx-auto text-blue-400/60 mb-2" />
+                  <p className="text-savia-text-muted text-sm">Drag and drop file here</p>
+                  <p className="text-xs text-savia-text-dim mt-1">Limit 200MB per file • DOCX, DOC</p>
+                </>
+              )}
+            </div>
+            {importMsg && (
+              <div className={`mt-3 p-3 rounded-lg text-sm ${importMsg.startsWith('\u2713') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {importMsg}
+              </div>
+            )}
           </div>
         )}
       </SectionCard>
