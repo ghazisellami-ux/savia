@@ -66,40 +66,66 @@ class PgCursorWrapper:
         sql = sql.replace("?", "%s")
         sql = sql.replace("AUTOINCREMENT", "")
         sql = sql.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+        sql = re.sub(r'\bBLOB\b', 'BYTEA', sql)
         if sql.strip().upper().startswith("PRAGMA"):
             return None, None
         sql = re.sub(r"INSERT\s+OR\s+IGNORE", "INSERT", sql, flags=re.IGNORECASE)
         return sql, params
 
     def execute(self, sql, params=None):
-        """Exécute une commande avec traduction automatique."""
+        """Exécute une commande avec traduction automatique et SAVEPOINT."""
         sql, params = self._translate(sql, params)
         if sql is None:
             self._last_sql_was_skipped = True
             return self
         
         self._last_sql_was_skipped = False
+        # Use SAVEPOINT for DDL/DML that might fail benignly (migrations)
+        sql_upper = sql.strip().upper()
+        use_savepoint = sql_upper.startswith(("ALTER", "INSERT", "CREATE"))
+        
         try:
+            if use_savepoint:
+                self._cursor.execute("SAVEPOINT exec_sp")
             self._cursor.execute(sql, params)
+            if use_savepoint:
+                self._cursor.execute("RELEASE SAVEPOINT exec_sp")
         except Exception as e:
             err_str = str(e).lower()
-            if "duplicate key" in err_str or "unique" in err_str:
-                pass 
+            benign = ("duplicate key", "unique", "already exists",
+                      "does not exist", "duplicate column")
+            if use_savepoint and any(msg in err_str for msg in benign):
+                try:
+                    self._cursor.execute("ROLLBACK TO SAVEPOINT exec_sp")
+                except Exception:
+                    pass
+                logger.debug(f"[PG] Benign error ignored: {str(e)[:80]}")
             else:
                 logger.error(f"[PG] SQL Execution Error: {e} | SQL: {sql[:100]}...")
                 raise
         return self
 
     def executescript(self, sql):
-        """Exécute un script multi-statements (séparés par ;)."""
+        """Exécute un script multi-statements avec SAVEPOINTs pour isolation."""
         statements = [s.strip() for s in sql.split(";") if s.strip()]
-        for stmt in statements:
+        logger.info(f"[PG] executescript: {len(statements)} statements to execute")
+        success_count = 0
+        for i, stmt in enumerate(statements):
             translated, _ = self._translate(stmt)
             if translated:
                 try:
+                    self._cursor.execute(f"SAVEPOINT sp_{i}")
                     self._cursor.execute(translated)
+                    self._cursor.execute(f"RELEASE SAVEPOINT sp_{i}")
+                    success_count += 1
                 except Exception as e:
-                    logger.warning(f"[PG] Script execution error in statement: {e}")
+                    try:
+                        self._cursor.execute(f"ROLLBACK TO SAVEPOINT sp_{i}")
+                    except Exception:
+                        pass
+                    logger.warning(f"[PG] Stmt {i} FAILED: {str(e)[:120]}")
+                    logger.debug(f"[PG] Failed SQL: {translated[:150]}")
+        logger.info(f"[PG] executescript done: {success_count}/{len(statements)} succeeded")
         self._last_sql_was_skipped = False
         return self
 
@@ -250,9 +276,10 @@ def get_db():
             raise
     else:
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=10)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA foreign_keys=ON")
             try:
                 yield conn
@@ -464,6 +491,20 @@ def init_db():
             telephone TEXT DEFAULT '',
             telegram_id TEXT DEFAULT '',
             FOREIGN KEY (tech_id) REFERENCES techniciens(id) ON DELETE CASCADE
+        );
+
+        -- Logs uploadés (Supervision) — content stocké dans S3/MinIO
+        CREATE TABLE IF NOT EXISTS logs_uploaded (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            equipement TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            s3_key TEXT DEFAULT '',
+            content_hash TEXT DEFAULT '',
+            size_bytes INTEGER DEFAULT 0,
+            nb_errors INTEGER DEFAULT 0,
+            nb_critiques INTEGER DEFAULT 0,
+            uploaded_by TEXT DEFAULT 'system',
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
 

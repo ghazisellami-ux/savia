@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* ==========================================
+   🎨 SAVIA Design System — Dark Medical Theme
+   ========================================== */
+
+@theme {
+  --color-savia-bg: #0f172a;
+  --color-savia-surface: #1e293b;
+  --color-savia-surface-hover: #334155;
+  --color-savia-border: rgba(148, 163, 184, 0.1);
+  --color-savia-accent: #2dd4bf;
+  --color-savia-accent-blue: #3b82f6;
+  --color-savia-text: #f1f5f9;
+  --color-savia-text-muted: #94a3b8;
+  --color-savia-text-dim: #64748b;
+  --color-savia-danger: #ef4444;
+  --color-savia-warning: #f59e0b;
+  --color-savia-success: #22c55e;
+}
+
+/* --- Base --- */
+body {
+  background: var(--color-savia-bg);
+  color: var(--color-savia-text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* --- Scrollbar premium --- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.2);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(45, 212, 191, 0.4); }
+
+/* --- Animations --- */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(45, 212, 191, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(45, 212, 191, 0.6); }
+}
+
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fade-in { animation: fade-in 0.4s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-slide-in { animation: slide-in-left 0.3s ease-out; }
+
+/* --- Glass effect --- */
+.glass {
+  background: rgba(30, 41, 59, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+/* --- Gradient text --- */
+.gradient-text {
+  background: linear-gradient(135deg, #2dd4bf, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* --- Login mesh background --- */
+.login-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 30%, rgba(45, 212, 191, 0.08), transparent),
+    radial-gradient(ellipse 50% 60% at 80% 70%, rgba(59, 130, 246, 0.08), transparent),
+    radial-gradient(ellipse 40% 40% at 50% 50%, rgba(139, 92, 246, 0.05), transparent);
+}
