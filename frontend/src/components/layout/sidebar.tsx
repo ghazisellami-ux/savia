@@ -24,7 +24,6 @@ const NAV_ITEMS = [
   { key: 'pieces', label: 'Pièces de Rechange', href: '/pieces', icon: Cog },
   { key: 'reports', label: 'Rapports', href: '/reports', icon: FileText },
   { key: 'contrats', label: 'Contrats & SLA', href: '/contrats', icon: ClipboardCheck },
-  { key: 'conformite', label: 'QHSE Conformité', href: '/conformite', icon: ShieldCheck },
   { key: 'admin', label: 'Administration', href: '/admin', icon: Settings },
   { key: 'clients_savia', label: 'Clients SAVIA', href: '/clients', icon: Building },
 ];
