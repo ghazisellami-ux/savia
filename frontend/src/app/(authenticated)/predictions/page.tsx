@@ -10,7 +10,7 @@ import {
   CheckCircle2, Target, RefreshCw, ThumbsUp, ThumbsDown, Calendar,
   History, Loader2, Sparkles, ShieldCheck, Zap, ClipboardList
 } from 'lucide-react';
-import { dashboard, ai as aiApi, equipements as equipApi } from '@/lib/api';
+import { dashboard, ai as aiApi, equipements as equipApi, interventions } from '@/lib/api';
 
 // --- Types ---
 interface PredictionItem {
@@ -103,13 +103,27 @@ export default function PredictionsPage() {
     try {
       // Fetch real KPIs to give Gemini meaningful data
       let realKpis: Record<string, unknown> = {};
+      let interventionStats = { total: 0, correctives: 0, preventives: 0, calibration: 0, autres: 0 };
       try {
         realKpis = await dashboard.kpis();
       } catch { /* ignore */ }
+      try {
+        const allInterventions = await interventions.list();
+        interventionStats.total = allInterventions.length;
+        interventionStats.correctives = allInterventions.filter((i: any) => i.type_intervention === 'Corrective').length;
+        interventionStats.preventives = allInterventions.filter((i: any) => i.type_intervention?.includes('réventive')).length;
+        interventionStats.calibration = allInterventions.filter((i: any) => i.type_intervention === 'Calibration').length;
+        interventionStats.autres = interventionStats.total - interventionStats.correctives - interventionStats.preventives - interventionStats.calibration;
+      } catch { /* ignore */ }
 
       const kpis: Record<string, unknown> = {
-        // Real dashboard data
+        // Real dashboard data (nb_equipements, nb_interventions, mtbf, mttr, cout_total, disponibilite)
         ...realKpis,
+        // Intervention breakdown
+        interventions_correctives: interventionStats.correctives,
+        interventions_preventives: interventionStats.preventives,
+        interventions_calibration: interventionStats.calibration,
+        interventions_autres: interventionStats.autres,
         // Prediction-specific data
         total_machines_surveillees: predictions.length,
         machines_critiques: critiques,
@@ -124,7 +138,9 @@ export default function PredictionsPage() {
           score_sante: p.score,
           tendance: p.tendance,
         })),
-        contexte: "Analyse prédictive de maintenance pour parc d'équipements de radiologie médicale en Tunisie. Objectif: générer un diagnostic et un plan de maintenance préventive.",
+        contexte: "Analyse prédictive de maintenance pour parc d'équipements de radiologie médicale en Tunisie. Données réelles: " +
+          `${interventionStats.total} interventions (${interventionStats.correctives} correctives, ${interventionStats.preventives} préventives, ${interventionStats.calibration} calibrations). ` +
+          "Objectif: générer un diagnostic complet et un plan de maintenance préventive.",
       };
       const res = await aiApi.analyzePerformance(kpis, 'TND');
       if (res?.ok && res.result) {
