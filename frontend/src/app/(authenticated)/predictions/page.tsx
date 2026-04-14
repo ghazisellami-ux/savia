@@ -195,7 +195,82 @@ export default function PredictionsPage() {
         ))}
       </div>
 
-      {/* AI Predictive Analysis */}
+      {/* Risk per Machine — only at-risk machines */}
+      <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-red-400" /> Risques de Panne par Machine</span>}>
+        {predictions.filter(p => p.risque >= 40).length === 0 ? (
+          <div className="text-center p-6 text-savia-text-muted text-sm">
+            <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-400" />
+            Aucun équipement à risque détecté. Tout le parc est en bonne santé.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-savia-text-dim uppercase tracking-wider border-b border-savia-border/50">
+                  <th className="py-2.5 px-3">Niveau</th>
+                  <th className="py-2.5 px-3">Machine</th>
+                  <th className="py-2.5 px-3">Pièce à risque</th>
+                  <th className="py-2.5 px-3">Date panne estimée</th>
+                  <th className="py-2.5 px-3">Risque</th>
+                  <th className="py-2.5 px-3 text-center">Confiance IA</th>
+                </tr>
+              </thead>
+              <tbody>
+                {predictions.filter(p => p.risque >= 40).map(p => {
+                  const panneDate = new Date();
+                  panneDate.setDate(panneDate.getDate() + p.joursAvantPanne);
+                  const formattedDate = panneDate.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+                  return (
+                    <tr key={p.machine} className="border-b border-savia-border/20 hover:bg-savia-surface-hover/20 transition-colors">
+                      <td className="py-3 px-3">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${p.risque >= 70 ? 'bg-red-500/10' : 'bg-yellow-500/10'}`}>
+                          {p.risque >= 70 ? <AlertTriangle className="w-4.5 h-4.5 text-red-500" /> :
+                           <Activity className="w-4.5 h-4.5 text-yellow-400" />}
+                        </div>
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="font-bold">{p.machine}</div>
+                        <div className="text-xs text-savia-text-dim">{p.joursAvantPanne} jours restants</div>
+                      </td>
+                      <td className="py-3 px-3">
+                        <span className="px-2 py-1 rounded-lg bg-savia-bg text-xs font-semibold">
+                          {p.composant}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-savia-text-dim" />
+                          <span className={`font-semibold ${p.risque >= 70 ? 'text-red-400' : 'text-yellow-400'}`}>
+                            {formattedDate}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-3">
+                        <div className="w-28">
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className="text-savia-text-dim">Risque</span>
+                            <span className={`font-bold ${p.risque >= 70 ? 'text-red-400' : 'text-yellow-400'}`}>{p.risque}%</span>
+                          </div>
+                          <div className="w-full h-2 bg-savia-bg rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${p.risque >= 70 ? 'bg-red-500' : 'bg-yellow-500'}`} style={{ width: `${p.risque}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 font-semibold inline-flex items-center gap-1">
+                          <Target className="w-3 h-3" /> {p.confiance}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* AI Predictive Analysis — below risks */}
       <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-savia-accent" /> Analyse IA Prédictive</span>}>
         <p className="text-savia-text-muted text-sm mb-4">
           Gemini analyse les scores de santé, tendances et prédictions pour générer un diagnostic et un plan de maintenance.
@@ -226,37 +301,6 @@ export default function PredictionsPage() {
             </div>
           </div>
         )}
-      </SectionCard>
-
-      {/* Risk per Machine */}
-      <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-red-400" /> Risques de Panne par Machine</span>}>
-        <div className="space-y-3">
-          {predictions.map(p => (
-            <div key={p.machine} className="flex items-center gap-4 p-3 rounded-lg bg-savia-bg/50 hover:bg-savia-surface-hover/30 transition-colors">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-savia-surface">
-                {p.risque >= 70 ? <AlertTriangle className="w-5 h-5 text-red-500" /> :
-                 p.risque >= 40 ? <Activity className="w-5 h-5 text-yellow-400" /> :
-                 <CheckCircle2 className="w-5 h-5 text-green-400" />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-bold text-sm">{p.machine}</div>
-                <div className="text-xs text-savia-text-muted">{p.composant} — {p.joursAvantPanne}j avant panne estimée</div>
-              </div>
-              <div className="w-32">
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-savia-text-dim">Risque</span>
-                  <span className={`font-bold ${p.risque >= 70 ? 'text-red-400' : p.risque >= 40 ? 'text-yellow-400' : 'text-green-400'}`}>{p.risque}%</span>
-                </div>
-                <div className="w-full h-2 bg-savia-bg rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${p.risque >= 70 ? 'bg-red-500' : p.risque >= 40 ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${p.risque}%` }} />
-                </div>
-              </div>
-              <span className="text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 font-semibold flex items-center gap-1">
-                <Target className="w-3 h-3" /> {p.confiance}%
-              </span>
-            </div>
-          ))}
-        </div>
       </SectionCard>
 
       {/* Feedback Section */}
