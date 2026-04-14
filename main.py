@@ -705,86 +705,113 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token)):
 
 @app.post("/api/ai/analyze-performance")
 def analyze_performance(body: dict, user: dict = Depends(_verify_token)):
-    """Calls Gemini to analyze an array of KPI metrics or intervention data."""
-    # Lazy load ai_engine to avoid loading issues if no API Key
+    """Calls Gemini to produce a detailed predictive maintenance report (v2)."""
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible. (Vérifiez GOOGLE_API_KEY).")
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
 
     kpis = body.get("kpis", {})
-    sym = body.get("sym", "EUR")
+    sym = body.get("sym", "TND")
 
-    # Build tech detail if available
-    tech_detail = ""
-    for ts in kpis.get("tech_stats", []):
-        tech_detail += (
-            f"  - {ts.get('nom', '?')}: {ts.get('nb_interventions', 0)} int, "
-            f"{ts.get('taux_resolution', 0)}% res, MTTR={ts.get('mttr_h', 0)}h, "
-            f"cout={ts.get('cout_total', 0)}\n"
-        )
+    # --- Fetch real per-machine data from DB ---
+    machine_details = ""
+    equip_detail = ""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT machine, COUNT(*) as nb, "
+                "SUM(CASE WHEN type_intervention='Corrective' THEN 1 ELSE 0 END) as corr, "
+                "SUM(CASE WHEN type_intervention ILIKE '%%r\u00e9ventive%%' THEN 1 ELSE 0 END) as prev, "
+                "ROUND(AVG(duree_minutes)::numeric,1) as mttr_m, "
+                "ROUND(SUM(cout)::numeric,0) as cout "
+                "FROM interventions GROUP BY machine ORDER BY nb DESC LIMIT 20"
+            ).fetchall()
+            for r in rows:
+                machine_details += f"  - {r['machine']}: {r['nb']} int ({r['corr']} corr, {r['prev']} prev), MTTR={r['mttr_m']}min, co\u00fbt={r['cout']} {sym}\n"
+            eqs = conn.execute('SELECT "Nom","Client","Type","Statut","DateInstallation" FROM equipements ORDER BY "Nom" LIMIT 25').fetchall()
+            for eq in eqs:
+                equip_detail += f"  - {eq['Nom']} ({eq.get('Type','?')}) — {eq.get('Client','?')}, install\u00e9: {eq.get('DateInstallation','?')}, statut: {eq.get('Statut','?')}\n"
+    except Exception as db_err:
+        logger.warning(f"DB fetch for AI failed: {db_err}")
 
-    # Build prediction risk detail if available
     risk_detail = ""
     for r in kpis.get("top_risques", []):
-        risk_detail += (
-            f"  - {r.get('machine', '?')}: risque {r.get('risque_panne_pct', 0)}%, "
-            f"pièce={r.get('composant_a_risque', '?')}, "
-            f"panne dans {r.get('jours_avant_panne', '?')}j, "
-            f"confiance IA={r.get('confiance_ia_pct', 0)}%, "
-            f"santé={r.get('score_sante', 0)}%, tendance={r.get('tendance', '?')}\n"
-        )
+        risk_detail += f"  - {r.get('machine','?')}: risque={r.get('risque_panne_pct',0)}%, pi\u00e8ce={r.get('composant_a_risque','?')}, panne_dans={r.get('jours_avant_panne','?')}j, sant\u00e9={r.get('score_sante',0)}%\n"
 
-    prompt = f"""Agis en tant que Directeur du Service Technique pour une entreprise d'équipements d'imagerie médicale en Tunisie.
-Ton rôle est d'analyser ces métriques pour générer un diagnostic prédictif et un plan de maintenance.
+    import datetime
+    today = datetime.date.today()
 
-=== DONNÉES DU PARC ===
-- Nombre total d'équipements : {kpis.get('nb_equipements', kpis.get('total_machines_surveillees', 0))}
-- Interventions totales enregistrées : {kpis.get('nb_interventions', kpis.get('nb_total', 0))}
-- Interventions correctives : {kpis.get('interventions_correctives', 0)}
-- Interventions préventives : {kpis.get('interventions_preventives', 0)}
-- Interventions calibration : {kpis.get('interventions_calibration', 0)}
-- Disponibilité du parc : {kpis.get('disponibilite', 0)}%
-- MTBF (temps moyen entre pannes) : {kpis.get('mtbf', 0)}h
-- MTTR (temps moyen de réparation) : {kpis.get('mttr', kpis.get('mttr_h', 0))}h
-- Coût total maintenance : {kpis.get('cout_total', 0)} {sym}
-- Équipements critiques : {kpis.get('nb_critiques', kpis.get('machines_critiques', 0))}
+    prompt = f"""Tu es Directeur du Service Technique d'une entreprise de maintenance d'\u00e9quipements d'imagerie m\u00e9dicale en Tunisie.
+Analyse ces donn\u00e9es R\u00c9ELLES et produis un rapport pr\u00e9dictif d\u00e9taill\u00e9.
 
-=== ANALYSE PRÉDICTIVE ===
-- Machines en risque critique (≥70%) : {kpis.get('machines_critiques', 0)}
-- Machines en attention (40-70%) : {kpis.get('machines_attention', 0)}
-- Précision moyenne de l'IA : {kpis.get('precision_ia_moyenne', 0)}%
+=== CHIFFRES DU PARC ===
+- \u00c9quipements : {kpis.get('nb_equipements', 0)} | Interventions : {kpis.get('nb_interventions', 0)}
+- Correctives : {kpis.get('interventions_correctives', 0)} | Pr\u00e9ventives : {kpis.get('interventions_preventives', 0)} | Calibrations : {kpis.get('interventions_calibration', 0)}
+- Disponibilit\u00e9 : {kpis.get('disponibilite', 0)}% | MTBF : {kpis.get('mtbf', 0)}h | MTTR : {kpis.get('mttr', 0)}h
+- Co\u00fbt total : {kpis.get('cout_total', 0)} {sym}
 
-Machines à risque de panne :
-{risk_detail if risk_detail else 'Aucune machine à risque détectée'}
+=== HISTORIQUE PAR MACHINE ===
+{machine_details if machine_details else 'Non disponible'}
 
-Performance par technicien :
-{tech_detail if tech_detail else 'Données par technicien non fournies'}
+=== PR\u00c9DICTIONS IA ===
+{risk_detail if risk_detail else 'Aucune'}
 
-Contexte : {kpis.get('contexte', '')}
+=== \u00c9QUIPEMENTS ===
+{equip_detail if equip_detail else 'Non disponible'}
 
-Donne-moi un rapport exécutif structuré, exigeant et constructif basé sur ces données RÉELLES. Réponds en JSON avec cette structure EXACTE :
-{{
-  "analyse": "Résumé exécutif de 3-5 phrases basé sur les données ci-dessus",
-  "points_forts": ["point fort 1", "point fort 2"],
-  "points_faibles": ["point faible 1", "point faible 2"],
-  "recommandations": [
-    {{
-      "titre": "Directive prioritaire",
-      "description": "Action précise à entreprendre",
-      "impact": "HAUT"
-    }}
+PRODUIS un rapport JSON STRICT :
+{{{{
+  "alertes_critiques": [
+    {{{{
+      "machine": "Nom (Client)",
+      "score_sante": 41,
+      "jours_avant_panne": 2,
+      "nb_interventions": 19,
+      "risque": "Risque concret",
+      "action_immediate": "Action + pi\u00e8ces"
+    }}}}
   ],
-  "objectifs": ["objectif mesurable 1", "objectif mesurable 2"]
-}}"""
+  "machines_stables": [
+    {{{{
+      "machine": "Nom (Client)",
+      "score_sante": 84,
+      "commentaire": "Pourquoi fiable"
+    }}}}
+  ],
+  "plan_maintenance": [
+    {{{{
+      "jour": "Lundi {today.strftime('%d/%m')}",
+      "cibles": "Machines",
+      "action": "Action"
+    }}}},
+    {{{{
+      "jour": "Mardi {(today + datetime.timedelta(days=1)).strftime('%d/%m')}",
+      "cibles": "Machines",
+      "action": "Action"
+    }}}},
+    {{{{
+      "jour": "Mercredi {(today + datetime.timedelta(days=2)).strftime('%d/%m')}",
+      "cibles": "Machines",
+      "action": "Action"
+    }}}}
+  ],
+  "estimation_couts": {{{{
+    "cout_curatif_historique": {int(kpis.get('cout_total', 0))},
+    "cout_preventif_propose": 0,
+    "detail_preventif": "D\u00e9tail calcul",
+    "gain_potentiel": 0,
+    "ratio": "Pour 1 TND investi, X TND \u00e9conomis\u00e9s"
+  }}}},
+  "tendances": ["Tendance 1", "Tendance 2", "Tendance 3"],
+  "conclusion": "Priorit\u00e9 absolue \u00e0..."
+}}}}"""
 
-    raw = _call_ia(prompt, timeout=60, is_json=True)
+    raw = _call_ia(prompt, timeout=90, is_json=True)
     if not raw:
-        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
-        
+        raise HTTPException(status_code=500, detail="L'IA n'a pas r\u00e9pondu.")
     result = clean_json_response(raw)
     return {"ok": True, "result": result}
 
