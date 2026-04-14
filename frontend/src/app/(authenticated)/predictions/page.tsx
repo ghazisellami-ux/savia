@@ -203,7 +203,7 @@ export default function PredictionsPage() {
             Aucun équipement à risque détecté. Tout le parc est en bonne santé.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-savia-text-dim uppercase tracking-wider border-b border-savia-border/50">

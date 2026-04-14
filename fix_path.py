@@ -1,0 +1,5 @@
+content = open('/app/migrate_desktop_db.py').read()
+content = content.replace("C:\\\\Users\\\\ACER\\\\Desktop\\\\sic_radiologie.db", "/app/desktop_backup.db")
+content = content.replace(r"C:\Users\ACER\Desktop\sic_radiologie.db", "/app/desktop_backup.db")
+open('/app/migrate_desktop_db.py', 'w').write(content)
+print("Path fixed!")
