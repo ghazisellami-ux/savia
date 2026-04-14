@@ -1,6 +1,7 @@
 'use client';
 // ==========================================
 // 📊 Dashboard Page — SAVIA
+// With client + period (monthly/annual) filters
 // ==========================================
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
@@ -10,8 +11,8 @@ import {
   PieChart, Pie, Cell, RadialBarChart, RadialBar, Legend,
   AreaChart, Area,
 } from 'recharts';
-import { dashboard, interventions as interventionsApi } from '@/lib/api';
-import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock } from 'lucide-react';
+import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
+import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
 
 // --- Types ---
 interface KpiData {
@@ -29,24 +30,8 @@ interface HealthScore {
   score: number;
   tendance: string;
   pannes: number;
+  client?: string;
 }
-
-const DEMO_MONTHLY = [
-  { mois: 'Jan', corrective: 5, preventive: 3 },
-  { mois: 'Fév', corrective: 3, preventive: 4 },
-  { mois: 'Mar', corrective: 7, preventive: 2 },
-  { mois: 'Avr', corrective: 4, preventive: 5 },
-  { mois: 'Mai', corrective: 2, preventive: 6 },
-  { mois: 'Jun', corrective: 6, preventive: 3 },
-];
-
-const DEMO_TYPES = [
-  { name: 'Hardware', value: 35, color: '#ef4444' },
-  { name: 'Software', value: 25, color: '#3b82f6' },
-  { name: 'Calibration', value: 20, color: '#f59e0b' },
-  { name: 'Power', value: 12, color: '#8b5cf6' },
-  { name: 'Autre', value: 8, color: '#64748b' },
-];
 
 // --- Chart theme ---
 const CHART_STYLE = {
@@ -57,37 +42,129 @@ const CHART_STYLE = {
   blue: '#3b82f6',
 };
 
+const MONTH_NAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+
+const DEMO_TYPES = [
+  { name: 'Hardware', value: 35, color: '#ef4444' },
+  { name: 'Software', value: 25, color: '#3b82f6' },
+  { name: 'Calibration', value: 20, color: '#f59e0b' },
+  { name: 'Power', value: 12, color: '#8b5cf6' },
+  { name: 'Autre', value: 8, color: '#64748b' },
+];
+
+// --- Helpers ---
+function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
+  if (mode === 'mensuel') {
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 0); // last day of month
+    return {
+      date_start: start.toISOString().substring(0, 10),
+      date_end: end.toISOString().substring(0, 10),
+      label: `${String(month).padStart(2, '0')}/${year}`,
+      rangeLabel: `${String(start.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} → ${String(end.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} (${end.getDate()}j)`,
+    };
+  } else {
+    return {
+      date_start: `${year}-01-01`,
+      date_end: `${year}-12-31`,
+      label: `${year}`,
+      rangeLabel: `01/01/${year} → 31/12/${year} (365j)`,
+    };
+  }
+}
+
+function getLast6Months(month: number, year: number) {
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    let m = month - i;
+    let y = year;
+    while (m <= 0) { m += 12; y--; }
+    months.push({ mois: MONTH_NAMES[m - 1].substring(0, 3), month: m, year: y });
+  }
+  return months;
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
+
+  // --- Filter state ---
+  const now = new Date();
+  const [selectedClient, setSelectedClient] = useState('');
+  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('mensuel');
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [clientList, setClientList] = useState<string[]>([]);
+
+  // --- Data state ---
   const [kpis, setKpis] = useState<KpiData>({
     nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0
   });
   const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
+  const [allInterventions, setAllInterventions] = useState<any[]>([]);
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // --- Computed date range ---
+  const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
+
+  // --- Load clients once ---
   useEffect(() => {
-    async function loadData() {
-      try {
-        const [kpiData, healthData, intervData] = await Promise.all([
-          dashboard.kpis(),
-          dashboard.healthScores(),
-          interventionsApi.list(),
-        ]);
-        setKpis(kpiData as any);
-        setHealthScores(healthData);
-        setRecentInterv((intervData || []).sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10));
-      } catch (err) {
-        console.error("Failed to load dashboard data", err);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    loadData();
+    clientsApi.list().then((res: any[]) => {
+      const names = res.map((c: any) => c.nom || c.Nom || '').filter(Boolean);
+      setClientList(names);
+    }).catch(() => {});
   }, []);
 
-  // Computed values
+  // --- Load data when filters change ---
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const params: any = {
+        date_start: dateRange.date_start,
+        date_end: dateRange.date_end,
+      };
+      if (selectedClient) params.client = selectedClient;
+
+      const [kpiData, healthData, intervData] = await Promise.all([
+        dashboard.kpis(params),
+        dashboard.healthScores(params),
+        interventionsApi.list(),
+      ]);
+      setKpis(kpiData as any);
+      setHealthScores(healthData);
+      setAllInterventions(intervData || []);
+
+      // Filter interventions for timeline display
+      let filtered = (intervData || []);
+      if (selectedClient) {
+        // We need to filter by machines belonging to client - use health scores which already have client
+        const clientMachines = healthData.map((h: any) => h.machine);
+        if (clientMachines.length > 0) {
+          filtered = filtered.filter((i: any) => clientMachines.includes(i.machine));
+        }
+      }
+      // Date filter
+      filtered = filtered.filter((i: any) => {
+        const d = i.date?.substring(0, 10);
+        if (!d) return false;
+        return d >= dateRange.date_start && d <= dateRange.date_end;
+      });
+
+      setRecentInterv(
+        filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+      );
+    } catch (err) {
+      console.error("Failed to load dashboard data", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [dateRange, selectedClient]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // --- Computed values ---
   const scoreGlobal = useMemo(() => {
     if (!healthScores.length) return 100;
     return Math.round(healthScores.reduce((s, h) => s + h.score, 0) / healthScores.length);
@@ -101,8 +178,27 @@ export default function DashboardPage() {
     ? `${Math.floor(kpis.mtbf / 24)}j ${Math.round(kpis.mtbf % 24)}h`
     : `${kpis.mtbf.toFixed(0)}h`;
 
+  // Monthly bar chart data — compute from real interventions
+  const monthlyChartData = useMemo(() => {
+    const months = getLast6Months(selectedMonth, selectedYear);
+    return months.map(m => {
+      const filtered = allInterventions.filter((i: any) => {
+        const d = new Date(i.date);
+        return d.getMonth() + 1 === m.month && d.getFullYear() === m.year;
+      });
+      return {
+        mois: m.mois,
+        corrective: filtered.filter((i: any) => (i.type_intervention || '').toLowerCase().includes('correct')).length,
+        preventive: filtered.filter((i: any) => (i.type_intervention || '').toLowerCase().includes('prevent') || (i.type_intervention || '').toLowerCase().includes('prévent')).length,
+      };
+    });
+  }, [allInterventions, selectedMonth, selectedYear]);
+
   // Gauge data for RadialBarChart
   const gaugeData = [{ name: 'Santé', value: scoreGlobal, fill: scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444' }];
+
+  // Available years
+  const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
 
   if (isLoading) {
     return (
@@ -127,23 +223,120 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* ===== FILTER BAR ===== */}
+      <div className="glass rounded-xl p-4 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          {/* Client Filter */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <Building2 className="w-3.5 h-3.5" /> Filtrer par client
+            </label>
+            <select
+              value={selectedClient}
+              onChange={e => setSelectedClient(e.target.value)}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              <option value="">Tous les clients</option>
+              {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {/* Period Mode Toggle */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <Calendar className="w-3.5 h-3.5" /> Période
+            </label>
+            <div className="flex rounded-lg overflow-hidden border border-savia-border">
+              <button
+                onClick={() => setPeriodMode('mensuel')}
+                className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
+                  periodMode === 'mensuel'
+                    ? 'bg-savia-accent text-white'
+                    : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
+                }`}
+              >
+                📅 Mensuel
+              </button>
+              <button
+                onClick={() => setPeriodMode('annuel')}
+                className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
+                  periodMode === 'annuel'
+                    ? 'bg-savia-accent text-white'
+                    : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
+                }`}
+              >
+                📆 Annuel
+              </button>
+            </div>
+          </div>
+
+          {/* Month Selector (only visible in mensuel mode) */}
+          {periodMode === 'mensuel' && (
+            <div>
+              <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+                Mois
+              </label>
+              <select
+                value={selectedMonth}
+                onChange={e => setSelectedMonth(Number(e.target.value))}
+                className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+              >
+                {MONTH_NAMES.map((name, i) => (
+                  <option key={i + 1} value={i + 1}>{i + 1} — {name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Year Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              Année
+            </label>
+            <select
+              value={selectedYear}
+              onChange={e => setSelectedYear(Number(e.target.value))}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Period Summary */}
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
+          <Filter className="w-4 h-4 text-savia-accent" />
+          <span className="text-sm font-semibold text-savia-accent">
+            Période : {dateRange.label}
+          </span>
+          <span className="text-xs text-savia-text-muted">
+            | {dateRange.rangeLabel}
+          </span>
+          {selectedClient && (
+            <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              {selectedClient}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* KPIs Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <KpiCard icon="🖥️" value={String(kpis.nb_equipements)} label="Équipements" />
-        <KpiCard icon="🔴" value={String(kpis.nb_critiques)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
-        <KpiCard icon="✅" value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
-        <KpiCard icon="⏱️" value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
-        <KpiCard icon="🔧" value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
-        <KpiCard icon="💰" value={`${kpis.cout_total.toLocaleString('fr')} EUR`} label="Coût Maintenance" />
+        <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(kpis.nb_critiques)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
+        <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
+        <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
+        <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
       </div>
 
       {/* Score Santé + Gamification */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Score Santé du Jour */}
-        <SectionCard title="📊 Score Santé du Jour">
+        <SectionCard title={<span className="flex items-center gap-2"><Activity className="w-5 h-5 text-savia-accent" /> Score Santé du Jour</span>}>
           <div className="text-center">
             <div className={`text-5xl font-black ${scoreGlobal >= 60 ? 'text-savia-success' : scoreGlobal >= 30 ? 'text-savia-warning' : 'text-savia-danger'}`}>
-              {scoreGlobal >= 60 ? '🟢' : scoreGlobal >= 30 ? '🟡' : '🔴'} {scoreGlobal}%
+              {scoreGlobal}%
             </div>
             <div className="text-savia-text-muted text-sm mt-2">→ stable</div>
             <div className="w-full bg-savia-bg rounded-full h-2 mt-4 overflow-hidden">
@@ -156,16 +349,16 @@ export default function DashboardPage() {
         </SectionCard>
 
         {/* Gamification */}
-        <SectionCard title="🏆 Gamification — Équipe">
+        <SectionCard title={<span className="flex items-center gap-2"><Trophy className="w-5 h-5 text-yellow-400" /> Gamification — Équipe</span>}>
           <div className="text-center">
             <div className="text-5xl font-black text-savia-warning">
               {kpis.nb_interventions} <span className="text-lg">interventions</span>
             </div>
             <div className="text-savia-warning text-sm font-semibold mt-2">
-              🥇 Niveau : Pro
+              ■ Niveau : Pro
             </div>
             <div className="text-savia-text-dim text-xs mt-1">
-              📊 Total réalisé: {kpis.nb_interventions} | 🔥 Belle performance !
+              Total réalisé: {kpis.nb_interventions} | Belle performance !
             </div>
           </div>
         </SectionCard>
@@ -177,7 +370,7 @@ export default function DashboardPage() {
           <button onClick={() => setShowAnomalies(!showAnomalies)} className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-red-500/5 transition-colors">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-400" />
-              <span className="font-bold text-red-400">🚨 {healthScores.filter(h => h.score < 40).length} anomalie(s) détectée(s)</span>
+              <span className="font-bold text-red-400">{healthScores.filter(h => h.score < 40).length} anomalie(s) détectée(s)</span>
             </div>
             {showAnomalies ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
           </button>
@@ -190,7 +383,7 @@ export default function DashboardPage() {
                     <span className="text-xs text-slate-400 ml-2">Score: {h.score}% — {h.pannes} pannes</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-500/20 text-red-400">
-                    {h.score < 15 ? '🔴 Critique' : '🟠 Dégradé'}
+                    {h.score < 15 ? 'Critique' : 'Dégradé'}
                   </span>
                 </div>
               ))}
@@ -200,11 +393,11 @@ export default function DashboardPage() {
       )}
 
       {/* 📅 Timeline des Interventions Récentes */}
-      <SectionCard title="📅 Timeline des Interventions Récentes">
+      <SectionCard title={<span className="flex items-center gap-2"><Clock className="w-5 h-5 text-blue-400" /> Interventions Récentes — {dateRange.label}</span>}>
         {recentInterv.length === 0 ? (
-          <div className="text-center text-slate-400 py-4">Aucune intervention récente</div>
+          <div className="text-center text-slate-400 py-4">Aucune intervention sur cette période</div>
         ) : (
-          <div className="relative pl-6">
+          <div className="relative pl-6 max-h-[320px] overflow-y-auto">
             <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-gradient-to-b from-savia-accent via-blue-500 to-purple-500" />
             {recentInterv.map((interv: any, i: number) => {
               const isCompleted = (interv.statut || '').toLowerCase().includes('tur');
@@ -218,7 +411,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${(interv.type_intervention || '').toLowerCase().includes('correct') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>{interv.type_intervention}</span>
-                      <span className="text-xs text-slate-400">👤 {interv.technicien || 'N/A'}</span>
+                      <span className="text-xs text-slate-400 flex items-center gap-1"><User className="w-3 h-3" /> {interv.technicien || 'N/A'}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isCompleted ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>{interv.statut}</span>
                     </div>
                   </div>
@@ -237,17 +430,17 @@ export default function DashboardPage() {
           <div className="absolute inset-2 rounded-full bg-gradient-to-br from-savia-accent to-savia-success animate-pulse shadow-lg shadow-savia-accent/30" />
         </div>
         <div>
-          <div className="text-lg font-extrabold gradient-text">🫀 Santé du Parc d&apos;Équipements</div>
-          <div className="text-savia-text-muted text-sm">📡 Monitoring en temps réel — Analyse prédictive active</div>
+          <div className="text-lg font-extrabold gradient-text flex items-center gap-2"><Heart className="w-5 h-5 text-red-400" /> Santé du Parc d&apos;Équipements</div>
+          <div className="text-savia-text-muted text-sm flex items-center gap-1"><Satellite className="w-3.5 h-3.5" /> Monitoring en temps réel — Analyse prédictive active</div>
         </div>
       </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Interventions par mois */}
-        <SectionCard title="📈 Interventions / Mois" className="lg:col-span-2">
+        <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>} className="lg:col-span-2">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={DEMO_MONTHLY} barGap={4}>
+            <BarChart data={monthlyChartData} barGap={4}>
               <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
               <YAxis stroke={CHART_STYLE.text} fontSize={12} />
               <Tooltip
@@ -260,7 +453,7 @@ export default function DashboardPage() {
         </SectionCard>
 
         {/* Répartition types erreurs */}
-        <SectionCard title="🎯 Types d'Erreurs">
+        <SectionCard title={<span className="flex items-center gap-2"><Crosshair className="w-5 h-5 text-purple-400" /> Types d&apos;Erreurs</span>}>
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
               <Pie
@@ -291,29 +484,30 @@ export default function DashboardPage() {
       {/* Health Scores Table + Gauge */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Table Santé */}
-        <SectionCard title="🫀 Score de Santé" className="lg:col-span-2">
+        <SectionCard title={<span className="flex items-center gap-2"><Heart className="w-5 h-5 text-red-400" /> Score de Santé</span>} className="lg:col-span-2">
           {/* Mini KPIs */}
           <div className="flex gap-3 mb-4">
             <div className="flex-1 text-center p-3 rounded-lg bg-red-500/10 border border-red-500/20">
               <div className="text-2xl font-black text-savia-danger">{nbCritique}</div>
-              <div className="text-xs text-red-300">🔴 Critique</div>
+              <div className="text-xs text-red-300">Critique</div>
             </div>
             <div className="flex-1 text-center p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
               <div className="text-2xl font-black text-savia-warning">{nbAttention}</div>
-              <div className="text-xs text-yellow-300">🟡 Attention</div>
+              <div className="text-xs text-yellow-300">Attention</div>
             </div>
             <div className="flex-1 text-center p-3 rounded-lg bg-green-500/10 border border-green-500/20">
               <div className="text-2xl font-black text-savia-success">{nbBon}</div>
-              <div className="text-xs text-green-300">🟢 Bon</div>
+              <div className="text-xs text-green-300">Bon</div>
             </div>
           </div>
 
           {/* Table */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 bg-slate-900 z-10">
                 <tr className="border-b border-savia-border">
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Équipement</th>
+                  <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Client</th>
                   <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Santé</th>
                   <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Tendance</th>
                   <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Pannes</th>
@@ -323,11 +517,12 @@ export default function DashboardPage() {
                 {[...healthScores].sort((a, b) => a.score - b.score).map((h) => (
                   <tr key={h.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{h.machine}</td>
+                    <td className="py-2.5 px-3 text-xs text-slate-400">{h.client || '—'}</td>
                     <td className="py-2.5 px-3 text-center">
                       <HealthBadge score={h.score} size="sm" />
                     </td>
                     <td className="py-2.5 px-3 text-center text-xs">
-                      {h.tendance === 'hausse' ? '📈 Hausse' : h.tendance === 'baisse' ? '📉 Baisse' : '➡️ Stable'}
+                      {h.tendance === 'hausse' ? '▲ Hausse' : h.tendance === 'baisse' ? '▼ Baisse' : '— Stable'}
                     </td>
                     <td className="py-2.5 px-3 text-center font-mono">{h.pannes}</td>
                   </tr>
@@ -338,7 +533,7 @@ export default function DashboardPage() {
         </SectionCard>
 
         {/* Gauge Santé Globale */}
-        <SectionCard title="🎯 Jauge Santé Globale">
+        <SectionCard title={<span className="flex items-center gap-2"><Target className="w-5 h-5 text-savia-accent" /> Jauge Santé Globale</span>}>
           <ResponsiveContainer width="100%" height={280}>
             <RadialBarChart
               cx="50%"
@@ -367,7 +562,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Disponibilité Trend */}
-      <SectionCard title="📈 Tendance Disponibilité (6 mois)">
+      <SectionCard title={<span className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-400" /> Tendance Disponibilité (6 mois)</span>}>
         <ResponsiveContainer width="100%" height={200}>
           <AreaChart data={[
             { mois: 'Jan', dispo: 97.2 }, { mois: 'Fév', dispo: 96.5 },

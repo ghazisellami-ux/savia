@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save, Sparkles, FileText, Download, Users, DollarSign, XCircle, ChevronDown, ChevronUp, Edit } from 'lucide-react';
-import { interventions, ai, equipements } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
 
 interface Intervention {
   id: number;
@@ -41,6 +41,7 @@ export default function SavPage() {
   const [filterStatut, setFilterStatut] = useState('Tous');
   const [filterType, setFilterType] = useState('Tous');
   const [data, setData] = useState<Intervention[]>([]);
+  const [techniciens, setTechniciens] = useState<{nom: string, prenom: string}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
@@ -61,8 +62,13 @@ export default function SavPage() {
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_minutes: '' });
 
   const loadData = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const res = await interventions.list();
+      const [res, techRes] = await Promise.all([
+        interventions.list(),
+        techApi.list().catch(() => []) 
+      ]);
+      setTechniciens(techRes as any);
       const mapped = res.map((item: any) => ({
         id: Number(item.id || 0),
         date: item.date || 'N/A',
@@ -608,7 +614,12 @@ export default function SavPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-slate-400 mb-1">Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className="block text-sm text-slate-400 mb-1">Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Technicien</label><input className={INPUT_CLS} placeholder="Ex: Ahmed" value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})} /></div>
+          <div><label className="block text-sm text-slate-400 mb-1">Technicien</label>
+            <select className={INPUT_CLS} value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})}>
+              <option value="">-- Sélectionnez --</option>
+              {techniciens.map(t => <option key={t.nom}>{t.prenom} {t.nom}</option>)}
+            </select>
+          </div>
           <div><label className="block text-sm text-slate-400 mb-1">Type</label>
             <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>
               <option>Corrective</option><option>Préventive</option><option>Installation</option>

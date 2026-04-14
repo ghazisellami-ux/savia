@@ -11,6 +11,7 @@ import jwt
 import bcrypt
 import logging
 import auth
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -168,11 +169,33 @@ def me(user: dict = Depends(_verify_token)):
 # ==========================================
 
 @app.get("/api/dashboard/kpis")
-def get_dashboard_kpis(user: dict = Depends(_verify_token)):
-    """Compute real KPIs from the database."""
+def get_dashboard_kpis(
+    client: Optional[str] = None,
+    date_start: Optional[str] = None,
+    date_end: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Compute real KPIs from the database, optionally filtered by client and date range."""
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+
+        # Filter equipements by client
+        if client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"] == client]
+
+        # Filter interventions by client (via matching machines)
+        if client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
+            machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
+            df_int = df_int[df_int["machine"].isin(machines_client)]
+
+        # Filter interventions by date range
+        if not df_int.empty and "date" in df_int.columns:
+            df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
+            if date_start:
+                df_int = df_int[df_int["date"] >= pd.to_datetime(date_start)]
+            if date_end:
+                df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
 
         nb_eq = len(df_eq) if not df_eq.empty else 0
         nb_critiques = 0
@@ -215,11 +238,29 @@ def get_dashboard_kpis(user: dict = Depends(_verify_token)):
 
 
 @app.get("/api/dashboard/health-scores")
-def get_health_scores(user: dict = Depends(_verify_token)):
+def get_health_scores(
+    client: Optional[str] = None,
+    date_start: Optional[str] = None,
+    date_end: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
     """Compute health scores per equipment based on intervention history."""
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+
+        # Filter equipements by client
+        if client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"] == client]
+
+        # Filter interventions by date range
+        if not df_int.empty and "date" in df_int.columns:
+            df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
+            if date_start:
+                df_int = df_int[df_int["date"] >= pd.to_datetime(date_start)]
+            if date_end:
+                df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
+
         scores = []
 
         if df_eq.empty:
@@ -505,8 +546,162 @@ def delete_technicien(tech_id: int, user: dict = Depends(_verify_token)):
 
 
 # ==========================================
+# LOGS UPLOAD (Supervision) — S3/MinIO + PostgreSQL
+# ==========================================
+
+@app.post("/api/logs/upload")
+def upload_log(body: dict, user: dict = Depends(_verify_token)):
+    """Upload un fichier log : contenu vers S3/MinIO, métadonnées vers PostgreSQL."""
+    import hashlib
+    equipement = body.get("equipement", "")
+    filename = body.get("filename", "unknown.log")
+    content = body.get("content", "")
+    nb_errors = body.get("nb_errors", 0)
+    nb_critiques = body.get("nb_critiques", 0)
+
+    if not equipement or not content:
+        raise HTTPException(status_code=400, detail="Équipement et contenu requis")
+
+    content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+    username = user.get("sub", "system") if user else "system"
+
+    try:
+        with get_db() as conn:
+            existing = conn.execute(
+                "SELECT id FROM logs_uploaded WHERE content_hash = ? AND equipement = ?",
+                (content_hash, equipement)
+            ).fetchone()
+            if existing:
+                eid = existing.get("id") if isinstance(existing, dict) else existing[0]
+                return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
+
+            # Upload contenu vers S3/MinIO
+            s3_key = ""
+            size_bytes = len(content.encode('utf-8'))
+            try:
+                from s3_storage import upload_file as s3_upload
+                s3_result = s3_upload(content, filename, equipement, {
+                    "nb_errors": str(nb_errors), "uploaded_by": username,
+                })
+                if s3_result:
+                    s3_key = s3_result["s3_key"]
+                    size_bytes = s3_result["size_bytes"]
+            except Exception as s3_err:
+                logger.warning(f"S3 upload failed (non-blocking): {s3_err}")
+
+            # Métadonnées en PostgreSQL
+            cursor = conn.execute(
+                """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username)
+            )
+            conn.execute(
+                "INSERT INTO audit_log (username, action, details) VALUES (?, ?, ?)",
+                (username, "Upload Log", f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)")
+            )
+            return {"ok": True, "id": cursor.lastrowid, "s3_key": s3_key,
+                    "message": f"Log enregistré — {size_bytes} octets, {nb_errors} erreur(s), S3: {'ok' if s3_key else 'fallback'}"}
+    except Exception as e:
+        logger.error(f"Log upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logs")
+def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
+    """Liste les logs uploadés (métadonnées depuis PostgreSQL)."""
+    try:
+        with get_db() as conn:
+            if equipement:
+                rows = conn.execute(
+                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = ? ORDER BY uploaded_at DESC",
+                    (equipement,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded ORDER BY uploaded_at DESC"
+                ).fetchall()
+            def _row(r):
+                if isinstance(r, dict):
+                    return {"id": r.get("id"), "equipement": r.get("equipement"), "filename": r.get("filename"), "s3_key": r.get("s3_key"), "size_bytes": r.get("size_bytes"), "nb_errors": r.get("nb_errors"), "nb_critiques": r.get("nb_critiques"), "uploaded_by": r.get("uploaded_by"), "uploaded_at": str(r.get("uploaded_at", ""))}
+                return {"id": r[0], "equipement": r[1], "filename": r[2], "s3_key": r[3], "size_bytes": r[4], "nb_errors": r[5], "nb_critiques": r[6], "uploaded_by": r[7], "uploaded_at": str(r[8])}
+            return [_row(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/logs/{log_id}")
+def get_log(log_id: int, user: dict = Depends(_verify_token)):
+    """Récupère le contenu d'un log depuis S3/MinIO."""
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT s3_key, equipement, filename FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Log non trouvé")
+            # Support both dict (PG) and tuple (SQLite) rows
+            if isinstance(row, dict):
+                s3_key = row.get("s3_key", "")
+                equipement = row.get("equipement", "")
+                filename = row.get("filename", "")
+            else:
+                s3_key, equipement, filename = row[0], row[1], row[2]
+            if not s3_key:
+                return {"id": log_id, "equipement": equipement, "filename": filename, "content": ""}
+            try:
+                from s3_storage import download_file
+                content = download_file(s3_key)
+                return {"id": log_id, "equipement": equipement, "filename": filename, "content": content or "", "s3_key": s3_key}
+            except Exception:
+                return {"id": log_id, "equipement": equipement, "filename": filename, "content": ""}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
 # AI INTEGRATION
 # ==========================================
+
+@app.post("/api/ai/analyze-diagnostic")
+def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token)):
+    """Calls Gemini to diagnose a machine error code and log contexts."""
+    try:
+        from ai_engine import get_ai_suggestion, AI_AVAILABLE
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible. (Vérifiez GOOGLE_API_KEY).")
+
+    machine = body.get("machine", "Équipement inconnu")
+    code_erreur = body.get("code_erreur", "")
+    message_erreur = body.get("message_erreur", "")
+    log_context = body.get("log_context", "")
+
+    try:
+        result = get_ai_suggestion(code_erreur, message_erreur, machine, log_context=log_context)
+        import json
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except:
+                return {"ok": True, "result": result}
+        
+        if result and isinstance(result, dict):
+            # Map uppercase keys from ai_engine to lowercase keys expected by frontend
+            return {"ok": True, "result": {
+                "probleme": result.get("Probleme", result.get("probleme", "Non identifié")),
+                "cause": result.get("Cause", result.get("cause", "À déterminer")),
+                "solution": result.get("Solution", result.get("solution", "Analyse manuelle requise")),
+                "prevention": result.get("Prevention", result.get("prevention", "Maintenance préventive recommandée")),
+                "urgence": result.get("Urgence", result.get("urgence", "À évaluer")),
+                "type": result.get("Type", result.get("type", "?")),
+                "priorite": result.get("Priorite", result.get("priorite", "MOYENNE")),
+                "confidence": result.get("Confidence_Score", result.get("confidence", 0)),
+            }}
+        return {"ok": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Diagnostic IA échoué: {e}")
 
 @app.post("/api/ai/analyze-performance")
 def analyze_performance(body: dict, user: dict = Depends(_verify_token)):

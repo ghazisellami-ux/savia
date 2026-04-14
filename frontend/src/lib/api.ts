@@ -56,13 +56,21 @@ export const auth = {
 // --- Dashboard ---
 export const dashboard = {
   kpis: (params?: { date_start?: string; date_end?: string; client?: string }) => {
-    const qs = new URLSearchParams(params as Record<string, string>).toString();
-    return request<Record<string, number>>(`/api/dashboard/kpis?${qs}`);
+    const p = new URLSearchParams();
+    if (params?.client) p.set('client', params.client);
+    if (params?.date_start) p.set('date_start', params.date_start);
+    if (params?.date_end) p.set('date_end', params.date_end);
+    const qs = p.toString();
+    return request<Record<string, number>>(`/api/dashboard/kpis${qs ? '?' + qs : ''}`);
   },
-  healthScores: (client?: string) => {
-    const qs = client ? `?client=${client}` : '';
-    return request<Array<{ machine: string; score: number; tendance: string; pannes: number }>>(
-      `/api/dashboard/health-scores${qs}`
+  healthScores: (params?: { client?: string; date_start?: string; date_end?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.client) p.set('client', params.client);
+    if (params?.date_start) p.set('date_start', params.date_start);
+    if (params?.date_end) p.set('date_end', params.date_end);
+    const qs = p.toString();
+    return request<Array<{ machine: string; score: number; tendance: string; pannes: number; client?: string }>>(
+      `/api/dashboard/health-scores${qs ? '?' + qs : ''}`
     );
   },
 };
@@ -148,6 +156,8 @@ export const admin = {
 export const ai = {
   analyzePerformance: (kpis: Record<string, unknown>, sym: string = "EUR") => 
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
+  analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "") =>
+    request<{ok: boolean, result: any}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
 };
 
 export { ApiError };

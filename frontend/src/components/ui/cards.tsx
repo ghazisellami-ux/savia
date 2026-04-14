@@ -5,7 +5,7 @@
 import { clsx } from 'clsx';
 
 interface KpiCardProps {
-  icon: string;
+  icon: React.ReactNode;
   value: string;
   label: string;
   variant?: 'default' | 'danger' | 'success' | 'warning';
@@ -54,12 +54,12 @@ interface HealthBadgeProps {
 export function HealthBadge({ score, size = 'md' }: HealthBadgeProps) {
   const color = score >= 60 ? 'text-savia-success' : score >= 30 ? 'text-savia-warning' : 'text-savia-danger';
   const bg = score >= 60 ? 'bg-green-500/10' : score >= 30 ? 'bg-yellow-500/10' : 'bg-red-500/10';
-  const emoji = score >= 60 ? '🟢' : score >= 30 ? '🟡' : '🔴';
+  const dotColor = score >= 60 ? 'bg-green-400' : score >= 30 ? 'bg-yellow-400' : 'bg-red-400';
   const sizeClass = size === 'sm' ? 'text-xs px-2 py-0.5' : size === 'lg' ? 'text-base px-4 py-2' : 'text-sm px-3 py-1';
 
   return (
     <span className={clsx('inline-flex items-center gap-1 rounded-full font-bold', color, bg, sizeClass)}>
-      {emoji} {score}%
+      <span className={clsx('w-2 h-2 rounded-full', dotColor)} /> {score}%
     </span>
   );
 }
@@ -68,7 +68,7 @@ export function HealthBadge({ score, size = 'md' }: HealthBadgeProps) {
 // 📊 Section Card
 // ==========================================
 interface SectionCardProps {
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }

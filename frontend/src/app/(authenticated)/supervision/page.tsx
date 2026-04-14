@@ -7,9 +7,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { SectionCard, HealthBadge } from '@/components/ui/cards';
 import {
   AlertTriangle, Upload, Search, Cpu, Building2, FileText,
-  Trash2, Send, Brain, ChevronDown, ChevronUp,
+  Trash2, Send, Brain, ChevronDown, ChevronUp, Server, Activity, 
+  CheckCircle2, Database, Settings, ShieldAlert, Folder, Zap, Save, Lightbulb
 } from 'lucide-react';
-import { equipements as equipApi, clients as clientsApi } from '@/lib/api';
+import { equipements as equipApi, clients as clientsApi, ai as aiApi } from '@/lib/api';
 
 // --- Types ---
 interface LogEntry {
@@ -61,20 +62,40 @@ const AI_FALLBACK: AiDiagnostic = {
 };
 
 function mapEquipToFleet(items: any[]): MachineFleet[] {
-  return items.map((item: any) => {
+  return items.map((item: any, i: number) => {
     const health = item.Score_Sante || item.health || 80;
     const etat: 'OK' | 'ATTENTION' | 'CRITIQUE' = health >= 80 ? 'OK' : health >= 50 ? 'ATTENTION' : 'CRITIQUE';
     const errCount = item.nb_erreurs || item.erreurs || (etat === 'CRITIQUE' ? 8 : etat === 'ATTENTION' ? 4 : 1);
     const critCount = etat === 'CRITIQUE' ? Math.ceil(errCount / 3) : etat === 'ATTENTION' ? 1 : 0;
+    
+    // Simulate error objects if there are none
+    let simulatedErrors: any[] = [];
+    if (!item.errors || item.errors.length === 0) {
+      if (etat === 'CRITIQUE') {
+        simulatedErrors = [
+          { code: `ERR-HV-0${(i%9)+1}`, message: 'Haute tension instable - variation détectée', statut: 'Non résolu', type: 'Hardware', frequence: 5 },
+          { code: `ERR-TMP-0${(i%3)+1}`, message: 'Surchauffe tube détectée', statut: 'Monitoring', type: 'System', frequence: 3 }
+        ];
+      } else if (etat === 'ATTENTION') {
+        simulatedErrors = [
+          { code: `ERR-CAL-0${(i%5)+1}`, message: 'Calibration capteur requise hors tolérance', statut: 'Non résolu', type: 'Software', frequence: 2 }
+        ];
+      } else if (errCount > 0) {
+        simulatedErrors = [
+          { code: `WARN-0${(i%5)+1}`, message: 'Micro-coupure réseau passée', statut: 'Résolu', type: 'Network', frequence: 1 }
+        ];
+      }
+    } else {
+      simulatedErrors = item.errors;
+    }
+
     return {
       machine: item.Nom || item.nom || 'Équipement',
       chemin: `logs/${(item.Nom || 'equip').replace(/\s+/g, '_')}.log`,
       etat,
       erreurs: errCount,
       critiques: critCount,
-      errors: (item.errors || []).map((e: any) => ({
-        code: e.code || 'ERR-000', message: e.message || '', statut: e.statut || 'Non résolu', type: e.type || 'Hardware', frequence: e.frequence || 1,
-      })),
+      errors: simulatedErrors,
     };
   });
 }
@@ -92,6 +113,11 @@ export default function SupervisionPage() {
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importEquip, setImportEquip] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importSuccess, setImportSuccess] = useState('');
+  const [rawLogContent, setRawLogContent] = useState<string>('');
 
   useEffect(() => {
     async function loadData() {
@@ -124,13 +150,179 @@ export default function SupervisionPage() {
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
-  const handleAnalyzeAI = () => {
+  const handleAnalyzeAI = async () => {
     setAiLoading(true);
-    setTimeout(() => {
-      setAiResult(AI_FALLBACK);
+    try {
+      const err = currentMachine.errors.find((e: any) => e.code === selectedError);
+      if (!err) return;
+      
+      const response = await aiApi.analyzeDiagnostic(
+        currentMachine.machine, 
+        err.code, 
+        err.message, 
+        "Pas de logs supplementaires specifiés"
+      );
+      
+      if (response && response.ok && response.result) {
+        setAiResult(response.result as AiDiagnostic);
+      } else {
+        // Dynamic fallback using the error's own data
+        setAiResult({
+          probleme: `Erreur ${err.code} sur ${currentMachine.machine}: ${err.message}`,
+          cause: `Analyse automatique indisponible. Code ${err.code} détecté ${err.frequence} fois.`,
+          solution: `1. Inspecter l'équipement ${currentMachine.machine}\n2. Rechercher le code ${err.code} dans la base de connaissances\n3. Consulter la documentation technique`,
+          prevention: `Planifier une maintenance préventive pour ${currentMachine.machine}.`,
+          urgence: err.statut === 'INCONNU' ? 'À ÉVALUER — Statut inconnu' : 'MOYENNE',
+          type: err.type || '?',
+          priorite: err.frequence > 10 ? 'HAUTE' : err.frequence > 3 ? 'MOYENNE' : 'BASSE',
+          confidence: 0,
+        });
+      }
+    } catch (error) {
+      console.error("AI Error", error);
+      const err = currentMachine.errors.find((e: any) => e.code === selectedError);
+      // Dynamic fallback on error — specific to this error code
+      setAiResult({
+        probleme: `Erreur ${err?.code || selectedError} — ${err?.message || 'Erreur inconnue'}`,
+        cause: `L'IA Gemini n'est pas disponible. Configurez GOOGLE_API_KEY dans le fichier .env du backend.`,
+        solution: `1. Vérifier ${err?.code || selectedError} dans la documentation\n2. Consulter la base de connaissances locale\n3. Contacter le support technique si nécessaire`,
+        prevention: 'Configurer GOOGLE_API_KEY pour activer les diagnostics IA automatiques.',
+        urgence: `Fréquence: ${err?.frequence || '?'} occurrence(s)`,
+        type: err?.type || '?',
+        priorite: 'MOYENNE',
+        confidence: 0,
+      });
+    } finally {
       setAiLoading(false);
       setShowAiDiag(true);
-    }, 2000);
+    }
+  };
+
+  const handleImportLog = async () => {
+    if (!importFile || !importEquip) return;
+    setImportLoading(true);
+    setImportSuccess('');
+    try {
+      const text = await importFile.text();
+      setRawLogContent(text);
+      const lines = text.split('\n').filter(l => l.trim());
+      // ---- V0-compatible log parser (matches Streamlit log_analyzer.py) ----
+      const isCSV = lines.slice(0, 20).filter(l => l.trim().startsWith('"') && l.includes('","')).length >= 3;
+      const rawEvents: Array<{code: string; message: string; severite: string}> = [];
+
+      if (isCSV) {
+        // CSV Parser (Giotto/IMS format)
+        for (const line of lines) {
+          const row: string[] = [];
+          let cur = '', inQ = false;
+          for (let c = 0; c < line.length; c++) {
+            if (line[c] === '"') { inQ = !inQ; continue; }
+            if (line[c] === ',' && !inQ) { row.push(cur.trim()); cur = ''; continue; }
+            cur += line[c];
+          }
+          row.push(cur.trim());
+          if (row.length < 6) continue;
+          const level = row[3], codeNum = row[4], msg = row[5];
+          const subMsg = row.length > 7 ? row[7] : '';
+          if (level === 'Info' && !msg.includes('Error') && !msg.includes('Fault')) continue;
+          let sev = 'ATTENTION';
+          if (level === 'Alarm') sev = 'ERREUR';
+          else if (level === 'Critical' || level === 'Fatal') sev = 'CRITIQUE';
+          let msgClean = msg;
+          if (subMsg && subMsg !== msg) msgClean = `${msg} \u2014 ${subMsg}`;
+          const stErr: string[] = [];
+          for (let s = 8; s + 1 < row.length; s += 2) { if (row[s+1] === 'State Error') stErr.push(row[s]); }
+          if (stErr.length > 0) msgClean += ` [${stErr.join(', ')}]`;
+          rawEvents.push({ code: codeNum, message: msgClean, severite: sev });
+        }
+      } else {
+        // Text Log Parser
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) continue;
+          const tsM = t.match(/(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}:\d{2})/);
+          const noTs = tsM ? t.replace(tsM[0], '').trim() : t;
+          let sev = '';
+          if (/\b(CRITICAL|FATAL|CRITIQUE)\b/i.test(t)) sev = 'CRITIQUE';
+          else if (/\b(ERROR|ERREUR)\b/i.test(t)) sev = 'ERREUR';
+          else if (/\b(WARNING|WARN|ATTENTION|ALARM)\b/i.test(t)) sev = 'ATTENTION';
+          const sM = noTs.match(/(?:Code|code|ERR|Err|ERROR|error|FAULT|fault)[:\s]+([0-9A-Fa-f]{2,8})/);
+          if (sM) {
+            const code = sM[1].toUpperCase();
+            const mM = noTs.match(/(?:Code|ERR|ERROR|FAULT)[:\s]+[0-9A-Fa-f]{2,8}\s*[-:]\s*(.+)/i);
+            rawEvents.push({ code, message: mM ? mM[1].trim().substring(0, 120) : 'Erreur Inconnue', severite: sev || 'ATTENTION' });
+            continue;
+          }
+          const hM = noTs.match(/(?<![0-9A-Za-z])0x([0-9A-Fa-f]{2,8})(?![0-9A-Za-z])/);
+          if (hM) { rawEvents.push({ code: hM[1].toUpperCase(), message: 'Erreur Inconnue', severite: sev || 'ATTENTION' }); continue; }
+          if (sev) {
+            const mc = noTs.replace(/\[.*?\]/g, '').trim().replace(/^\d+\s*/, '').trim();
+            const nc = t.match(/\b(\d{2,4})\b/);
+            rawEvents.push({ code: nc ? nc[1] : 'TXT', message: (mc || t).substring(0, 120), severite: sev });
+          }
+        }
+      }
+      // Aggregate by code with frequency (like V0)
+      const parsedErrors: Array<{code: string; message: string; statut: string; type: string; frequence: number}> = [];
+      let errCount = 0, critCount = 0;
+      for (const evt of rawEvents) {
+        errCount++;
+        if (evt.severite === 'CRITIQUE') critCount++;
+        const ex = parsedErrors.find(e => e.code === evt.code);
+        if (ex) { ex.frequence++; }
+        else { parsedErrors.push({ code: evt.code, message: evt.message, statut: 'INCONNU', type: '?', frequence: 1 }); }
+      }
+      parsedErrors.sort((a, b) => b.frequence - a.frequence);
+      if (parsedErrors.length === 0 && lines.length > 0) {
+        parsedErrors.push({ code: 'INFO', message: `${lines.length} lignes - aucune erreur`, statut: 'OK', type: 'Info', frequence: lines.length });
+      }
+
+      // Update fleet for the selected equipment
+      setFleet(prev => prev.map(m => {
+        if (m.machine !== importEquip) return m;
+        return {
+          ...m,
+          chemin: importFile.name,
+          erreurs: errCount,
+          critiques: critCount,
+          etat: critCount > 0 ? 'CRITIQUE' as const : errCount > 0 ? 'ATTENTION' as const : 'OK' as const,
+          errors: parsedErrors,
+        };
+      }));
+      // Select this machine and its first error if any
+      setSelectedMachine(importEquip);
+      if (parsedErrors.length > 0 && parsedErrors[0].statut !== 'OK') {
+        setSelectedError(parsedErrors[0].code);
+      }
+      setImportSuccess(`✓ ${lines.length} lignes parsées — ${errCount} erreur(s) détectée(s) dont ${critCount} critique(s)`);
+      setImportFile(null);
+
+      // Save log to backend database
+      try {
+        const token = localStorage.getItem('savia_token');
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/logs/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+          body: JSON.stringify({
+            equipement: importEquip,
+            filename: importFile.name,
+            content: text,
+            nb_errors: errCount,
+            nb_critiques: critCount,
+          }),
+        });
+      } catch (saveErr) {
+        console.warn('Log save to DB failed (non-blocking):', saveErr);
+      }
+      // Reset file input
+      const fileInput = document.getElementById('log-file-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+    } catch (err) {
+      console.error('Import error:', err);
+      setImportSuccess('✗ Erreur lors de l\'import du fichier');
+    } finally {
+      setImportLoading(false);
+    }
   };
 
   const critCount = fleet.filter(m => m.etat === 'CRITIQUE').length;
@@ -145,7 +337,9 @@ export default function SupervisionPage() {
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-black gradient-text">🛠️ Supervision — Monitoring Machines</h1>
+        <h1 className="text-2xl font-black gradient-text flex items-center gap-3">
+          <Activity className="w-8 h-8 text-savia-accent" /> Supervision — Monitoring Machines
+        </h1>
         <p className="text-savia-text-muted text-sm mt-1">
           Scan des logs, détection d&apos;erreurs, diagnostic IA
         </p>
@@ -159,7 +353,7 @@ export default function SupervisionPage() {
         >
           <div className="flex items-center gap-3">
             <Upload className="w-5 h-5 text-savia-accent" />
-            <span className="font-semibold">📥 Importer un fichier Log</span>
+            <span className="font-semibold">Importer un fichier Log</span>
           </div>
           {expandImport ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
@@ -170,22 +364,29 @@ export default function SupervisionPage() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-                  🏥 Associer à l&apos;équipement
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Server className="w-4 h-4" /> Associer à l&apos;équipement
                 </label>
-                <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
+                <select
+                  value={importEquip}
+                  onChange={e => setImportEquip(e.target.value)}
+                  className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
+                >
+                  <option value="">— Sélectionner un équipement —</option>
                   {fleet.map(m => (
                     <option key={m.machine} value={m.machine}>{m.machine}</option>
                   ))}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-                  📄 Fichier Log
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <FileText className="w-4 h-4" /> Fichier Log
                 </label>
                 <input
+                  id="log-file-input"
                   type="file"
                   accept=".log,.txt,.csv,.elg2"
+                  onChange={e => setImportFile(e.target.files?.[0] || null)}
                   className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2 text-savia-text
                              file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0
                              file:text-sm file:font-semibold file:bg-savia-accent/20 file:text-savia-accent
@@ -193,9 +394,18 @@ export default function SupervisionPage() {
                 />
               </div>
             </div>
-            <button className="w-full py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
-              💾 Enregistrer et analyser
+            <button
+              onClick={handleImportLog}
+              disabled={!importFile || !importEquip || importLoading}
+              className="w-full py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importLoading ? 'Analyse en cours...' : 'Enregistrer et analyser'}
             </button>
+            {importSuccess && (
+              <div className={`text-sm p-2 rounded-lg ${importSuccess.startsWith('✓') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {importSuccess}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -203,8 +413,8 @@ export default function SupervisionPage() {
       {/* Filters */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-            🏢 Client
+          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+            <Building2 className="w-4 h-4" /> Client
           </label>
           <select
             value={selectedClient}
@@ -216,8 +426,8 @@ export default function SupervisionPage() {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-            🏥 Équipement
+          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+            <Server className="w-4 h-4" /> Équipement
           </label>
           <select
             value={selectedEquip}
@@ -229,8 +439,8 @@ export default function SupervisionPage() {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-            📂 Fichier Log
+          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+            <FileText className="w-4 h-4" /> Fichier Log
           </label>
           <select
             value={selectedMachine}
@@ -254,15 +464,15 @@ export default function SupervisionPage() {
       {/* Errors Table */}
       {currentMachine.errors.length === 0 ? (
         <div className="glass rounded-xl p-8 text-center">
-          <div className="text-4xl mb-3">✅</div>
+          <CheckCircle2 className="w-12 h-12 mb-3 mx-auto text-savia-success" />
           <p className="text-savia-success font-bold text-lg">{currentMachine.machine} — Système sain</p>
           <p className="text-savia-text-muted text-sm mt-1">Aucune erreur détectée dans les logs.</p>
         </div>
       ) : (
-        <SectionCard title={`🔎 Erreurs détectées sur ${currentMachine.machine}`}>
-          <div className="overflow-x-auto">
+        <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-savia-accent" /> Erreurs détectées sur {currentMachine.machine}</span>}>
+          <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 bg-slate-900 z-10">
                 <tr className="border-b border-savia-border">
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Code</th>
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Message</th>
@@ -275,7 +485,7 @@ export default function SupervisionPage() {
                 {currentMachine.errors.map((err) => (
                   <tr
                     key={err.code}
-                    onClick={() => setSelectedError(err.code)}
+                    onClick={() => { setSelectedError(err.code); setAiResult(null); setShowAiDiag(false); }}
                     className={`border-b border-savia-border/50 cursor-pointer transition-colors
                       ${selectedError === err.code ? 'bg-savia-accent/10 border-l-2 border-l-savia-accent' : 'hover:bg-savia-surface-hover/50'}`}
                   >
@@ -314,11 +524,11 @@ export default function SupervisionPage() {
             {/* Error Info Card */}
             <div className="glass rounded-xl p-5 border-l-4 border-l-red-500">
               <h3 className="text-lg font-bold mb-3">
-                🆔 Code : <span className="text-savia-accent font-mono">{err.code}</span> — {err.message}
+                <Database className="w-5 h-5 inline mr-1 -mt-1 text-red-500" /> Code : <span className="text-savia-accent font-mono">{err.code}</span> — {err.message}
               </h3>
               <div className="flex items-center gap-2 mb-4">
                 <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20">
-                  ⚠️ Erreur INCONNUE — Aucune solution dans la base
+                  <AlertTriangle className="w-4 h-4 inline mr-1 -mt-0.5 text-red-400" /> Erreur INCONNUE — Aucune solution dans la base
                 </span>
               </div>
 
@@ -333,12 +543,12 @@ export default function SupervisionPage() {
                 {aiLoading ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    🧠 Analyse IA en cours...
+                    Analyse IA en cours...
                   </>
                 ) : (
                   <>
                     <Brain className="w-5 h-5" />
-                    ✨ Analyser avec l&apos;IA (Gemini)
+                    Analyser avec l&apos;IA (Gemini)
                   </>
                 )}
               </button>
@@ -347,36 +557,36 @@ export default function SupervisionPage() {
             {/* AI Diagnostic Results */}
             {showAiDiag && aiResult && (
               <div className="space-y-4 animate-fade-in">
-                <h3 className="text-lg font-bold gradient-text">📋 Résultat du Diagnostic IA</h3>
+                <h3 className="text-lg font-bold gradient-text flex items-center gap-2"><Brain className="w-5 h-5" /> Résultat du Diagnostic IA</h3>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Problème */}
                   <div className="rounded-xl p-4 border-l-4 border-l-red-500 bg-red-500/5">
-                    <div className="text-red-400 font-bold text-xs uppercase tracking-wider mb-2">🔴 Problème identifié</div>
+                    <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-wider mb-2"><AlertTriangle className="w-4 h-4" /> Problème identifié</div>
                     <p className="text-savia-text text-sm">{aiResult.probleme}</p>
                   </div>
                   {/* Cause */}
                   <div className="rounded-xl p-4 border-l-4 border-l-yellow-500 bg-yellow-500/5">
-                    <div className="text-yellow-400 font-bold text-xs uppercase tracking-wider mb-2">🟠 Cause probable</div>
+                    <div className="flex items-center gap-2 text-yellow-400 font-bold text-xs uppercase tracking-wider mb-2"><Search className="w-4 h-4" /> Cause probable</div>
                     <p className="text-savia-text text-sm">{aiResult.cause}</p>
                   </div>
                 </div>
 
                 {/* Solution */}
                 <div className="rounded-xl p-4 border-l-4 border-l-green-500 bg-green-500/5">
-                  <div className="text-green-400 font-bold text-xs uppercase tracking-wider mb-2">🟢 Procédure d&apos;investigation</div>
+                  <div className="flex items-center gap-2 text-green-400 font-bold text-xs uppercase tracking-wider mb-2"><Settings className="w-4 h-4" /> Procédure d&apos;investigation</div>
                   <pre className="text-savia-text text-sm whitespace-pre-wrap font-sans">{aiResult.solution}</pre>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Prévention */}
                   <div className="rounded-xl p-4 border-l-4 border-l-blue-500 bg-blue-500/5">
-                    <div className="text-blue-400 font-bold text-xs uppercase tracking-wider mb-2">🛡️ Maintenance préventive</div>
+                    <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-wider mb-2"><ShieldAlert className="w-4 h-4" /> Maintenance préventive</div>
                     <p className="text-savia-text text-sm">{aiResult.prevention}</p>
                   </div>
                   {/* Urgence */}
                   <div className="rounded-xl p-4 border-l-4 border-l-purple-500 bg-purple-500/5">
-                    <div className="text-purple-400 font-bold text-xs uppercase tracking-wider mb-2">⏱️ Évaluation d&apos;urgence</div>
+                    <div className="flex items-center gap-2 text-purple-400 font-bold text-xs uppercase tracking-wider mb-2"><Activity className="w-4 h-4" /> Évaluation d&apos;urgence</div>
                     <p className="text-savia-text text-sm">{aiResult.urgence}</p>
                   </div>
                 </div>
@@ -384,33 +594,33 @@ export default function SupervisionPage() {
                 {/* Badges */}
                 <div className="flex gap-3">
                   <span className="px-4 py-1.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400">
-                    📁 {aiResult.type}
+                    <Folder className="w-3 h-3 inline mr-1 -mt-0.5" /> {aiResult.type}
                   </span>
                   <span className={`px-4 py-1.5 rounded-full text-xs font-bold
                     ${aiResult.priorite === 'HAUTE' ? 'bg-red-500/10 text-red-400' :
                       aiResult.priorite === 'MOYENNE' ? 'bg-yellow-500/10 text-yellow-400' :
                       'bg-green-500/10 text-green-400'}`}>
-                    ⚡ {aiResult.priorite}
+                    <Zap className="w-3 h-3 inline mr-1 -mt-0.5" /> {aiResult.priorite}
                   </span>
                   <span className={`px-4 py-1.5 rounded-full text-xs font-bold
                     ${aiResult.confidence >= 80 ? 'bg-green-500/10 text-green-400' :
                       aiResult.confidence >= 50 ? 'bg-yellow-500/10 text-yellow-400' :
                       'bg-red-500/10 text-red-400'}`}>
-                    🎯 Confiance: {aiResult.confidence}%
+                    <CheckCircle2 className="w-3 h-3 inline mr-1 -mt-0.5" /> Confiance: {aiResult.confidence}%
                   </span>
                 </div>
               </div>
             )}
 
             {/* Save to Knowledge Base */}
-            <SectionCard title="💾 Enregistrer dans la Base de Connaissances">
+            <SectionCard title={<span className="flex items-center gap-2"><Save className="w-4 h-4 text-savia-accent" /> Enregistrer dans la Base de Connaissances</span>}>
               <p className="text-savia-text-muted text-sm mb-4 italic">
                 Remplissez ce formulaire avec la solution qui a réellement fonctionné sur le terrain.
               </p>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-                    🔧 Cause confirmée
+                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <Settings className="w-4 h-4" /> Cause confirmée
                   </label>
                   <input
                     type="text"
@@ -421,8 +631,8 @@ export default function SupervisionPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-                    💡 Solution appliquée
+                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <Lightbulb className="w-4 h-4" /> Solution appliquée
                   </label>
                   <textarea
                     rows={3}
@@ -434,7 +644,7 @@ export default function SupervisionPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">📁 Type</label>
+                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><Folder className="w-4 h-4" /> Type</label>
                     <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
                       {['Hardware', 'Software', 'Calibration', 'Power', 'Network', 'Autre'].map(t => (
                         <option key={t} value={t}>{t}</option>
@@ -442,7 +652,7 @@ export default function SupervisionPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">⚡ Priorité</label>
+                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><Zap className="w-4 h-4" /> Priorité</label>
                     <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
                       {['HAUTE', 'MOYENNE', 'BASSE'].map(p => (
                         <option key={p} value={p}>{p}</option>
@@ -451,7 +661,7 @@ export default function SupervisionPage() {
                   </div>
                 </div>
                 <button className="w-full py-3 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
-                  💾 Enregistrer dans la base
+                  <Save className="w-5 h-5 inline mr-2 -mt-1" /> Enregistrer dans la base
                 </button>
               </div>
             </SectionCard>
@@ -473,28 +683,23 @@ export default function SupervisionPage() {
         </button>
         {expandLogs && (
           <div className="p-4 pt-0 border-t border-savia-border/50">
-            <pre className="text-xs text-savia-text-dim font-mono bg-savia-bg rounded-lg p-4 overflow-x-auto max-h-64 overflow-y-auto">
-{`[2025-03-15 08:23:01] INFO  System startup sequence initiated
-[2025-03-15 08:23:12] INFO  Detector warmup: OK (32°C)
-[2025-03-15 08:23:45] WARN  HV Generator: ripple exceeds 1.8% (threshold: 2.0%)
-[2025-03-15 08:24:01] INFO  Tube current: 250mA - nominal
-[2025-03-15 09:15:33] ERROR ERR-HV-001: Haute tension tube instable - fluctuation de 4.2%
-[2025-03-15 09:15:34] ERROR Acquisition aborted - patient scan interrupted
-[2025-03-15 09:15:35] WARN  Auto-retry scheduled in 30 seconds
-[2025-03-15 09:16:05] INFO  Retry attempt 1/3
-[2025-03-15 09:16:12] ERROR ERR-HV-001: Haute tension tube instable - fluctuation de 3.8%
-[2025-03-15 09:16:35] INFO  Retry attempt 2/3
-[2025-03-15 09:17:02] INFO  Acquisition completed (degraded mode)
-[2025-03-15 10:45:22] WARN  TMP-02: Gantry temperature 42°C (warning threshold: 40°C)
-[2025-03-15 11:30:00] INFO  Calibration check: detector offset 0.12 (max: 0.15)
-[2025-03-15 14:22:11] ERROR ERR-DT-003: Détecteur calibration offset 0.18 > seuil 0.15`}
-            </pre>
+            {rawLogContent ? (
+              <pre className="text-xs text-savia-text-dim font-mono bg-savia-bg rounded-lg p-4 overflow-x-auto max-h-[400px] overflow-y-auto whitespace-pre-wrap">
+                {rawLogContent}
+              </pre>
+            ) : (
+              <div className="text-center py-8 text-savia-text-muted">
+                <FileText className="w-10 h-10 mx-auto mb-2 text-savia-text-dim" />
+                <p className="text-sm">Aucun fichier log importé.</p>
+                <p className="text-xs mt-1">Importez un fichier log via le bouton ci-dessus pour voir son contenu brut ici.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Fleet Status */}
-      <SectionCard title="📋 État du Parc">
+      <SectionCard title={<span className="flex items-center gap-2"><Activity className="w-4 h-4 text-savia-accent" /> État du Parc</span>}>
         {/* Mini KPIs */}
         <div className="flex gap-3 mb-4">
           <div className="flex-1 text-center p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -512,16 +717,16 @@ export default function SupervisionPage() {
         </div>
 
         {/* Fleet Table */}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
+            <thead className="sticky top-0 bg-slate-900 z-10">
               <tr className="border-b border-savia-border">
                 <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">État</th>
-                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">🏥 Équipement</th>
-                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">🏢 Client</th>
-                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">📄 Fichier</th>
-                <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">⚠️ Err.</th>
-                <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">🔴 Crit.</th>
+                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Server className="w-3 h-3 inline mr-1 -mt-0.5" /> Équipement</th>
+                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Building2 className="w-3 h-3 inline mr-1 -mt-0.5" /> Client</th>
+                <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><FileText className="w-3 h-3 inline mr-1 -mt-0.5" /> Fichier</th>
+                <th className="text-center py-2 px-3 text-savia-text-muted font-semibold"><AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" /> Err.</th>
+                <th className="text-center py-2 px-3 text-savia-text-muted font-semibold"><AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5 text-red-500" /> Crit.</th>
               </tr>
             </thead>
             <tbody>
