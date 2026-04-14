@@ -101,14 +101,30 @@ export default function PredictionsPage() {
     setAiLoading(true);
     setAiAnalysis('');
     try {
+      // Fetch real KPIs to give Gemini meaningful data
+      let realKpis: Record<string, unknown> = {};
+      try {
+        realKpis = await dashboard.kpis();
+      } catch { /* ignore */ }
+
       const kpis: Record<string, unknown> = {
-        total_machines: predictions.length,
-        critiques,
-        attention,
-        avg_confiance: avgConfiance,
-        predictions: predictions.slice(0, 5).map(p => ({
-          machine: p.machine, risque: p.risque, jours: p.joursAvantPanne, composant: p.composant
+        // Real dashboard data
+        ...realKpis,
+        // Prediction-specific data
+        total_machines_surveillees: predictions.length,
+        machines_critiques: critiques,
+        machines_attention: attention,
+        precision_ia_moyenne: avgConfiance,
+        top_risques: predictions.filter(p => p.risque >= 40).slice(0, 6).map(p => ({
+          machine: p.machine,
+          risque_panne_pct: p.risque,
+          jours_avant_panne: p.joursAvantPanne,
+          composant_a_risque: p.composant,
+          confiance_ia_pct: p.confiance,
+          score_sante: p.score,
+          tendance: p.tendance,
         })),
+        contexte: "Analyse prédictive de maintenance pour parc d'équipements de radiologie médicale en Tunisie. Objectif: générer un diagnostic et un plan de maintenance préventive.",
       };
       const res = await aiApi.analyzePerformance(kpis, 'TND');
       if (res?.ok && res.result) {
