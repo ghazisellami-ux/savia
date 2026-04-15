@@ -90,7 +90,7 @@ export const interventions = {
 // --- Équipements ---
 export const equipements = {
   list: () => request<Array<Record<string, unknown>>>('/api/equipements'),
-  create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/equipements', { method: 'POST', body: data }),
+  create: (data: Record<string, unknown>) => request<{ok: boolean; id: number | null}>('/api/equipements', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
 };
@@ -99,6 +99,11 @@ export const equipements = {
 export const documentsTechniques = {
   listAll: () => request<Array<Record<string, unknown>>>('/api/documents-techniques'),
   listByEquipment: (equipId: number) => request<Array<Record<string, unknown>>>(`/api/documents-techniques/${equipId}`),
+  upload: (equipementId: number, nomFichier: string, contenuBase64: string) =>
+    request<{ok: boolean}>('/api/documents-techniques/upload', {
+      method: 'POST',
+      body: { equipement_id: equipementId, nom_fichier: nomFichier, contenu_base64: contenuBase64 }
+    }),
   download: (docId: number) => request<{ contenu_base64: string; nom_fichier: string }>(`/api/documents-techniques/download/${docId}`),
   delete: (docId: number) => request<{ok: boolean}>(`/api/documents-techniques/${docId}`, { method: 'DELETE' }),
 };
