@@ -94,16 +94,24 @@ export default function SavPage() {
         techApi.list().catch(() => [])
       ]);
       setTechniciens(techRes as any);
+      const normalizeStatut = (s: string): string => {
+        if (!s) return 'En cours';
+        const low = s.toLowerCase();
+        if (low.includes('tur') || low.includes('termin') || low.includes('clotur')) return 'Cloturee';
+        if (low.includes('cours')) return 'En cours';
+        if (low.includes('planif')) return 'Planifiee';
+        return s;
+      };
       const mapped = res.map((item: any) => ({
         id: Number(item.id || 0),
         date: item.date || 'N/A',
         machine: item.machine || '',
         client: item.client || '',
         type: item.type_intervention || 'Corrective',
-        technicien: item.technicien || 'Non assigné',
+        technicien: item.technicien || 'Non assign\u00e9',
         duree: Math.round((item.duree_minutes || 0) / 60),
         duree_minutes: item.duree_minutes || 0,
-        statut: item.statut || 'En cours',
+        statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         probleme: item.probleme || '',
         cause: item.cause || '',
@@ -292,7 +300,7 @@ export default function SavPage() {
         if (d.getFullYear() !== filterYear) return false;
         if (periodMode === 'mensuel' && d.getMonth() !== filterMonth) return false;
       }
-      if (filterStatut !== 'Tous' && !i.statut.toLowerCase().includes(filterStatut.toLowerCase())) return false;
+      if (filterStatut !== 'Tous' && i.statut !== filterStatut) return false;
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
       if (filterClient !== 'Tous' && i.client !== filterClient) return false;
       if (filterEquip !== 'Tous' && i.machine !== filterEquip) return false;
@@ -483,9 +491,9 @@ export default function SavPage() {
             </div>
             <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="Tous">Tous les statuts</option>
-              <option value="Cloturee">Clôturée</option>
+              <option value="Cloturee">Cloturee</option>
               <option value="En cours">En cours</option>
-              <option value="Planifiée">Planifiée</option>
+              <option value="Planifiee">Planifiee</option>
             </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="Tous">Tous les types</option>
