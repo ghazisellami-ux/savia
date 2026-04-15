@@ -303,7 +303,16 @@ def get_equipements(user: dict = Depends(_verify_token)):
 @app.post("/api/equipements")
 def create_equipement(body: dict, user: dict = Depends(_verify_token)):
     ajouter_equipement(body)
-    return {"ok": True}
+    # Return the ID of the created/upserted equipment
+    nom = body.get("Nom", "")
+    client = body.get("Client", "Centre Principal")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id FROM equipements WHERE nom = ? AND client = ?",
+            (nom, client)
+        ).fetchone()
+    equip_id = dict(row)["id"] if row else None
+    return {"ok": True, "id": equip_id}
 
 
 @app.put("/api/equipements/{equip_id}")
@@ -321,6 +330,19 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
 # ==========================================
 # DOCUMENTS TECHNIQUES
 # ==========================================
+
+@app.post("/api/documents-techniques/upload")
+def upload_document(body: dict, user: dict = Depends(_verify_token)):
+    """Upload a technical document (base64 encoded) for an equipment."""
+    from db_engine import ajouter_document_technique
+    equip_id = body.get("equipement_id")
+    nom_fichier = body.get("nom_fichier", "")
+    contenu_base64 = body.get("contenu_base64", "")
+    if not equip_id or not nom_fichier or not contenu_base64:
+        raise HTTPException(status_code=400, detail="equipement_id, nom_fichier et contenu_base64 requis")
+    ajouter_document_technique(equip_id, nom_fichier, contenu_base64)
+    return {"ok": True}
+
 
 @app.get("/api/documents-techniques")
 def get_all_documents(user: dict = Depends(_verify_token)):

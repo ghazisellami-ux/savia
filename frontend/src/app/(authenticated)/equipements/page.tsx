@@ -162,6 +162,21 @@ export default function EquipementsPage() {
     setDocFiles([]);
   };
 
+  // Helper: convert File to base64 string
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove the "data:...;base64," prefix
+        const base64 = result.split(',')[1] || result;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleSave = async () => {
     if (!form.Nom.trim() || !form.Client.trim()) return;
     setIsSaving(true);
@@ -170,11 +185,29 @@ export default function EquipementsPage() {
       if (docFiles.length > 0) {
         (payload as any).DocumentTechnique = docFiles.map(f => f.name).join(', ');
       }
+
+      let targetEquipId: number | null = null;
+
       if (editingEquip) {
         await equipements.update(Number(editingEquip.id), payload);
+        targetEquipId = Number(editingEquip.id);
       } else {
-        await equipements.create(payload);
+        const result = await equipements.create(payload);
+        targetEquipId = result.id;
       }
+
+      // Upload each document file to the backend
+      if (targetEquipId && docFiles.length > 0) {
+        for (const file of docFiles) {
+          try {
+            const base64Content = await fileToBase64(file);
+            await documentsTechniques.upload(targetEquipId, file.name, base64Content);
+          } catch (uploadErr) {
+            console.error(`Failed to upload ${file.name}:`, uploadErr);
+          }
+        }
+      }
+
       setForm(emptyForm);
       setDocFiles([]);
       setShowAddForm(false);
