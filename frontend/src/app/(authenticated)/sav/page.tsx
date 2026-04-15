@@ -60,13 +60,13 @@ export default function SavPage() {
   const [techniciens, setTechniciens] = useState<{nom: string, prenom: string}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showAiModal, setShowAiModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<Intervention | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   const [aiError, setAiError] = useState('');
+  const [isPdfGenerating, setIsPdfGenerating] = useState(false);
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return d.toISOString().substring(0, 10);
@@ -169,18 +169,24 @@ export default function SavPage() {
     setIsAnalyzing(true);
     setAiError('');
     setAiResult(null);
-    setShowAiModal(true);
+    setActiveTab(4); // Switch to AI tab
     try {
-      const totalInterv = data.length;
-      const terminees = data.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
-      const totalCout = data.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
-      const totalDuree = data.reduce((a, b) => a + b.duree, 0);
-      const mttrCalc = totalInterv > 0 ? Math.round(totalDuree / totalInterv) : 0;
-      const tauxRes = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
-      const correctifs = data.filter(i => i.type.toLowerCase().includes('correct')).length;
+      const allInterv = data;
+      const nb_total = allInterv.length;
+      const nb_cloturees = allInterv.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
+      const nb_en_cours = allInterv.filter(i => i.statut.toLowerCase().includes('cours')).length;
+      const nb_correctives = allInterv.filter(i => i.type.toLowerCase().includes('correct')).length;
+      const nb_preventives = allInterv.filter(i => i.type.toLowerCase().includes('ventive')).length;
+      const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
+      const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
+      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
+      const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
+      const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
+      // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
-      data.forEach(i => {
+      allInterv.forEach(i => {
         const t = i.technicien || 'Inconnu';
         const prev = techMap.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
         prev.nb++;
@@ -189,22 +195,47 @@ export default function SavPage() {
         prev.cout += (i.cout || i.coutPieces);
         techMap.set(t, prev);
       });
-      const tech_stats = Array.from(techMap.entries()).map(([nom, s]) => ({
-        nom, nb_interventions: s.nb, taux_resolution: s.nb > 0 ? Math.round((s.clot / s.nb) * 100) : 0,
-        mttr_h: s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0,
-        cout_total: s.cout,
-      }));
+      let tech_details = '';
+      techMap.forEach((s, nom) => {
+        const taux = s.nb > 0 ? Math.round((s.clot / s.nb) * 100) : 0;
+        const mttr = s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0;
+        tech_details += `- ${nom}: ${s.nb} interventions, ${s.clot} clôturées, taux=${taux}%, MTTR=${mttr}h, coût=${s.cout} TND\n`;
+      });
 
-      const kpis = {
-        nb_total: totalInterv, taux_resolution: tauxRes, mttr_h: mttrCalc,
-        cout_moyen: totalInterv > 0 ? Math.round(totalCout / totalInterv) : 0,
-        cout_total: totalCout,
-        ratio_correctif_pct: totalInterv > 0 ? Math.round((correctifs / totalInterv) * 100) : 0,
-        score_global: Math.min(100, tauxRes + (mttrCalc < 4 ? 20 : 0)),
-        tech_stats,
+      // Build machine details
+      const machineMap = new Map<string, number>();
+      allInterv.forEach(i => machineMap.set(i.machine, (machineMap.get(i.machine) || 0) + 1));
+      let machines_detail = '';
+      Array.from(machineMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15).forEach(([m, nb]) => {
+        machines_detail += `- ${m}: ${nb} interventions\n`;
+      });
+
+      // Client details
+      const clientMap = new Map<string, number>();
+      allInterv.forEach(i => { if (i.client) clientMap.set(i.client, (clientMap.get(i.client) || 0) + 1); });
+      let clients_detail = '';
+      Array.from(clientMap.entries()).sort((a, b) => b[1] - a[1]).forEach(([c, nb]) => {
+        clients_detail += `- ${c}: ${nb} interventions\n`;
+      });
+
+      // Recent interventions
+      let interventions_detail = '';
+      allInterv.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 20).forEach(i => {
+        interventions_detail += `- ${i.date.substring(0,10)} | ${i.machine} | ${i.technicien} | ${i.type} | ${i.statut} | ${i.duree}h | ${i.cout || i.coutPieces} TND | ${i.probleme || '-'}\n`;
+      });
+
+      const sav_data = {
+        nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
+        duree_totale_h: Math.round(totalDureeMin / 60),
+        nb_correctives, nb_preventives, nb_installations,
+        ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
+        cout_interventions: totalCoutInterv, cout_pieces: totalCoutPieces,
+        cout_total: totalCoutInterv + totalCoutPieces,
+        cout_moyen: nb_total > 0 ? Math.round((totalCoutInterv + totalCoutPieces) / nb_total) : 0,
+        tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
-      const res = await ai.analyzePerformance(kpis, 'TND');
+      const res = await ai.analyzeSav(sav_data, 'TND');
       if (res.ok && res.result) {
         setAiResult(typeof res.result === 'string' ? JSON.parse(res.result) : res.result);
       } else {
@@ -215,6 +246,41 @@ export default function SavPage() {
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // PDF Generation
+  const handleGeneratePdf = () => {
+    setIsPdfGenerating(true);
+    const pdfFiltered = data.filter(i => {
+      const d = new Date(i.date);
+      return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
+    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
+    const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+
+    const w = window.open('', '_blank');
+    if (!w) { setIsPdfGenerating(false); return; }
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport SAV — ${pdfDateFrom} au ${pdfDateTo}</title>
+    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{background:#f0f9ff;border:1px solid #d1d5db;padding:8px;text-align:left;font-weight:bold}
+    td{border:1px solid #d1d5db;padding:6px 8px}.kpi{display:inline-block;background:#f8fafc;border:1px solid #d1d5db;border-radius:8px;padding:12px 24px;margin:8px;text-align:center}
+    .kpi .val{font-size:28px;font-weight:bold;color:#0f766e}.kpi .lab{font-size:11px;color:#666;margin-top:4px}
+    @media print{body{margin:20px}}</style></head><body>
+    <h1>Rapport SAV — Interventions</h1>
+    <p>Période : <strong>${pdfDateFrom}</strong> au <strong>${pdfDateTo}</strong></p>
+    <div style="margin:20px 0">
+      <div class="kpi"><div class="val">${pdfFiltered.length}</div><div class="lab">Interventions</div></div>
+      <div class="kpi"><div class="val">${cloturees}</div><div class="lab">Clôturées</div></div>
+      <div class="kpi"><div class="val">${pdfFiltered.length > 0 ? Math.round((cloturees/pdfFiltered.length)*100) : 0}%</div><div class="lab">Taux résolution</div></div>
+      <div class="kpi"><div class="val">${coutT.toLocaleString('fr')} TND</div><div class="lab">Coût total</div></div>
+    </div>
+    <table><thead><tr>${['Date','Machine','Client','Technicien','Type','Statut','Durée','Coût (TND)'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${pdfFiltered.map(i => `<tr><td>${i.date.substring(0,10)}</td><td>${i.machine}</td><td>${i.client||'-'}</td><td>${i.technicien}</td><td>${i.type}</td><td>${i.statut}</td><td>${i.duree}h</td><td>${(i.cout||i.coutPieces).toLocaleString('fr')}</td></tr>`).join('')}</tbody></table>
+    <p style="margin-top:24px;font-size:11px;color:#999">Généré par SAVIA — ${new Date().toLocaleString('fr-FR')}</p>
+    </body></html>`);
+    w.document.close();
+    setTimeout(() => { w.print(); setIsPdfGenerating(false); }, 500);
   };
 
   // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
@@ -292,14 +358,9 @@ export default function SavPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Suivi complet des interventions techniques</p>
         </div>
-        <div className="flex gap-3">
-          <button onClick={handleAiAnalyze} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20">
-            <Sparkles className="w-4 h-4" /> Analyser avec l&apos;IA
-          </button>
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
-            <Plus className="w-4 h-4" /> Nouvelle intervention
-          </button>
-        </div>
+        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+          <Plus className="w-4 h-4" /> Nouvelle intervention
+        </button>
       </div>
 
       {/* Period Filter Bar (Mensuel / Annuel) */}
@@ -687,8 +748,8 @@ export default function SavPage() {
                 <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CalendarDays className="w-3.5 h-3.5" /> Au</label>
                 <input type="date" className={INPUT_CLS} value={pdfDateTo} onChange={e => setPdfDateTo(e.target.value)} />
               </div>
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
-                <FileText className="w-4 h-4" /> Générer PDF
+              <button onClick={handleGeneratePdf} disabled={isPdfGenerating} className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                {isPdfGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />} Générer PDF
               </button>
             </div>
           </div>
@@ -742,34 +803,58 @@ export default function SavPage() {
         </div>
       )}
 
-      {/* ===== TAB 4: ANALYSE IA ===== */}
+      {/* ===== TAB 4: ANALYSE IA COMPLÈTE ===== */}
       {activeTab === 4 && (
         <div className="space-y-6">
-          <div className="glass rounded-xl p-6">
-            <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Brain className="w-4 h-4 text-purple-400" /> Recommandations IA (Gemini)
-            </h3>
-            <div className="text-center">
-              <button onClick={handleAiAnalyze} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto">
-                <Sparkles className="w-5 h-5" /> Analyser la performance avec l&apos;IA
-              </button>
-              <p className="text-xs text-savia-text-dim mt-2">Gemini analysera vos KPIs et la performance de l&apos;équipe</p>
-            </div>
+          {/* Launch button */}
+          <div className="glass rounded-xl p-6 text-center">
+            <Brain className="w-10 h-10 text-purple-400 mx-auto mb-3" />
+            <h3 className="text-lg font-bold text-savia-text mb-2">Analyse IA Complète — SAV</h3>
+            <p className="text-sm text-savia-text-muted mb-4">Gemini analysera l&apos;ensemble de vos données SAV : performance équipe, coûts, tendances, et recommandations</p>
+            <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center justify-center gap-2 px-8 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto">
+              {isAnalyzing ? <><Loader2 className="w-5 h-5 animate-spin" /> Analyse en cours...</> : <><Sparkles className="w-5 h-5" /> Lancer l&apos;analyse complète</>}
+            </button>
           </div>
 
+          {/* Loading state */}
+          {isAnalyzing && (
+            <div className="glass rounded-xl p-12 text-center">
+              <div className="relative mx-auto w-16 h-16 mb-4"><Loader2 className="w-16 h-16 animate-spin text-purple-400" /><Sparkles className="w-6 h-6 text-pink-400 absolute -top-1 -right-1 animate-pulse" /></div>
+              <p className="text-savia-text font-semibold">Gemini analyse vos données SAV...</p>
+              <p className="text-xs text-savia-text-dim mt-1">Cela peut prendre jusqu&apos;à 30 secondes</p>
+            </div>
+          )}
+
+          {/* Error */}
+          {aiError && (
+            <div className="glass rounded-xl p-6 text-center border border-red-500/20">
+              <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-3" />
+              <p className="text-red-400 font-semibold">{aiError}</p>
+            </div>
+          )}
+
+          {/* Results */}
           {aiResult && (
-            <div className="space-y-4">
-              <div className="glass rounded-xl p-5 border border-purple-500/20">
-                <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4" /> Résumé Exécutif
-                </h3>
-                <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse || 'N/A'}</p>
+            <div className="space-y-5">
+              {/* Score + Résumé */}
+              <div className="glass rounded-xl p-6 border border-purple-500/20">
+                <div className="flex items-start gap-4">
+                  {aiResult.score_global && (
+                    <div className="flex-shrink-0 w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                      <span className="text-2xl font-black text-white">{aiResult.score_global}</span>
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2"><BarChart3 className="w-4 h-4" /> Résumé Exécutif</h3>
+                    <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse || 'N/A'}</p>
+                  </div>
+                </div>
               </div>
+
+              {/* Points Forts / Faibles */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="glass rounded-xl p-5 border border-green-500/20">
-                  <h3 className="text-sm font-bold text-green-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <ThumbsUp className="w-4 h-4" /> Points Forts
-                  </h3>
+                  <h3 className="text-sm font-bold text-green-400 uppercase tracking-wider mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4" /> Points Forts</h3>
                   <ul className="space-y-2">
                     {(aiResult.points_forts || []).map((pt: string, i: number) => (
                       <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><CheckCircle className="w-3.5 h-3.5 text-green-400 mt-0.5 flex-shrink-0" /> {pt}</li>
@@ -777,9 +862,7 @@ export default function SavPage() {
                   </ul>
                 </div>
                 <div className="glass rounded-xl p-5 border border-red-500/20">
-                  <h3 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <ThumbsDown className="w-4 h-4" /> Points Faibles
-                  </h3>
+                  <h3 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-2"><ThumbsDown className="w-4 h-4" /> Points Faibles</h3>
                   <ul className="space-y-2">
                     {(aiResult.points_faibles || []).map((pt: string, i: number) => (
                       <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" /> {pt}</li>
@@ -787,10 +870,52 @@ export default function SavPage() {
                   </ul>
                 </div>
               </div>
+
+              {/* Performance Équipe */}
+              {aiResult.performance_equipe && aiResult.performance_equipe.length > 0 && (
+                <div className="glass rounded-xl p-5 border border-blue-500/20">
+                  <h3 className="text-sm font-bold text-blue-400 uppercase tracking-wider mb-3 flex items-center gap-2"><Users className="w-4 h-4" /> Évaluation de l&apos;Équipe</h3>
+                  <div className="space-y-3">
+                    {aiResult.performance_equipe.map((pe: any, i: number) => (
+                      <div key={i} className="flex items-start gap-3 bg-savia-surface-hover/30 rounded-lg p-3">
+                        <div className={`px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0 ${
+                          pe.evaluation?.toLowerCase().includes('excellent') ? 'bg-green-500/15 text-green-400' :
+                          pe.evaluation?.toLowerCase().includes('bon') ? 'bg-blue-500/15 text-blue-400' :
+                          'bg-yellow-500/15 text-yellow-400'
+                        }`}>{pe.evaluation}</div>
+                        <div>
+                          <div className="font-bold text-sm text-savia-text">{pe.technicien}</div>
+                          <p className="text-xs text-savia-text-muted mt-0.5">{pe.commentaire}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Analyse Coûts */}
+              {aiResult.analyse_couts && (
+                <div className="glass rounded-xl p-5 border border-yellow-500/20">
+                  <h3 className="text-sm font-bold text-yellow-400 uppercase tracking-wider mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4" /> Analyse des Coûts</h3>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                        aiResult.analyse_couts.verdict?.toLowerCase().includes('maîtris') ? 'bg-green-500/15 text-green-400' :
+                        aiResult.analyse_couts.verdict?.toLowerCase().includes('critiq') ? 'bg-red-500/15 text-red-400' :
+                        'bg-yellow-500/15 text-yellow-400'
+                      }`}>{aiResult.analyse_couts.verdict}</span>
+                    </div>
+                    <p className="text-sm text-savia-text">{aiResult.analyse_couts.detail}</p>
+                    {aiResult.analyse_couts.economie_possible && (
+                      <p className="text-sm text-green-400 font-semibold flex items-center gap-1"><TrendingUp className="w-3.5 h-3.5" /> {aiResult.analyse_couts.economie_possible}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Recommandations */}
               <div className="glass rounded-xl p-5 border border-cyan-500/20">
-                <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Lightbulb className="w-4 h-4" /> Recommandations
-                </h3>
+                <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider mb-3 flex items-center gap-2"><Lightbulb className="w-4 h-4" /> Recommandations</h3>
                 <div className="space-y-3">
                   {(aiResult.recommandations || []).map((rec: any, i: number) => (
                     <div key={i} className="bg-savia-surface-hover/50 rounded-lg p-3">
@@ -802,6 +927,30 @@ export default function SavPage() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Tendances + Priorités */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {aiResult.tendances && aiResult.tendances.length > 0 && (
+                  <div className="glass rounded-xl p-5 border border-indigo-500/20">
+                    <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-wider mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4" /> Tendances Observées</h3>
+                    <ul className="space-y-2">
+                      {aiResult.tendances.map((t: string, i: number) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><Activity className="w-3.5 h-3.5 text-indigo-400 mt-0.5 flex-shrink-0" /> {t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {aiResult.priorites_immediates && aiResult.priorites_immediates.length > 0 && (
+                  <div className="glass rounded-xl p-5 border border-orange-500/20">
+                    <h3 className="text-sm font-bold text-orange-400 uppercase tracking-wider mb-3 flex items-center gap-2"><Zap className="w-4 h-4" /> Priorités Immédiates</h3>
+                    <ul className="space-y-2">
+                      {aiResult.priorites_immediates.map((p: string, i: number) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><AlertTriangle className="w-3.5 h-3.5 text-orange-400 mt-0.5 flex-shrink-0" /> {p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -865,51 +1014,7 @@ export default function SavPage() {
         </div>
       </Modal>
 
-      {/* AI Analysis Modal (for header button) */}
-      <Modal isOpen={showAiModal} onClose={() => setShowAiModal(false)} title="Analyse IA — Performance SAV" size="xl">
-        {isAnalyzing ? (
-          <div className="flex flex-col items-center justify-center py-12 gap-4">
-            <div className="relative"><Loader2 className="w-12 h-12 animate-spin text-purple-400" /><Sparkles className="w-5 h-5 text-pink-400 absolute -top-1 -right-1 animate-pulse" /></div>
-            <p className="text-savia-text-muted text-sm">Gemini analyse vos données...</p>
-          </div>
-        ) : aiError ? (
-          <div className="glass rounded-xl p-6 text-center border border-red-500/20">
-            <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-3" />
-            <p className="text-red-400 font-semibold">{aiError}</p>
-          </div>
-        ) : aiResult ? (
-          <div className="space-y-5">
-            <div className="glass rounded-xl p-5 border border-purple-500/20">
-              <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2"><BarChart3 className="w-4 h-4" /> Résumé Exécutif</h3>
-              <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse}</p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="glass rounded-xl p-5 border border-green-500/20">
-                <h3 className="text-sm font-bold text-green-400 uppercase tracking-wider mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4" /> Points Forts</h3>
-                <ul className="space-y-2">{(aiResult.points_forts || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><CheckCircle className="w-3.5 h-3.5 text-green-400 mt-0.5 flex-shrink-0" /> {pt}</li>)}</ul>
-              </div>
-              <div className="glass rounded-xl p-5 border border-red-500/20">
-                <h3 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-2"><ThumbsDown className="w-4 h-4" /> Points Faibles</h3>
-                <ul className="space-y-2">{(aiResult.points_faibles || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><AlertTriangle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" /> {pt}</li>)}</ul>
-              </div>
-            </div>
-            <div className="glass rounded-xl p-5 border border-cyan-500/20">
-              <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider mb-3 flex items-center gap-2"><Lightbulb className="w-4 h-4" /> Recommandations</h3>
-              <div className="space-y-3">
-                {(aiResult.recommandations || []).map((rec: any, i: number) => (
-                  <div key={i} className="bg-savia-surface-hover/50 rounded-lg p-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-sm text-savia-text">{rec.titre}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rec.impact === 'HAUT' ? 'bg-red-500/20 text-red-400' : rec.impact === 'MOYEN' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{rec.impact}</span>
-                    </div>
-                    <p className="text-xs text-savia-text-muted">{rec.description}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
+
     </div>
   );
 }
