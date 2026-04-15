@@ -319,6 +319,42 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
 
 
 # ==========================================
+# DOCUMENTS TECHNIQUES
+# ==========================================
+
+@app.get("/api/documents-techniques")
+def get_all_documents(user: dict = Depends(_verify_token)):
+    """List all technical documents with associated equipment info."""
+    from db_engine import lire_tous_documents_techniques
+    return lire_tous_documents_techniques()
+
+
+@app.get("/api/documents-techniques/{equip_id}")
+def get_documents_by_equipment(equip_id: int, user: dict = Depends(_verify_token)):
+    """List technical documents for a specific equipment."""
+    from db_engine import lire_documents_techniques
+    return lire_documents_techniques(equip_id)
+
+
+@app.get("/api/documents-techniques/download/{doc_id}")
+def download_document(doc_id: int, user: dict = Depends(_verify_token)):
+    """Download a specific technical document (returns base64 content)."""
+    from db_engine import lire_document_technique_contenu
+    doc = lire_document_technique_contenu(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document non trouvé")
+    return doc
+
+
+@app.delete("/api/documents-techniques/{doc_id}")
+def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
+    """Delete a technical document."""
+    from db_engine import supprimer_document_technique
+    supprimer_document_technique(doc_id)
+    return {"ok": True}
+
+
+# ==========================================
 # INTERVENTIONS / SAV
 # ==========================================
 

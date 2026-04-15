@@ -95,6 +95,14 @@ export const equipements = {
   delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
 };
 
+// --- Documents Techniques ---
+export const documentsTechniques = {
+  listAll: () => request<Array<Record<string, unknown>>>('/api/documents-techniques'),
+  listByEquipment: (equipId: number) => request<Array<Record<string, unknown>>>(`/api/documents-techniques/${equipId}`),
+  download: (docId: number) => request<{ contenu_base64: string; nom_fichier: string }>(`/api/documents-techniques/download/${docId}`),
+  delete: (docId: number) => request<{ok: boolean}>(`/api/documents-techniques/${docId}`, { method: 'DELETE' }),
+};
+
 // --- Techniciens ---
 export const techniciens = {
   list: () => request<Array<Record<string, unknown>>>('/api/techniciens'),
@@ -173,4 +181,4 @@ export const logs = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
