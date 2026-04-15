@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/modal';
 import { Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle, Calendar, Clock } from 'lucide-react';
 import { planning, equipements } from '@/lib/api';
 
-const INPUT_CLS = "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-500/40 outline-none transition-all";
+const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 const MONTHS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const DAYS_SHORT = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const EVENT_COLORS = [
@@ -168,7 +168,7 @@ export default function PlanningPage() {
         <button onClick={() => {
           setForm({...emptyForm, date_planifiee: todayStr});
           setShowAddModal(true);
-        }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+        }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
           <Plus className="w-4 h-4" /> Planifier une maintenance
         </button>
       </div>
@@ -198,7 +198,7 @@ export default function PlanningPage() {
         <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
           <span className="text-red-400 font-bold">🚨 {overdueCount} maintenance(s) en retard !</span>
-          <span className="text-xs text-slate-400">Des maintenances planifiées n&apos;ont pas encore été réalisées.</span>
+          <span className="text-xs text-savia-text-muted">Des maintenances planifiées n&apos;ont pas encore été réalisées.</span>
         </div>
       )}
 
@@ -206,13 +206,13 @@ export default function PlanningPage() {
       <SectionCard title="">
         {/* Month navigation */}
         <div className="flex items-center justify-between mb-6">
-          <button onClick={prevMonth} className="flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer">
+          <button onClick={prevMonth} className="flex items-center gap-1 px-3 py-2 rounded-lg bg-savia-surface-hover hover:bg-savia-border text-savia-text transition-colors cursor-pointer">
             <ChevronLeft className="w-4 h-4" /> Précédent
           </button>
           <h2 className="text-xl font-black gradient-text">
             {MONTHS[currentMonth]} {currentYear}
           </h2>
-          <button onClick={nextMonth} className="flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer">
+          <button onClick={nextMonth} className="flex items-center gap-1 px-3 py-2 rounded-lg bg-savia-surface-hover hover:bg-savia-border text-savia-text transition-colors cursor-pointer">
             Suivant <ChevronRight className="w-4 h-4" />
           </button>
         </div>
@@ -246,7 +246,7 @@ export default function PlanningPage() {
                   'border-savia-border/30 hover:border-savia-border hover:bg-savia-surface-hover/30'
                 }`}
               >
-                <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-slate-300' : 'text-slate-600'}`}>
+                <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-savia-text' : 'text-slate-600'}`}>
                   {cell.day}
                 </div>
                 <div className="space-y-0.5">
@@ -260,7 +260,7 @@ export default function PlanningPage() {
                     );
                   })}
                   {events.length > 3 && (
-                    <div className="text-[10px] text-slate-500 px-1">+{events.length - 3}</div>
+                    <div className="text-[10px] text-savia-text-dim px-1">+{events.length - 3}</div>
                   )}
                 </div>
               </div>
@@ -290,7 +290,7 @@ export default function PlanningPage() {
                         {isOverdue ? '⚠️ En retard' : ev.statut}
                       </span>
                     </div>
-                    <div className="text-sm text-slate-400 space-y-1">
+                    <div className="text-sm text-savia-text-muted space-y-1">
                       <div>👤 {ev.technicien}</div>
                       <div>📝 {ev.description || 'Maintenance préventive'}</div>
                       <div>⏱️ {Math.round(ev.duree_minutes / 60)}h — {ev.type_maintenance}</div>
@@ -353,19 +353,19 @@ export default function PlanningPage() {
       {/* Add Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="📅 Planifier une Maintenance" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className="block text-sm text-slate-400 mb-1">Date</label><input type="date" className={INPUT_CLS} value={form.date_planifiee} onChange={e => setForm({...form, date_planifiee: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner CT-01" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Technicien</label><input className={INPUT_CLS} placeholder="Ex: Ahmed" value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Type</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Date</label><input type="date" className={INPUT_CLS} value={form.date_planifiee} onChange={e => setForm({...form, date_planifiee: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner CT-01" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Technicien</label><input className={INPUT_CLS} placeholder="Ex: Ahmed" value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Type</label>
             <select className={INPUT_CLS} value={form.type_maintenance} onChange={e => setForm({...form, type_maintenance: e.target.value})}>
               <option>Préventive</option><option>Corrective</option><option>Calibration</option><option>Inspection</option>
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Durée estimée (min)</label><input type="number" className={INPUT_CLS} value={form.duree_minutes} onChange={e => setForm({...form, duree_minutes: e.target.value})} /></div>
-          <div className="md:col-span-2"><label className="block text-sm text-slate-400 mb-1">Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Détails de la maintenance..." value={form.description} onChange={e => setForm({...form, description: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Durée estimée (min)</label><input type="number" className={INPUT_CLS} value={form.duree_minutes} onChange={e => setForm({...form, duree_minutes: e.target.value})} /></div>
+          <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Détails de la maintenance..." value={form.description} onChange={e => setForm({...form, description: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white cursor-pointer">Annuler</button>
-          <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text cursor-pointer">Annuler</button>
+          <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Planifier
           </button>
         </div>

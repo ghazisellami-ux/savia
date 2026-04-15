@@ -8,7 +8,7 @@ import { admin, techniciens } from '@/lib/api';
 interface User { id: number; nom: string; email: string; role: string; client: string; derniereConnexion: string; }
 interface Technicien { id: number; nom: string; specialite: string; qualification: string; dispo: string; email: string; telephone: string; }
 
-const INPUT_CLS = "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-500/40 outline-none transition-all";
+const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 
 export default function AdminPage() {
   const [tab, setTab] = useState<'users' | 'techs'>('users');
@@ -81,7 +81,7 @@ export default function AdminPage() {
           <p className="text-savia-text-muted text-sm mt-1">Gestion des utilisateurs, techniciens et permissions</p>
         </div>
         {tab === 'techs' && (
-          <button onClick={() => setShowAddTech(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+          <button onClick={() => setShowAddTech(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
             <Plus className="w-4 h-4" /> Nouveau Technicien
           </button>
         )}
@@ -95,10 +95,10 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-savia-border pb-0">
-        <button onClick={() => setTab('users')} className={`px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer ${tab === 'users' ? 'bg-savia-surface text-savia-accent border-b-2 border-savia-accent' : 'text-savia-text-muted hover:text-white'}`}>
+        <button onClick={() => setTab('users')} className={`px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer ${tab === 'users' ? 'bg-savia-surface text-savia-accent border-b-2 border-savia-accent' : 'text-savia-text-muted hover:text-savia-text'}`}>
           <Users className="w-4 h-4 inline mr-1.5" />Utilisateurs
         </button>
-        <button onClick={() => setTab('techs')} className={`px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer ${tab === 'techs' ? 'bg-savia-surface text-savia-accent border-b-2 border-savia-accent' : 'text-savia-text-muted hover:text-white'}`}>
+        <button onClick={() => setTab('techs')} className={`px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer ${tab === 'techs' ? 'bg-savia-surface text-savia-accent border-b-2 border-savia-accent' : 'text-savia-text-muted hover:text-savia-text'}`}>
           <Wrench className="w-4 h-4 inline mr-1.5" />Techniciens
         </button>
       </div>
@@ -176,36 +176,36 @@ export default function AdminPage() {
       <Modal isOpen={showAddTech} onClose={() => setShowAddTech(false)} title="➕ Nouveau Technicien" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Nom *</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Nom *</label>
             <input className={INPUT_CLS} placeholder="Ex: Ben Ali" value={form.nom} onChange={e => setForm({...form, nom: e.target.value})} />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Prénom</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Prénom</label>
             <input className={INPUT_CLS} placeholder="Ex: Ahmed" value={form.prenom} onChange={e => setForm({...form, prenom: e.target.value})} />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Spécialité</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Spécialité</label>
             <select className={INPUT_CLS} value={form.specialite} onChange={e => setForm({...form, specialite: e.target.value})}>
               <option value="">— Sélectionner —</option>
               <option>Scanner CT</option><option>IRM</option><option>Radiographie</option><option>Mammographie</option><option>Général</option>
             </select>
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Qualification</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Qualification</label>
             <input className={INPUT_CLS} placeholder="Ex: Ingénieur Biomédical" value={form.qualification} onChange={e => setForm({...form, qualification: e.target.value})} />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Email</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Email</label>
             <input type="email" className={INPUT_CLS} placeholder="Ex: ahmed@savia.tn" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Téléphone</label>
+            <label className="block text-sm text-savia-text-muted mb-1">Téléphone</label>
             <input className={INPUT_CLS} placeholder="Ex: +216 XX XXX XXX" value={form.telephone} onChange={e => setForm({...form, telephone: e.target.value})} />
           </div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowAddTech(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
-          <button onClick={handleSaveTech} disabled={isSaving || !form.nom.trim()} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+          <button onClick={() => setShowAddTech(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
+          <button onClick={handleSaveTech} disabled={isSaving || !form.nom.trim()} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Sauvegarder
           </button>

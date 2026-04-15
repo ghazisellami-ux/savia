@@ -251,7 +251,7 @@ export default function DashboardPage() {
                 onClick={() => setPeriodMode('mensuel')}
                 className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
                   periodMode === 'mensuel'
-                    ? 'bg-savia-accent text-white'
+                    ? 'bg-savia-accent text-savia-text'
                     : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
                 }`}
               >
@@ -261,7 +261,7 @@ export default function DashboardPage() {
                 onClick={() => setPeriodMode('annuel')}
                 className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
                   periodMode === 'annuel'
-                    ? 'bg-savia-accent text-white'
+                    ? 'bg-savia-accent text-savia-text'
                     : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
                 }`}
               >
@@ -372,7 +372,7 @@ export default function DashboardPage() {
               <AlertTriangle className="w-5 h-5 text-red-400" />
               <span className="font-bold text-red-400">{healthScores.filter(h => h.score < 40).length} anomalie(s) détectée(s)</span>
             </div>
-            {showAnomalies ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            {showAnomalies ? <ChevronUp className="w-4 h-4 text-savia-text-muted" /> : <ChevronDown className="w-4 h-4 text-savia-text-muted" />}
           </button>
           {showAnomalies && (
             <div className="px-4 pb-4 space-y-2">
@@ -380,7 +380,7 @@ export default function DashboardPage() {
                 <div key={h.machine} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
                   <div>
                     <span className="font-bold text-sm">{h.machine}</span>
-                    <span className="text-xs text-slate-400 ml-2">Score: {h.score}% — {h.pannes} pannes</span>
+                    <span className="text-xs text-savia-text-muted ml-2">Score: {h.score}% — {h.pannes} pannes</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-500/20 text-red-400">
                     {h.score < 15 ? 'Critique' : 'Dégradé'}
@@ -395,7 +395,7 @@ export default function DashboardPage() {
       {/* 📅 Timeline des Interventions Récentes */}
       <SectionCard title={<span className="flex items-center gap-2"><Clock className="w-5 h-5 text-blue-400" /> Interventions Récentes — {dateRange.label}</span>}>
         {recentInterv.length === 0 ? (
-          <div className="text-center text-slate-400 py-4">Aucune intervention sur cette période</div>
+          <div className="text-center text-savia-text-muted py-4">Aucune intervention sur cette période</div>
         ) : (
           <div className="relative pl-6 max-h-[320px] overflow-y-auto">
             <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-gradient-to-b from-savia-accent via-blue-500 to-purple-500" />
@@ -407,11 +407,11 @@ export default function DashboardPage() {
                   <div className="glass rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-bold text-sm">{interv.machine}</span>
-                      <span className="text-xs text-slate-400">{(interv.date || '').substring(0, 10)}</span>
+                      <span className="text-xs text-savia-text-muted">{(interv.date || '').substring(0, 10)}</span>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${(interv.type_intervention || '').toLowerCase().includes('correct') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>{interv.type_intervention}</span>
-                      <span className="text-xs text-slate-400 flex items-center gap-1"><User className="w-3 h-3" /> {interv.technicien || 'N/A'}</span>
+                      <span className="text-xs text-savia-text-muted flex items-center gap-1"><User className="w-3 h-3" /> {interv.technicien || 'N/A'}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${isCompleted ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>{interv.statut}</span>
                     </div>
                   </div>
@@ -504,7 +504,7 @@ export default function DashboardPage() {
           {/* Table */}
           <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-900 z-10">
+              <thead className="sticky top-0 bg-savia-bg z-10">
                 <tr className="border-b border-savia-border">
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Équipement</th>
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Client</th>
@@ -517,7 +517,7 @@ export default function DashboardPage() {
                 {[...healthScores].sort((a, b) => a.score - b.score).map((h) => (
                   <tr key={h.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{h.machine}</td>
-                    <td className="py-2.5 px-3 text-xs text-slate-400">{h.client || '—'}</td>
+                    <td className="py-2.5 px-3 text-xs text-savia-text-muted">{h.client || '—'}</td>
                     <td className="py-2.5 px-3 text-center">
                       <HealthBadge score={h.score} size="sm" />
                     </td>

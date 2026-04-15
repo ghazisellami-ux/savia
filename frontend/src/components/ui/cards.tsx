@@ -21,7 +21,7 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip }: Kp
   }[variant];
 
   const glowColor = {
-    default: 'hover:shadow-[0_0_20px_rgba(45,212,191,0.1)]',
+    default: 'hover:shadow-[0_0_20px_rgba(212,163,115,0.1)]',
     danger: 'hover:shadow-[0_0_20px_rgba(239,68,68,0.1)]',
     success: 'hover:shadow-[0_0_20px_rgba(34,197,94,0.1)]',
     warning: 'hover:shadow-[0_0_20px_rgba(245,158,11,0.1)]',

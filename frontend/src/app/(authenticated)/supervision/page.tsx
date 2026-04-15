@@ -419,7 +419,7 @@ export default function SupervisionPage() {
             <button
               onClick={handleImportLog}
               disabled={!importFile || !importEquip || importLoading}
-              className="w-full py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {importLoading ? 'Analyse en cours...' : 'Enregistrer et analyser'}
             </button>
@@ -494,7 +494,7 @@ export default function SupervisionPage() {
         <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-savia-accent" /> Erreurs détectées sur {currentMachine.machine}</span>}>
           <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-900 z-10">
+              <thead className="sticky top-0 bg-savia-bg z-10">
                 <tr className="border-b border-savia-border">
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Code</th>
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Message</th>
@@ -558,7 +558,7 @@ export default function SupervisionPage() {
               <button
                 onClick={handleAnalyzeAI}
                 disabled={aiLoading}
-                className="w-full py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-blue-600
+                className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600
                            hover:from-purple-500 hover:to-blue-500 disabled:opacity-50
                            transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
@@ -682,7 +682,7 @@ export default function SupervisionPage() {
                     </select>
                   </div>
                 </div>
-                <button className="w-full py-3 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+                <button className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
                   <Save className="w-5 h-5 inline mr-2 -mt-1" /> Enregistrer dans la base
                 </button>
               </div>
@@ -741,7 +741,7 @@ export default function SupervisionPage() {
         {/* Fleet Table */}
         <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-slate-900 z-10">
+            <thead className="sticky top-0 bg-savia-bg z-10">
               <tr className="border-b border-savia-border">
                 <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">État</th>
                 <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Server className="w-3 h-3 inline mr-1 -mt-0.5" /> Équipement</th>
@@ -841,7 +841,7 @@ export default function SupervisionPage() {
               </button>
               <button
                 onClick={() => executeDeleteLog(confirmDelete)}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-500
+                className="flex-1 py-2.5 rounded-lg font-semibold text-savia-text bg-red-600 hover:bg-red-500
                            transition-all cursor-pointer flex items-center justify-center gap-2"
               >
                 <Trash2 className="w-4 h-4" /> Supprimer

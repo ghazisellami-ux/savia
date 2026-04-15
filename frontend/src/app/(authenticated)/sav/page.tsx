@@ -27,10 +27,10 @@ interface Intervention {
   cout: number;
 }
 
-const INPUT_CLS = "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-500/40 outline-none transition-all";
+const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
 const TAB_ACTIVE = "border-cyan-400 text-cyan-400 bg-cyan-400/5";
-const TAB_INACTIVE = "border-transparent text-slate-400 hover:text-white hover:border-slate-500";
+const TAB_INACTIVE = "border-transparent text-savia-text-muted hover:text-savia-text hover:border-slate-500";
 
 const TYPES_ERREUR = ["Hardware", "Software", "Réseau", "Calibration", "Mécanique", "Électrique", "Autre"];
 const PRIORITES = ["Haute", "Moyenne", "Basse"];
@@ -256,10 +256,10 @@ export default function SavPage() {
           <p className="text-savia-text-muted text-sm mt-1">Suivi complet des interventions techniques</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={handleAiAnalyze} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20">
+          <button onClick={handleAiAnalyze} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20">
             <Sparkles className="w-4 h-4" /> Analyser avec l&apos;IA
           </button>
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
             <Plus className="w-4 h-4" /> Nouvelle intervention
           </button>
         </div>
@@ -347,7 +347,7 @@ export default function SavPage() {
                           setSelectedIntervention(i);
                           setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_minutes: String(i.duree_minutes) });
                           setShowStatusModal(true);
-                        }} className="p-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 cursor-pointer">
+                        }} className="p-1 rounded bg-savia-border hover:bg-savia-text-dim/20 text-savia-text cursor-pointer">
                           <Edit className="w-3.5 h-3.5" />
                         </button>
                       </td>
@@ -365,11 +365,11 @@ export default function SavPage() {
         <div className="space-y-6">
           {/* Score global */}
           <div className="glass rounded-xl p-6 text-center">
-            <div className="text-sm text-slate-400 mb-2 uppercase tracking-wider font-bold">Score de Performance Global</div>
+            <div className="text-sm text-savia-text-muted mb-2 uppercase tracking-wider font-bold">Score de Performance Global</div>
             <div className={`text-6xl font-black ${tauxResolution >= 70 ? 'text-green-400' : tauxResolution >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>
               {Math.min(100, Math.round(tauxResolution * 0.4 + (mttr > 0 && mttr < 2 ? 30 : mttr > 0 ? Math.max(0, 30 - (mttr - 2) * 5) : 15) + (100 - (totalInterv > 0 ? correctifs / totalInterv * 100 : 0)) * 0.3))}/100
             </div>
-            <div className="w-full bg-slate-800 rounded-full h-3 mt-4 overflow-hidden max-w-md mx-auto">
+            <div className="w-full bg-savia-surface-hover rounded-full h-3 mt-4 overflow-hidden max-w-md mx-auto">
               <div className={`h-full rounded-full transition-all duration-1000 ${tauxResolution >= 70 ? 'bg-green-400' : tauxResolution >= 40 ? 'bg-yellow-400' : 'bg-red-400'}`}
                 style={{ width: `${Math.min(100, tauxResolution)}%` }} />
             </div>
@@ -377,10 +377,10 @@ export default function SavPage() {
 
           {/* Summary KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{totalInterv}</div><div className="text-xs text-slate-400 mt-1">Interventions totales</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{tauxResolution}%</div><div className="text-xs text-slate-400 mt-1">Taux résolution</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-purple-400">{mttr}h</div><div className="text-xs text-slate-400 mt-1">MTTR moyen</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{totalDureeH}h</div><div className="text-xs text-slate-400 mt-1">Durée totale</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{totalInterv}</div><div className="text-xs text-savia-text-muted mt-1">Interventions totales</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{tauxResolution}%</div><div className="text-xs text-savia-text-muted mt-1">Taux résolution</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-purple-400">{mttr}h</div><div className="text-xs text-savia-text-muted mt-1">MTTR moyen</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{totalDureeH}h</div><div className="text-xs text-savia-text-muted mt-1">Durée totale</div></div>
           </div>
 
           {/* Ratio correctif/préventif */}
@@ -391,7 +391,7 @@ export default function SavPage() {
                   <span className="text-red-400 font-bold">🔴 Corrective: {correctifs}</span>
                   <span className="text-green-400 font-bold">🟢 Préventive: {preventifs}</span>
                 </div>
-                <div className="w-full bg-slate-800 rounded-full h-4 overflow-hidden flex">
+                <div className="w-full bg-savia-surface-hover rounded-full h-4 overflow-hidden flex">
                   <div className="bg-red-400 h-full transition-all" style={{ width: `${totalInterv > 0 ? (correctifs / totalInterv * 100) : 50}%` }} />
                   <div className="bg-green-400 h-full transition-all" style={{ width: `${totalInterv > 0 ? (preventifs / totalInterv * 100) : 50}%` }} />
                 </div>
@@ -437,17 +437,17 @@ export default function SavPage() {
             <div className="glass rounded-xl p-6 text-center border border-blue-500/20">
               <div className="text-sm text-blue-400 font-bold uppercase tracking-wider mb-2">💰 Coût Interventions</div>
               <div className="text-4xl font-black text-blue-400">{coutInterventions.toLocaleString('fr')} TND</div>
-              <div className="text-xs text-slate-400 mt-2">Charge technique (main d&apos;œuvre)</div>
+              <div className="text-xs text-savia-text-muted mt-2">Charge technique (main d&apos;œuvre)</div>
             </div>
             <div className="glass rounded-xl p-6 text-center border border-purple-500/20">
               <div className="text-sm text-purple-400 font-bold uppercase tracking-wider mb-2">🔩 Coût Pièces</div>
               <div className="text-4xl font-black text-purple-400">{coutPieces.toLocaleString('fr')} TND</div>
-              <div className="text-xs text-slate-400 mt-2">Pièces de rechange utilisées</div>
+              <div className="text-xs text-savia-text-muted mt-2">Pièces de rechange utilisées</div>
             </div>
             <div className="glass rounded-xl p-6 text-center border border-cyan-500/20">
               <div className="text-sm text-cyan-400 font-bold uppercase tracking-wider mb-2">📊 Coût Total</div>
               <div className="text-4xl font-black text-cyan-400">{(coutInterventions + coutPieces).toLocaleString('fr')} TND</div>
-              <div className="text-xs text-slate-400 mt-2">Dépenses totales maintenance</div>
+              <div className="text-xs text-savia-text-muted mt-2">Dépenses totales maintenance</div>
             </div>
           </div>
 
@@ -459,11 +459,11 @@ export default function SavPage() {
                 return (
                   <div key={t.nom} className="flex items-center gap-4">
                     <div className="w-40 font-semibold text-sm truncate">{t.nom}</div>
-                    <div className="flex-1 bg-slate-800 rounded-full h-3 overflow-hidden">
+                    <div className="flex-1 bg-savia-surface-hover rounded-full h-3 overflow-hidden">
                       <div className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct)}%` }} />
                     </div>
-                    <div className="w-32 text-right font-mono text-sm text-slate-300">{t.cout.toLocaleString('fr')} TND</div>
-                    <div className="w-12 text-right text-xs text-slate-500">{pct.toFixed(0)}%</div>
+                    <div className="w-32 text-right font-mono text-sm text-savia-text">{t.cout.toLocaleString('fr')} TND</div>
+                    <div className="w-12 text-right text-xs text-savia-text-dim">{pct.toFixed(0)}%</div>
                   </div>
                 );
               })}
@@ -480,8 +480,8 @@ export default function SavPage() {
                 return (
                   <div key={type} className={`glass rounded-xl p-4 border border-${color}-500/20`}>
                     <div className={`text-sm font-bold text-${color}-400 mb-2`}>{type}</div>
-                    <div className="text-2xl font-black text-white">{typeData.length} <span className="text-sm text-slate-400">interventions</span></div>
-                    <div className="text-sm text-slate-400 mt-1">Coût: {typeCout.toLocaleString('fr')} TND</div>
+                    <div className="text-2xl font-black text-savia-text">{typeData.length} <span className="text-sm text-savia-text-muted">interventions</span></div>
+                    <div className="text-sm text-savia-text-muted mt-1">Coût: {typeCout.toLocaleString('fr')} TND</div>
                   </div>
                 );
               })}
@@ -496,14 +496,14 @@ export default function SavPage() {
           <SectionCard title="📄 Rapport PDF des Interventions">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
               <div>
-                <label className="block text-sm text-slate-400 mb-1">📅 Du</label>
+                <label className="block text-sm text-savia-text-muted mb-1">📅 Du</label>
                 <input type="date" className={INPUT_CLS} value={pdfDateFrom} onChange={e => setPdfDateFrom(e.target.value)} />
               </div>
               <div>
-                <label className="block text-sm text-slate-400 mb-1">📅 Au</label>
+                <label className="block text-sm text-savia-text-muted mb-1">📅 Au</label>
                 <input type="date" className={INPUT_CLS} value={pdfDateTo} onChange={e => setPdfDateTo(e.target.value)} />
               </div>
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
+              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
                 <FileText className="w-4 h-4" /> Générer PDF
               </button>
             </div>
@@ -519,13 +519,13 @@ export default function SavPage() {
               return (
                 <div>
                   <div className="flex gap-4 mb-4">
-                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-savia-accent">{pdfFiltered.length}</div><div className="text-xs text-slate-400">Interventions</div></div>
-                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-green-400">{pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length}</div><div className="text-xs text-slate-400">Clôturées</div></div>
-                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-red-400">{pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0).toLocaleString('fr')} TND</div><div className="text-xs text-slate-400">Coût total</div></div>
+                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-savia-accent">{pdfFiltered.length}</div><div className="text-xs text-savia-text-muted">Interventions</div></div>
+                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-green-400">{pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length}</div><div className="text-xs text-savia-text-muted">Clôturées</div></div>
+                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="text-xl font-bold text-red-400">{pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0).toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Coût total</div></div>
                   </div>
                   <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
                     <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-slate-900">
+                      <thead className="sticky top-0 bg-savia-bg">
                         <tr className="border-b border-savia-border">
                           {['Date', 'Machine', 'Technicien', 'Type', 'Statut', 'Durée', 'Coût'].map(h => (
                             <th key={h} className="text-left py-2 px-2 text-savia-text-muted">{h}</th>
@@ -559,10 +559,10 @@ export default function SavPage() {
         <div className="space-y-6">
           <SectionCard title="🧠 Recommandations IA (Gemini)">
             <div className="text-center">
-              <button onClick={handleAiAnalyze} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto">
+              <button onClick={handleAiAnalyze} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto">
                 <Sparkles className="w-5 h-5" /> Analyser la performance avec l&apos;IA
               </button>
-              <p className="text-xs text-slate-500 mt-2">Gemini analysera vos KPIs et la performance de l&apos;équipe</p>
+              <p className="text-xs text-savia-text-dim mt-2">Gemini analysera vos KPIs et la performance de l&apos;équipe</p>
             </div>
           </SectionCard>
 
@@ -570,14 +570,14 @@ export default function SavPage() {
             <div className="space-y-4">
               <div className="glass rounded-xl p-5 border border-purple-500/20">
                 <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider mb-2">📊 Résumé Exécutif</h3>
-                <p className="text-sm text-slate-300 leading-relaxed">{aiResult.analyse || 'N/A'}</p>
+                <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse || 'N/A'}</p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="glass rounded-xl p-5 border border-green-500/20">
                   <h3 className="text-sm font-bold text-green-400 uppercase tracking-wider mb-3">✅ Points Forts</h3>
                   <ul className="space-y-2">
                     {(aiResult.points_forts || []).map((pt: string, i: number) => (
-                      <li key={i} className="flex items-start gap-2 text-sm text-slate-300"><span className="text-green-400 mt-0.5">●</span> {pt}</li>
+                      <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><span className="text-green-400 mt-0.5">●</span> {pt}</li>
                     ))}
                   </ul>
                 </div>
@@ -585,7 +585,7 @@ export default function SavPage() {
                   <h3 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-3">⚠️ Points Faibles</h3>
                   <ul className="space-y-2">
                     {(aiResult.points_faibles || []).map((pt: string, i: number) => (
-                      <li key={i} className="flex items-start gap-2 text-sm text-slate-300"><span className="text-red-400 mt-0.5">●</span> {pt}</li>
+                      <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><span className="text-red-400 mt-0.5">●</span> {pt}</li>
                     ))}
                   </ul>
                 </div>
@@ -594,12 +594,12 @@ export default function SavPage() {
                 <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider mb-3">💡 Recommandations</h3>
                 <div className="space-y-3">
                   {(aiResult.recommandations || []).map((rec: any, i: number) => (
-                    <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+                    <div key={i} className="bg-savia-surface-hover/50 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-sm text-white">{rec.titre}</span>
+                        <span className="font-bold text-sm text-savia-text">{rec.titre}</span>
                         <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rec.impact === 'HAUT' ? 'bg-red-500/20 text-red-400' : rec.impact === 'MOYEN' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{rec.impact}</span>
                       </div>
-                      <p className="text-xs text-slate-400">{rec.description}</p>
+                      <p className="text-xs text-savia-text-muted">{rec.description}</p>
                     </div>
                   ))}
                 </div>
@@ -612,35 +612,35 @@ export default function SavPage() {
       {/* Add Intervention Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="➕ Nouvelle Intervention" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className="block text-sm text-slate-400 mb-1">Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Technicien</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Technicien</label>
             <select className={INPUT_CLS} value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})}>
               <option value="">-- Sélectionnez --</option>
               {techniciens.map(t => <option key={t.nom}>{t.prenom} {t.nom}</option>)}
             </select>
           </div>
-          <div><label className="block text-sm text-slate-400 mb-1">Type</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Type</label>
             <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>
               <option>Corrective</option><option>Préventive</option><option>Installation</option>
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Code erreur</label><input className={INPUT_CLS} placeholder="Ex: E147" value={form.code_erreur} onChange={e => setForm({...form, code_erreur: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Type erreur</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Code erreur</label><input className={INPUT_CLS} placeholder="Ex: E147" value={form.code_erreur} onChange={e => setForm({...form, code_erreur: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Type erreur</label>
             <select className={INPUT_CLS} value={form.type_erreur} onChange={e => setForm({...form, type_erreur: e.target.value})}>
               {TYPES_ERREUR.map(t => <option key={t}>{t}</option>)}
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Priorité</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Priorité</label>
             <select className={INPUT_CLS} value={form.priorite} onChange={e => setForm({...form, priorite: e.target.value})}>
               {PRIORITES.map(p => <option key={p}>{p}</option>)}
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Durée (min)</label><input type="number" className={INPUT_CLS} value={form.duree_minutes} onChange={e => setForm({...form, duree_minutes: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Coût pièces (TND)</label><input type="number" className={INPUT_CLS} value={form.cout_pieces} onChange={e => setForm({...form, cout_pieces: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Pièces utilisées</label><input className={INPUT_CLS} placeholder="Ex: Tube RX, Câble" value={form.pieces_utilisees} onChange={e => setForm({...form, pieces_utilisees: e.target.value})} /></div>
-          <div className="md:col-span-2"><label className="block text-sm text-slate-400 mb-1">Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Décrivez le problème..." value={form.probleme} onChange={e => setForm({...form, probleme: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Durée (min)</label><input type="number" className={INPUT_CLS} value={form.duree_minutes} onChange={e => setForm({...form, duree_minutes: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Coût pièces (TND)</label><input type="number" className={INPUT_CLS} value={form.cout_pieces} onChange={e => setForm({...form, cout_pieces: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Pièces utilisées</label><input className={INPUT_CLS} placeholder="Ex: Tube RX, Câble" value={form.pieces_utilisees} onChange={e => setForm({...form, pieces_utilisees: e.target.value})} /></div>
+          <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Décrivez le problème..." value={form.probleme} onChange={e => setForm({...form, probleme: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
-          <button onClick={handleSave} disabled={isSaving || !form.machine.trim()} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
+          <button onClick={handleSave} disabled={isSaving || !form.machine.trim()} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Sauvegarder
           </button>
         </div>
@@ -649,18 +649,18 @@ export default function SavPage() {
       {/* Status Change Modal */}
       <Modal isOpen={showStatusModal} onClose={() => setShowStatusModal(false)} title={`📝 Modifier — ${selectedIntervention?.machine || ''}`} size="lg">
         <div className="space-y-4">
-          <div><label className="block text-sm text-slate-400 mb-1">Statut</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Statut</label>
             <select className={INPUT_CLS} value={statusForm.statut} onChange={e => setStatusForm({...statusForm, statut: e.target.value})}>
               <option>En cours</option><option>Clôturée</option><option>Planifiée</option>
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Problème identifié</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.probleme} onChange={e => setStatusForm({...statusForm, probleme: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Durée (min)</label><input type="number" className={INPUT_CLS} value={statusForm.duree_minutes} onChange={e => setStatusForm({...statusForm, duree_minutes: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Problème identifié</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.probleme} onChange={e => setStatusForm({...statusForm, probleme: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Durée (min)</label><input type="number" className={INPUT_CLS} value={statusForm.duree_minutes} onChange={e => setStatusForm({...statusForm, duree_minutes: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowStatusModal(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
-          <button onClick={handleStatusChange} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+          <button onClick={() => setShowStatusModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
+          <button onClick={handleStatusChange} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Enregistrer
           </button>
         </div>
@@ -671,7 +671,7 @@ export default function SavPage() {
         {isAnalyzing ? (
           <div className="flex flex-col items-center justify-center py-12 gap-4">
             <div className="relative"><Loader2 className="w-12 h-12 animate-spin text-purple-400" /><Sparkles className="w-5 h-5 text-pink-400 absolute -top-1 -right-1 animate-pulse" /></div>
-            <p className="text-slate-400 text-sm">Gemini analyse vos données...</p>
+            <p className="text-savia-text-muted text-sm">Gemini analyse vos données...</p>
           </div>
         ) : aiError ? (
           <div className="glass rounded-xl p-6 text-center border border-red-500/20">
@@ -682,28 +682,28 @@ export default function SavPage() {
           <div className="space-y-5">
             <div className="glass rounded-xl p-5 border border-purple-500/20">
               <h3 className="text-sm font-bold text-purple-400 uppercase tracking-wider mb-2">📊 Résumé Exécutif</h3>
-              <p className="text-sm text-slate-300 leading-relaxed">{aiResult.analyse}</p>
+              <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse}</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="glass rounded-xl p-5 border border-green-500/20">
                 <h3 className="text-sm font-bold text-green-400 uppercase tracking-wider mb-3">✅ Points Forts</h3>
-                <ul className="space-y-2">{(aiResult.points_forts || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-slate-300"><span className="text-green-400 mt-0.5">●</span> {pt}</li>)}</ul>
+                <ul className="space-y-2">{(aiResult.points_forts || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><span className="text-green-400 mt-0.5">●</span> {pt}</li>)}</ul>
               </div>
               <div className="glass rounded-xl p-5 border border-red-500/20">
                 <h3 className="text-sm font-bold text-red-400 uppercase tracking-wider mb-3">⚠️ Points Faibles</h3>
-                <ul className="space-y-2">{(aiResult.points_faibles || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-slate-300"><span className="text-red-400 mt-0.5">●</span> {pt}</li>)}</ul>
+                <ul className="space-y-2">{(aiResult.points_faibles || []).map((pt: string, i: number) => <li key={i} className="flex items-start gap-2 text-sm text-savia-text"><span className="text-red-400 mt-0.5">●</span> {pt}</li>)}</ul>
               </div>
             </div>
             <div className="glass rounded-xl p-5 border border-cyan-500/20">
               <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider mb-3">💡 Recommandations</h3>
               <div className="space-y-3">
                 {(aiResult.recommandations || []).map((rec: any, i: number) => (
-                  <div key={i} className="bg-slate-800/50 rounded-lg p-3">
+                  <div key={i} className="bg-savia-surface-hover/50 rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-sm text-white">{rec.titre}</span>
+                      <span className="font-bold text-sm text-savia-text">{rec.titre}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${rec.impact === 'HAUT' ? 'bg-red-500/20 text-red-400' : rec.impact === 'MOYEN' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{rec.impact}</span>
                     </div>
-                    <p className="text-xs text-slate-400">{rec.description}</p>
+                    <p className="text-xs text-savia-text-muted">{rec.description}</p>
                   </div>
                 ))}
               </div>
