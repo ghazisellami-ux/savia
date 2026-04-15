@@ -6,8 +6,8 @@ import { interventions, equipements, ai, contrats } from '@/lib/api';
 
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
 const TAB_ACTIVE = "border-cyan-400 text-cyan-400 bg-cyan-400/5";
-const TAB_INACTIVE = "border-transparent text-slate-400 hover:text-white hover:border-slate-500";
-const INPUT_CLS = "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-500/40 outline-none transition-all";
+const TAB_INACTIVE = "border-transparent text-savia-text-muted hover:text-savia-text hover:border-slate-500";
+const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 
 export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState(0);
@@ -162,13 +162,13 @@ Génère un rapport structuré avec ces sections EXACTES :
         <div className="space-y-6">
           <SectionCard title="📄 Rapport Mensuel Global">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div><label className="block text-sm text-slate-400 mb-1">Mois</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Mois</label>
                 <select className={INPUT_CLS} value={selMois} onChange={e => setSelMois(Number(e.target.value))}>
                   {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
                 </select></div>
-              <div><label className="block text-sm text-slate-400 mb-1">Année</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Année</label>
                 <input type="number" className={INPUT_CLS} value={selAnnee} min={2020} max={2030} onChange={e => setSelAnnee(Number(e.target.value))} /></div>
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
+              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
                 <FileText className="w-4 h-4" /> Générer le Rapport
               </button>
             </div>
@@ -182,9 +182,9 @@ Génère un rapport structuré avec ces sections EXACTES :
             const cout = monthData.reduce((a: number, b: any) => a + (b.cout || 0), 0);
             return (
               <div className="grid grid-cols-3 gap-4">
-                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{nbIntv}</div><div className="text-xs text-slate-400 mt-1">Interventions</div></div>
-                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{nbClot}</div><div className="text-xs text-slate-400 mt-1">Clôturées</div></div>
-                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-red-400">{cout.toLocaleString('fr')}</div><div className="text-xs text-slate-400 mt-1">Coût total (TND)</div></div>
+                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-savia-accent">{nbIntv}</div><div className="text-xs text-savia-text-muted mt-1">Interventions</div></div>
+                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-green-400">{nbClot}</div><div className="text-xs text-savia-text-muted mt-1">Clôturées</div></div>
+                <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-red-400">{cout.toLocaleString('fr')}</div><div className="text-xs text-savia-text-muted mt-1">Coût total (TND)</div></div>
               </div>
             );
           })()}
@@ -195,19 +195,19 @@ Génère un rapport structuré avec ces sections EXACTES :
       {activeTab === 1 && (
         <div className="space-y-6">
           <SectionCard title="🏢 Rapport Client Mensuel">
-            <p className="text-sm text-slate-400 mb-4">Générez un rapport PDF par client avec interventions, coûts et disponibilité.</p>
+            <p className="text-sm text-savia-text-muted mb-4">Générez un rapport PDF par client avec interventions, coûts et disponibilité.</p>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-              <div><label className="block text-sm text-slate-400 mb-1">Client</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Client</label>
                 <select className={INPUT_CLS} value={selClient} onChange={e => setSelClient(e.target.value)}>
                   {clients.map(c => <option key={c} value={c}>{c}</option>)}
                 </select></div>
-              <div><label className="block text-sm text-slate-400 mb-1">Mois</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Mois</label>
                 <select className={INPUT_CLS} value={selClientMois} onChange={e => setSelClientMois(Number(e.target.value))}>
                   {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
                 </select></div>
-              <div><label className="block text-sm text-slate-400 mb-1">Année</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Année</label>
                 <input type="number" className={INPUT_CLS} value={selClientAnnee} min={2020} max={2030} onChange={e => setSelClientAnnee(Number(e.target.value))} /></div>
-              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
+              <button className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer">
                 <FileText className="w-4 h-4" /> Générer Rapport Client
               </button>
             </div>
@@ -233,7 +233,7 @@ Génère un rapport structuré avec ces sections EXACTES :
                 <SectionCard title="Détail des interventions">
                   <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
                     <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-slate-900">
+                      <thead className="sticky top-0 bg-savia-bg">
                         <tr className="border-b border-savia-border">
                           {['Date', 'Machine', 'Type', 'Technicien', 'Statut', 'Coût'].map(h => (
                             <th key={h} className="text-left py-2 px-2 text-savia-text-muted">{h}</th>
@@ -256,7 +256,7 @@ Génère un rapport structuré avec ces sections EXACTES :
                   </div>
                 </SectionCard>
               </div>
-            ) : <div className="glass rounded-xl p-6 text-center text-slate-400">Aucune intervention pour {selClient} en {selClientMois}/{selClientAnnee}.</div>;
+            ) : <div className="glass rounded-xl p-6 text-center text-savia-text-muted">Aucune intervention pour {selClient} en {selClientMois}/{selClientAnnee}.</div>;
           })()}
         </div>
       )}
@@ -265,25 +265,25 @@ Génère un rapport structuré avec ces sections EXACTES :
       {activeTab === 2 && (
         <div className="space-y-6">
           <SectionCard title="🤖 Rapport IA (Gemini)">
-            <p className="text-sm text-slate-400 mb-4">Gemini analyse vos données et génère un rapport avec tendances, risques et recommandations.</p>
+            <p className="text-sm text-savia-text-muted mb-4">Gemini analyse vos données et génère un rapport avec tendances, risques et recommandations.</p>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-              <div><label className="block text-sm text-slate-400 mb-1">📆 Période</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">📆 Période</label>
                 <select className={INPUT_CLS} value={iaPeriode} onChange={e => setIaPeriode(e.target.value)}>
                   <option>Mensuel</option><option>Annuel</option>
                 </select></div>
-              {iaPeriode === 'Mensuel' && <div><label className="block text-sm text-slate-400 mb-1">Mois</label>
+              {iaPeriode === 'Mensuel' && <div><label className="block text-sm text-savia-text-muted mb-1">Mois</label>
                 <select className={INPUT_CLS} value={iaMois} onChange={e => setIaMois(Number(e.target.value))}>
                   {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
                 </select></div>}
-              <div><label className="block text-sm text-slate-400 mb-1">Année</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Année</label>
                 <input type="number" className={INPUT_CLS} value={iaAnnee} min={2020} max={2030} onChange={e => setIaAnnee(Number(e.target.value))} /></div>
-              <div><label className="block text-sm text-slate-400 mb-1">🏢 Client</label>
+              <div><label className="block text-sm text-savia-text-muted mb-1">🏢 Client</label>
                 <select className={INPUT_CLS} value={iaClient} onChange={e => setIaClient(e.target.value)}>
                   <option>Tous les clients</option>
                   {clients.map(c => <option key={c} value={c}>{c}</option>)}
                 </select></div>
             </div>
-            <button onClick={handleAiReport} disabled={isGenerating} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 w-full mt-4 disabled:opacity-50">
+            <button onClick={handleAiReport} disabled={isGenerating} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 w-full mt-4 disabled:opacity-50">
               {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
               {isGenerating ? '🧠 Gemini analyse vos données...' : '🧠 Générer le Rapport IA'}
             </button>
@@ -324,13 +324,13 @@ Génère un rapport structuré avec ces sections EXACTES :
                 if (currentKey) sections.push({key: currentKey, ...sectionMap[currentKey] || {color: '#64748b', icon: '📌'}, content: currentContent.trim()});
 
                 if (sections.length === 0) {
-                  return <div className="glass rounded-xl p-5 whitespace-pre-wrap text-sm text-slate-300">{reportText}</div>;
+                  return <div className="glass rounded-xl p-5 whitespace-pre-wrap text-sm text-savia-text">{reportText}</div>;
                 }
 
                 return sections.map((sec, i) => (
                   <div key={i} className="rounded-xl p-5" style={{ background: `${sec.color}08`, borderLeft: `4px solid ${sec.color}` }}>
                     <h4 className="font-bold text-sm uppercase tracking-wider mb-3" style={{ color: sec.color }}>{sec.icon} {sec.key}</h4>
-                    <div className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{sec.content}</div>
+                    <div className="text-sm text-savia-text whitespace-pre-wrap leading-relaxed">{sec.content}</div>
                   </div>
                 ));
               })()}
@@ -346,7 +346,7 @@ Génère un rapport structuré avec ces sections EXACTES :
             <div className="flex gap-4 mb-4">
               {['Client', 'Équipement'].map(m => (
                 <button key={m} onClick={() => setCompareMode(m)}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${compareMode === m ? 'bg-savia-accent text-black' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${compareMode === m ? 'bg-savia-accent text-white' : 'bg-savia-surface-hover text-savia-text-muted hover:text-savia-text'}`}>
                   {m}
                 </button>
               ))}
@@ -392,11 +392,11 @@ Génère un rapport structuré avec ces sections EXACTES :
                       const maxNb = Math.max(...sorted.map(s => s[1].nb));
                       return (
                         <div key={key} className="flex items-center gap-3">
-                          <div className="w-32 text-xs text-slate-400 truncate text-right">{key}</div>
-                          <div className="flex-1 bg-slate-800 rounded-full h-4 overflow-hidden">
+                          <div className="w-32 text-xs text-savia-text-muted truncate text-right">{key}</div>
+                          <div className="flex-1 bg-savia-surface-hover rounded-full h-4 overflow-hidden">
                             <div className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full" style={{ width: `${(stats.nb / maxNb * 100)}%` }} />
                           </div>
-                          <div className="w-8 text-xs font-mono text-slate-400">{stats.nb}</div>
+                          <div className="w-8 text-xs font-mono text-savia-text-muted">{stats.nb}</div>
                         </div>
                       );
                     })}
@@ -443,10 +443,10 @@ Génère un rapport structuré avec ces sections EXACTES :
                       {fiab.map(f => (
                         <tr key={f.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50">
                           <td className="py-2.5 px-3 font-bold">{f.machine}</td>
-                          <td className="py-2.5 px-3 text-sm text-slate-400">{f.client}</td>
+                          <td className="py-2.5 px-3 text-sm text-savia-text-muted">{f.client}</td>
                           <td className="py-2.5 px-3">
                             <div className="flex items-center gap-2">
-                              <div className="w-16 bg-slate-800 rounded-full h-2 overflow-hidden">
+                              <div className="w-16 bg-savia-surface-hover rounded-full h-2 overflow-hidden">
                                 <div className={`h-full rounded-full ${f.score >= 60 ? 'bg-green-400' : f.score >= 30 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${f.score}%` }} />
                               </div>
                               <span className={`text-xs font-bold ${f.score >= 60 ? 'text-green-400' : f.score >= 30 ? 'text-yellow-400' : 'text-red-400'}`}>{f.score}%</span>
@@ -454,7 +454,7 @@ Génère un rapport structuré avec ces sections EXACTES :
                           </td>
                           <td className="py-2.5 px-3 font-mono text-red-400">{f.pannes}</td>
                           <td className="py-2.5 px-3 font-mono">{f.mttr}h</td>
-                          <td className="py-2.5 px-3 text-xs text-slate-400">{f.lastPanne}</td>
+                          <td className="py-2.5 px-3 text-xs text-savia-text-muted">{f.lastPanne}</td>
                         </tr>
                       ))}
                     </tbody>

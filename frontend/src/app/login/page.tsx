@@ -112,7 +112,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-lg font-bold text-white
+              className="w-full py-3 rounded-lg font-bold text-savia-text
                          bg-gradient-to-r from-savia-accent to-savia-accent-blue
                          hover:from-savia-accent/90 hover:to-savia-accent-blue/90
                          disabled:opacity-50 disabled:cursor-not-allowed

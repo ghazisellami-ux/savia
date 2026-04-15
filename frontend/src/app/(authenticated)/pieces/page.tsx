@@ -17,10 +17,10 @@ interface Piece {
   notes: string;
 }
 
-const INPUT_CLS = "w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-500/40 outline-none transition-all";
+const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
 const TAB_ACTIVE = "border-cyan-400 text-cyan-400 bg-cyan-400/5";
-const TAB_INACTIVE = "border-transparent text-slate-400 hover:text-white hover:border-slate-500";
+const TAB_INACTIVE = "border-transparent text-savia-text-muted hover:text-savia-text hover:border-slate-500";
 const TYPES_EQUIPEMENTS = ["Scanner CT", "IRM", "Radiographie", "Mammographie", "Échographie", "Fluoroscopie", "Angiographie", "Autre"];
 
 export default function PiecesPage() {
@@ -203,7 +203,7 @@ Fournis une analyse structurée en 4 sections :
           <h1 className="text-2xl font-black gradient-text">🔩 Pièces de Rechange</h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion du stock, traçabilité et prédictions IA</p>
         </div>
-        <button onClick={() => { setForm(emptyForm); setShowAddModal(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+        <button onClick={() => { setForm(emptyForm); setShowAddModal(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
           <Plus className="w-4 h-4" /> Nouvelle Pièce
         </button>
       </div>
@@ -222,19 +222,19 @@ Fournis une analyse structurée en 4 sections :
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle className="w-5 h-5 text-red-400" />
             <span className="font-bold text-red-400">🚨 {lowStock.length} pièce(s) en stock critique !</span>
-            <span className="text-xs text-slate-400 ml-2">({ruptures} en rupture, {lowStock.length - ruptures} stock bas)</span>
+            <span className="text-xs text-savia-text-muted ml-2">({ruptures} en rupture, {lowStock.length - ruptures} stock bas)</span>
           </div>
           <div className="space-y-2 max-h-40 overflow-y-auto">
             {lowStock.map(p => (
               <div key={p.id} className={`flex items-center justify-between p-2 rounded-lg ${p.stock_actuel === 0 ? 'bg-red-500/10 border-l-4 border-red-500' : 'bg-yellow-500/5 border-l-4 border-yellow-500'}`}>
                 <div>
                   <span className="font-bold text-sm">{p.designation}</span>
-                  <span className="text-xs text-slate-400 ml-2">{p.reference}</span>
+                  <span className="text-xs text-savia-text-muted ml-2">{p.reference}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                   <span>📦 {p.stock_actuel} / Min: {p.stock_minimum}</span>
                   <span>🏭 {p.fournisseur}</span>
-                  <span className={`px-2 py-0.5 rounded-full font-bold ${p.stock_actuel === 0 ? 'bg-red-500 text-white' : 'bg-yellow-500 text-black'}`}>
+                  <span className={`px-2 py-0.5 rounded-full font-bold ${p.stock_actuel === 0 ? 'bg-red-500 text-savia-text' : 'bg-yellow-500 text-white'}`}>
                     {p.stock_actuel === 0 ? '🚨 RUPTURE' : '⚠️ Bas'}
                   </span>
                 </div>
@@ -256,7 +256,7 @@ Fournis une analyse structurée en 4 sections :
         </select>
       </div>
 
-      <div className="text-xs text-slate-400">📦 {filtered.length} pièce(s) affichée(s)</div>
+      <div className="text-xs text-savia-text-muted">📦 {filtered.length} pièce(s) affichée(s)</div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-savia-border overflow-x-auto">
@@ -284,13 +284,13 @@ Fournis une analyse structurée en 4 sections :
                   <tr key={p.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                     <td className="py-2.5 px-3 font-mono text-savia-accent font-bold text-xs">{p.reference}</td>
                     <td className="py-2.5 px-3 font-semibold">{p.designation}</td>
-                    <td className="py-2.5 px-3 text-xs text-slate-400">{p.equipement_type}</td>
+                    <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
                     <td className="py-2.5 px-3 text-center">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${p.stock_actuel === 0 ? 'bg-red-500/10 text-red-400' : p.stock_actuel <= p.stock_minimum ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
                         {p.stock_actuel}
                       </span>
                     </td>
-                    <td className="py-2.5 px-3 text-center text-xs text-slate-400">{p.stock_minimum}</td>
+                    <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
                     <td className="py-2.5 px-3 text-sm">{p.fournisseur}</td>
                     <td className="py-2.5 px-3 text-right font-mono text-sm">{p.prix_unitaire.toLocaleString('fr')} TND</td>
                   </tr>
@@ -305,18 +305,18 @@ Fournis une analyse structurée en 4 sections :
       {activeTab === 1 && (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-savia-accent">{new Set(traceData.map(t => t.piece)).size}</div><div className="text-xs text-slate-400 mt-1">🔧 Pièces différentes</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-blue-400">{new Set(traceData.map(t => t.equipement)).size}</div><div className="text-xs text-slate-400 mt-1">🏥 Équipements</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-purple-400">{traceData.length}</div><div className="text-xs text-slate-400 mt-1">📦 Utilisations totales</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-savia-accent">{new Set(traceData.map(t => t.piece)).size}</div><div className="text-xs text-savia-text-muted mt-1">🔧 Pièces différentes</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-blue-400">{new Set(traceData.map(t => t.equipement)).size}</div><div className="text-xs text-savia-text-muted mt-1">🏥 Équipements</div></div>
+            <div className="glass rounded-xl p-4 text-center"><div className="text-2xl font-black text-purple-400">{traceData.length}</div><div className="text-xs text-savia-text-muted mt-1">📦 Utilisations totales</div></div>
           </div>
 
           <SectionCard title="🔍 Historique d'utilisation des pièces">
             {traceData.length === 0 ? (
-              <div className="text-center text-slate-400 py-8">Aucune donnée de traçabilité disponible.</div>
+              <div className="text-center text-savia-text-muted py-8">Aucune donnée de traçabilité disponible.</div>
             ) : (
               <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-slate-900">
+                  <thead className="sticky top-0 bg-savia-bg">
                     <tr className="border-b border-savia-border">
                       {['Date', 'Pièce', 'Équipement', 'Technicien', 'Statut'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted">{h}</th>
@@ -355,7 +355,7 @@ Fournis une analyse structurée en 4 sections :
                     </span>
                     <div>
                       <div className="font-bold">{p.reference} — {p.designation}</div>
-                      <div className="text-xs text-slate-400">{p.equipement_type} | Stock: {p.stock_actuel} | Min: {p.stock_minimum} | {p.prix_unitaire.toLocaleString('fr')} TND</div>
+                      <div className="text-xs text-savia-text-muted">{p.equipement_type} | Stock: {p.stock_actuel} | Min: {p.stock_minimum} | {p.prix_unitaire.toLocaleString('fr')} TND</div>
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -386,7 +386,7 @@ Fournis une analyse structurée en 4 sections :
         <div className="space-y-6">
           <SectionCard title="🧠 Assistant d'Achat Prédictif">
             <div className="text-center space-y-4">
-              <p className="text-sm text-slate-400">L&apos;IA analyse vos cycles de remplacement et niveaux de stock pour anticiper les ruptures.</p>
+              <p className="text-sm text-savia-text-muted">L&apos;IA analyse vos cycles de remplacement et niveaux de stock pour anticiper les ruptures.</p>
               <div className="flex gap-4 justify-center flex-wrap">
                 <div className="flex gap-2 flex-wrap">
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400">🚨 {ruptures} en rupture</span>
@@ -395,7 +395,7 @@ Fournis une analyse structurée en 4 sections :
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400">💰 Valeur: {(totalValeur / 1000).toFixed(0)}K TND</span>
                 </div>
               </div>
-              <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto disabled:opacity-50">
+              <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto disabled:opacity-50">
                 {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
                 {isAnalyzing ? 'Analyse en cours...' : '🚀 Lancer l\'Analyse IA'}
               </button>
@@ -426,7 +426,7 @@ Fournis une analyse structurée en 4 sections :
                           </div>
                         );
                       })}
-                      <div className="bg-slate-800/50 rounded-lg p-4 whitespace-pre-wrap text-sm text-slate-300 leading-relaxed">
+                      <div className="bg-savia-surface-hover/50 rounded-lg p-4 whitespace-pre-wrap text-sm text-savia-text leading-relaxed">
                         {typeof aiResult === 'string' ? aiResult : JSON.stringify(aiResult, null, 2)}
                       </div>
                     </div>
@@ -441,21 +441,21 @@ Fournis une analyse structurée en 4 sections :
       {/* Add Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="➕ Nouvelle Pièce" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className="block text-sm text-slate-400 mb-1">Référence</label><input className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Désignation *</label><input className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Type équipement</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Type équipement</label>
             <select className={INPUT_CLS} value={form.equipement_type} onChange={e => setForm({...form, equipement_type: e.target.value})}>
               {TYPES_EQUIPEMENTS.map(t => <option key={t}>{t}</option>)}
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Stock minimum</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Fournisseur</label><input className={INPUT_CLS} placeholder="Siemens" value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur</label><input className={INPUT_CLS} placeholder="Siemens" value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white cursor-pointer">Annuler</button>
-          <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text cursor-pointer">Annuler</button>
+          <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Sauvegarder
           </button>
         </div>
@@ -464,21 +464,21 @@ Fournis une analyse structurée en 4 sections :
       {/* Edit Modal */}
       <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title={`✏️ Modifier — ${selectedPiece?.designation || ''}`} size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className="block text-sm text-slate-400 mb-1">Référence</label><input className={INPUT_CLS} value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Désignation</label><input className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Type équipement</label>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Désignation</label><input className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Type équipement</label>
             <select className={INPUT_CLS} value={form.equipement_type} onChange={e => setForm({...form, equipement_type: e.target.value})}>
               {TYPES_EQUIPEMENTS.map(t => <option key={t}>{t}</option>)}
             </select></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Stock minimum</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Fournisseur</label><input className={INPUT_CLS} value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
-          <div><label className="block text-sm text-slate-400 mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur</label><input className={INPUT_CLS} value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-slate-400 hover:text-white cursor-pointer">Annuler</button>
-          <button onClick={handleEdit} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text cursor-pointer">Annuler</button>
+          <button onClick={handleEdit} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Enregistrer
           </button>
         </div>

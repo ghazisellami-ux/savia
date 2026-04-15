@@ -310,7 +310,7 @@ export default function PredictionsPage() {
         <button
           onClick={handleAiAnalysis}
           disabled={aiLoading}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer mb-4"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer mb-4"
         >
           {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           {aiLoading ? 'Analyse en cours...' : 'Lancer l\'analyse Gemini'}
@@ -508,7 +508,7 @@ export default function PredictionsPage() {
                 <button
                   onClick={() => { if (decaleDate) submitFeedback('decale', decaleDate); }}
                   disabled={!decaleDate}
-                  className="px-4 py-2 rounded-lg font-semibold text-white bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 transition-all cursor-pointer"
+                  className="px-4 py-2 rounded-lg font-semibold text-savia-text bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 transition-all cursor-pointer"
                 >
                   Valider
                 </button>

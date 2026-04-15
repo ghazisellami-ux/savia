@@ -425,7 +425,7 @@ export default function EquipementsPage() {
               <button
                 onClick={handleSave}
                 disabled={isSaving || !form.Nom.trim() || !form.Client.trim()}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
               >
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 {editingEquip ? 'Mettre à jour' : 'Sauvegarder'}
@@ -542,7 +542,7 @@ export default function EquipementsPage() {
               </button>
               <button
                 onClick={() => executeDelete(confirmDelete)}
-                className="flex-1 py-2.5 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-500 transition-all cursor-pointer flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg font-semibold text-savia-text bg-red-600 hover:bg-red-500 transition-all cursor-pointer flex items-center justify-center gap-2"
               >
                 <Trash2 className="w-4 h-4" /> Supprimer
               </button>
