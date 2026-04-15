@@ -1030,6 +1030,115 @@ PRODUIS un rapport JSON STRICT :
     return {"ok": True, "result": result}
 
 
+@app.post("/api/ai/analyze-sav")
+def analyze_sav(body: dict, user: dict = Depends(_verify_token)):
+    """Comprehensive SAV/Interventions analysis using Gemini."""
+    try:
+        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
+
+    sav_data = body.get("sav_data", {})
+    sym = body.get("sym", "TND")
+
+    prompt = f"""Tu es un expert en gestion de maintenance SAV pour équipements d'imagerie médicale en Tunisie.
+Analyse ces données SAV RÉELLES et produis un rapport COMPLET et DÉTAILLÉ.
+
+=== STATISTIQUES GLOBALES ===
+- Total interventions : {sav_data.get('nb_total', 0)}
+- Clôturées : {sav_data.get('nb_cloturees', 0)}
+- En cours : {sav_data.get('nb_en_cours', 0)}
+- Taux résolution : {sav_data.get('taux_resolution', 0)}%
+- MTTR moyen : {sav_data.get('mttr_h', 0)}h
+- Durée totale : {sav_data.get('duree_totale_h', 0)}h
+
+=== RÉPARTITION PAR TYPE ===
+- Correctives : {sav_data.get('nb_correctives', 0)}
+- Préventives : {sav_data.get('nb_preventives', 0)}  
+- Installations : {sav_data.get('nb_installations', 0)}
+- Ratio correctif : {sav_data.get('ratio_correctif_pct', 0)}%
+
+=== COÛTS ===
+- Coût total interventions : {sav_data.get('cout_interventions', 0)} {sym}
+- Coût pièces : {sav_data.get('cout_pieces', 0)} {sym}
+- Coût total : {sav_data.get('cout_total', 0)} {sym}
+- Coût moyen/intervention : {sav_data.get('cout_moyen', 0)} {sym}
+
+=== PERFORMANCE ÉQUIPE (par technicien) ===
+{sav_data.get('tech_details', 'Non disponible')}
+
+=== DÉTAIL DES INTERVENTIONS RÉCENTES ===
+{sav_data.get('interventions_detail', 'Non disponible')}
+
+=== MACHINES LES PLUS INTERVENUES ===
+{sav_data.get('machines_detail', 'Non disponible')}
+
+=== CLIENTS ===
+{sav_data.get('clients_detail', 'Non disponible')}
+
+IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure exacte :
+{{{{
+  "analyse": "Résumé exécutif complet de la situation SAV (3-5 phrases détaillées)",
+  "score_global": 75,
+  "points_forts": [
+    "Point fort 1 détaillé avec chiffres",
+    "Point fort 2 détaillé avec chiffres",
+    "Point fort 3 détaillé avec chiffres"
+  ],
+  "points_faibles": [
+    "Point faible 1 détaillé avec chiffres",
+    "Point faible 2 détaillé avec chiffres", 
+    "Point faible 3 détaillé avec chiffres"
+  ],
+  "recommandations": [
+    {{{{
+      "titre": "Titre recommandation",
+      "description": "Description détaillée de l'action à entreprendre",
+      "impact": "HAUT"
+    }}}},
+    {{{{
+      "titre": "Titre recommandation 2",
+      "description": "Description détaillée",
+      "impact": "MOYEN"
+    }}}},
+    {{{{
+      "titre": "Titre recommandation 3",
+      "description": "Description détaillée",
+      "impact": "BAS"
+    }}}}
+  ],
+  "performance_equipe": [
+    {{{{
+      "technicien": "Nom",
+      "evaluation": "Excellent/Bon/À améliorer",
+      "commentaire": "Commentaire détaillé sur ses performances"
+    }}}}
+  ],
+  "analyse_couts": {{{{
+    "verdict": "Maîtrisés/Élevés/Critiques",
+    "detail": "Analyse détaillée des coûts",
+    "economie_possible": "Estimation d'économie possible et comment"
+  }}}},
+  "tendances": [
+    "Tendance 1 observée",
+    "Tendance 2 observée",
+    "Tendance 3 observée"
+  ],
+  "priorites_immediates": [
+    "Action prioritaire 1",
+    "Action prioritaire 2"
+  ]
+}}}}"""
+
+    raw = _call_ia(prompt, timeout=90, is_json=True)
+    if not raw:
+        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
+    result = clean_json_response(raw)
+    return {"ok": True, "result": result}
+
+
 # ==========================================
 # ADMIN — Utilisateurs
 # ==========================================
