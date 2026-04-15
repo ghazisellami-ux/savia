@@ -1054,15 +1054,42 @@ def lire_tous_documents_techniques():
 # ==========================================
 
 def lire_interventions(machine=None):
-    """Lit les interventions, optionnellement filtrées par machine."""
+    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via jointure équipements."""
     with get_db() as conn:
+        base_query = """
+            SELECT i.*, e.client AS client
+            FROM interventions i
+            LEFT JOIN equipements e ON LOWER(i.machine) = LOWER(e.nom)
+        """
         if machine:
             df = read_sql(
-                "SELECT * FROM interventions WHERE machine = ? ORDER BY date DESC",
+                base_query + " WHERE i.machine = ? ORDER BY i.date DESC",
                 conn, params=(machine,))
         else:
-            df = read_sql("SELECT * FROM interventions ORDER BY date DESC", conn)
+            df = read_sql(base_query + " ORDER BY i.date DESC", conn)
     df = _fix_df_text(df)
+    # If exact join didn't match, try fuzzy matching for remaining nulls
+    if not df.empty and "client" in df.columns:
+        null_clients = df["client"].isna() | (df["client"] == "")
+        if null_clients.any():
+            # Build a machine->client lookup from equipements
+            try:
+                with get_db() as conn2:
+                    eq_df = read_sql("SELECT nom, client FROM equipements WHERE client IS NOT NULL AND client != ''", conn2)
+                if not eq_df.empty:
+                    for idx in df[null_clients].index:
+                        machine_name = str(df.at[idx, "machine"]).lower()
+                        for _, eq_row in eq_df.iterrows():
+                            eq_name = str(eq_row["nom"]).lower()
+                            # Check if one contains the other
+                            if eq_name in machine_name or machine_name in eq_name:
+                                df.at[idx, "client"] = eq_row["client"]
+                                break
+            except Exception:
+                pass
+    # Fill remaining NaN with empty string
+    if "client" in df.columns:
+        df["client"] = df["client"].fillna("")
     # Normaliser le statut (gère TOUTE corruption d'encodage)
     if not df.empty and "statut" in df.columns:
         df["statut"] = df["statut"].apply(
