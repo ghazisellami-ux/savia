@@ -55,20 +55,24 @@ body {
 .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
 .animate-slide-in { animation: slide-in-left 0.3s ease-out; }
 
-/* --- Glass effect --- */
+/* --- 3D Neumorphism Effect (Replaces Glass) --- */
 .glass {
   background: #FAF6ED;
-  border: 1px solid rgba(184, 169, 154, 0.2);
-  box-shadow: 0 8px 30px rgba(184, 169, 154, 0.25), 0 2px 10px rgba(184, 169, 154, 0.1);
+  border: none;
+  border-radius: 16px;
+  box-shadow: 6px 6px 12px #e3dac7, -6px -6px 12px #ffffff;
+  transition: all 0.3s ease;
 }
 
 /* --- Global Shadows for Surface Elements --- */
 aside {
-  box-shadow: 4px 0 24px rgba(184, 169, 154, 0.2) !important;
+  box-shadow: 8px 8px 16px #e3dac7, -8px -8px 16px #ffffff !important;
+  border: none !important;
 }
+
 thead th {
-  box-shadow: 0 4px 12px rgba(184, 169, 154, 0.1) !important;
-  border-bottom: 1px solid rgba(184, 169, 154, 0.2) !important;
+  box-shadow: 4px 4px 8px #e3dac7, -4px -4px 8px #ffffff !important;
+  border: none !important;
 }
 
 /* --- Gradient text --- */
