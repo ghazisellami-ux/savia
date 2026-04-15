@@ -53,6 +53,7 @@ export default function SavPage() {
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterEquip, setFilterEquip] = useState('Tous');
+  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('mensuel');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [data, setData] = useState<Intervention[]>([]);
@@ -216,14 +217,14 @@ export default function SavPage() {
     }
   };
 
-  // ===== FILTERING with month/year + client + equipment + status =====
+  // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
   const filtered = useMemo(() => {
     return data.filter(i => {
-      // Month/Year filter
+      // Period filter
       const d = new Date(i.date);
       if (!isNaN(d.getTime())) {
-        if (d.getMonth() !== filterMonth) return false;
         if (d.getFullYear() !== filterYear) return false;
+        if (periodMode === 'mensuel' && d.getMonth() !== filterMonth) return false;
       }
       if (filterStatut !== 'Tous' && !i.statut.toLowerCase().includes(filterStatut.toLowerCase())) return false;
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
@@ -232,7 +233,7 @@ export default function SavPage() {
       if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [search, filterStatut, filterType, filterClient, filterEquip, filterMonth, filterYear, data]);
+  }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
   // ===== KPI CALCULATIONS (based on filtered data) =====
   const totalInterv = filtered.length;
@@ -301,34 +302,78 @@ export default function SavPage() {
         </div>
       </div>
 
-      {/* Month/Year Filter Bar */}
-      <div className="glass rounded-xl p-4">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 text-savia-text-muted">
-            <CalendarRange className="w-4 h-4 text-savia-accent" />
-            <span className="text-sm font-semibold">Période :</span>
+      {/* Period Filter Bar (Mensuel / Annuel) */}
+      <div className="glass rounded-xl p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          {/* Period Mode Toggle */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <Calendar className="w-3.5 h-3.5" /> Période
+            </label>
+            <div className="flex rounded-lg overflow-hidden border border-savia-border">
+              <button
+                onClick={() => setPeriodMode('mensuel')}
+                className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  periodMode === 'mensuel'
+                    ? 'bg-savia-accent text-white'
+                    : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
+                }`}
+              >
+                <CalendarDays className="w-3.5 h-3.5" /> Mensuel
+              </button>
+              <button
+                onClick={() => setPeriodMode('annuel')}
+                className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  periodMode === 'annuel'
+                    ? 'bg-savia-accent text-white'
+                    : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
+                }`}
+              >
+                <CalendarRange className="w-3.5 h-3.5" /> Annuel
+              </button>
+            </div>
           </div>
-          <select
-            value={filterMonth}
-            onChange={e => setFilterMonth(Number(e.target.value))}
-            className="bg-savia-surface border border-savia-border rounded-lg px-3 py-2 text-sm text-savia-text"
-          >
-            {MONTHS.map(m => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-          <select
-            value={filterYear}
-            onChange={e => setFilterYear(Number(e.target.value))}
-            className="bg-savia-surface border border-savia-border rounded-lg px-3 py-2 text-sm text-savia-text"
-          >
-            {availableYears.map(y => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-          <div className="text-xs text-savia-text-dim ml-2">
-            {filtered.length} intervention{filtered.length > 1 ? 's' : ''} pour {MONTHS[filterMonth]?.label} {filterYear}
+
+          {/* Month Selector (only in mensuel mode) */}
+          {periodMode === 'mensuel' && (
+            <div>
+              <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Mois</label>
+              <select
+                value={filterMonth}
+                onChange={e => setFilterMonth(Number(e.target.value))}
+                className="w-full bg-savia-surface border border-savia-border rounded-lg px-3 py-2.5 text-sm text-savia-text"
+              >
+                {MONTHS.map(m => (
+                  <option key={m.value} value={m.value}>{m.value + 1} — {m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Year Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Année</label>
+            <select
+              value={filterYear}
+              onChange={e => setFilterYear(Number(e.target.value))}
+              className="w-full bg-savia-surface border border-savia-border rounded-lg px-3 py-2.5 text-sm text-savia-text"
+            >
+              {availableYears.map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
           </div>
+        </div>
+
+        {/* Period Summary */}
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
+          <Filter className="w-4 h-4 text-savia-accent" />
+          <span className="text-sm font-semibold text-savia-accent">
+            Période : {periodMode === 'mensuel' ? `${MONTHS[filterMonth]?.label} ${filterYear}` : `Année ${filterYear}`}
+          </span>
+          <span className="text-xs text-savia-text-muted">
+            | {filtered.length} intervention{filtered.length > 1 ? 's' : ''}
+          </span>
         </div>
       </div>
 
