@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" fill="none">
+  <defs>
+    <linearGradient id="navyTeal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2F4156"/>
+      <stop offset="100%" stop-color="#567C8D"/>
+    </linearGradient>
+    <linearGradient id="tealOnly" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#567C8D"/>
+      <stop offset="100%" stop-color="#8AAAB8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Left leg of A -->
+  <path d="M110 155 L145 65 L160 65" stroke="url(#navyTeal)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Right leg of A -->
+  <path d="M210 155 L175 65 L160 65" stroke="url(#navyTeal)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Circuit board frame top of A -->
+  <!-- Horizontal top bar -->
+  <rect x="138" y="48" width="44" height="8" rx="4" fill="url(#navyTeal)"/>
+  <!-- Vertical left pillar -->
+  <rect x="138" y="48" width="8" height="28" rx="4" fill="url(#navyTeal)"/>
+  <!-- Vertical right pillar -->
+  <rect x="174" y="48" width="8" height="28" rx="4" fill="url(#navyTeal)"/>
+
+  <!-- Circuit nodes left -->
+  <circle cx="124" cy="70" r="4" fill="#567C8D"/>
+  <line x1="138" y1="70" x2="128" y2="70" stroke="#567C8D" stroke-width="3"/>
+  <circle cx="124" cy="82" r="4" fill="#567C8D"/>
+  <line x1="138" y1="82" x2="128" y2="82" stroke="#567C8D" stroke-width="3"/>
+  <circle cx="124" cy="94" r="4" fill="#567C8D"/>
+  <line x1="138" y1="94" x2="128" y2="94" stroke="#567C8D" stroke-width="3"/>
+
+  <!-- Circuit nodes right -->
+  <circle cx="196" cy="70" r="4" fill="#567C8D"/>
+  <line x1="182" y1="70" x2="192" y2="70" stroke="#567C8D" stroke-width="3"/>
+  <circle cx="196" cy="82" r="4" fill="#567C8D"/>
+  <line x1="182" y1="82" x2="192" y2="82" stroke="#567C8D" stroke-width="3"/>
+  <circle cx="196" cy="94" r="4" fill="#567C8D"/>
+  <line x1="182" y1="94" x2="192" y2="94" stroke="#567C8D" stroke-width="3"/>
+
+  <!-- ECG / heartbeat line (crossbar of A) -->
+  <polyline
+    points="122,110 135,110 142,96 149,124 156,104 163,110 178,110 185,100 192,118 198,110 210,110"
+    stroke="url(#tealOnly)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- SAVIA text -->
+  <text x="160" y="178" text-anchor="middle"
+    font-family="'Inter', 'Arial', sans-serif"
+    font-size="28" font-weight="800" letter-spacing="6"
+    fill="url(#navyTeal)">SAVIA</text>
+</svg>
