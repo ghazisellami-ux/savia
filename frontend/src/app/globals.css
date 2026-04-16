@@ -1,22 +1,24 @@
 @import "tailwindcss";
 
 /* ==========================================
-   🎨 SAVIA Design System — Dark Medical Theme
+   🎨 SAVIA Design System — Navy & Teal Theme
    ========================================== */
 
 @theme {
-  --color-savia-bg: #FAF6ED;
-  --color-savia-surface: #FAF6ED;
-  --color-savia-surface-hover: #F2EBE1;
-  --color-savia-border: rgba(184, 169, 154, 0.2);
-  --color-savia-accent: #D4A373;
-  --color-savia-accent-blue: #A28C74;
-  --color-savia-text: #2D2620;
-  --color-savia-text-muted: #6B5C51;
-  --color-savia-text-dim: #9B8C82;
-  --color-savia-danger: #EF4444;
-  --color-savia-warning: #F59E0B;
-  --color-savia-success: #22C55E;
+  /* Fond identique — beige chaud conservé */
+  --color-savia-bg:           #FAF6ED;
+  --color-savia-surface:      #FAF6ED;
+  --color-savia-surface-hover:#EEF3F6;
+  --color-savia-border:       rgba(86, 124, 141, 0.18);
+  /* Palette photo */
+  --color-savia-accent:       #567C8D;   /* Teal */
+  --color-savia-accent-blue:  #2F4156;   /* Navy */
+  --color-savia-text:         #2F4156;   /* Navy */
+  --color-savia-text-muted:   #567C8D;   /* Teal */
+  --color-savia-text-dim:     #8AAAB8;   /* Sky Blue foncé */
+  --color-savia-danger:       #EF4444;
+  --color-savia-warning:      #F59E0B;
+  --color-savia-success:      #22C55E;
 }
 
 /* --- Base --- */
@@ -26,36 +28,36 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
-/* --- Scrollbar premium --- */
+/* --- Scrollbar premium (teal) --- */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 163, 115, 0.3);
+  background: rgba(86, 124, 141, 0.3);
   border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(212, 163, 115, 0.6); }
+::-webkit-scrollbar-thumb:hover { background: rgba(86, 124, 141, 0.6); }
 
 /* --- Animations --- */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 8px rgba(212, 163, 115, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(212, 163, 115, 0.6); }
+  0%, 100% { box-shadow: 0 0 8px  rgba(86, 124, 141, 0.25); }
+  50%       { box-shadow: 0 0 20px rgba(86, 124, 141, 0.5); }
 }
 
 @keyframes slide-in-left {
   from { opacity: 0; transform: translateX(-16px); }
-  to { opacity: 1; transform: translateX(0); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
-.animate-fade-in { animation: fade-in 0.4s ease-out; }
-.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
-.animate-slide-in { animation: slide-in-left 0.3s ease-out; }
+.animate-fade-in    { animation: fade-in       0.4s ease-out; }
+.animate-pulse-glow { animation: pulse-glow    2s   ease-in-out infinite; }
+.animate-slide-in   { animation: slide-in-left 0.3s ease-out; }
 
-/* --- 3D Neumorphism Effect (Replaces Glass) --- */
+/* --- Neumorphism (fond beige conservé) --- */
 .glass {
   background: #FAF6ED;
   border: none;
@@ -64,7 +66,7 @@ body {
   transition: all 0.3s ease;
 }
 
-/* --- Global Shadows for Surface Elements --- */
+/* --- Global Shadows --- */
 aside {
   box-shadow: 8px 8px 16px #e3dac7, -8px -8px 16px #ffffff !important;
   border: none !important;
@@ -75,21 +77,21 @@ thead th {
   border: none !important;
 }
 
-/* --- Gradient text (titres de page — bleu saphir) --- */
+/* --- Gradient text — Navy → Teal (palette photo) --- */
 .gradient-text {
-  background: linear-gradient(135deg, #1D5FA4, #38A3D8);
+  background: linear-gradient(135deg, #2F4156, #567C8D);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* --- Login mesh background --- */
+/* --- Login mesh background (beige conservé) --- */
 .login-mesh {
   position: fixed;
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(ellipse 60% 50% at 20% 30%, rgba(212, 163, 115, 0.15), transparent),
-    radial-gradient(ellipse 50% 60% at 80% 70%, rgba(162, 140, 116, 0.15), transparent),
-    radial-gradient(ellipse 40% 40% at 50% 50%, rgba(250, 246, 237, 0.8), transparent);
+    radial-gradient(ellipse 60% 50% at 20% 30%, rgba(86, 124, 141, 0.12), transparent),
+    radial-gradient(ellipse 50% 60% at 80% 70%, rgba(47,  65,  86,  0.08), transparent),
+    radial-gradient(ellipse 40% 40% at 50% 50%, rgba(250, 246, 237, 0.9),  transparent);
 }
