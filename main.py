@@ -1342,17 +1342,40 @@ def get_settings(user: dict = Depends(_verify_token)):
         "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
         "gemini_api_key",
     ]
-    result = {}
-    for k in keys:
-        result[k] = get_config(k, "")
-    return result
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
+                (keys,)
+            ).fetchall()
+            result = {k: "" for k in keys}
+            for row in rows:
+                result[row["cle"]] = row["valeur"] or ""
+            return result
+    except Exception:
+        # Fallback: chercher clé par clé
+        result = {}
+        for k in keys:
+            result[k] = get_config(k, "")
+        return result
 
 
 @app.put("/api/settings")
 def update_settings(body: dict, user: dict = Depends(_verify_token)):
-    for k, v in body.items():
-        set_config(k, str(v))
-    return {"ok": True}
+    try:
+        with get_db() as conn:
+            for k, v in body.items():
+                conn.execute(
+                    """
+                    INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
+                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
+                    """,
+                    (k, str(v))
+                )
+        return {"ok": True}
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}\n{traceback.format_exc()}")
 
 
 # ==========================================

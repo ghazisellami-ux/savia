@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth-context';
 import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
-  ClipboardCheck, Settings, LogOut, Radio,
+  ClipboardCheck, Settings, LogOut, SlidersHorizontal,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { key: 'reports',            label: 'Rapports & Exports',     href: '/reports',     icon: FileText      },
   { key: 'contrats',           label: 'Contrats & SLA',         href: '/contrats',    icon: ClipboardCheck},
   { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings      },
+  { key: 'settings',           label: 'Paramètres',             href: '/settings',    icon: SlidersHorizontal },
 ];
 
 const ROLE_COLOR: Record<string, string> = {
