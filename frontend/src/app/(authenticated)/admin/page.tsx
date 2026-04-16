@@ -163,6 +163,9 @@ export default function AdminPage() {
   const [companyName, setCompanyName] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_company') || '' : ''));
   const [logoPreview, setLogoPreview] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_logo') || '' : ''));
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [profilesSaving, setProfilesSaving] = useState(false);
+  const [profilesSaved,  setProfilesSaved]  = useState(false);
+  const [profilesErr,    setProfilesErr]    = useState('');
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -214,6 +217,28 @@ export default function AdminPage() {
         telephone: item.telephone || '',
         telegram_id: item.telegram_id || '',
       })));
+
+      // Charger les permissions depuis la BD et les appliquer aux profils
+      try {
+        const token = localStorage.getItem('savia_token') || '';
+        const settingsRes = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
+        if (settingsRes.ok) {
+          const settingsData = await settingsRes.json();
+          const dbPerms = JSON.parse(settingsData.role_permissions || '{}');
+          if (Object.keys(dbPerms).length > 0) {
+            setProfiles(prev => prev.map(p => {
+              const role = PROFILE_ROLE_MAP[p.id];
+              if (!role || !dbPerms[role]) return p;
+              const permsForRole = dbPerms[role];
+              // Convertir {page: true/false} en tableau de pages autorisées
+              const authorizedPages = Object.entries(permsForRole)
+                .filter(([, v]) => v === true)
+                .map(([k]) => k);
+              return { ...p, pages: authorizedPages };
+            }));
+          }
+        }
+      } catch { /* silencieux */ }
     } catch (err) { console.error(err); }
     finally { setIsLoading(false); }
   }, []);
@@ -313,6 +338,39 @@ export default function AdminPage() {
     setProfiles(prev => prev.map(p => p.id !== profileId ? p : {
       ...p, pages: p.pages.includes(pageKey) ? p.pages.filter(k => k !== pageKey) : [...p.pages, pageKey]
     }));
+  };
+
+  // ── Save profiles permissions to DB ──────────────────────
+  const saveProfiles = async () => {
+    setProfilesSaving(true); setProfilesErr(''); setProfilesSaved(false);
+    try {
+      // Construire le format role_permissions: {Role: {page: true/false}}
+      const rolePerms: Record<string, Record<string, boolean>> = {};
+      profiles.forEach(p => {
+        const role = PROFILE_ROLE_MAP[p.id];
+        if (!role) return;
+        rolePerms[role] = {};
+        ALL_PAGES.forEach(page => {
+          rolePerms[role][page.key] = p.pages.includes(page.key);
+        });
+      });
+      // Admin a toujours tout
+      rolePerms['Admin'] = Object.fromEntries(ALL_PAGES.map(p => [p.key, true]));
+
+      const token = localStorage.getItem('savia_token') || '';
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ role_permissions: JSON.stringify(rolePerms) }),
+      });
+      if (!res.ok) throw new Error(`Erreur ${res.status}`);
+      setProfilesSaved(true);
+      setTimeout(() => setProfilesSaved(false), 3000);
+    } catch (e: any) {
+      setProfilesErr(`❌ ${e.message}`);
+    } finally {
+      setProfilesSaving(false);
+    }
   };
 
   const roleColor = (role: string) => {
@@ -462,6 +520,24 @@ export default function AdminPage() {
               </div>
             </SectionCard>
           ))}
+
+          {/* Bouton Valider les permissions */}
+          <div className="flex items-center justify-between pt-2 border-t border-savia-border">
+            <div>
+              {profilesSaved && (
+                <span className="text-green-400 text-sm font-bold">✅ Permissions sauvegardées !</span>
+              )}
+              {profilesErr && <span className="text-red-400 text-sm">{profilesErr}</span>}
+            </div>
+            <button
+              onClick={saveProfiles}
+              disabled={profilesSaving}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+            >
+              {profilesSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {profilesSaving ? 'Sauvegarde...' : 'Valider les permissions'}
+            </button>
+          </div>
         </div>
       )}
 
