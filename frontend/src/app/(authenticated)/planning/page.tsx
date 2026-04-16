@@ -66,6 +66,9 @@ export default function PlanningPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
+  // Day-detail popup
+  const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
+  const [dayDetailEvents, setDayDetailEvents] = useState<PlanItem[]>([]);
 
   // Equipements filtered by selected client
   const filteredEquips = useMemo(() => {
@@ -266,7 +269,21 @@ export default function PlanningPage() {
             const isPast = new Date(cell.date) < now && !isToday;
             return (
               <div key={i}
-                onClick={() => { if (cell.inMonth) { setSelectedDay(cell.day); setForm({...emptyForm, date_planifiee: cell.date}); setError(''); setShowAddModal(true); } }}
+                onClick={() => {
+                  if (!cell.inMonth) return;
+                  const evs = eventsForDate(cell.date);
+                  if (evs.length > 0) {
+                    // Ouvrir la popup détails
+                    setDayDetailDate(cell.date);
+                    setDayDetailEvents(evs);
+                  } else {
+                    // Ouvrir la modale ajout
+                    setSelectedDay(cell.day);
+                    setForm({...emptyForm, date_planifiee: cell.date});
+                    setError('');
+                    setShowAddModal(true);
+                  }
+                }}
                 className={`min-h-[80px] rounded-lg p-1 border transition-all cursor-pointer ${
                   !cell.inMonth ? 'opacity-30 border-transparent' :
                   isToday ? 'border-cyan-400 bg-cyan-400/5' :
@@ -361,7 +378,7 @@ export default function PlanningPage() {
       </SectionCard>
 
       {/* ADD MODAL */}
-      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setSelectedDay(null); }} title="Planifier une Maintenance" size="lg">
+      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setSelectedDay(null); }} title={`Planifier une Maintenance${selectedDay ? ` — ${String(selectedDay).padStart(2,'0')}/${String(currentMonth+1).padStart(2,'0')}/${currentYear}` : ''}`}>
         <div className="space-y-5">
 
           {error && (
@@ -477,6 +494,103 @@ export default function PlanningPage() {
           </button>
         </div>
       </Modal>
+
+      {/* ═══════════ DAY DETAIL POPUP ═══════════ */}
+      {dayDetailDate && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm overflow-y-auto py-10 px-4" onClick={() => setDayDetailDate(null)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
+              <h2 className="text-base font-black gradient-text flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-savia-accent" />
+                Maintenances — {dayDetailDate}
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const day = Number(dayDetailDate!.split('-')[2]);
+                    setDayDetailDate(null);
+                    setSelectedDay(day);
+                    setForm({...emptyForm, date_planifiee: dayDetailDate!});
+                    setError('');
+                    setShowAddModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-savia-accent hover:opacity-90 cursor-pointer transition-all"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Ajouter
+                </button>
+                <button onClick={() => setDayDetailDate(null)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Events */}
+            <div className="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
+              {dayDetailEvents.map((ev, i) => {
+                const isPast = new Date(ev.date_planifiee) < now;
+                const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
+                const colors = getStatutColor(ev.statut, isOverdue);
+                return (
+                  <div key={i} className={`rounded-xl border-l-4 p-4 space-y-2 ${colors.cell}`}>
+                    {/* Machine + statut */}
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="flex items-center gap-2 font-black text-sm">
+                        <Server className="w-4 h-4 flex-shrink-0" /> {ev.machine}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${colors.badge}`}>
+                        {isOverdue ? 'En retard' : ev.statut}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      {ev.client && (
+                        <div className="flex items-center gap-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-savia-text-muted" />
+                          <span className="text-savia-text-muted">Client :</span>
+                          <span className="font-semibold">{ev.client}</span>
+                        </div>
+                      )}
+                      {ev.technicien && (
+                        <div className="flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-savia-text-muted" />
+                          <span className="text-savia-text-muted">Tech :</span>
+                          <span className="font-semibold">{ev.technicien}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <Wrench className="w-3.5 h-3.5 text-savia-text-muted" />
+                        <span className="text-savia-text-muted">Type :</span>
+                        <span className="font-semibold">{ev.type_maintenance}</span>
+                      </div>
+                      {ev.recurrence && ev.recurrence !== 'Aucune' && (
+                        <div className="flex items-center gap-1.5">
+                          <RefreshCw className="w-3.5 h-3.5 text-savia-text-muted" />
+                          <span className="text-savia-text-muted">Récurrence :</span>
+                          <span className="font-semibold">{ev.recurrence}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {ev.description && (
+                      <div className="flex items-start gap-1.5 text-xs pt-1 border-t border-current/10">
+                        <FileText className="w-3.5 h-3.5 text-savia-text-muted flex-shrink-0 mt-0.5" />
+                        <p className="text-savia-text-muted">{ev.description}</p>
+                      </div>
+                    )}
+                    {ev.notes && (
+                      <div className="flex items-start gap-1.5 text-xs">
+                        <StickyNote className="w-3.5 h-3.5 text-savia-text-muted flex-shrink-0 mt-0.5" />
+                        <p className="italic text-savia-text-dim">{ev.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
