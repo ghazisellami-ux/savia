@@ -543,7 +543,8 @@ export default function ReportsPage() {
               )}
             </div>
           )}
-
+        </div>
+      )}
 
       {/* TAB 3: COMPARAISON */}
       {activeTab === 3 && (
