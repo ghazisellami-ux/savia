@@ -447,6 +447,48 @@ def get_demandes(
     return _df_to_records(df)
 
 
+@app.post("/api/demandes")
+def create_demande(body: dict, user: dict = Depends(_verify_token)):
+    from db_engine import get_db
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO demandes_intervention
+              (date_demande, demandeur, client, equipement, urgence,
+               description, code_erreur, contact_nom, contact_tel, statut)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            body.get("date_demande") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            body.get("demandeur") or "",
+            body.get("client") or "",
+            body.get("equipement") or "",
+            body.get("urgence") or "Moyenne",
+            body.get("description") or "",
+            body.get("code_erreur") or "",
+            body.get("contact_nom") or "",
+            body.get("contact_tel") or "",
+            body.get("statut") or "En attente",
+        ))
+    return {"success": True}
+
+
+@app.put("/api/demandes/{demande_id}/statut")
+def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_verify_token)):
+    from db_engine import get_db
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE demandes_intervention
+            SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
+                date_traitement = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (
+            body.get("statut") or "En cours",
+            body.get("technicien_assigne") or "",
+            body.get("notes_traitement") or "",
+            demande_id,
+        ))
+    return {"success": True}
+
+
 # ==========================================
 # PIÈCES DE RECHANGE
 # ==========================================
