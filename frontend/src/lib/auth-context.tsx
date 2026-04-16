@@ -11,7 +11,7 @@ interface User {
   username: string;
   nom: string;
   role: string;
-  client?: string;
+  client?: string;  // présent pour Lecteur
 }
 
 interface AuthContextType {
