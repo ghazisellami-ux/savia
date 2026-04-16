@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
@@ -30,18 +30,23 @@ const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'Assignée':            { bg: 'rgba(168,85,247,0.12)',  color: '#7C3AED'      },
 };
 
+type PiecesQty = Record<number, number>;
+
 export default function InterventionDetailPage() {
   const router = useRouter();
   const params = useParams();
   const id = Number(params?.id);
 
   const [intervention, setIntervention] = useState<any>(null);
-  const [loading, setLoading]   = useState(true);
-  const [saving, setSaving]     = useState(false);
-  const [error, setError]       = useState('');
-  const [success, setSuccess]   = useState('');
-  const [photoFile, setPhotoFile]   = useState<File | null>(null);
+  const [allPieces, setAllPieces]       = useState<any[]>([]);
+  const [equipement, setEquipement]     = useState<any>(null);
+  const [loading, setLoading]           = useState(true);
+  const [saving, setSaving]             = useState(false);
+  const [error, setError]               = useState('');
+  const [success, setSuccess]           = useState('');
+  const [photoFile, setPhotoFile]       = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState('');
+  const [piecesQty, setPiecesQty]       = useState<PiecesQty>({});
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
@@ -51,17 +56,23 @@ export default function InterventionDetailPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
-    loadIntervention();
+    loadAll();
   }, [id]);
 
-  const loadIntervention = async () => {
+  const loadAll = async () => {
     setLoading(true);
     try {
-      // Charger depuis la liste car pas de GET /id
-      const all = await api.interventions.list();
+      const [all, pieces, equips] = await Promise.all([
+        api.interventions.list(),
+        api.pieces.list(),
+        api.equipements.list(),
+      ]);
+
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
+
       setIntervention(found);
+      setAllPieces(pieces as any[]);
       setForm({
         statut:        found.statut || 'En cours',
         probleme:      found.probleme || '',
@@ -73,6 +84,15 @@ export default function InterventionDetailPage() {
         priorite:      found.priorite || '',
         duree_minutes: found.duree_minutes || 0,
       });
+
+      // Trouver l'équipement correspondant à la machine de l'intervention
+      const machineName = (found.machine || '').toLowerCase();
+      const eq = (equips as any[]).find(e =>
+        (e.nom || '').toLowerCase() === machineName ||
+        machineName.includes((e.nom || '').toLowerCase())
+      );
+      setEquipement(eq || null);
+
     } catch {
       setError('Erreur lors du chargement.');
     } finally {
@@ -80,14 +100,37 @@ export default function InterventionDetailPage() {
     }
   };
 
+  // Filtrer les pièces par type d'équipement (correspondance partielle insensible à la casse)
+  const filteredPieces = useMemo(() => {
+    if (allPieces.length === 0) return [];
+    if (!equipement) return allPieces;
+    const eqType = (equipement.type || '').toLowerCase().trim();
+    if (!eqType) return allPieces;
+    return allPieces.filter(p => {
+      const pt = (p.equipement_type || '').toLowerCase().trim();
+      return pt === eqType || pt.includes(eqType) || eqType.includes(pt);
+    });
+  }, [allPieces, equipement]);
+
+  const handleQty = (pieceId: number, qty: number) => {
+    setPiecesQty(prev => {
+      if (qty <= 0) { const next = { ...prev }; delete next[pieceId]; return next; }
+      return { ...prev, [pieceId]: qty };
+    });
+  };
+
+  const selectedCount = Object.keys(piecesQty).length;
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess(''); setSaving(true);
     try {
-      await api.interventions.update(id, form);
-      if (photoFile) {
-        await api.interventions.uploadPhoto(id, photoFile).catch(() => {});
-      }
+      const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
+        const p = allPieces.find(x => x.id === Number(pieceId));
+        return { id: Number(pieceId), reference: p?.reference || '', quantite: qty };
+      });
+      await api.interventions.update(id, { ...form, pieces_a_deduire });
+      if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(() => {});
       setSuccess('✅ Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
     } catch {
@@ -98,7 +141,6 @@ export default function InterventionDetailPage() {
   };
 
   const set = (k: keyof typeof form, v: any) => setForm(f => ({ ...f, [k]: v }));
-
   const statutStyle = STATUT_STYLES[form.statut] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
   const isClotured = form.statut === 'Cloturee';
 
@@ -126,7 +168,7 @@ export default function InterventionDetailPage() {
       <Header />
       <main style={{ padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
 
-        {/* Titre + statut badge */}
+        {/* Header carte */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px' }}>←</button>
           <div style={{ flex: 1 }}>
@@ -135,6 +177,7 @@ export default function InterventionDetailPage() {
             </h1>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
               #{id} · {intervention?.date ? new Date(intervention.date).toLocaleDateString('fr-FR') : ''}
+              {equipement?.type && <> · <strong>{equipement.type}</strong></>}
             </p>
           </div>
           <span style={{ ...statutStyle, fontSize: '0.7rem', fontWeight: 700, padding: '4px 12px', borderRadius: '20px', textTransform: 'uppercase' }}>
@@ -143,26 +186,26 @@ export default function InterventionDetailPage() {
         </div>
 
         {success && (
-          <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: '10px', padding: '14px', textAlign: 'center', color: '#15803D', fontWeight: 700, marginBottom: '16px' }}>
+          <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid #22C55E', borderRadius: '10px', padding: '14px', textAlign: 'center', color: '#15803D', fontWeight: 700, marginBottom: '16px' }}>
             {success}
           </div>
         )}
 
         <form onSubmit={handleSave}>
-          {/* Statut */}
+          {/* Sélecteur statut */}
           <div style={SECTION}>
             <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚙️ Statut</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
               {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
                 const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
                 return (
                   <button key={s} type="button" onClick={() => set('statut', s)}
                     style={{
-                      padding: '10px', border: `2px solid ${form.statut === s ? st.color : 'var(--border)'}`,
+                      padding: '10px 4px', border: `2px solid ${form.statut === s ? st.color : 'var(--border)'}`,
                       borderRadius: '10px', background: form.statut === s ? st.bg : '#fff',
                       color: form.statut === s ? st.color : 'var(--text-muted)',
-                      fontWeight: form.statut === s ? 800 : 500, fontSize: '0.8rem',
-                      cursor: 'pointer', transition: 'all 0.2s',
+                      fontWeight: form.statut === s ? 800 : 500, fontSize: '0.72rem',
+                      cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center',
                     }}>
                     {s}
                   </button>
@@ -175,9 +218,9 @@ export default function InterventionDetailPage() {
           <div style={SECTION}>
             <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔍 Diagnostic</h3>
             {[
-              { key: 'probleme', label: 'Problème constaté',   ph: 'Symptômes observés...' },
-              { key: 'cause',    label: 'Cause racine',        ph: 'Analyse de la cause...' },
-              { key: 'solution', label: 'Solution appliquée',  ph: 'Actions correctives...' },
+              { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
+              { key: 'cause',    label: 'Cause racine',      ph: 'Analyse de la cause...' },
+              { key: 'solution', label: 'Solution appliquée',ph: 'Actions correctives...' },
             ].map(({ key, label, ph }) => (
               <div key={key} style={{ marginBottom: '12px' }}>
                 <label style={LABEL}>{label}</label>
@@ -197,6 +240,77 @@ export default function InterventionDetailPage() {
                 <label style={LABEL}>⏱ Durée (min)</label>
                 <input type="number" style={INPUT} min={0} value={form.duree_minutes} onChange={e => set('duree_minutes', parseInt(e.target.value) || 0)} />
               </div>
+            </div>
+          </div>
+
+          {/* 🔩 Pièces de rechange */}
+          <div style={SECTION}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                🔩 Pièces de rechange
+              </h3>
+              {selectedCount > 0 && (
+                <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
+                  {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+
+            {equipement?.type && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
+                🏷 Filtre : <strong>{equipement.type}</strong>
+                {filteredPieces.length === 0 && allPieces.length > 0 && (
+                  <span style={{ color: 'var(--warning)', marginLeft: '8px' }}>— Affichage de toutes les pièces</span>
+                )}
+              </p>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {(filteredPieces.length > 0 ? filteredPieces : allPieces).map((p: any) => {
+                const qty = piecesQty[p.id] || 0;
+                const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                const rupture = enStock === 0;
+                return (
+                  <div key={p.id} style={{
+                    background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa',
+                    border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`,
+                    borderRadius: '10px', padding: '10px 12px',
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    opacity: rupture && qty === 0 ? 0.55 : 1,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {p.designation || p.nom}
+                      </p>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
+                        <span style={{
+                          fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                          background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                          color: rupture ? 'var(--danger)' : '#15803D',
+                        }}>
+                          {rupture ? '⚠ Rupture' : `✅ ${enStock} en stock`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Compteur +/- */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <button type="button" onClick={() => handleQty(p.id, qty - 1)} disabled={qty === 0}
+                        style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        −
+                      </button>
+                      <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>
+                        {qty}
+                      </span>
+                      <button type="button" onClick={() => handleQty(p.id, qty + 1)}
+                        style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: rupture ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: rupture ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        +
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -235,9 +349,7 @@ export default function InterventionDetailPage() {
                 )}
               </div>
               {photoPreview && (
-                <div style={{ marginTop: '10px' }}>
-                  <img src={photoPreview} alt="Aperçu" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain' }} />
-                </div>
+                <img src={photoPreview} alt="Aperçu" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginTop: '10px' }} />
               )}
             </div>
           )}
@@ -257,7 +369,7 @@ export default function InterventionDetailPage() {
 
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {saving ? '⏳ Enregistrement...' : '💾 Mettre à jour'}
+            {saving ? '⏳ Enregistrement...' : `💾 Mettre à jour${selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}`}
           </button>
         </form>
       </main>
