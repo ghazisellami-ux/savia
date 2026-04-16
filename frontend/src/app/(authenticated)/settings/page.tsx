@@ -6,7 +6,7 @@ const INPUT_CLASS = "w-full bg-savia-bg/50 border border-savia-border rounded-lg
 const LABEL_CLASS = "block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2";
 
 async function fetchAPI(path: string, opts: RequestInit = {}) {
-  const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+  const token = localStorage.getItem('savia_token');
   const res = await fetch(path, {
     ...opts,
     headers: {
