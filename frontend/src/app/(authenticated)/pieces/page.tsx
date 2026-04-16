@@ -3,8 +3,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Sparkles,
-  Filter, Wrench, Building2, TrendingDown, DollarSign, ShoppingCart, Clock,
-  CheckCircle2, XCircle, History, Brain, BarChart3, Boxes, Factory, StickyNote } from 'lucide-react';
+  Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
+  Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock } from 'lucide-react';
 import { pieces, interventions, ai } from '@/lib/api';
 
 interface Piece {
@@ -37,8 +37,14 @@ export default function PiecesPage() {
   const [selectedPiece, setSelectedPiece] = useState<Piece | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [aiResult, setAiResult] = useState<string>('');
-  const [aiSelectedPiece, setAiSelectedPiece] = useState<string>('all');
+  const [aiResult, setAiResult] = useState<any>(null);
+  // Feedback
+  const [selectedFeedbackPiece, setSelectedFeedbackPiece] = useState('');
+  const [feedbackHistory, setFeedbackHistory] = useState<any[]>([]);
+  const [showFeedbackHistory, setShowFeedbackHistory] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [decaleDate, setDecaleDate] = useState('');
+  const [feedbackSuccess, setFeedbackSuccess] = useState('');
 
   const emptyForm = { reference: '', designation: '', equipement_type: 'Scanner CT', stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -67,6 +73,27 @@ export default function PiecesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Load feedback from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('savia_pieces_feedback');
+    if (saved) setFeedbackHistory(JSON.parse(saved));
+  }, []);
+
+  const submitFeedback = (type: 'correct' | 'faux_positif' | 'decale', vraiDate?: string) => {
+    if (!selectedFeedbackPiece) return;
+    const entry = { piece: selectedFeedbackPiece, type, vraiDate, timestamp: new Date().toISOString() };
+    const updated = [entry, ...feedbackHistory];
+    setFeedbackHistory(updated);
+    localStorage.setItem('savia_pieces_feedback', JSON.stringify(updated));
+    setFeedbackSuccess(
+      type === 'correct' ? 'Prédiction confirmée' :
+      type === 'faux_positif' ? 'Faux positif signalé' :
+      `Date corrigée → ${vraiDate}`
+    );
+    setShowDatePicker(false); setDecaleDate('');
+    setTimeout(() => setFeedbackSuccess(''), 4000);
+  };
 
   const handleSave = async () => {
     if (!form.designation.trim()) return;
@@ -118,34 +145,56 @@ export default function PiecesPage() {
 
   const handleAiAnalyze = async () => {
     setIsAnalyzing(true);
-    setAiResult('');
+    setAiResult(null);
+    const today = new Date();
+    const inDays = (n: number) => new Date(today.getTime() + n * 86400000).toLocaleDateString('fr-FR');
     try {
-      const piecesInfo = filtered.map(p => {
-        const status = p.stock_actuel === 0 ? '🚨 RUPTURE' : p.stock_actuel <= p.stock_minimum ? '⚠️ Stock bas' : '✅ OK';
-        return `- ${p.designation} (${p.reference}) [${p.equipement_type}] | Stock: ${p.stock_actuel}/${p.stock_minimum} (${status}) | Fournisseur: ${p.fournisseur} | Prix: ${p.prix_unitaire.toLocaleString('fr')} TND`;
+      const piecesInfo = data.map(p => {
+        const statut = p.stock_actuel === 0 ? 'RUPTURE' : p.stock_actuel <= p.stock_minimum ? 'Stock bas' : 'OK';
+        const manquant = Math.max(0, p.stock_minimum - p.stock_actuel + 1);
+        return `- ${p.designation} (${p.reference}) | Type: ${p.equipement_type} | Stock: ${p.stock_actuel}/${p.stock_minimum} [${statut}] | Manquant: ${manquant} unité(s) | Fournisseur: ${p.fournisseur || 'N/A'} | Prix: ${p.prix_unitaire} TND`;
       }).join('\n');
+      const totalVal = data.reduce((a, p) => a + p.stock_actuel * p.prix_unitaire, 0);
+      const ruptures = data.filter(p => p.stock_actuel === 0).length;
+      const bas = data.filter(p => p.stock_actuel > 0 && p.stock_actuel <= p.stock_minimum).length;
 
-      const totalVal = filtered.reduce((a, p) => a + p.stock_actuel * p.prix_unitaire, 0);
-      const prompt = `Agis en tant que Supply Chain Manager pour un réseau hospitalier spécialisé en imagerie médicale.
-Valeur actuelle du stock : ${totalVal.toLocaleString('fr')} TND.
+      const prompt = `Tu es Supply Chain Manager spécialisé en équipements de radiologie médicale (Tunisie).
+Date d'aujourd'hui: ${today.toLocaleDateString('fr-FR')}.
+Stock total: ${data.length} références | Valeur: ${totalVal.toLocaleString('fr')} TND | RUPTURES: ${ruptures} | STOCK BAS: ${bas}
 
-Analyse ces pièces de rechange :
+Inventaire:
 ${piecesInfo}
 
-Fournis une analyse structurée en 4 sections :
-🔍 Analyse du risque — identifie le capital immobilisé et les pièces critiques
-🛒 Recommandation — ruptures impactant la continuité des soins
-📅 Timing d'achat — plan de commande (immédiat vs mois prochain)
-💰 Impact budget — impact financier en TND et optimisation`;
+Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après) avec cette structure exacte:
+{
+  "analyse_risque": "texte de 2-3 phrases sur les pièces critiques et le capital immobilisé",
+  "recommandations": [
+    {"piece": "nom", "reference": "ref", "action": "Commander immédiatement | Commander bientôt | OK", "quantite": 2, "date_achat": "JJ/MM/AAAA", "urgence": "critique | haute | normale", "cout_estime": 500}
+  ],
+  "plan_achat": [
+    {"semaine": "S1 (${inDays(0)} - ${inDays(6)})", "pieces": ["pièce1", "pièce2"], "budget": 1200},
+    {"semaine": "S2 (${inDays(7)} - ${inDays(13)})", "pieces": ["pièce3"], "budget": 800}
+  ],
+  "impact_budget": {"cout_total_commande": 2000, "gain_potentiel": 5000, "ratio": "Pour 1 TND investi, X TND économés"},
+  "tendances": ["tendance 1", "tendance 2"]
+}`;
 
       const res = await ai.analyzePerformance({ prompt_override: prompt } as any, 'TND');
       if (res.ok && res.result) {
-        setAiResult(typeof res.result === 'string' ? res.result : JSON.stringify(res.result, null, 2));
+        const raw = typeof res.result === 'string' ? res.result : JSON.stringify(res.result);
+        // Try to extract JSON from the response
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try { setAiResult(JSON.parse(jsonMatch[0])); }
+          catch { setAiResult({ analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] }); }
+        } else {
+          setAiResult({ analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] });
+        }
       } else {
-        setAiResult("L'IA n'a pas pu générer de réponse.");
+        setAiResult({ analyse_risque: "L'IA n'a pas pu générer de réponse.", recommandations: [], plan_achat: [], tendances: [] });
       }
     } catch (err: any) {
-      setAiResult(`Erreur: ${err?.message || "Analyse indisponible"}`);
+      setAiResult({ analyse_risque: `Erreur: ${err?.message || 'Analyse indisponible'}`, recommandations: [], plan_achat: [], tendances: [] });
     } finally { setIsAnalyzing(false); }
   };
 
@@ -528,37 +577,121 @@ Fournis une analyse structurée en 4 sections :
 
           {aiResult && (
             <SectionCard title="Résultat de l'Analyse IA">
-              <div className="space-y-3">
-                {/* Parse sections */}
-                {(() => {
-                  const sections = [
-                    { key: 'risque', icon: '🔍', title: 'Analyse du risque', color: '#ef4444' },
-                    { key: 'recommandation', icon: '🛒', title: 'Recommandation', color: '#f59e0b' },
-                    { key: 'timing', icon: '📅', title: "Timing d'achat", color: '#10b981' },
-                    { key: 'budget', icon: '💰', title: 'Impact budget', color: '#3b82f6' },
-                  ];
-                  // Simple display
-                  return (
-                    <div className="prose prose-invert max-w-none">
-                      {sections.map(sec => {
-                        const regex = new RegExp(`${sec.icon}[^\\n]*`, 'i');
-                        return (
-                          <div key={sec.key} className="mb-4 p-4 rounded-lg" style={{ background: `${sec.color}10`, borderLeft: `4px solid ${sec.color}` }}>
-                            <div className="font-bold text-sm uppercase tracking-wider mb-2" style={{ color: sec.color }}>
-                              {sec.icon} {sec.title}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      <div className="bg-savia-surface-hover/50 rounded-lg p-4 whitespace-pre-wrap text-sm text-savia-text leading-relaxed">
-                        {typeof aiResult === 'string' ? aiResult : JSON.stringify(aiResult, null, 2)}
-                      </div>
+              <div className="space-y-4">
+                {aiResult.analyse_risque && (
+                  <div className="p-4 rounded-lg bg-red-500/10 border-l-4 border-red-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-red-400 mb-2 uppercase tracking-wider">
+                      <AlertTriangle className="w-4 h-4" /> Analyse du Risque
                     </div>
-                  );
-                })()}
+                    <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse_risque}</p>
+                  </div>
+                )}
+                {aiResult.recommandations?.length > 0 && (
+                  <div className="p-4 rounded-lg bg-yellow-500/10 border-l-4 border-yellow-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-yellow-400 mb-3 uppercase tracking-wider">
+                      <ShoppingCart className="w-4 h-4" /> Recommandations d&apos;Achat
+                    </div>
+                    <div className="space-y-2">
+                      {aiResult.recommandations.map((r: any, i: number) => (
+                        <div key={i} className={`flex items-center justify-between flex-wrap gap-2 p-3 rounded-lg ${r.urgence === 'critique' ? 'bg-red-500/10' : r.urgence === 'haute' ? 'bg-yellow-500/10' : 'bg-green-500/5'}`}>
+                          <div><span className="font-semibold text-sm">{r.piece}</span><span className="text-xs text-savia-text-muted ml-2 font-mono">{r.reference}</span></div>
+                          <div className="flex items-center gap-3 text-xs flex-wrap">
+                            <span className="flex items-center gap-1"><Boxes className="w-3 h-3" /> {r.quantite} unité(s)</span>
+                            <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-blue-400" /><span className="text-blue-400 font-semibold">{r.date_achat}</span></span>
+                            <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime?.toLocaleString('fr')} TND</span>
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${r.urgence === 'critique' ? 'bg-red-500/20 text-red-400' : r.urgence === 'haute' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{r.action}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {aiResult.plan_achat?.length > 0 && (
+                  <div className="p-4 rounded-lg bg-green-500/10 border-l-4 border-green-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-green-400 mb-3 uppercase tracking-wider">
+                      <Calendar className="w-4 h-4" /> Plan d&apos;Achat Planifié
+                    </div>
+                    <div className="space-y-2">
+                      {aiResult.plan_achat.map((s: any, i: number) => (
+                        <div key={i} className="flex items-start justify-between flex-wrap gap-2 p-3 rounded-lg bg-green-500/5">
+                          <div><div className="font-semibold text-sm text-green-300">{s.semaine}</div><div className="text-xs text-savia-text-muted mt-1">{(s.pieces || []).join(' · ')}</div></div>
+                          <span className="flex items-center gap-1 text-sm font-bold text-green-400"><DollarSign className="w-3.5 h-3.5" />{s.budget?.toLocaleString('fr')} TND</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {aiResult.impact_budget && (
+                  <div className="p-4 rounded-lg bg-blue-500/10 border-l-4 border-blue-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-blue-400 mb-3 uppercase tracking-wider"><DollarSign className="w-4 h-4" /> Impact Budget</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiResult.impact_budget.cout_total_commande?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Coût total commande</div></div>
+                      <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiResult.impact_budget.gain_potentiel?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
+                      <div className="text-center p-3 rounded-lg bg-purple-500/10"><div className="text-sm font-bold text-purple-400 leading-tight">{aiResult.impact_budget.ratio}</div><div className="text-xs text-savia-text-muted mt-1">Ratio ROI</div></div>
+                    </div>
+                  </div>
+                )}
+                {aiResult.tendances?.length > 0 && (
+                  <div className="p-4 rounded-lg bg-savia-surface-hover/50 space-y-2">
+                    <div className="font-bold text-sm text-savia-text-muted uppercase tracking-wider mb-2">Tendances observées</div>
+                    {aiResult.tendances.map((t: string, i: number) => (
+                      <div key={i} className="flex items-start gap-2 text-sm text-savia-text"><span className="text-savia-accent mt-0.5">›</span>{t}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </SectionCard>
           )}
+
+          {/* Feedback — Validez les Prédictions */}
+          <SectionCard title="Feedback — Validez les Prédictions IA">
+            <div className="space-y-4">
+              <p className="text-sm text-savia-text-muted">Sélectionnez une pièce et indiquez si la recommandation était correcte pour améliorer les futures analyses.</p>
+              <select value={selectedFeedbackPiece} onChange={e => setSelectedFeedbackPiece(e.target.value)}
+                className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
+                <option value="">— Sélectionner une pièce —</option>
+                {data.map(p => <option key={p.id} value={p.designation}>{p.designation} ({p.reference})</option>)}
+              </select>
+              {selectedFeedbackPiece && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-3">
+                    <button onClick={() => submitFeedback('correct')} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-green-400 bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-all cursor-pointer"><ThumbsUp className="w-4 h-4" />Correct</button>
+                    <button onClick={() => submitFeedback('faux_positif')} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all cursor-pointer"><ThumbsDown className="w-4 h-4" />Faux positif</button>
+                    <button onClick={() => setShowDatePicker(!showDatePicker)} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all cursor-pointer ${showDatePicker ? 'ring-2 ring-yellow-500/40' : ''}`}><Calendar className="w-4 h-4" />Date décalée</button>
+                    <button onClick={() => setShowFeedbackHistory(!showFeedbackHistory)} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-savia-text-muted bg-savia-surface border border-savia-border hover:bg-savia-surface-hover transition-all cursor-pointer ${showFeedbackHistory ? 'ring-2 ring-savia-accent/40' : ''}`}><History className="w-4 h-4" />Historique</button>
+                  </div>
+                  {showDatePicker && (
+                    <div className="flex items-center gap-3 p-4 rounded-lg bg-yellow-500/5 border border-yellow-500/20 flex-wrap">
+                      <Calendar className="w-5 h-5 text-yellow-400" />
+                      <span className="text-sm text-savia-text-muted">Vraie date de commande :</span>
+                      <input type="date" value={decaleDate} onChange={e => setDecaleDate(e.target.value)} className="bg-savia-bg border border-savia-border rounded-lg px-3 py-2 text-savia-text focus:ring-2 focus:ring-yellow-500/40" />
+                      <button onClick={() => { if (decaleDate) submitFeedback('decale', decaleDate); }} disabled={!decaleDate} className="px-4 py-2 rounded-lg font-semibold text-white bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 transition-all cursor-pointer">Valider</button>
+                    </div>
+                  )}
+                  {feedbackSuccess && (<div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 text-green-400 text-sm font-semibold"><ShieldCheck className="w-4 h-4" />{feedbackSuccess}</div>)}
+                </div>
+              )}
+              {showFeedbackHistory && feedbackHistory.length > 0 && (
+                <div className="mt-2 space-y-2">
+                  <h4 className="text-sm font-bold text-savia-text-muted flex items-center gap-2"><History className="w-4 h-4" />Historique ({feedbackHistory.length} entrées)</h4>
+                  <div className="max-h-[200px] overflow-y-auto space-y-2">
+                    {feedbackHistory.map((fb: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-savia-bg/50 text-sm">
+                        <div className={`p-1.5 rounded-full ${fb.type === 'correct' ? 'bg-green-500/10 text-green-400' : fb.type === 'faux_positif' ? 'bg-red-500/10 text-red-400' : 'bg-yellow-500/10 text-yellow-400'}`}>
+                          {fb.type === 'correct' ? <ThumbsUp className="w-3.5 h-3.5" /> : fb.type === 'faux_positif' ? <ThumbsDown className="w-3.5 h-3.5" /> : <Calendar className="w-3.5 h-3.5" />}
+                        </div>
+                        <div className="flex-1"><span className="font-semibold">{fb.piece}</span><span className="text-savia-text-dim ml-2">{fb.type === 'correct' ? '— Correct' : fb.type === 'faux_positif' ? '— Faux positif' : `— Décalé → ${fb.vraiDate}`}</span></div>
+                        <span className="text-xs text-savia-text-dim">{new Date(fb.timestamp).toLocaleDateString('fr-FR')}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {showFeedbackHistory && feedbackHistory.length === 0 && (
+                <div className="mt-2 text-center p-6 text-savia-text-muted text-sm"><History className="w-8 h-8 mx-auto mb-2 text-savia-text-dim" />Aucun feedback enregistré.</div>
+              )}
+            </div>
+          </SectionCard>
         </div>
       )}
 
