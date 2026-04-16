@@ -9,7 +9,7 @@ import {
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Star, Radio,
 } from 'lucide-react';
-import { admin, techniciens } from '@/lib/api';
+import { admin, techniciens, clients } from '@/lib/api';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
