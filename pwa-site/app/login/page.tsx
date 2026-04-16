@@ -21,10 +21,16 @@ export default function LoginPage() {
     setError(''); setLoading(true);
     try {
       const res = await api.login(username, password);
-      if (res.role !== 'technicien') {
+      const role = res.user?.role || '';
+      if (role.toLowerCase() !== 'technicien') {
         setError('Accès réservé aux techniciens.'); setLoading(false); return;
       }
-      saveSession(res.access_token, { id: 0, nom: res.nom, role: res.role, username });
+      saveSession(res.token, {
+        id: 0,
+        nom: res.user.nom_complet || res.user.nom || username,
+        role: res.user.role,
+        username,
+      });
       router.replace('/interventions');
     } catch {
       setError('Identifiant ou mot de passe incorrect.');

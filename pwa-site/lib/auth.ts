@@ -25,7 +25,12 @@ export function getUser(): SaviaUser | null {
 
 export function saveSession(token: string, user: SaviaUser) {
   localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  // Normalize: backend returns nom_complet, we store as nom
+  const normalizedUser: SaviaUser = {
+    ...user,
+    nom: (user as any).nom_complet || user.nom || user.username,
+  };
+  localStorage.setItem(USER_KEY, JSON.stringify(normalizedUser));
 }
 
 export function clearSession() {
