@@ -3,29 +3,30 @@ import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import {
-  Shield, Users, Plus, Trash2, Loader2, Save, Wrench,
-  X, Eye, EyeOff, CheckSquare, Square, Edit2, Crown,
-  UserCog, Package, Wrench as Tech, BookOpen, ChevronRight
+  Shield, Users, Plus, Trash2, Loader2, Save,
+  X, Eye, EyeOff, Edit2, Crown, UserCog,
+  Wrench, BarChart3, Monitor, Hospital, BookOpen,
+  ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
+  Radio,
 } from 'lucide-react';
 import { admin, techniciens } from '@/lib/api';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
 
-// ─── ALL PAGES ────────────────────────────────────────────
-const ALL_PAGES = [
-  { key: 'dashboard',   label: 'Tableau de bord',      icon: '📊' },
-  { key: 'sav',         label: 'SAV / Interventions',  icon: '🔧' },
-  { key: 'equipements', label: 'Équipements',           icon: '🏥' },
-  { key: 'planning',    label: 'Planning',              icon: '📅' },
-  { key: 'pieces',      label: 'Pièces de rechange',   icon: '⚙️' },
-  { key: 'contrats',    label: 'Contrats',              icon: '📄' },
-  { key: 'clients',     label: 'Clients',               icon: '🏢' },
-  { key: 'reports',     label: 'Rapports & Exports',   icon: '📈' },
-  { key: 'supervision', label: 'Supervision',           icon: '🖥️' },
-  { key: 'predictions', label: 'Prédictions IA',        icon: '🔮' },
-  { key: 'knowledge',   label: 'Base de connaissance', icon: '📚' },
-  { key: 'admin',       label: 'Administration',        icon: '👑' },
+// ─── ALL PAGES (matches sidebar exactly) ──────────────────
+const ALL_PAGES: {key: string; label: string; icon: any}[] = [
+  { key: 'dashboard',          label: 'Dashboard',               icon: BarChart3      },
+  { key: 'supervision',        label: 'Supervision',             icon: Monitor        },
+  { key: 'equipements',        label: 'Équipements',             icon: Hospital       },
+  { key: 'base_connaissances', label: 'Base de Connaissances',  icon: BookOpen       },
+  { key: 'sav',                label: 'SAV & Interventions',    icon: Wrench         },
+  { key: 'demandes',           label: "Demandes d'intervention", icon: ClipboardList  },
+  { key: 'planning',           label: 'Planning',               icon: CalendarDays   },
+  { key: 'pieces',             label: 'Pièces de Rechange',     icon: Cog            },
+  { key: 'reports',            label: 'Rapports & Exports',     icon: FileText       },
+  { key: 'contrats',           label: 'Contrats & SLA',         icon: ClipboardCheck },
+  { key: 'admin',              label: 'Administration',         icon: Settings       },
 ];
 
 // ─── DEFAULT PROFILES ─────────────────────────────────────
@@ -46,7 +47,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-blue-500/10',
     border: 'border-blue-500/30',
     description: 'SAV, planning, équipements, rapports',
-    pages: ['dashboard', 'sav', 'equipements', 'planning', 'reports', 'supervision', 'knowledge'],
+    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'demandes', 'planning', 'reports', 'base_connaissances'],
   },
   {
     id: 'gestionnaire_stock',
@@ -54,8 +55,8 @@ const DEFAULT_PROFILES: Profile[] = [
     couleur: 'text-amber-400',
     bg: 'bg-amber-500/10',
     border: 'border-amber-500/30',
-    description: 'Pièces de rechange, prédictions, commandes',
-    pages: ['dashboard', 'pieces', 'predictions', 'reports'],
+    description: 'Pièces de rechange, commandes',
+    pages: ['dashboard', 'pieces', 'reports'],
   },
   {
     id: 'technicien',
@@ -63,8 +64,8 @@ const DEFAULT_PROFILES: Profile[] = [
     couleur: 'text-cyan-400',
     bg: 'bg-cyan-500/10',
     border: 'border-cyan-500/30',
-    description: 'SAV, planning, équipements',
-    pages: ['dashboard', 'sav', 'equipements', 'planning'],
+    description: 'SAV, planning, équipements, demandes',
+    pages: ['dashboard', 'sav', 'demandes', 'equipements', 'planning', 'base_connaissances'],
   },
   {
     id: 'lecteur',
@@ -357,13 +358,15 @@ export default function AdminPage() {
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
                 {ALL_PAGES.map(page => {
                   const checked = profile.pages.includes(page.key);
+                  const Icon = page.icon;
                   return (
                     <label key={page.key} onClick={() => togglePage(profile.id, page.key)}
                       className={`flex items-center gap-2 p-2.5 rounded-lg cursor-pointer transition-all border ${checked ? `${profile.bg} ${profile.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
                       <div className={`w-4 h-4 rounded shrink-0 flex items-center justify-center border transition-all ${checked ? `${profile.couleur.replace('text-', 'bg-').replace('-400', '-500')} border-transparent` : 'border-savia-border'}`}>
                         {checked && <span className="text-white text-xs font-black">✓</span>}
                       </div>
-                      <span className="text-xs">{page.icon} {page.label}</span>
+                      <Icon className={`w-3.5 h-3.5 shrink-0 ${checked ? profile.couleur : 'text-savia-text-muted'}`} />
+                      <span className="text-xs">{page.label}</span>
                     </label>
                   );
                 })}
@@ -501,11 +504,13 @@ export default function AdminPage() {
                   <div className="flex flex-wrap gap-1.5">
                     {(profiles.find(p => p.id === userForm.profileId)?.pages || []).map(key => {
                       const page = ALL_PAGES.find(p => p.key === key);
-                      return page ? (
-                        <span key={key} className="text-xs px-2 py-0.5 rounded-full bg-savia-accent/10 text-savia-accent border border-savia-accent/20">
-                          {page.icon} {page.label}
+                      if (!page) return null;
+                      const Icon = page.icon;
+                      return (
+                        <span key={key} className="text-xs px-2 py-0.5 rounded-full bg-savia-accent/10 text-savia-accent border border-savia-accent/20 flex items-center gap-1">
+                          <Icon className="w-2.5 h-2.5" /> {page.label}
                         </span>
-                      ) : null;
+                      );
                     })}
                   </div>
                 </div>
