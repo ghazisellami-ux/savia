@@ -6,6 +6,7 @@ import {
   Zap, FileText, Tag, Edit, Send
 } from 'lucide-react';
 import { demandes, equipements, techniciens as techApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 interface Demande {
   id: number;
@@ -38,12 +39,24 @@ const STATUT_COLORS: Record<string, string> = {
   'Clôturée': 'bg-gray-500/10 text-gray-400',
 };
 
-const emptyForm = {
-  demandeur: '', client: '', equipement: '', urgence: 'Moyenne',
-  description: '', code_erreur: '', contact_nom: '', contact_tel: '',
-};
-
 export default function DemandesPage() {
+  const { user } = useAuth();
+  const isLecteur = user?.role === 'Lecteur';
+  const clientNom = user?.client || '';
+  const demandeurNom = user?.nom || '';
+
+  // Formulaire pré-rempli pour Lecteur
+  const emptyForm = {
+    demandeur: isLecteur ? demandeurNom : '',
+    client: isLecteur ? clientNom : '',
+    equipement: '',
+    urgence: 'Moyenne',
+    description: '',
+    code_erreur: '',
+    contact_nom: isLecteur ? demandeurNom : '',
+    contact_tel: '',
+  };
+
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('Tous');
   const [data, setData] = useState<Demande[]>([]);
@@ -85,16 +98,36 @@ export default function DemandesPage() {
         notes_traitement: item.notes_traitement || '',
       }));
       setData(mapped);
-      setEquips((eqRes as any[]).map((e: any) => e.Nom || e.nom || '').filter(Boolean));
+      // Pour Lecteur : filtrer les équipements selon son client
+      const allEquips = (eqRes as any[]).map((e: any) => ({ nom: e.Nom || e.nom || '', client: e.Client || e.client || '' }));
+      const filteredEquips = isLecteur && clientNom
+        ? allEquips.filter(e => e.client.toLowerCase() === clientNom.toLowerCase()).map(e => e.nom)
+        : allEquips.map(e => e.nom);
+      setEquips(filteredEquips.filter(Boolean));
       setTechs((techRes as any[]).map((t: any) => `${t.prenom || ''} ${t.nom || ''}`.trim()).filter(Boolean));
     } catch (err) {
       console.error("Failed to fetch demandes", err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isLecteur, clientNom]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const openNewModal = () => {
+    // Toujours pré-remplir avec les données du Lecteur à l'ouverture
+    setForm({
+      demandeur: isLecteur ? demandeurNom : '',
+      client: isLecteur ? clientNom : '',
+      equipement: '',
+      urgence: 'Moyenne',
+      description: '',
+      code_erreur: '',
+      contact_nom: isLecteur ? demandeurNom : '',
+      contact_tel: '',
+    });
+    setShowNewModal(true);
+  };
 
   const handleCreate = async () => {
     if (!form.demandeur || !form.equipement || !form.description) {
@@ -105,7 +138,6 @@ export default function DemandesPage() {
     try {
       await demandes.create(form as any);
       setShowNewModal(false);
-      setForm(emptyForm);
       await loadData();
     } catch (err) {
       console.error(err);
@@ -116,6 +148,8 @@ export default function DemandesPage() {
   };
 
   const openUpdate = (d: Demande) => {
+    // Lecteur ne peut pas changer le statut (vue seule)
+    if (isLecteur) return;
     setSelectedDemande(d);
     setUpdateForm({ statut: d.statut, technicien_assigne: d.technicien_assigne, notes_traitement: d.notes_traitement });
     setShowUpdateModal(true);
@@ -168,12 +202,20 @@ export default function DemandesPage() {
           <p className="text-savia-text-muted text-sm mt-1">Suivi des demandes terrain</p>
         </div>
         <button
-          onClick={() => { setForm(emptyForm); setShowNewModal(true); }}
+          onClick={openNewModal}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg"
         >
           <Plus className="w-4 h-4" /> Nouvelle demande
         </button>
       </div>
+
+      {/* Lecteur badge d'info */}
+      {isLecteur && (
+        <div className="glass rounded-xl px-4 py-2.5 border border-savia-accent/20 flex items-center gap-2 text-sm text-savia-accent">
+          <Building2 className="w-4 h-4" />
+          Vos demandes sont liées au client : <strong>{clientNom}</strong>
+        </div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-3 gap-4">
@@ -232,10 +274,13 @@ export default function DemandesPage() {
                   {d.statut}
                 </span>
               </div>
-              <button onClick={() => openUpdate(d)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-savia-accent/10 text-savia-accent hover:bg-savia-accent/20 transition-colors text-xs font-semibold cursor-pointer">
-                <Edit className="w-3.5 h-3.5" /> Mettre à jour
-              </button>
+              {/* Lecteur : pas de bouton "Mettre à jour" */}
+              {!isLecteur && (
+                <button onClick={() => openUpdate(d)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-savia-accent/10 text-savia-accent hover:bg-savia-accent/20 transition-colors text-xs font-semibold cursor-pointer">
+                  <Edit className="w-3.5 h-3.5" /> Mettre à jour
+                </button>
+              )}
             </div>
             <p className="text-sm mb-3 text-savia-text">{d.description}</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-savia-text-muted">
@@ -263,6 +308,7 @@ export default function DemandesPage() {
             <div className="flex items-center justify-between p-5 border-b border-savia-border">
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <Plus className="w-5 h-5 text-savia-accent" /> Nouvelle demande d&apos;intervention
+                {isLecteur && <span className="ml-2 text-xs font-normal text-savia-accent bg-savia-accent/10 px-2 py-0.5 rounded-full">{clientNom}</span>}
               </h2>
               <button onClick={() => setShowNewModal(false)} className="p-2 rounded-lg hover:bg-savia-surface-hover cursor-pointer">
                 <X className="w-4 h-4" />
@@ -291,24 +337,38 @@ export default function DemandesPage() {
                     <User className="w-3.5 h-3.5" /> Demandeur *
                   </label>
                   <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
-                    onChange={e => setForm({...form, demandeur: e.target.value})} />
+                    onChange={e => setForm({...form, demandeur: e.target.value})}
+                    readOnly={isLecteur} />
                 </div>
-                {/* Client */}
+                {/* Client — verrouillé pour Lecteur */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
+                    {isLecteur && <span className="text-xs text-green-400 font-normal">(auto)</span>}
                   </label>
-                  <input className={INPUT_CLS} placeholder="Nom du client" value={form.client}
-                    onChange={e => setForm({...form, client: e.target.value})} />
+                  <input className={`${INPUT_CLS} ${isLecteur ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    placeholder="Nom du client" value={form.client}
+                    onChange={e => setForm({...form, client: e.target.value})}
+                    readOnly={isLecteur} />
                 </div>
-                {/* Equipement */}
+                {/* Equipement — liste filtrée pour Lecteur */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Server className="w-3.5 h-3.5" /> Équipement concerné *
                   </label>
-                  <input className={INPUT_CLS} list="equip-list" placeholder="Sélectionner ou saisir" value={form.equipement}
-                    onChange={e => setForm({...form, equipement: e.target.value})} />
-                  <datalist id="equip-list">{equips.map(e => <option key={e} value={e} />)}</datalist>
+                  {isLecteur ? (
+                    <select className={INPUT_CLS} value={form.equipement}
+                      onChange={e => setForm({...form, equipement: e.target.value})}>
+                      <option value="">-- Sélectionner votre équipement --</option>
+                      {equips.map(e => <option key={e} value={e}>{e}</option>)}
+                    </select>
+                  ) : (
+                    <>
+                      <input className={INPUT_CLS} list="equip-list" placeholder="Sélectionner ou saisir" value={form.equipement}
+                        onChange={e => setForm({...form, equipement: e.target.value})} />
+                      <datalist id="equip-list">{equips.map(e => <option key={e} value={e} />)}</datalist>
+                    </>
+                  )}
                 </div>
                 {/* Code erreur */}
                 <div>
@@ -362,8 +422,8 @@ export default function DemandesPage() {
         </div>
       )}
 
-      {/* ========== MODAL: Mise à jour statut ========== */}
-      {showUpdateModal && selectedDemande && (
+      {/* ========== MODAL: Mise à jour statut (Admin/Tech uniquement) ========== */}
+      {!isLecteur && showUpdateModal && selectedDemande && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl">
             <div className="flex items-center justify-between p-5 border-b border-savia-border">
