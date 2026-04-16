@@ -237,13 +237,18 @@ export default function InterventionDetailPage() {
                 </select>
               </div>
               <div>
-                <label style={LABEL}>⏱ Durée (min)</label>
-                <input type="number" style={INPUT} min={0} value={form.duree_minutes} onChange={e => set('duree_minutes', parseInt(e.target.value) || 0)} />
+                <label style={LABEL}>⏱ Durée (heures)</label>
+                <input
+                  type="number" style={INPUT} min={0} step={0.5}
+                  value={form.duree_minutes > 0 ? +(form.duree_minutes / 60).toFixed(2) : 0}
+                  onChange={e => set('duree_minutes', Math.round((parseFloat(e.target.value) || 0) * 60))}
+                />
               </div>
             </div>
           </div>
 
-          {/* 🔩 Pièces de rechange */}
+          {/* 🔩 Pièces de rechange — masqué si aucune pièce pour ce type */}
+          {filteredPieces.length > 0 && (
           <div style={SECTION}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
@@ -258,15 +263,13 @@ export default function InterventionDetailPage() {
 
             {equipement?.type && (
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
-                🏷 Filtre : <strong>{equipement.type}</strong>
-                {filteredPieces.length === 0 && allPieces.length > 0 && (
-                  <span style={{ color: 'var(--warning)', marginLeft: '8px' }}>— Affichage de toutes les pièces</span>
-                )}
+                🏷 Filtre : <strong>{equipement.type}</strong> · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''}
               </p>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {(filteredPieces.length > 0 ? filteredPieces : allPieces).map((p: any) => {
+            {/* Liste avec défilement — 3 pièces visibles (~72px chacune) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
+              {filteredPieces.map((p: any) => {
                 const qty = piecesQty[p.id] || 0;
                 const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
                 const rupture = enStock === 0;
@@ -313,6 +316,7 @@ export default function InterventionDetailPage() {
               })}
             </div>
           </div>
+          )}
 
           {/* Description & Notes */}
           <div style={SECTION}>
