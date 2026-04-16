@@ -32,6 +32,13 @@ const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
 
 type PiecesQty = Record<number, number>;
 
+// Vérifie si deux chaînes se correspondent (partiel, insensible à la casse)
+function similarEnough(a: string, b: string): boolean {
+  const na = a.toLowerCase().replace(/[-_\s]/g, '');
+  const nb = b.toLowerCase().replace(/[-_\s]/g, '');
+  return na.includes(nb) || nb.includes(na);
+}
+
 export default function InterventionDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -39,7 +46,6 @@ export default function InterventionDetailPage() {
 
   const [intervention, setIntervention] = useState<any>(null);
   const [allPieces, setAllPieces]       = useState<any[]>([]);
-  const [equipement, setEquipement]     = useState<any>(null);
   const [loading, setLoading]           = useState(true);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState('');
@@ -62,10 +68,9 @@ export default function InterventionDetailPage() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [all, pieces, equips] = await Promise.all([
+      const [all, pieces] = await Promise.all([
         api.interventions.list(),
         api.pieces.list(),
-        api.equipements.list(),
       ]);
 
       const found = (all as any[]).find(i => Number(i.id) === id);
@@ -84,15 +89,6 @@ export default function InterventionDetailPage() {
         priorite:      found.priorite || '',
         duree_minutes: found.duree_minutes || 0,
       });
-
-      // Trouver l'équipement correspondant à la machine de l'intervention
-      const machineName = (found.machine || '').toLowerCase();
-      const eq = (equips as any[]).find(e =>
-        (e.nom || '').toLowerCase() === machineName ||
-        machineName.includes((e.nom || '').toLowerCase())
-      );
-      setEquipement(eq || null);
-
     } catch {
       setError('Erreur lors du chargement.');
     } finally {
@@ -100,17 +96,17 @@ export default function InterventionDetailPage() {
     }
   };
 
-  // Filtrer les pièces par type d'équipement (correspondance partielle insensible à la casse)
+  // Filtrer les pièces : l'equipement_type de la pièce doit correspondre
+  // au nom de la machine de l'intervention (correspondance partielle bidirectionnelle)
   const filteredPieces = useMemo(() => {
-    if (allPieces.length === 0) return [];
-    if (!equipement) return allPieces;
-    const eqType = (equipement.type || '').toLowerCase().trim();
-    if (!eqType) return allPieces;
+    if (!intervention?.machine || allPieces.length === 0) return [];
+    const machineName = intervention.machine.toLowerCase().replace(/[-_\s]/g, '');
     return allPieces.filter(p => {
-      const pt = (p.equipement_type || '').toLowerCase().trim();
-      return pt === eqType || pt.includes(eqType) || eqType.includes(pt);
+      const pt = (p.equipement_type || '').toLowerCase().replace(/[-_\s]/g, '');
+      if (!pt) return false;
+      return machineName.includes(pt) || pt.includes(machineName);
     });
-  }, [allPieces, equipement]);
+  }, [allPieces, intervention]);
 
   const handleQty = (pieceId: number, qty: number) => {
     setPiecesQty(prev => {
@@ -168,7 +164,7 @@ export default function InterventionDetailPage() {
       <Header />
       <main style={{ padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
 
-        {/* Header carte */}
+        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px' }}>←</button>
           <div style={{ flex: 1 }}>
@@ -177,7 +173,6 @@ export default function InterventionDetailPage() {
             </h1>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
               #{id} · {intervention?.date ? new Date(intervention.date).toLocaleDateString('fr-FR') : ''}
-              {equipement?.type && <> · <strong>{equipement.type}</strong></>}
             </p>
           </div>
           <span style={{ ...statutStyle, fontSize: '0.7rem', fontWeight: 700, padding: '4px 12px', borderRadius: '20px', textTransform: 'uppercase' }}>
@@ -192,29 +187,8 @@ export default function InterventionDetailPage() {
         )}
 
         <form onSubmit={handleSave}>
-          {/* Sélecteur statut */}
-          <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚙️ Statut</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-              {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
-                const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
-                return (
-                  <button key={s} type="button" onClick={() => set('statut', s)}
-                    style={{
-                      padding: '10px 4px', border: `2px solid ${form.statut === s ? st.color : 'var(--border)'}`,
-                      borderRadius: '10px', background: form.statut === s ? st.bg : '#fff',
-                      color: form.statut === s ? st.color : 'var(--text-muted)',
-                      fontWeight: form.statut === s ? 800 : 500, fontSize: '0.72rem',
-                      cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center',
-                    }}>
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
 
-          {/* Diagnostic */}
+          {/* ① Diagnostic */}
           <div style={SECTION}>
             <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔍 Diagnostic</h3>
             {[
@@ -247,78 +221,74 @@ export default function InterventionDetailPage() {
             </div>
           </div>
 
-          {/* 🔩 Pièces de rechange — masqué si aucune pièce pour ce type */}
+          {/* ② Pièces de rechange — masqué si aucune correspondance */}
           {filteredPieces.length > 0 && (
-          <div style={SECTION}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
-                🔩 Pièces de rechange
-              </h3>
-              {selectedCount > 0 && (
-                <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
-                  {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
-                </span>
-              )}
-            </div>
+            <div style={SECTION}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                  🔩 Pièces de rechange
+                </h3>
+                {selectedCount > 0 && (
+                  <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
+                    {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
 
-            {equipement?.type && (
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
-                🏷 Filtre : <strong>{equipement.type}</strong> · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''}
+                🏷 {intervention?.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
               </p>
-            )}
 
-            {/* Liste avec défilement — 3 pièces visibles (~72px chacune) */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
-              {filteredPieces.map((p: any) => {
-                const qty = piecesQty[p.id] || 0;
-                const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
-                const rupture = enStock === 0;
-                return (
-                  <div key={p.id} style={{
-                    background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa',
-                    border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`,
-                    borderRadius: '10px', padding: '10px 12px',
-                    display: 'flex', alignItems: 'center', gap: '10px',
-                    opacity: rupture && qty === 0 ? 0.55 : 1,
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {p.designation || p.nom}
-                      </p>
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
-                        <span style={{
-                          fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
-                          background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
-                          color: rupture ? 'var(--danger)' : '#15803D',
-                        }}>
-                          {rupture ? '⚠ Rupture' : `✅ ${enStock} en stock`}
+              {/* 3 pièces visibles, défilement pour le reste */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
+                {filteredPieces.map((p: any) => {
+                  const qty = piecesQty[p.id] || 0;
+                  const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                  const rupture = enStock === 0;
+                  return (
+                    <div key={p.id} style={{
+                      background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa',
+                      border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`,
+                      borderRadius: '10px', padding: '10px 12px',
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      opacity: rupture && qty === 0 ? 0.55 : 1,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {p.designation || p.nom}
+                        </p>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
+                          <span style={{
+                            fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                            background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                            color: rupture ? 'var(--danger)' : '#15803D',
+                          }}>
+                            {rupture ? '⚠ Rupture' : `✅ ${enStock} en stock`}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <button type="button" onClick={() => handleQty(p.id, qty - 1)} disabled={qty === 0}
+                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          −
+                        </button>
+                        <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>
+                          {qty}
                         </span>
+                        <button type="button" onClick={() => handleQty(p.id, qty + 1)}
+                          style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: rupture ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: rupture ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          +
+                        </button>
                       </div>
                     </div>
-
-                    {/* Compteur +/- */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                      <button type="button" onClick={() => handleQty(p.id, qty - 1)} disabled={qty === 0}
-                        style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        −
-                      </button>
-                      <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>
-                        {qty}
-                      </span>
-                      <button type="button" onClick={() => handleQty(p.id, qty + 1)}
-                        style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: rupture ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: rupture ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        +
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
           )}
 
-          {/* Description & Notes */}
+          {/* ③ Description & Notes */}
           <div style={SECTION}>
             <div style={{ marginBottom: '12px' }}>
               <label style={LABEL}>📝 Description</label>
@@ -332,33 +302,7 @@ export default function InterventionDetailPage() {
             </div>
           </div>
 
-          {/* Photo si clôture */}
-          {isClotured && (
-            <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche Signée</h3>
-              <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                setPhotoFile(f);
-                setPhotoPreview(URL.createObjectURL(f));
-              }} />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
-                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer' }}>
-                  📷 Prendre photo
-                </button>
-                {photoFile && (
-                  <button type="button" onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
-                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '12px 16px', borderRadius: '10px', cursor: 'pointer' }}>🗑</button>
-                )}
-              </div>
-              {photoPreview && (
-                <img src={photoPreview} alt="Aperçu" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginTop: '10px' }} />
-              )}
-            </div>
-          )}
-
-          {/* Priorité */}
+          {/* ④ Priorité */}
           <div style={SECTION}>
             <label style={LABEL}>🚨 Priorité</label>
             <select style={INPUT} value={form.priorite} onChange={e => set('priorite', e.target.value)}>
@@ -369,8 +313,62 @@ export default function InterventionDetailPage() {
             </select>
           </div>
 
+          {/* ⑤ Statut — EN BAS */}
+          <div style={SECTION}>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚙️ Statut de l&apos;intervention</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+              {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
+                const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
+                return (
+                  <button key={s} type="button" onClick={() => set('statut', s)}
+                    style={{
+                      padding: '10px 4px', border: `2px solid ${form.statut === s ? st.color : 'var(--border)'}`,
+                      borderRadius: '10px', background: form.statut === s ? st.bg : '#fff',
+                      color: form.statut === s ? st.color : 'var(--text-muted)',
+                      fontWeight: form.statut === s ? 800 : 500, fontSize: '0.72rem',
+                      cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center',
+                    }}>
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ⑥ Photo fiche signée — uniquement si Clôturée, juste après le statut */}
+          {isClotured && (
+            <div style={{ ...SECTION, border: '2px dashed var(--teal)' }}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche de clôture signée</h3>
+              <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                setPhotoFile(f);
+                setPhotoPreview(URL.createObjectURL(f));
+              }} />
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
+                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}>
+                  📷 {photoFile ? 'Changer la photo' : 'Prendre / Importer photo'}
+                </button>
+                {photoFile && (
+                  <button type="button" onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
+                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '14px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700 }}>🗑</button>
+                )}
+              </div>
+              {photoPreview && (
+                <img src={photoPreview} alt="Aperçu fiche" style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginTop: '12px', display: 'block' }} />
+              )}
+              {!photoFile && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+                  Joignez une photo de la fiche d&apos;intervention signée par le client
+                </p>
+              )}
+            </div>
+          )}
+
           {error && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
 
+          {/* ⑦ Bouton mise à jour */}
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {saving ? '⏳ Enregistrement...' : `💾 Mettre à jour${selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}`}
