@@ -176,7 +176,7 @@ export default function AdminPage() {
         specialite: item.specialite || 'Général',
         qualification: item.qualification || '',
         niveau_competence: item.niveau_competence || 'Junior',
-        dispo: item.dispo || 'Disponible',
+        dispo: typeof item.dispo === 'number' ? (item.dispo ? 'Disponible' : 'Indisponible') : (item.dispo || 'Disponible'),
         email: item.email || '',
         telephone: item.telephone || '',
         telegram_id: item.telegram_id || '',
@@ -444,7 +444,7 @@ export default function AdminPage() {
                       </div>
                     </td>
                     <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${t.dispo.toLowerCase().includes('dispo') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>{t.dispo}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${String(t.dispo).toLowerCase().includes('dispo') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>{t.dispo}</span>
                     </td>
                     <td className="py-2.5 px-3">
                       <button onClick={() => handleDeleteTech(t.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer">
