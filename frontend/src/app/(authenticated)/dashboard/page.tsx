@@ -5,6 +5,7 @@
 // ==========================================
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -90,7 +91,9 @@ export default function DashboardPage() {
 
   // --- Filter state ---
   const now = new Date();
-  const [selectedClient, setSelectedClient] = useState('');
+  const isLecteur = user?.role === 'Lecteur';
+  const canSeeCosts = useCanSeeCosts();
+  const [selectedClient, setSelectedClient] = useState(user?.role === 'Lecteur' ? (user?.client || '') : '');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('mensuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
@@ -226,20 +229,22 @@ export default function DashboardPage() {
       {/* ===== FILTER BAR ===== */}
       <div className="glass rounded-xl p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-          {/* Client Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-              <Building2 className="w-3.5 h-3.5" /> Filtrer par client
-            </label>
-            <select
-              value={selectedClient}
-              onChange={e => setSelectedClient(e.target.value)}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
-            >
-              <option value="">Tous les clients</option>
-              {clientList.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
+          {/* Client Filter — masqué pour Lecteur (données auto-filtrées) */}
+          {!isLecteur && (
+            <div>
+              <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+                <Building2 className="w-3.5 h-3.5" /> Filtrer par client
+              </label>
+              <select
+                value={selectedClient}
+                onChange={e => setSelectedClient(e.target.value)}
+                className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+              >
+                <option value="">Tous les clients</option>
+                {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
 
           {/* Period Mode Toggle */}
           <div>
@@ -327,7 +332,9 @@ export default function DashboardPage() {
         <KpiCard icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
         <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
         <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
-        <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
+        {canSeeCosts && (
+          <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
+        )}
       </div>
 
       {/* Score Santé + Gamification */}

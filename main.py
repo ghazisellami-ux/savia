@@ -190,12 +190,15 @@ def get_dashboard_kpis(
         df_eq = lire_equipements()
         df_int = lire_interventions()
 
+        # Pour Lecteur : forcer le filtre par son client
+        effective_client = _get_client_filter(user) or client
+
         # Filter equipements by client
-        if client and not df_eq.empty and "Client" in df_eq.columns:
-            df_eq = df_eq[df_eq["Client"] == client]
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
         # Filter interventions by client (via matching machines)
-        if client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
+        if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
             machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
             df_int = df_int[df_int["machine"].isin(machines_client)]
 
@@ -259,9 +262,12 @@ def get_health_scores(
         df_eq = lire_equipements()
         df_int = lire_interventions()
 
+        # Pour Lecteur : forcer le filtre par son client
+        effective_client = _get_client_filter(user) or client
+
         # Filter equipements by client
-        if client and not df_eq.empty and "Client" in df_eq.columns:
-            df_eq = df_eq[df_eq["Client"] == client]
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
