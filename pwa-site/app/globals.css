@@ -1,0 +1,48 @@
+/* ==========================================
+   SAVIA Site — Mobile-First PWA
+   Palette: Navy #2F4156 | Teal #567C8D | Sky #C8D9E6 | Beige #FAF6ED
+   ========================================== */
+@import "tailwindcss";
+
+:root {
+  --navy:        #2F4156;
+  --teal:        #567C8D;
+  --sky:         #C8D9E6;
+  --beige:       #FAF6ED;
+  --beige-dark:  #EEF3F6;
+  --border:      rgba(86,124,141,0.2);
+  --text:        #2F4156;
+  --text-muted:  #567C8D;
+  --text-dim:    #8AAAB8;
+  --success:     #22C55E;
+  --warning:     #F59E0B;
+  --danger:      #EF4444;
+  --radius:      14px;
+  --radius-sm:   8px;
+  --header-h:    58px;
+  --nav-h:       64px;
+  --shadow:      0 4px 20px rgba(47,65,86,0.1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--beige);
+  color: var(--text);
+  height: 100%;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up { animation: fade-up 0.3s ease-out; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
