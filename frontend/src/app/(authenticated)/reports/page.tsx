@@ -549,127 +549,269 @@ export default function ReportsPage() {
       {/* TAB 3: COMPARAISON */}
       {activeTab === 3 && (
         <div className="space-y-6">
-          <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-4 h-4 text-savia-accent" /> Comparaison Inter-Clients / Inter-Équipements</span>}>
-            <div className="flex gap-4 mb-4">
-              {['Client', 'Équipement'].map(m => (
-                <button key={m} onClick={() => setCompareMode(m)}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${compareMode === m ? 'bg-savia-accent text-white' : 'bg-savia-surface-hover text-savia-text-muted hover:text-savia-text'}`}>
-                  {m}
-                </button>
-              ))}
-            </div>
-            {(() => {
-              const groupKey = compareMode === 'Client' ? 'client' : 'machine';
-              const groups: Record<string, {nb: number, duree: number, corrective: number}> = {};
-              data.forEach((i: any) => {
-                const key = groupKey === 'client' ? (machineToClient[i.machine] || 'Non spécifié') : (i.machine || 'Inconnu');
-                if (!groups[key]) groups[key] = {nb: 0, duree: 0, corrective: 0};
-                groups[key].nb++;
-                groups[key].duree += (i.duree_minutes || 0);
-                if ((i.type_intervention || '').toLowerCase().includes('correct')) groups[key].corrective++;
-              });
-              const sorted = Object.entries(groups).sort((a, b) => b[1].nb - a[1].nb);
+          <div className="flex gap-3 items-center">
+            {['Client', 'Équipement'].map(m => (
+              <button key={m} onClick={() => setCompareMode(m)}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${compareMode === m ? 'bg-savia-accent text-white shadow-lg shadow-cyan-500/20' : 'bg-savia-surface-hover text-savia-text-muted hover:text-savia-text'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+
+          {(() => {
+            const groupKey = compareMode === 'Client' ? 'client' : 'machine';
+            const groups: Record<string, {nb: number, duree: number, corrective: number}> = {};
+            data.forEach((i: any) => {
+              const key = groupKey === 'client' ? (machineToClient[i.machine] || 'Non spécifié') : (i.machine || 'Inconnu');
+              if (!groups[key]) groups[key] = {nb: 0, duree: 0, corrective: 0};
+              groups[key].nb++;
+              groups[key].duree += (i.duree_minutes || 0);
+              if ((i.type_intervention || '').toLowerCase().includes('correct')) groups[key].corrective++;
+            });
+            const sorted = Object.entries(groups).sort((a, b) => b[1].nb - a[1].nb).slice(0, 12);
+            const maxNb = Math.max(...sorted.map(s => s[1].nb), 1);
+            const maxDuree = Math.max(...sorted.map(s => s[1].duree), 1);
+
+            // SVG bar chart renderer
+            const BarChart = ({ items, getValue, getColor, label, unit }: {
+              items: [string, any][],
+              getValue: (v: any) => number,
+              getColor: (v: any, max: number) => string,
+              label: string,
+              unit: string
+            }) => {
+              const W = 600; const H = 200; const PAD_L = 140; const PAD_B = 36; const PAD_T = 16; const PAD_R = 20;
+              const chartW = W - PAD_L - PAD_R;
+              const chartH = H - PAD_B - PAD_T;
+              const max = Math.max(...items.map(([, v]) => getValue(v)), 1);
+              const barW = Math.floor(chartW / items.length) - 4;
               return (
-                <div className="space-y-4">
+                <div className="glass rounded-xl p-4">
+                  <div className="text-xs font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <BarChart3 className="w-3.5 h-3.5 text-savia-accent" /> {label}
+                  </div>
+                  <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: 200}}>
+                    {/* Y grid lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+                      const y = PAD_T + chartH * (1 - pct);
+                      const val = Math.round(max * pct);
+                      return (
+                        <g key={pct}>
+                          <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="rgba(100,116,139,0.15)" strokeWidth="1" />
+                          <text x={PAD_L - 6} y={y + 4} textAnchor="end" fontSize="9" fill="#64748b">
+                            {val >= 60 ? `${(val/60).toFixed(1)}h` : `${val}${unit}`}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    {/* Bars */}
+                    {items.map(([key, stats], idx) => {
+                      const val = getValue(stats);
+                      const bh = Math.max((val / max) * chartH, 1);
+                      const x = PAD_L + idx * (chartW / items.length) + 2;
+                      const y = PAD_T + chartH - bh;
+                      const color = getColor(stats, max);
+                      const label2 = key.length > 14 ? key.substring(0, 13) + '…' : key;
+                      return (
+                        <g key={key}>
+                          <rect x={x} y={y} width={barW} height={bh} rx="3" fill={color} opacity="0.85" />
+                          <text x={x + barW / 2} y={PAD_T + chartH + 14} textAnchor="middle" fontSize="8" fill="#94a3b8"
+                            transform={`rotate(-30, ${x + barW / 2}, ${PAD_T + chartH + 14})`}>
+                            {label2}
+                          </text>
+                          <text x={x + barW / 2} y={y - 3} textAnchor="middle" fontSize="9" fill="#e2e8f0" fontWeight="bold">
+                            {unit === '' ? val : val >= 60 ? `${(val/60).toFixed(1)}h` : `${val}${unit}`}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    {/* X axis */}
+                    <line x1={PAD_L} y1={PAD_T + chartH} x2={W - PAD_R} y2={PAD_T + chartH} stroke="rgba(100,116,139,0.4)" strokeWidth="1" />
+                  </svg>
+                </div>
+              );
+            };
+
+            return (
+              <div className="space-y-4">
+                {/* Chart 1: Nombre d'interventions */}
+                <BarChart
+                  items={sorted}
+                  getValue={v => v.nb}
+                  getColor={(v, max) => {
+                    const pct = v.nb / max;
+                    return pct > 0.7 ? '#06b6d4' : pct > 0.4 ? '#3b82f6' : '#8b5cf6';
+                  }}
+                  label={`Nombre d'interventions par ${compareMode.toLowerCase()}`}
+                  unit=""
+                />
+                {/* Chart 2: Durée totale */}
+                <BarChart
+                  items={sorted}
+                  getValue={v => v.duree}
+                  getColor={(v, max) => {
+                    const pct = v.duree / max;
+                    return pct > 0.7 ? '#f59e0b' : pct > 0.4 ? '#10b981' : '#06b6d4';
+                  }}
+                  label={`Durée totale des interventions par ${compareMode.toLowerCase()}`}
+                  unit=" min"
+                />
+
+                {/* Table */}
+                <SectionCard title={<span className="flex items-center gap-2"><Wrench className="w-4 h-4 text-savia-accent" /> Détail</span>}>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-savia-border">
                           <th className="text-left py-2 px-3 text-savia-text-muted">{compareMode}</th>
-                          <th className="text-center py-2 px-3 text-savia-text-muted flex items-center gap-1 justify-center"><Wrench className="w-3.5 h-3.5" /> Interventions</th>
-                          <th className="text-center py-2 px-3 text-savia-text-muted"><AlertTriangle className="w-3.5 h-3.5 inline mr-1" />Correctives</th>
-                          <th className="text-center py-2 px-3 text-savia-text-muted">Heures</th>
+                          <th className="text-center py-2 px-3 text-savia-text-muted">Interventions</th>
+                          <th className="text-center py-2 px-3 text-savia-text-muted">Correctives</th>
+                          <th className="text-center py-2 px-3 text-savia-text-muted">% Correct.</th>
+                          <th className="text-center py-2 px-3 text-savia-text-muted">Durée totale</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sorted.map(([key, stats]) => (
+                        {Object.entries(groups).sort((a,b) => b[1].nb - a[1].nb).map(([key, stats]) => (
                           <tr key={key} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50">
                             <td className="py-2.5 px-3 font-bold">{key}</td>
                             <td className="py-2.5 px-3 text-center font-mono">{stats.nb}</td>
                             <td className="py-2.5 px-3 text-center font-mono text-red-400">{stats.corrective}</td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`text-xs font-bold ${stats.nb > 0 && stats.corrective/stats.nb > 0.6 ? 'text-red-400' : stats.nb > 0 && stats.corrective/stats.nb > 0.3 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                {stats.nb > 0 ? Math.round(stats.corrective/stats.nb*100) : 0}%
+                              </span>
+                            </td>
                             <td className="py-2.5 px-3 text-center font-mono">{(stats.duree / 60).toFixed(1)}h</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  <div className="space-y-2">
-                    {sorted.slice(0, 10).map(([key, stats]) => {
-                      const maxNb = Math.max(...sorted.map(s => s[1].nb));
-                      return (
-                        <div key={key} className="flex items-center gap-3">
-                          <div className="w-32 text-xs text-savia-text-muted truncate text-right">{key}</div>
-                          <div className="flex-1 bg-savia-surface-hover rounded-full h-4 overflow-hidden">
-                            <div className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full" style={{ width: `${(stats.nb / maxNb * 100)}%` }} />
-                          </div>
-                          <div className="w-8 text-xs font-mono text-savia-text-muted">{stats.nb}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-          </SectionCard>
+                </SectionCard>
+              </div>
+            );
+          })()}
         </div>
       )}
 
       {/* TAB 4: FIABILITÉ */}
       {activeTab === 4 && (
         <div className="space-y-6">
-          <SectionCard title={<span className="flex items-center gap-2"><Star className="w-4 h-4 text-yellow-400" /> Fiabilité des Équipements</span>}>
-            {(() => {
-              const machineStats: Record<string, {pannes: number, mttr: number, count: number, lastPanne: string}> = {};
-              data.forEach((i: any) => {
-                const m = i.machine || 'Inconnu';
-                if (!machineStats[m]) machineStats[m] = {pannes: 0, mttr: 0, count: 0, lastPanne: ''};
-                machineStats[m].pannes++;
-                machineStats[m].mttr += (i.duree_minutes || 0);
-                machineStats[m].count++;
-                const d = i.date || '';
-                if (d > (machineStats[m].lastPanne || '')) machineStats[m].lastPanne = d;
-              });
-              const fiab = Object.entries(machineStats).map(([machine, stats]) => {
-                const mttr = stats.count > 0 ? Math.round(stats.mttr / stats.count / 60 * 10) / 10 : 0;
-                const score = Math.max(0, Math.min(100, 100 - stats.pannes * 10));
-                return { machine, pannes: stats.pannes, mttr, score, client: machineToClient[machine] || '?', lastPanne: stats.lastPanne.substring(0, 10) };
-              }).sort((a, b) => a.score - b.score);
-              return (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-savia-border">
-                        {['Équipement', 'Client', 'Score', 'Pannes', 'MTTR', 'Dernière panne'].map(h => (
-                          <th key={h} className="text-left py-2 px-3 text-savia-text-muted">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fiab.map(f => (
-                        <tr key={f.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50">
-                          <td className="py-2.5 px-3 font-bold">{f.machine}</td>
-                          <td className="py-2.5 px-3 text-sm text-savia-text-muted">{f.client}</td>
-                          <td className="py-2.5 px-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-16 bg-savia-surface-hover rounded-full h-2 overflow-hidden">
-                                <div className={`h-full rounded-full ${f.score >= 60 ? 'bg-green-400' : f.score >= 30 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${f.score}%` }} />
-                              </div>
-                              <span className={`text-xs font-bold ${f.score >= 60 ? 'text-green-400' : f.score >= 30 ? 'text-yellow-400' : 'text-red-400'}`}>{f.score}%</span>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3 font-mono text-red-400">{f.pannes}</td>
-                          <td className="py-2.5 px-3 font-mono">{f.mttr}h</td>
-                          <td className="py-2.5 px-3 text-xs text-savia-text-muted">{f.lastPanne}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+          {(() => {
+            const machineStats: Record<string, {pannes: number, mttr: number, count: number, lastPanne: string}> = {};
+            data.forEach((i: any) => {
+              const m = i.machine || 'Inconnu';
+              if (!machineStats[m]) machineStats[m] = {pannes: 0, mttr: 0, count: 0, lastPanne: ''};
+              machineStats[m].pannes++;
+              machineStats[m].mttr += (i.duree_minutes || 0);
+              machineStats[m].count++;
+              const d = i.date || '';
+              if (d > (machineStats[m].lastPanne || '')) machineStats[m].lastPanne = d;
+            });
+            const fiab = Object.entries(machineStats).map(([machine, stats]) => {
+              const mttr = stats.count > 0 ? Math.round(stats.mttr / stats.count / 60 * 10) / 10 : 0;
+              const score = Math.max(0, Math.min(100, 100 - stats.pannes * 10));
+              return { machine, pannes: stats.pannes, mttr, score, client: machineToClient[machine] || '?', lastPanne: stats.lastPanne.substring(0, 10) };
+            }).sort((a, b) => a.score - b.score);
+
+            const top12 = fiab.slice(0, 12);
+
+            // Horizontal bar chart for reliability
+            const barHeight = 28;
+            const gap = 6;
+            const PAD_L = 160;
+            const PAD_R = 60;
+            const svgW = 700;
+            const svgH = top12.length * (barHeight + gap) + 20;
+
+            return (
+              <>
+                {/* Chart: Score de fiabilité */}
+                <SectionCard title={<span className="flex items-center gap-2"><Activity className="w-4 h-4 text-savia-accent" /> Score de Fiabilité par Équipement</span>}>
+                  <div className="mb-3 flex items-center gap-6 text-xs">
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bg-green-400"></span> Fiable ≥ 60%</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bg-yellow-400"></span> Moyen 30–60%</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bg-red-400"></span> Critique &lt; 30%</span>
+                  </div>
+                  <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full" style={{height: svgH}}>
+                    {top12.map((f, idx) => {
+                      const y = idx * (barHeight + gap) + 10;
+                      const bw = Math.max(((f.score / 100) * (svgW - PAD_L - PAD_R)), 2);
+                      const color = f.score >= 60 ? '#4ade80' : f.score >= 30 ? '#facc15' : '#f87171';
+                      const shortName = f.machine.length > 22 ? f.machine.substring(0, 21) + '…' : f.machine;
+                      return (
+                        <g key={f.machine}>
+                          <text x={PAD_L - 8} y={y + barHeight / 2 + 4} textAnchor="end" fontSize="10" fill="#94a3b8">{shortName}</text>
+                          {/* BG track */}
+                          <rect x={PAD_L} y={y} width={svgW - PAD_L - PAD_R} height={barHeight} rx="4" fill="rgba(100,116,139,0.1)" />
+                          {/* Score bar */}
+                          <rect x={PAD_L} y={y} width={bw} height={barHeight} rx="4" fill={color} opacity="0.8" />
+                          {/* Score label */}
+                          <text x={PAD_L + bw + 6} y={y + barHeight / 2 + 4} fontSize="11" fill={color} fontWeight="bold">{f.score}%</text>
+                          {/* Pannes badge */}
+                          <text x={svgW - PAD_R + 4} y={y + barHeight / 2 + 4} fontSize="10" fill="#f87171">{f.pannes} 🔧</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                  {fiab.length > 12 && (
+                    <p className="text-xs text-savia-text-muted mt-2 text-center">Affichage des 12 premiers sur {fiab.length} équipements</p>
+                  )}
+                </SectionCard>
+
+                {/* Donut-style summary */}
+                <div className="grid grid-cols-3 gap-4">
+                  {[
+                    { label: 'Fiables', count: fiab.filter(f => f.score >= 60).length, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
+                    { label: 'Moyens', count: fiab.filter(f => f.score >= 30 && f.score < 60).length, color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+                    { label: 'Critiques', count: fiab.filter(f => f.score < 30).length, color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' },
+                  ].map(s => (
+                    <div key={s.label} className={`${s.bg} ${s.border} border rounded-xl p-4 text-center`}>
+                      <div className={`text-4xl font-black ${s.color}`}>{s.count}</div>
+                      <div className="text-xs text-savia-text-muted mt-1">{s.label}</div>
+                    </div>
+                  ))}
                 </div>
-              );
-            })()}
-          </SectionCard>
+
+                {/* Detail table */}
+                <SectionCard title={<span className="flex items-center gap-2"><Star className="w-4 h-4 text-yellow-400" /> Détail de la Fiabilité</span>}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-savia-border">
+                          {['Équipement', 'Client', 'Score', 'Pannes', 'MTTR moy.', 'Dernière panne'].map(h => (
+                            <th key={h} className="text-left py-2 px-3 text-savia-text-muted">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fiab.map(f => (
+                          <tr key={f.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50">
+                            <td className="py-2.5 px-3 font-bold">{f.machine}</td>
+                            <td className="py-2.5 px-3 text-sm text-savia-text-muted">{f.client}</td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-16 bg-savia-surface-hover rounded-full h-2 overflow-hidden">
+                                  <div className={`h-full rounded-full ${f.score >= 60 ? 'bg-green-400' : f.score >= 30 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${f.score}%` }} />
+                                </div>
+                                <span className={`text-xs font-bold ${f.score >= 60 ? 'text-green-400' : f.score >= 30 ? 'text-yellow-400' : 'text-red-400'}`}>{f.score}%</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-red-400">{f.pannes}</td>
+                            <td className="py-2.5 px-3 font-mono">{f.mttr}h</td>
+                            <td className="py-2.5 px-3 text-xs text-savia-text-muted">{f.lastPanne}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </SectionCard>
+              </>
+            );
+          })()}
         </div>
       )}
     </div>
   );
 }
+
