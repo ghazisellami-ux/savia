@@ -11,6 +11,7 @@ import {
   Download, Filter, FolderOpen
 } from 'lucide-react';
 import { equipements, documentsTechniques } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 interface Equipment {
   id: string;
@@ -53,6 +54,8 @@ function getStatutBadge(statut: string) {
 }
 
 export default function EquipementsPage() {
+  const { user } = useAuth();
+  const isLecteur = user?.role === 'Lecteur';
   const [activeTab, setActiveTab] = useState<'equipements' | 'documents'>('equipements');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
@@ -328,7 +331,7 @@ export default function EquipementsPage() {
         ))}
       </div>
 
-      {/* Tab Navigation */}
+      {/* Tab Navigation — Documents masqué pour Lecteur */}
       <div className="flex gap-1 glass rounded-xl p-1">
         <button
           onClick={() => setActiveTab('equipements')}
@@ -340,6 +343,7 @@ export default function EquipementsPage() {
         >
           <Server className="w-4 h-4" /> Équipements
         </button>
+        {!isLecteur && (
         <button
           onClick={() => setActiveTab('documents')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
@@ -350,12 +354,14 @@ export default function EquipementsPage() {
         >
           <FileText className="w-4 h-4" /> Documents Techniques
         </button>
+        )}
       </div>
 
       {/* ========== TAB: ÉQUIPEMENTS ========== */}
       {activeTab === 'equipements' && (
         <>
-          {/* Add/Edit Equipment Form (Collapsible) */}
+          {/* Add/Edit Equipment Form — masqué pour Lecteur */}
+          {!isLecteur && (
           <div ref={formRef} className="glass rounded-xl overflow-hidden">
             <button
               onClick={() => { if (showAddForm) { cancelForm(); } else { setEditingEquip(null); setForm(emptyForm); setShowAddForm(true); } }}
@@ -592,6 +598,7 @@ export default function EquipementsPage() {
               </div>
             )}
           </div>
+          )}
 
           {/* Filters */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -656,8 +663,12 @@ export default function EquipementsPage() {
                     </span>
                   </div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => startEdit(eq)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => setConfirmDelete(eq)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                    {!isLecteur && (
+                      <>
+                        <button onClick={() => startEdit(eq)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setConfirmDelete(eq)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
