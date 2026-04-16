@@ -251,7 +251,7 @@ export default function DashboardPage() {
                 onClick={() => setPeriodMode('mensuel')}
                 className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
                   periodMode === 'mensuel'
-                    ? 'bg-savia-accent text-savia-text'
+                    ? 'bg-savia-accent text-white shadow-inner'
                     : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
                 }`}
               >
@@ -261,7 +261,7 @@ export default function DashboardPage() {
                 onClick={() => setPeriodMode('annuel')}
                 className={`flex-1 py-2.5 text-sm font-bold transition-all cursor-pointer ${
                   periodMode === 'annuel'
-                    ? 'bg-savia-accent text-savia-text'
+                    ? 'bg-savia-accent-blue text-white shadow-inner'
                     : 'bg-savia-bg/50 text-savia-text-muted hover:bg-savia-surface-hover/30'
                 }`}
               >
