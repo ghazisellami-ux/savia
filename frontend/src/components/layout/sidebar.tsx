@@ -6,24 +6,25 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import {
-  BarChart3, Monitor, Hospital, BookOpen,
+  BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
   ClipboardCheck, Settings, LogOut, Radio,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const NAV_ITEMS = [
-  { key: 'dashboard',          label: 'Dashboard',                href: '/dashboard',  icon: BarChart3     },
-  { key: 'supervision',        label: 'Supervision',              href: '/supervision', icon: Monitor       },
-  { key: 'equipements',        label: 'Équipements',              href: '/equipements', icon: Hospital      },
-  { key: 'base_connaissances', label: 'Base de Connaissances',   href: '/knowledge',   icon: BookOpen      },
-  { key: 'sav',                label: 'SAV & Interventions',     href: '/sav',         icon: Wrench        },
-  { key: 'demandes',           label: "Demandes d'Intervention", href: '/demandes',    icon: ClipboardList },
-  { key: 'planning',           label: 'Planning',                href: '/planning',    icon: CalendarDays  },
-  { key: 'pieces',             label: 'Pièces de Rechange',      href: '/pieces',      icon: Cog           },
-  { key: 'reports',            label: 'Rapports & Exports',      href: '/reports',     icon: FileText      },
-  { key: 'contrats',           label: 'Contrats & SLA',          href: '/contrats',    icon: ClipboardCheck},
-  { key: 'admin',              label: 'Administration',          href: '/admin',       icon: Settings      },
+  { key: 'dashboard',          label: 'Dashboard',               href: '/dashboard',  icon: BarChart3     },
+  { key: 'supervision',        label: 'Supervision',             href: '/supervision', icon: Monitor       },
+  { key: 'equipements',        label: 'Équipements',             href: '/equipements', icon: Hospital      },
+  { key: 'predictions',        label: 'Prédictions',             href: '/predictions', icon: TrendingUp    },
+  { key: 'base_connaissances', label: 'Base de Connaissances',  href: '/knowledge',   icon: BookOpen      },
+  { key: 'sav',                label: 'SAV & Interventions',    href: '/sav',         icon: Wrench        },
+  { key: 'demandes',           label: "Demandes d'Intervention", href: '/demandes',   icon: ClipboardList },
+  { key: 'planning',           label: 'Planning',               href: '/planning',    icon: CalendarDays  },
+  { key: 'pieces',             label: 'Pièces de Rechange',     href: '/pieces',      icon: Cog           },
+  { key: 'reports',            label: 'Rapports & Exports',     href: '/reports',     icon: FileText      },
+  { key: 'contrats',           label: 'Contrats & SLA',         href: '/contrats',    icon: ClipboardCheck},
+  { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings      },
 ];
 
 const ROLE_COLOR: Record<string, string> = {
