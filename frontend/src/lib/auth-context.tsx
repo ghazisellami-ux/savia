@@ -48,6 +48,11 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
     base_connaissances: true, sav: true, planning: true, pieces: true,
     reports: true, contrats: true, admin: false, settings: false, demandes: true,
   },
+  Gestionnaire: {
+    dashboard: true, supervision: false, equipements: true, predictions: true,
+    base_connaissances: false, sav: false, planning: false, pieces: true,
+    reports: true, contrats: true, admin: false, settings: false, demandes: false,
+  },
   Lecteur: {
     dashboard: true, supervision: true, equipements: true, predictions: false,
     base_connaissances: false, sav: false, planning: false, pieces: false,
@@ -113,7 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const perms = Object.keys(permissions).length > 0
       ? permissions
       : (DEFAULT_ROLE_PERMS[user.role] || {});
-    return perms[page] !== false;
+    // Deny by default: la page doit être EXPLICITEMENT à true
+    return perms[page] === true;
   }, [user, permissions]);
 
   return (
