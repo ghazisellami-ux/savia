@@ -143,52 +143,40 @@ export default function PiecesPage() {
     catch (err) { console.error("Delete failed", err); }
   };
 
+  // Helper: calculate predicted purchase date client-side
+  const predictedDate = (p: Piece): string => {
+    const today = new Date();
+    const add = (n: number) => new Date(today.getTime() + n * 86400000).toLocaleDateString('fr-FR');
+    if (p.stock_actuel === 0) return add(0);                        // Rupture → aujourd'hui
+    if (p.stock_actuel <= p.stock_minimum) return add(3);           // Stock bas → +3 jours
+    const marge = p.stock_actuel - p.stock_minimum;
+    if (marge <= 2) return add(14);                                 // Faible marge → +14 jours
+    if (marge <= 5) return add(30);                                 // Bonne marge → +30 jours
+    return add(60);                                                 // OK → +60 jours
+  };
+
   const handleAiAnalyze = async () => {
     setIsAnalyzing(true);
     setAiResult(null);
-    const today = new Date();
-    const inDays = (n: number) => new Date(today.getTime() + n * 86400000).toLocaleDateString('fr-FR');
     try {
-      const piecesInfo = data.map(p => {
-        const statut = p.stock_actuel === 0 ? 'RUPTURE' : p.stock_actuel <= p.stock_minimum ? 'Stock bas' : 'OK';
-        const manquant = Math.max(0, p.stock_minimum - p.stock_actuel + 1);
-        return `- ${p.designation} (${p.reference}) | Type: ${p.equipement_type} | Stock: ${p.stock_actuel}/${p.stock_minimum} [${statut}] | Manquant: ${manquant} unité(s) | Fournisseur: ${p.fournisseur || 'N/A'} | Prix: ${p.prix_unitaire} TND`;
-      }).join('\n');
-      const totalVal = data.reduce((a, p) => a + p.stock_actuel * p.prix_unitaire, 0);
-      const ruptures = data.filter(p => p.stock_actuel === 0).length;
-      const bas = data.filter(p => p.stock_actuel > 0 && p.stock_actuel <= p.stock_minimum).length;
-
-      const prompt = `Tu es Supply Chain Manager spécialisé en équipements de radiologie médicale (Tunisie).
-Date d'aujourd'hui: ${today.toLocaleDateString('fr-FR')}.
-Stock total: ${data.length} références | Valeur: ${totalVal.toLocaleString('fr')} TND | RUPTURES: ${ruptures} | STOCK BAS: ${bas}
-
-Inventaire:
-${piecesInfo}
-
-Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après) avec cette structure exacte:
-{
-  "analyse_risque": "texte de 2-3 phrases sur les pièces critiques et le capital immobilisé",
-  "recommandations": [
-    {"piece": "nom", "reference": "ref", "action": "Commander immédiatement | Commander bientôt | OK", "quantite": 2, "date_achat": "JJ/MM/AAAA", "urgence": "critique | haute | normale", "cout_estime": 500}
-  ],
-  "plan_achat": [
-    {"semaine": "S1 (${inDays(0)} - ${inDays(6)})", "pieces": ["pièce1", "pièce2"], "budget": 1200},
-    {"semaine": "S2 (${inDays(7)} - ${inDays(13)})", "pieces": ["pièce3"], "budget": 800}
-  ],
-  "impact_budget": {"cout_total_commande": 2000, "gain_potentiel": 5000, "ratio": "Pour 1 TND investi, X TND économés"},
-  "tendances": ["tendance 1", "tendance 2"]
-}`;
-
-      const res = await ai.analyzePerformance({ prompt_override: prompt } as any, 'TND');
+      const res = await ai.analyzePieces(data.map(p => ({
+        designation: p.designation,
+        reference: p.reference,
+        equipement_type: p.equipement_type,
+        stock_actuel: p.stock_actuel,
+        stock_minimum: p.stock_minimum,
+        prix_unitaire: p.prix_unitaire,
+        fournisseur: p.fournisseur,
+      })), 'TND');
       if (res.ok && res.result) {
         const raw = typeof res.result === 'string' ? res.result : JSON.stringify(res.result);
-        // Try to extract JSON from the response
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           try { setAiResult(JSON.parse(jsonMatch[0])); }
           catch { setAiResult({ analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] }); }
         } else {
-          setAiResult({ analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] });
+          try { setAiResult(typeof res.result === 'object' ? res.result : { analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] }); }
+          catch { setAiResult({ analyse_risque: raw, recommandations: [], plan_achat: [], tendances: [] }); }
         }
       } else {
         setAiResult({ analyse_risque: "L'IA n'a pas pu générer de réponse.", recommandations: [], plan_achat: [], tendances: [] });
@@ -483,7 +471,7 @@ Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après) 
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-savia-surface z-10">
                     <tr className="border-b border-savia-border">
-                      {['Pièce', 'Type', 'Stock actuel', 'Min', 'Fournisseur', 'Prix unit.', 'Urgence'].map(h => (
+                      {['Pièce', 'Type', 'Stock actuel', 'Min', 'Fournisseur', 'Prix unit.', 'Date prévision', 'Urgence'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -520,6 +508,14 @@ Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après) 
                             <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
                             <td className="py-2.5 px-3 text-xs">{p.fournisseur || '—'}</td>
                             <td className="py-2.5 px-3 text-right font-mono text-xs">{p.prix_unitaire.toLocaleString('fr')} TND</td>
+                            <td className="py-2.5 px-3">
+                              <span className={`flex items-center gap-1 text-xs font-semibold ${
+                                isRupture ? 'text-red-400' : isBas ? 'text-yellow-400' : 'text-green-400/80'
+                              }`}>
+                                <Calendar className="w-3 h-3" />
+                                {predictedDate(p)}
+                              </span>
+                            </td>
                             <td className="py-2.5 px-3">
                               {isRupture ? (
                                 <div className="space-y-0.5">
@@ -591,15 +587,25 @@ Réponds UNIQUEMENT en JSON valide (pas de markdown, pas de texte avant/après) 
                     <div className="flex items-center gap-2 font-bold text-sm text-yellow-400 mb-3 uppercase tracking-wider">
                       <ShoppingCart className="w-4 h-4" /> Recommandations d&apos;Achat
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {aiResult.recommandations.map((r: any, i: number) => (
-                        <div key={i} className={`flex items-center justify-between flex-wrap gap-2 p-3 rounded-lg ${r.urgence === 'critique' ? 'bg-red-500/10' : r.urgence === 'haute' ? 'bg-yellow-500/10' : 'bg-green-500/5'}`}>
-                          <div><span className="font-semibold text-sm">{r.piece}</span><span className="text-xs text-savia-text-muted ml-2 font-mono">{r.reference}</span></div>
+                        <div key={i} className={`p-3 rounded-lg ${r.urgence === 'critique' ? 'bg-red-500/10 border border-red-500/20' : r.urgence === 'haute' ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-green-500/5 border border-green-500/10'}`}>
+                          <div className="flex items-start justify-between flex-wrap gap-2 mb-2">
+                            <div>
+                              <span className="font-semibold text-sm">{r.piece}</span>
+                              <span className="text-xs text-savia-text-muted ml-2 font-mono">{r.reference}</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${r.urgence === 'critique' ? 'bg-red-500/20 text-red-400' : r.urgence === 'haute' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{r.action}</span>
+                          </div>
+                          {r.raison && (
+                            <div className="text-xs text-savia-text-muted bg-savia-bg/50 rounded px-3 py-2 mb-2 italic border-l-2 border-savia-accent/40">
+                              {r.raison}
+                            </div>
+                          )}
                           <div className="flex items-center gap-3 text-xs flex-wrap">
                             <span className="flex items-center gap-1"><Boxes className="w-3 h-3" /> {r.quantite} unité(s)</span>
                             <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-blue-400" /><span className="text-blue-400 font-semibold">{r.date_achat}</span></span>
                             <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime?.toLocaleString('fr')} TND</span>
-                            <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${r.urgence === 'critique' ? 'bg-red-500/20 text-red-400' : r.urgence === 'haute' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>{r.action}</span>
                           </div>
                         </div>
                       ))}

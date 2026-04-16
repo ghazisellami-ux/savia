@@ -183,6 +183,8 @@ export const ai = {
     request<{ok: boolean, result: any}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
   analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
     request<{ok: boolean, result: any}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
+  analyzePieces: (pieces: any[], sym: string = "TND") =>
+    request<{ok: boolean, result: any}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
 };
 
 // --- Logs / S3 ---

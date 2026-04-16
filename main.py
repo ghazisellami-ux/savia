@@ -1072,6 +1072,78 @@ PRODUIS un rapport JSON STRICT :
     return {"ok": True, "result": result}
 
 
+@app.post("/api/ai/analyze-pieces")
+def analyze_pieces(body: dict, user: dict = Depends(_verify_token)):
+    """Calls Gemini to produce a spare parts purchase prediction report with dates and reasons."""
+    try:
+        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
+
+    pieces_data = body.get("pieces", [])
+    sym = body.get("sym", "TND")
+
+    import datetime
+    today = datetime.date.today()
+    def fmt(d): return d.strftime("%d/%m/%Y")
+
+    inventory_lines = ""
+    for p in pieces_data:
+        nom = p.get("designation","?"); ref = p.get("reference","?")
+        stock = p.get("stock_actuel", 0); mini = p.get("stock_minimum", 1)
+        prix = p.get("prix_unitaire", 0); four = p.get("fournisseur","N/A")
+        equip = p.get("equipement_type","?")
+        manquant = max(0, mini - stock + 1)
+        if stock == 0: statut = "RUPTURE TOTALE"
+        elif stock <= mini: statut = f"STOCK BAS (manque {manquant})"
+        else: statut = f"OK (marge={stock-mini})"
+        inventory_lines += f"  - {nom} ({ref}) | Equip: {equip} | Stock: {stock}/{mini} [{statut}] | {four} | {prix} {sym}\n"
+
+    total_val = sum(p.get("stock_actuel",0)*p.get("prix_unitaire",0) for p in pieces_data)
+    ruptures = sum(1 for p in pieces_data if p.get("stock_actuel",0)==0)
+    bas = sum(1 for p in pieces_data if 0 < p.get("stock_actuel",0) <= p.get("stock_minimum",1))
+    s1 = f"{fmt(today)} - {fmt(today+datetime.timedelta(days=6))}"
+    s2 = f"{fmt(today+datetime.timedelta(days=7))} - {fmt(today+datetime.timedelta(days=13))}"
+    s3 = f"{fmt(today+datetime.timedelta(days=14))} - {fmt(today+datetime.timedelta(days=20))}"
+    d0=fmt(today); d3=fmt(today+datetime.timedelta(days=3)); d7=fmt(today+datetime.timedelta(days=7)); d14=fmt(today+datetime.timedelta(days=14))
+
+    prompt = f"""Tu es Supply Chain Manager expert en pièces de rechange pour équipements de radiologie médicale (Tunisie).
+Date du jour : {fmt(today)} | Inventaire : {len(pieces_data)} réf. | Valeur : {total_val:,.0f} {sym} | RUPTURES : {ruptures} | STOCK BAS : {bas}
+
+INVENTAIRE :
+{inventory_lines}
+
+Génère un plan d'achat prévisionnel avec dates précises et raisons médicales/opérationnelles.
+Réponds UNIQUEMENT en JSON valide (sans markdown, sans texte avant/après) :
+{{
+  "analyse_risque": "Synthèse 3-4 phrases sur pièces critiques, impact soins, capital immobilisé",
+  "recommandations": [
+    {{"piece": "Nom pièce", "reference": "REF", "raison": "Impact médical concret si non commandée (ex: arrêt scanner CT = patients sans diagnostic)", "action": "Commander immédiatement", "quantite": 2, "date_achat": "{d0}", "urgence": "critique", "cout_estime": 500}},
+    {{"piece": "Nom pièce 2", "reference": "REF2", "raison": "Raison opérationnelle spécifique", "action": "Commander bientôt", "quantite": 1, "date_achat": "{d7}", "urgence": "haute", "cout_estime": 300}}
+  ],
+  "plan_achat": [
+    {{"semaine": "S1 ({s1})", "pieces": ["pièce1"], "budget": 1200, "priorite": "Critique"}},
+    {{"semaine": "S2 ({s2})", "pieces": ["pièce2"], "budget": 800, "priorite": "Haute"}},
+    {{"semaine": "S3 ({s3})", "pieces": ["pièce3"], "budget": 500, "priorite": "Normale"}}
+  ],
+  "impact_budget": {{
+    "cout_total_commande": 2500,
+    "gain_potentiel": 8000,
+    "ratio": "Pour 1 {sym} investi, 3.2 {sym} économisés en arrêts",
+    "cout_indisponibilite_estime": 3000
+  }},
+  "tendances": ["Tendance 1 avec données concrètes", "Tendance 2", "Tendance 3"]
+}}"""
+
+    raw = _call_ia(prompt, timeout=90, is_json=True)
+    if not raw:
+        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
+    result = clean_json_response(raw)
+    return {"ok": True, "result": result}
+
+
 @app.post("/api/ai/analyze-sav")
 def analyze_sav(body: dict, user: dict = Depends(_verify_token)):
     """Comprehensive SAV/Interventions analysis using Gemini."""
