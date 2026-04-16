@@ -12,16 +12,17 @@ import { planning, equipements, clients as clientsApi, techniciens as techApi } 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 const MONTHS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const DAYS_SHORT = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
-const EVENT_COLORS = [
-  'bg-green-500/20 border-green-500 text-green-300',
-  'bg-red-500/20 border-red-500 text-red-300',
-  'bg-blue-500/20 border-blue-500 text-blue-300',
-  'bg-purple-500/20 border-purple-500 text-purple-300',
-  'bg-cyan-500/20 border-cyan-500 text-cyan-300',
-  'bg-yellow-500/20 border-yellow-500 text-yellow-300',
-  'bg-pink-500/20 border-pink-500 text-pink-300',
-  'bg-orange-500/20 border-orange-500 text-orange-300',
-];
+const STATUT_COLORS: Record<string, { cell: string; badge: string; dot: string }> = {
+  'Planifiée':  { cell: 'bg-blue-500/20 border-blue-500 text-blue-300',    badge: 'bg-blue-500/15 text-blue-400',    dot: 'bg-blue-400' },
+  'En cours':   { cell: 'bg-yellow-500/20 border-yellow-500 text-yellow-300', badge: 'bg-yellow-500/15 text-yellow-400', dot: 'bg-yellow-400' },
+  'Terminée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
+  'Réalisée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
+  'En retard':  { cell: 'bg-red-500/20 border-red-500 text-red-300',        badge: 'bg-red-500/15 text-red-400',      dot: 'bg-red-400' },
+};
+const getStatutColor = (statut: string, isOverdue: boolean) => {
+  if (isOverdue) return STATUT_COLORS['En retard'];
+  return STATUT_COLORS[statut] || { cell: 'bg-blue-500/20 border-blue-500 text-blue-300', badge: 'bg-blue-500/15 text-blue-400', dot: 'bg-blue-400' };
+};
 const RECURRENCES = ['Aucune', 'Hebdomadaire', 'Mensuelle', 'Trimestrielle', 'Semestrielle', 'Annuelle'];
 const TYPES_MAINTENANCE = ['Préventive', 'Corrective', 'Calibration', 'Inspection', 'Qualification', 'Mise à jour logiciel'];
 
@@ -120,14 +121,6 @@ export default function PlanningPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Machine color mapping
-  const machineColors = useMemo(() => {
-    const map: Record<string, string> = {};
-    [...new Set(data.map(d => d.machine))].forEach((m, i) => {
-      map[m] = EVENT_COLORS[i % EVENT_COLORS.length];
-    });
-    return map;
-  }, [data]);
 
   // Calendar grid
   const calendarDays = useMemo(() => {
@@ -283,12 +276,12 @@ export default function PlanningPage() {
                 <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-savia-text' : 'text-slate-600'}`}>{cell.day}</div>
                 <div className="space-y-0.5">
                   {events.slice(0, 3).map((ev, j) => {
-                    const colorCls = machineColors[ev.machine] || EVENT_COLORS[0];
-                    const isOverdue = isPast && ev.statut !== 'Réalisée';
+                    const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
+                    const colors = getStatutColor(ev.statut, isOverdue);
                     return (
-                      <div key={j} className={`text-[10px] leading-tight px-1 py-0.5 rounded border-l-2 truncate ${isOverdue ? 'bg-red-500/20 border-red-500 text-red-300' : colorCls}`}
-                        title={`${ev.machine} — ${ev.technicien}`}>
-                        {ev.machine.substring(0, 15)}
+                      <div key={j} className={`text-[10px] leading-tight px-1 py-0.5 rounded border-l-2 truncate ${colors.cell}`}
+                        title={`[${isOverdue ? 'En retard' : ev.statut}] ${ev.machine} — ${ev.technicien}`}>
+                        {ev.machine.substring(0, 14)}
                       </div>
                     );
                   })}
@@ -299,6 +292,22 @@ export default function PlanningPage() {
           })}
         </div>
       </SectionCard>
+
+      {/* Status Legend */}
+      <div className="glass rounded-xl px-5 py-3 flex flex-wrap items-center gap-4">
+        <span className="text-xs font-bold text-savia-text-muted uppercase tracking-wider">Légende :</span>
+        {[
+          { label: 'Planifiée',  dot: 'bg-blue-400',   text: 'text-blue-400'   },
+          { label: 'En cours',   dot: 'bg-yellow-400', text: 'text-yellow-400' },
+          { label: 'Terminée',   dot: 'bg-green-400',  text: 'text-green-400'  },
+          { label: 'En retard',  dot: 'bg-red-400',    text: 'text-red-400'    },
+        ].map(s => (
+          <div key={s.label} className="flex items-center gap-2">
+            <span className={`w-3 h-3 rounded-sm border-l-2 ${s.dot} opacity-80`} />
+            <span className={`text-xs font-semibold ${s.text}`}>{s.label}</span>
+          </div>
+        ))}
+      </div>
 
       {/* Upcoming list */}
       <SectionCard title="Prochaines Maintenances">
@@ -323,11 +332,12 @@ export default function PlanningPage() {
                     <td className="py-2 px-3 text-xs">{ev.type_maintenance}</td>
                     <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence || '—'}</td>
                     <td className="py-2 px-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                        ev.statut === 'Réalisée' ? 'bg-green-500/10 text-green-400' :
-                        isOverdue ? 'bg-red-500/10 text-red-400' :
-                        'bg-blue-500/10 text-blue-400'
-                      }`}>{isOverdue ? 'Retard' : ev.statut}</span>
+                      {(() => {
+                        const isOverdue = new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée';
+                        const colors = getStatutColor(ev.statut, isOverdue);
+                        const label = isOverdue ? 'En retard' : ev.statut;
+                        return <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>{label}</span>;
+                      })()}
                     </td>
                   </tr>
                 );
