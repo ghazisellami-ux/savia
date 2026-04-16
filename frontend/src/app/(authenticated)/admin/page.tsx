@@ -7,7 +7,7 @@ import {
   X, Eye, EyeOff, Edit2, Crown, UserCog, Phone, Mail, Send,
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
-  Star, Radio,
+  Star, Radio, Upload, Building2, Globe, Check,
 } from 'lucide-react';
 import { admin, techniciens, clients } from '@/lib/api';
 
@@ -133,7 +133,7 @@ const emptyTech = () => ({
 });
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<'users' | 'profiles' | 'techs'>('users');
+  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>(DEFAULT_PROFILES);
@@ -151,6 +151,35 @@ export default function AdminPage() {
 
   // Profile edit
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
+
+  // Settings
+  const DEVISES = [
+    { code: 'TND', label: 'Dinar Tunisien', flag: '🇹🇳', symbol: 'DT' },
+    { code: 'DZD', label: 'Dinar Algérien', flag: '🇩🇿', symbol: 'DA' },
+    { code: 'MAD', label: 'Dirham Marocain', flag: '🇲🇦', symbol: 'MAD' },
+    { code: 'XOF', label: 'Franc CFA (BCEAO)', flag: '🆈', symbol: 'FCFA' },
+  ];
+  const [devise, setDevise] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
+  const [companyName, setCompanyName] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_company') || '' : ''));
+  const [logoPreview, setLogoPreview] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_logo') || '' : ''));
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setLogoPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+  };
+  const saveSettings = () => {
+    localStorage.setItem('savia_devise', devise);
+    localStorage.setItem('savia_company', companyName);
+    if (logoPreview) localStorage.setItem('savia_logo', logoPreview);
+    else localStorage.removeItem('savia_logo');
+    window.dispatchEvent(new Event('savia_settings_changed'));
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 2000);
+  };
 
   // Tech modal
   const [showAddTech, setShowAddTech] = useState(false);
@@ -337,9 +366,10 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="flex gap-1 border-b border-savia-border">
         {[
-          { id: 'users', label: 'Utilisateurs', icon: <Users className="w-4 h-4" /> },
+          { id: 'users',    label: 'Utilisateurs',       icon: <Users className="w-4 h-4" /> },
           { id: 'profiles', label: 'Profils & Permissions', icon: <Shield className="w-4 h-4" /> },
-          { id: 'techs', label: 'Techniciens', icon: <Wrench className="w-4 h-4" /> },
+          { id: 'techs',    label: 'Techniciens',         icon: <Wrench className="w-4 h-4" /> },
+          { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" /> },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer border-b-2 ${tab === t.id ? 'border-savia-accent text-savia-accent bg-savia-accent/5' : 'border-transparent text-savia-text-muted hover:text-savia-text'}`}>
@@ -493,6 +523,93 @@ export default function AdminPage() {
           </div>
         </SectionCard>
       )}
+
+      {/* ─── TAB: SETTINGS ───────────────────────────────────── */}
+      {tab === 'settings' && (
+        <div className="space-y-6">
+          {/* Devise */}
+          <SectionCard title={<span className="flex items-center gap-2"><Globe className="w-4 h-4 text-savia-accent" /> Devise de l'application</span>}>
+            <p className="text-xs text-savia-text-muted mb-4">La devise sélectionnée sera utilisée sur toutes les pages (rapports, pièces, contrats…)</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {DEVISES.map(d => (
+                <button key={d.code} onClick={() => setDevise(d.code)}
+                  className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                    devise === d.code
+                      ? 'border-savia-accent bg-savia-accent/10 text-savia-accent'
+                      : 'border-savia-border hover:bg-savia-surface-hover text-savia-text'
+                  }`}>
+                  <span className="text-3xl">{d.flag}</span>
+                  <div className="text-center">
+                    <div className="text-sm font-black">{d.symbol}</div>
+                    <div className="text-xs text-savia-text-muted">{d.label}</div>
+                  </div>
+                  {devise === d.code && <Check className="w-4 h-4" />}
+                </button>
+              ))}
+            </div>
+          </SectionCard>
+
+          {/* Identité client */}
+          <SectionCard title={<span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-savia-accent" /> Identité de l'entreprise</span>}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+              <div className="space-y-4">
+                <div>
+                  <label className={LABEL}>Nom de l'entreprise / client</label>
+                  <input className={INPUT} placeholder="Ex: SIC Radiologie Tunisie"
+                    value={companyName} onChange={e => setCompanyName(e.target.value)} />
+                  <p className="text-xs text-savia-text-muted mt-1">Affiché dans l'en-tête et les rapports PDF</p>
+                </div>
+                <div>
+                  <label className={LABEL}><Upload className="w-3 h-3 inline mr-1" />Logo de l'entreprise</label>
+                  <div className="mt-2">
+                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-savia-border rounded-xl cursor-pointer hover:border-savia-accent hover:bg-savia-accent/5 transition-all">
+                      <Upload className="w-6 h-6 text-savia-text-muted mb-2" />
+                      <span className="text-xs text-savia-text-muted">Cliquer pour uploader (PNG, JPG, SVG)</span>
+                      <span className="text-xs text-savia-text-dim mt-0.5">Recommandé : 200×60 px, fond transparent</span>
+                      <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                    </label>
+                  </div>
+                  {logoPreview && (
+                    <div className="mt-3 flex items-center gap-3">
+                      <button onClick={() => setLogoPreview('')} className="text-xs text-red-400 hover:text-red-300 cursor-pointer">✕ Supprimer le logo</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Aperçu */}
+              <div className="flex flex-col items-center gap-4">
+                <p className="text-xs text-savia-text-muted font-semibold uppercase tracking-wider">Aperçu</p>
+                <div className="w-full bg-savia-bg border border-savia-border rounded-xl p-6 flex items-center justify-center gap-4 min-h-[120px]">
+                  {logoPreview
+                    ? <img src={logoPreview} alt="logo" className="max-h-16 max-w-[180px] object-contain" />
+                    : <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-savia-accent to-blue-600 flex items-center justify-center"><Building2 className="w-6 h-6 text-white" /></div>
+                  }
+                  <div>
+                    <div className="font-black text-lg gradient-text">{companyName || 'SAVIA'}</div>
+                    <div className="text-xs text-savia-text-muted">Plateforme de gestion</div>
+                    <div className="text-xs text-savia-accent font-semibold mt-1">{DEVISES.find(d => d.code === devise)?.symbol} — {DEVISES.find(d => d.code === devise)?.label}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+
+          {/* Save */}
+          <div className="flex justify-end">
+            <button onClick={saveSettings}
+              className={`flex items-center gap-2 px-8 py-3 rounded-xl font-bold text-white transition-all cursor-pointer shadow-lg ${
+                settingsSaved
+                  ? 'bg-green-500 shadow-green-500/20'
+                  : 'bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 shadow-cyan-500/20'
+              }`}>
+              {settingsSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+              {settingsSaved ? 'Paramètres sauvegardés !' : 'Enregistrer les paramètres'}
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {/* ═══════════════ USER MODAL ═══════════════════════════ */}
       {showUserModal && (
