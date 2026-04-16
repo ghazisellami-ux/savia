@@ -108,7 +108,18 @@ interface User {
   profileId?: string;
 }
 
-interface Technicien { id: number; nom: string; specialite: string; qualification: string; dispo: string; email: string; telephone: string; }
+interface Technicien {
+  id: number;
+  nom: string;
+  prenom: string;
+  specialite: string;
+  qualification: string;
+  niveau_competence: string;
+  dispo: string;
+  email: string;
+  telephone: string;
+  telegram_id: string;
+}
 
 const emptyUser = () => ({
   username: '', password: '', nom_complet: '', email: '', profileId: 'lecteur', client: '', actif: true,
