@@ -4,10 +4,10 @@ import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import {
   Shield, Users, Plus, Trash2, Loader2, Save,
-  X, Eye, EyeOff, Edit2, Crown, UserCog,
+  X, Eye, EyeOff, Edit2, Crown, UserCog, Phone, Mail, Send,
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
-  Radio,
+  Star, Radio,
 } from 'lucide-react';
 import { admin, techniciens } from '@/lib/api';
 
@@ -135,8 +135,9 @@ export default function AdminPage() {
 
   // Tech modal
   const [showAddTech, setShowAddTech] = useState(false);
-  const [techForm, setTechForm] = useState(emptyTech);
+  const [techForm, setTechForm] = useState(emptyTech());
   const [isSavingTech, setIsSavingTech] = useState(false);
+  const [techMsg, setTechMsg] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -153,12 +154,15 @@ export default function AdminPage() {
       })));
       setTechs((techsRes as any[]).map((item: any) => ({
         id: item.id || 0,
-        nom: item.nom_complet || `${item.nom || ''} ${item.prenom || ''}`.trim() || 'N/A',
+        nom: item.nom || '',
+        prenom: item.prenom || '',
         specialite: item.specialite || 'Général',
         qualification: item.qualification || '',
+        niveau_competence: item.niveau_competence || 'Junior',
         dispo: item.dispo || 'Disponible',
         email: item.email || '',
         telephone: item.telephone || '',
+        telegram_id: item.telegram_id || '',
       })));
     } catch (err) { console.error(err); }
     finally { setIsLoading(false); }
@@ -214,10 +218,18 @@ export default function AdminPage() {
   // ── Save Tech ────────────────────────────────────────────
   const handleSaveTech = async () => {
     if (!techForm.nom.trim()) return;
-    setIsSavingTech(true);
-    try { await techniciens.create(techForm); setTechForm(emptyTech); setShowAddTech(false); await load(); }
-    catch { /* noop */ } finally { setIsSavingTech(false); }
+    setIsSavingTech(true); setTechMsg('');
+    try {
+      await techniciens.create(techForm);
+      setTechForm(emptyTech());
+      setShowAddTech(false);
+      setTechMsg('');
+      await load();
+    } catch (err: any) {
+      setTechMsg(`❌ ${err?.message || 'Erreur'}`);
+    } finally { setIsSavingTech(false); }  
   };
+  const setT = (k: string, v: string) => setTechForm(f => ({ ...f, [k]: v }));
   const handleDeleteTech = async (id: number) => {
     if (!confirm('Supprimer ce technicien ?')) return;
     try { await techniciens.delete(id); await load(); } catch { /* noop */ }
@@ -256,7 +268,7 @@ export default function AdminPage() {
             </button>
           )}
           {tab === 'techs' && (
-            <button onClick={() => setShowAddTech(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
+            <button onClick={() => { setTechForm(emptyTech()); setTechMsg(''); setShowAddTech(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
               <Plus className="w-4 h-4" /> Nouveau Technicien
             </button>
           )}
@@ -384,7 +396,7 @@ export default function AdminPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-savia-border">
-                  {['Nom', 'Spécialité', 'Qualification', 'Disponibilité', 'Email', 'Actions'].map(h => (
+                  {['Nom & Prénom', 'Spécialité', 'Niveau', 'Téléphone', 'Contact', 'Dispo', 'Actions'].map(h => (
                     <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs font-semibold">{h}</th>
                   ))}
                 </tr>
@@ -392,13 +404,31 @@ export default function AdminPage() {
               <tbody>
                 {techs.map(t => (
                   <tr key={t.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
-                    <td className="py-2.5 px-3 font-semibold">{t.nom}</td>
-                    <td className="py-2.5 px-3">{t.specialite}</td>
-                    <td className="py-2.5 px-3 text-sm">{t.qualification}</td>
+                    <td className="py-2.5 px-3">
+                      <div className="font-semibold">{t.nom} {t.prenom}</div>
+                      <div className="text-xs text-savia-text-muted">{t.qualification}</div>
+                    </td>
+                    <td className="py-2.5 px-3 text-sm">{t.specialite}</td>
+                    <td className="py-2.5 px-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                        t.niveau_competence === 'Expert' ? 'bg-purple-500/10 text-purple-400' :
+                        t.niveau_competence === 'Senior' ? 'bg-blue-500/10 text-blue-400' :
+                        t.niveau_competence === 'Intermédiaire' ? 'bg-amber-500/10 text-amber-400' :
+                        'bg-green-500/10 text-green-400'
+                      }`}>{t.niveau_competence || 'Junior'}</span>
+                    </td>
+                    <td className="py-2.5 px-3 text-xs">
+                      {t.telephone && <a href={`tel:${t.telephone}`} className="flex items-center gap-1 text-savia-text-muted hover:text-savia-accent"><Phone className="w-3 h-3" />{t.telephone}</a>}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <div className="flex items-center gap-2">
+                        {t.email && <a href={`mailto:${t.email}`} title={t.email} className="p-1 rounded text-savia-text-muted hover:text-savia-accent"><Mail className="w-3.5 h-3.5" /></a>}
+                        {t.telegram_id && <a href={`https://t.me/${t.telegram_id.replace('@','')}`} target="_blank" title={t.telegram_id} className="p-1 rounded text-savia-text-muted hover:text-blue-400"><Send className="w-3.5 h-3.5" /></a>}
+                      </div>
+                    </td>
                     <td className="py-2.5 px-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${t.dispo.toLowerCase().includes('dispo') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>{t.dispo}</span>
                     </td>
-                    <td className="py-2.5 px-3 text-xs text-savia-text-muted">{t.email}</td>
                     <td className="py-2.5 px-3">
                       <button onClick={() => handleDeleteTech(t.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer">
                         <Trash2 className="w-3.5 h-3.5" />
@@ -406,7 +436,7 @@ export default function AdminPage() {
                     </td>
                   </tr>
                 ))}
-                {techs.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-savia-text-muted">Aucun technicien enregistré.</td></tr>}
+                {techs.length === 0 && <tr><td colSpan={7} className="py-6 text-center text-savia-text-muted">Aucun technicien enregistré.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -541,30 +571,99 @@ export default function AdminPage() {
       )}
 
       {/* ═══════════════ TECH MODAL ═══════════════════════════ */}
-      <Modal isOpen={showAddTech} onClose={() => setShowAddTech(false)} title="Nouveau Technicien" size="lg">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className={LABEL}>Nom *</label><input className={INPUT} placeholder="Ex: Ben Ali" value={techForm.nom} onChange={e => setTechForm({ ...techForm, nom: e.target.value })} /></div>
-          <div><label className={LABEL}>Prénom</label><input className={INPUT} placeholder="Ex: Ahmed" value={techForm.prenom} onChange={e => setTechForm({ ...techForm, prenom: e.target.value })} /></div>
-          <div>
-            <label className={LABEL}>Spécialité</label>
-            <select className={INPUT} value={techForm.specialite} onChange={e => setTechForm({ ...techForm, specialite: e.target.value })}>
-              <option value="">— Sélectionner —</option>
-              {['Scanner CT', 'IRM', 'Radiographie', 'Mammographie', 'Échographie', 'Général'].map(s => <option key={s}>{s}</option>)}
-            </select>
+      {showAddTech && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 backdrop-blur-sm overflow-y-auto py-6 px-4">
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-xl shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
+              <h2 className="text-lg font-black gradient-text flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-savia-accent" /> Nouveau Technicien
+              </h2>
+              <button onClick={() => setShowAddTech(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              {/* Identité */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL}>Nom *</label>
+                  <input className={INPUT} placeholder="Ex: Ben Ali" value={techForm.nom} onChange={e => setT('nom', e.target.value)} />
+                </div>
+                <div>
+                  <label className={LABEL}>Prénom</label>
+                  <input className={INPUT} placeholder="Ex: Ahmed" value={techForm.prenom} onChange={e => setT('prenom', e.target.value)} />
+                </div>
+              </div>
+
+              {/* Compétences */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL}>Spécialité</label>
+                  <select className={INPUT} value={techForm.specialite} onChange={e => setT('specialite', e.target.value)}>
+                    <option value="">— Sélectionner —</option>
+                    {SPECIALITES.map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={LABEL}>Niveau de compétence</label>
+                  <div className="flex gap-1.5">
+                    {NIVEAUX.map(n => (
+                      <button key={n} type="button" onClick={() => setT('niveau_competence', n)}
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                          techForm.niveau_competence === n
+                            ? n === 'Expert' ? 'bg-purple-500/20 text-purple-400 border-purple-500/40'
+                              : n === 'Senior' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
+                              : n === 'Intermédiaire' ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                              : 'bg-green-500/20 text-green-400 border-green-500/40'
+                            : 'border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+                        }`}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className={LABEL}>Qualification</label>
+                <input className={INPUT} placeholder="Ex: Ingénieur Biomédical" value={techForm.qualification} onChange={e => setT('qualification', e.target.value)} />
+              </div>
+
+              {/* Contact */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL}><Phone className="w-3 h-3 inline mr-1" />Téléphone</label>
+                  <input className={INPUT} placeholder="+216 XX XXX XXX" value={techForm.telephone} onChange={e => setT('telephone', e.target.value)} />
+                </div>
+                <div>
+                  <label className={LABEL}><Mail className="w-3 h-3 inline mr-1" />Email</label>
+                  <input type="email" className={INPUT} placeholder="ahmed@savia.tn" value={techForm.email} onChange={e => setT('email', e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <label className={LABEL}><Send className="w-3 h-3 inline mr-1" />Telegram (username ou ID)</label>
+                <input className={INPUT} placeholder="Ex: @ahmed_savia ou 123456789" value={techForm.telegram_id} onChange={e => setT('telegram_id', e.target.value)} />
+              </div>
+
+              {techMsg && (
+                <div className={`p-3 rounded-lg text-sm font-semibold ${techMsg.includes('❌') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                  {techMsg}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border">
+              <button onClick={() => setShowAddTech(false)} className="px-4 py-2 rounded-lg text-sm font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer">
+                Annuler
+              </button>
+              <button onClick={handleSaveTech} disabled={isSavingTech || !techForm.nom.trim()}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
+                {isSavingTech ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {isSavingTech ? 'Enregistrement...' : 'Ajouter le technicien'}
+              </button>
+            </div>
           </div>
-          <div><label className={LABEL}>Qualification</label><input className={INPUT} placeholder="Ex: Ingénieur Biomédical" value={techForm.qualification} onChange={e => setTechForm({ ...techForm, qualification: e.target.value })} /></div>
-          <div><label className={LABEL}>Email</label><input type="email" className={INPUT} placeholder="ahmed@savia.tn" value={techForm.email} onChange={e => setTechForm({ ...techForm, email: e.target.value })} /></div>
-          <div><label className={LABEL}>Téléphone</label><input className={INPUT} placeholder="+216 XX XXX XXX" value={techForm.telephone} onChange={e => setTechForm({ ...techForm, telephone: e.target.value })} /></div>
         </div>
-        <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
-          <button onClick={() => setShowAddTech(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-white/5 transition-colors cursor-pointer">Annuler</button>
-          <button onClick={handleSaveTech} disabled={isSavingTech || !techForm.nom.trim()}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
-            {isSavingTech ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Sauvegarder
-          </button>
-        </div>
-      </Modal>
+      )}
     </div>
   );
 }
