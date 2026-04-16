@@ -532,56 +532,57 @@ export default function PlanningPage() {
                 const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
                 const colors = getStatutColor(ev.statut, isOverdue);
                 return (
-                  <div key={i} className={`rounded-xl border-l-4 p-4 space-y-2 ${colors.cell}`}>
+                  <div key={i} className={`rounded-xl border border-savia-border border-l-4 p-4 space-y-2 bg-savia-surface-hover/40 ${colors.dot.replace('bg-', 'border-l-').replace('bg-savia', 'border-l-savia')}`}
+                    style={{ borderLeftColor: colors.dot === 'bg-blue-400' ? '#60a5fa' : colors.dot === 'bg-yellow-400' ? '#facc15' : colors.dot === 'bg-green-400' ? '#4ade80' : '#f87171' }}>
                     {/* Machine + statut */}
                     <div className="flex items-start justify-between gap-2">
-                      <span className="flex items-center gap-2 font-black text-sm">
-                        <Server className="w-4 h-4 flex-shrink-0" /> {ev.machine}
+                      <span className="flex items-center gap-2 font-black text-sm text-savia-text">
+                        <Server className="w-4 h-4 flex-shrink-0 text-savia-text-muted" /> {ev.machine}
                       </span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${colors.badge}`}>
                         {isOverdue ? 'En retard' : ev.statut}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-savia-text">
                       {ev.client && (
                         <div className="flex items-center gap-1.5">
                           <Building2 className="w-3.5 h-3.5 text-savia-text-muted" />
                           <span className="text-savia-text-muted">Client :</span>
-                          <span className="font-semibold">{ev.client}</span>
+                          <span className="font-semibold text-savia-text">{ev.client}</span>
                         </div>
                       )}
                       {ev.technicien && (
                         <div className="flex items-center gap-1.5">
                           <User className="w-3.5 h-3.5 text-savia-text-muted" />
                           <span className="text-savia-text-muted">Tech :</span>
-                          <span className="font-semibold">{ev.technicien}</span>
+                          <span className="font-semibold text-savia-text">{ev.technicien}</span>
                         </div>
                       )}
                       <div className="flex items-center gap-1.5">
                         <Wrench className="w-3.5 h-3.5 text-savia-text-muted" />
                         <span className="text-savia-text-muted">Type :</span>
-                        <span className="font-semibold">{ev.type_maintenance}</span>
+                        <span className="font-semibold text-savia-text">{ev.type_maintenance}</span>
                       </div>
                       {ev.recurrence && ev.recurrence !== 'Aucune' && (
                         <div className="flex items-center gap-1.5">
                           <RefreshCw className="w-3.5 h-3.5 text-savia-text-muted" />
                           <span className="text-savia-text-muted">Récurrence :</span>
-                          <span className="font-semibold">{ev.recurrence}</span>
+                          <span className="font-semibold text-savia-text">{ev.recurrence}</span>
                         </div>
                       )}
                     </div>
 
                     {ev.description && (
-                      <div className="flex items-start gap-1.5 text-xs pt-1 border-t border-current/10">
+                      <div className="flex items-start gap-1.5 text-xs pt-1 border-t border-savia-border">
                         <FileText className="w-3.5 h-3.5 text-savia-text-muted flex-shrink-0 mt-0.5" />
-                        <p className="text-savia-text-muted">{ev.description}</p>
+                        <p className="text-savia-text">{ev.description}</p>
                       </div>
                     )}
                     {ev.notes && (
                       <div className="flex items-start gap-1.5 text-xs">
                         <StickyNote className="w-3.5 h-3.5 text-savia-text-muted flex-shrink-0 mt-0.5" />
-                        <p className="italic text-savia-text-dim">{ev.notes}</p>
+                        <p className="italic text-savia-text-muted">{ev.notes}</p>
                       </div>
                     )}
                   </div>
