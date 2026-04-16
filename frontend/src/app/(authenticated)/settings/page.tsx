@@ -1,12 +1,17 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
 
 const INPUT = "w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 focus:outline-none";
 const LABEL = "block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2";
 const CARD = "bg-savia-surface border border-savia-border rounded-xl p-6 space-y-4";
 
 export default function SettingsPage() {
+  const { user } = useAuth();
+  const router = useRouter();
+
   const [token,       setToken]       = useState('');
   const [chatId,      setChatId]      = useState('');
   const [geminiKey,   setGeminiKey]   = useState('');
@@ -19,6 +24,13 @@ export default function SettingsPage() {
   const [saved,       setSaved]       = useState(false);
   const [saveErr,     setSaveErr]     = useState('');
   const [testResult,  setTestResult]  = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Guard : Admin seulement
+  useEffect(() => {
+    if (user && user.role !== 'Admin') {
+      router.replace('/dashboard');
+    }
+  }, [user, router]);
 
   // Charger silencieusement — pas de blocage si l'API échoue
   useEffect(() => {

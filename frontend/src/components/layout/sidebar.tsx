@@ -25,8 +25,8 @@ const NAV_ITEMS = [
   { key: 'pieces',             label: 'Pièces de Rechange',     href: '/pieces',      icon: Cog           },
   { key: 'reports',            label: 'Rapports & Exports',     href: '/reports',     icon: FileText      },
   { key: 'contrats',           label: 'Contrats & SLA',         href: '/contrats',    icon: ClipboardCheck},
-  { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings      },
-  { key: 'settings',           label: 'Paramètres',             href: '/settings',    icon: SlidersHorizontal },
+  { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings,          adminOnly: true },
+  { key: 'settings',           label: 'Paramètres',             href: '/settings',    icon: SlidersHorizontal, adminOnly: true },
 ];
 
 const ROLE_COLOR: Record<string, string> = {
@@ -62,7 +62,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter(item => !item.adminOnly || user.role === 'Admin').map((item) => {
           const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
           const Icon = item.icon;
           return (
