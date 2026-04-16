@@ -25,20 +25,23 @@ export const api = {
       '/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }
     ),
 
-  // Interventions (SAV)
+  // Interventions
   interventions: {
-    list: (params?: { technicien?: string }) => {
-      const qs = params?.technicien ? `?technicien=${encodeURIComponent(params.technicien)}` : '';
-      return req<any[]>(`/api/sav${qs}`);
+    list: (params?: { technicien?: string; machine?: string }) => {
+      const p = new URLSearchParams();
+      if (params?.technicien) p.set('technicien', params.technicien);
+      if (params?.machine) p.set('machine', params.machine);
+      const qs = p.toString();
+      return req<any[]>(`/api/interventions${qs ? '?' + qs : ''}`);
     },
-    get: (id: number) => req<any>(`/api/sav/${id}`),
-    create: (data: any) => req<any>('/api/sav', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: any) => req<any>(`/api/sav/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    get:    (id: number) => req<any>(`/api/interventions/${id}`),
+    create: (data: any) => req<any>('/api/interventions', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: any) => req<any>(`/api/interventions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     uploadPhoto: async (id: number, file: File) => {
       const token = localStorage.getItem('savia_site_token') || '';
       const fd = new FormData();
       fd.append('file', file);
-      const res = await fetch(`${API_BASE}/api/sav/${id}/photo`, {
+      const res = await fetch(`/api/interventions/${id}/photo`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: fd,

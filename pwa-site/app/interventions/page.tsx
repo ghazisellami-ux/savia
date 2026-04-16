@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getUser, isLoggedIn } from '@/lib/auth';
@@ -12,11 +12,11 @@ const STATUTS = ['', 'En cours', 'En attente de piece', 'Cloturee'];
 export default function InterventionsPage() {
   const router = useRouter();
   const user = getUser();
-  const [data, setData] = useState<any[]>([]);
+  const [data, setData]         = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
-  const [statut, setStatut] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [statut, setStatut]     = useState('En cours'); // Par défaut: En cours
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState('');
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
@@ -26,15 +26,23 @@ export default function InterventionsPage() {
   const loadData = async () => {
     setLoading(true); setError('');
     try {
-      const res = await api.interventions.list();
-      // Filter only interventions assigned to this technician
-      const mine = res.filter((i: any) => {
-        const tech = (i.technicien_assigne || i.technicien || '').toLowerCase();
-        return tech.includes((user?.nom || '').toLowerCase()) || tech.includes((user?.username || '').toLowerCase());
+      // Passer le nom du technicien en query param pour filtre côté serveur
+      const techName = user?.nom || user?.username || '';
+      const res = await api.interventions.list({ technicien: techName });
+
+      // Trier par date décroissante (plus récentes en premier)
+      const sorted = (res as any[]).sort((a, b) => {
+        const da = new Date(a.date || a.date_intervention || a.created_at || 0).getTime();
+        const db = new Date(b.date || b.date_intervention || b.created_at || 0).getTime();
+        return db - da;
       });
-      setData(mine);
-      setFiltered(mine);
-    } catch (e) {
+
+      setData(sorted);
+      // Appliquer le filtre par défaut "En cours"
+      setFiltered(sorted.filter(i =>
+        (i.statut || '').toLowerCase().includes('cours')
+      ));
+    } catch {
       setError('Impossible de charger les interventions.');
     } finally {
       setLoading(false);
@@ -43,7 +51,11 @@ export default function InterventionsPage() {
 
   const applyFilter = (s: string) => {
     setStatut(s);
-    setFiltered(s ? data.filter(i => i.statut === s) : data);
+    if (!s) {
+      setFiltered(data);
+    } else {
+      setFiltered(data.filter(i => i.statut === s));
+    }
   };
 
   return (
@@ -90,8 +102,8 @@ export default function InterventionsPage() {
               client={i.client || ''}
               statut={i.statut || 'En cours'}
               type={i.type_intervention || i.type || ''}
-              date={i.date_intervention || i.created_at || ''}
-              technicien={i.technicien_assigne || i.technicien || ''}
+              date={i.date || i.date_intervention || i.created_at || ''}
+              technicien={i.technicien || i.technicien_assigne || ''}
               priorite={i.priorite || ''}
             />
           ))}
