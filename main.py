@@ -133,7 +133,7 @@ def root():
 def login(body: LoginRequest):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
+            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
             (body.username,)
         ).fetchone()
 
@@ -145,6 +145,7 @@ def login(body: LoginRequest):
         "sub": user_data["username"],
         "role": user_data["role"],
         "nom": user_data.get("nom_complet", ""),
+        "client": user_data.get("client", "") or "",  # ← ajouté
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
@@ -155,6 +156,7 @@ def login(body: LoginRequest):
             "username": user_data["username"],
             "nom": user_data.get("nom_complet", ""),
             "role": user_data["role"],
+            "client": user_data.get("client", "") or "",  # ← ajouté
         }
     }
 
@@ -162,6 +164,14 @@ def login(body: LoginRequest):
 @app.get("/api/auth/me")
 def me(user: dict = Depends(_verify_token)):
     return {"user": user}
+
+
+def _get_client_filter(user: dict) -> Optional[str]:
+    """Retourne le client restricté pour un Lecteur, None sinon (accès total)."""
+    if user.get("role") == "Lecteur":
+        c = user.get("client", "").strip()
+        return c if c else None
+    return None
 
 
 # ==========================================
@@ -297,7 +307,11 @@ def get_health_scores(
 
 @app.get("/api/equipements")
 def get_equipements(user: dict = Depends(_verify_token)):
-    return _df_to_records(lire_equipements())
+    df = lire_equipements()
+    client_filter = _get_client_filter(user)
+    if client_filter and not df.empty and "Client" in df.columns:
+        df = df[df["Client"].astype(str).str.lower() == client_filter.lower()]
+    return _df_to_records(df)
 
 
 @app.post("/api/equipements")
@@ -392,6 +406,17 @@ def get_interventions(
         df = df[df["technicien"].astype(str).apply(
             lambda t: all(w in t.lower() for w in words)
         )]
+    # Filtrage par client pour Lecteur
+    client_filter = _get_client_filter(user)
+    if client_filter and not df.empty:
+        # Obtenir les machines du client
+        df_eq = lire_equipements()
+        if not df_eq.empty and "Client" in df_eq.columns and "Nom" in df_eq.columns:
+            machines_client = set(
+                df_eq[df_eq["Client"].astype(str).str.lower() == client_filter.lower()]["Nom"].tolist()
+            )
+            if "machine" in df.columns:
+                df = df[df["machine"].isin(machines_client)]
     return _df_to_records(df)
 
 
@@ -522,7 +547,9 @@ def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
 
 @app.get("/api/contrats")
 def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_token)):
-    return _df_to_records(lire_contrats(client=client))
+    # Pour Lecteur : forcer le filtre par son client
+    effective_client = _get_client_filter(user) or client
+    return _df_to_records(lire_contrats(client=effective_client))
 
 
 @app.post("/api/contrats")
@@ -574,7 +601,20 @@ def get_planning(
     statut: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    return _df_to_records(lire_planning(machine=machine, statut=statut))
+    df = lire_planning(machine=machine, statut=statut)
+    # Pour Lecteur : filtrer par les machines de son client
+    client_filter = _get_client_filter(user)
+    if client_filter and not df.empty:
+        df_eq = lire_equipements()
+        if not df_eq.empty and "Client" in df_eq.columns and "Nom" in df_eq.columns:
+            machines_client = set(
+                df_eq[df_eq["Client"].astype(str).str.lower() == client_filter.lower()]["Nom"].tolist()
+            )
+            if "machine" in df.columns:
+                df = df[df["machine"].isin(machines_client)]
+            elif "equipement" in df.columns:
+                df = df[df["equipement"].isin(machines_client)]
+    return _df_to_records(df)
 
 
 @app.post("/api/planning")
