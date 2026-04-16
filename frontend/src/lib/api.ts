@@ -142,6 +142,12 @@ export const contrats = {
     const qs = client ? `?client=${client}` : '';
     return request<Array<Record<string, unknown>>>(`/api/contrats${qs}`);
   },
+  create: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/contrats', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
+  delete: (id: number) =>
+    request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'DELETE' }),
 };
 
 export const conformite = {
