@@ -86,6 +86,17 @@ export default function EquipementsPage() {
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
   const dynamicTypes = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))], [data]);
 
+  // Lookup: matricule fiscale -> client name (for auto-fill)
+  const matriculeClientMap = useMemo(() => {
+    const map = new Map<string, string>();
+    data.forEach(eq => {
+      if (eq.matriculeFiscale && eq.client) {
+        map.set(eq.matriculeFiscale.trim().toLowerCase(), eq.client);
+      }
+    });
+    return map;
+  }, [data]);
+
   // Documents filter options (derived from docs data)
   const docEquipOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.equipement_nom).filter(Boolean)))], [docs]);
   const docClientOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.client).filter(Boolean)))], [docs]);
@@ -369,16 +380,35 @@ export default function EquipementsPage() {
                       <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                         <Hash className="w-3.5 h-3.5" /> Matricule Fiscale du client *
                       </label>
-                      <input
-                        className={INPUT_CLS}
-                        placeholder="Ex: 1234567/A/P/M/000"
-                        value={form.MatriculeFiscale}
-                        onChange={e => setForm({...form, MatriculeFiscale: e.target.value})}
-                      />
+                      <div className="relative">
+                        <input
+                          className={INPUT_CLS}
+                          placeholder="Ex: 1234567/A/P/M/000"
+                          value={form.MatriculeFiscale}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const matched = matriculeClientMap.get(val.trim().toLowerCase());
+                            if (matched) {
+                              setForm({...form, MatriculeFiscale: val, Client: matched});
+                            } else {
+                              setForm({...form, MatriculeFiscale: val});
+                            }
+                          }}
+                        />
+                        {form.MatriculeFiscale && matriculeClientMap.has(form.MatriculeFiscale.trim().toLowerCase()) && (
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-green-400">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span className="text-xs font-semibold">Client trouvé</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                         <Building2 className="w-3.5 h-3.5" /> Client / Site *
+                        {form.MatriculeFiscale && matriculeClientMap.has(form.MatriculeFiscale.trim().toLowerCase()) && (
+                          <span className="text-green-400 text-[10px] font-normal ml-1">(auto-rempli)</span>
+                        )}
                       </label>
                       <input
                         className={INPUT_CLS}
