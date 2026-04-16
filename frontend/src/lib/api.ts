@@ -179,6 +179,12 @@ export const clients = {
 
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
+  createUser: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/admin/users', { method: 'POST', body: data }),
+  updateUser: (id: number, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'PUT', body: data }),
+  deleteUser: (id: number) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
 };
 
 // --- AI Engine ---
