@@ -426,28 +426,102 @@ Fournis une analyse structurée en 4 sections :
       {/* TAB 3: PRÉDICTIONS IA */}
       {activeTab === 3 && (
         <div className="space-y-6">
-          <SectionCard title="Assistant d'Achat Prédictif">
+
+          {/* Tableau de prédictions */}
+          <SectionCard title="État du Stock & Recommandations d'Achat">
+            <div className="overflow-x-auto">
+              <div className="overflow-y-auto" style={{maxHeight: '400px'}}>
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-savia-surface z-10">
+                    <tr className="border-b border-savia-border">
+                      {['Pièce', 'Type', 'Stock actuel', 'Min', 'Fournisseur', 'Prix unit.', 'Urgence'].map(h => (
+                        <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data
+                      .slice()
+                      .sort((a, b) => {
+                        // Trier par urgence : rupture > bas > OK
+                        const urgA = a.stock_actuel === 0 ? 0 : a.stock_actuel <= a.stock_minimum ? 1 : 2;
+                        const urgB = b.stock_actuel === 0 ? 0 : b.stock_actuel <= b.stock_minimum ? 1 : 2;
+                        return urgA - urgB;
+                      })
+                      .map(p => {
+                        const isRupture = p.stock_actuel === 0;
+                        const isBas = !isRupture && p.stock_actuel <= p.stock_minimum;
+                        const manquant = Math.max(0, p.stock_minimum - p.stock_actuel + 1);
+                        return (
+                          <tr key={p.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${
+                            isRupture ? 'bg-red-500/5' : isBas ? 'bg-yellow-500/5' : ''
+                          }`}>
+                            <td className="py-2.5 px-3">
+                              <div className="font-semibold text-sm">{p.designation}</div>
+                              <div className="text-xs text-savia-text-muted font-mono">{p.reference}</div>
+                            </td>
+                            <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                                isRupture ? 'bg-red-500/15 text-red-400' :
+                                isBas ? 'bg-yellow-500/15 text-yellow-400' :
+                                'bg-green-500/15 text-green-400'
+                              }`}>{p.stock_actuel}</span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
+                            <td className="py-2.5 px-3 text-xs">{p.fournisseur || '—'}</td>
+                            <td className="py-2.5 px-3 text-right font-mono text-xs">{p.prix_unitaire.toLocaleString('fr')} TND</td>
+                            <td className="py-2.5 px-3">
+                              {isRupture ? (
+                                <div className="space-y-0.5">
+                                  <span className="flex items-center gap-1 text-xs font-bold text-red-400">
+                                    <XCircle className="w-3 h-3" /> Commander immédiatement
+                                  </span>
+                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s)</span>
+                                </div>
+                              ) : isBas ? (
+                                <div className="space-y-0.5">
+                                  <span className="flex items-center gap-1 text-xs font-bold text-yellow-400">
+                                    <AlertTriangle className="w-3 h-3" /> Commander bientôt
+                                  </span>
+                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s)</span>
+                                </div>
+                              ) : (
+                                <span className="flex items-center gap-1 text-xs text-green-400">
+                                  <CheckCircle2 className="w-3 h-3" /> Stock suffisant
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </SectionCard>
+
+          {/* Analyse IA */}
+          <SectionCard title="Assistant d'Achat Prédictif IA">
             <div className="text-center space-y-4">
               <p className="text-sm text-savia-text-muted">L&apos;IA analyse vos cycles de remplacement et niveaux de stock pour anticiper les ruptures.</p>
-              <div className="flex gap-4 justify-center flex-wrap">
-                <div className="flex gap-2 flex-wrap">
-                  <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400">
-                    <XCircle className="w-3 h-3" /> {ruptures} en rupture
-                  </span>
-                  <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/10 text-yellow-400">
-                    <AlertTriangle className="w-3 h-3" /> {lowStock.length - ruptures} stock bas
-                  </span>
-                  <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-400">
-                    <CheckCircle2 className="w-3 h-3" /> {data.length - lowStock.length} OK
-                  </span>
-                  <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400">
-                    <DollarSign className="w-3 h-3" /> Valeur: {(totalValeur / 1000).toFixed(0)}K TND
-                  </span>
-                </div>
+              <div className="flex gap-2 flex-wrap justify-center">
+                <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400">
+                  <XCircle className="w-3 h-3" /> {ruptures} en rupture
+                </span>
+                <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/10 text-yellow-400">
+                  <AlertTriangle className="w-3 h-3" /> {lowStock.length - ruptures} stock bas
+                </span>
+                <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-400">
+                  <CheckCircle2 className="w-3 h-3" /> {data.length - lowStock.length} OK
+                </span>
+                <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400">
+                  <DollarSign className="w-3 h-3" /> Valeur: {(totalValeur / 1000).toFixed(0)}K TND
+                </span>
               </div>
-              <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto disabled:opacity-50">
+              <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto disabled:opacity-50">
                 {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                {isAnalyzing ? 'Analyse en cours...' : '🚀 Lancer l\'Analyse IA'}
+                {isAnalyzing ? 'Analyse en cours...' : 'Lancer l\'Analyse IA'}
               </button>
             </div>
           </SectionCard>
