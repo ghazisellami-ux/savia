@@ -84,7 +84,8 @@ export default function PlanningPage() {
 
       const mapped = (planRes as any[]).map((item: any) => ({
         id: item.id || 0,
-        date_planifiee: item.date_planifiee || item.Date || '',
+        // La colonne BD s'appelle date_prevue, pas date_planifiee
+        date_planifiee: item.date_prevue || item.date_planifiee || item.Date || '',
         machine: item.machine || '',
         client: item.client || '',
         description: item.description || '',
@@ -310,40 +311,52 @@ export default function PlanningPage() {
       </div>
 
       {/* Upcoming list */}
-      <SectionCard title="Prochaines Maintenances">
+      <SectionCard title={`Toutes les Maintenances (${data.length})`}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-savia-border">
-                {['Date', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
-                  <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.sort((a, b) => a.date_planifiee.localeCompare(b.date_planifiee)).slice(0, 25).map(ev => {
-                const isOverdue = new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée';
-                return (
-                  <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
-                    <td className="py-2 px-3 text-xs font-mono">{ev.date_planifiee.substring(0, 10)}</td>
-                    <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.client || '—'}</td>
-                    <td className="py-2 px-3 font-semibold text-sm">{ev.machine}</td>
-                    <td className="py-2 px-3 text-xs">{ev.technicien || '—'}</td>
-                    <td className="py-2 px-3 text-xs">{ev.type_maintenance}</td>
-                    <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence || '—'}</td>
-                    <td className="py-2 px-3">
-                      {(() => {
-                        const isOverdue = new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée';
-                        const colors = getStatutColor(ev.statut, isOverdue);
-                        const label = isOverdue ? 'En retard' : ev.statut;
-                        return <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>{label}</span>;
-                      })()}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-y-auto" style={{maxHeight: '420px'}}>
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-savia-surface z-10">
+                <tr className="border-b border-savia-border">
+                  {['Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
+                    <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data
+                  .slice()
+                  .sort((a, b) => {
+                    // Items avec date en premier, triés chronologiquement
+                    if (!a.date_planifiee && !b.date_planifiee) return 0;
+                    if (!a.date_planifiee) return 1;
+                    if (!b.date_planifiee) return -1;
+                    return a.date_planifiee.localeCompare(b.date_planifiee);
+                  })
+                  .map(ev => {
+                    const hasDate = !!ev.date_planifiee;
+                    const isOverdue = hasDate && new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
+                    const colors = getStatutColor(ev.statut, isOverdue);
+                    return (
+                      <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
+                        <td className="py-2 px-3 text-xs font-mono whitespace-nowrap">
+                          {hasDate ? ev.date_planifiee.substring(0, 10) : <span className="text-savia-text-dim italic">Sans date</span>}
+                        </td>
+                        <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.client || '—'}</td>
+                        <td className="py-2 px-3 font-semibold text-sm">{ev.machine}</td>
+                        <td className="py-2 px-3 text-xs">{ev.technicien || '—'}</td>
+                        <td className="py-2 px-3 text-xs whitespace-nowrap">{ev.type_maintenance}</td>
+                        <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—'}</td>
+                        <td className="py-2 px-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>
+                            {isOverdue ? 'En retard' : ev.statut}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </SectionCard>
 
