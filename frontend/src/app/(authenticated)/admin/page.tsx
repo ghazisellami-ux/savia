@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/modal';
 import {
   Shield, Users, Plus, Trash2, Loader2, Save,
   X, Eye, EyeOff, Edit2, Crown, UserCog,
-  Wrench, BarChart3, Monitor, Hospital, BookOpen,
+  Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Radio,
 } from 'lucide-react';
@@ -19,6 +19,7 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'dashboard',          label: 'Dashboard',               icon: BarChart3      },
   { key: 'supervision',        label: 'Supervision',             icon: Monitor        },
   { key: 'equipements',        label: 'Équipements',             icon: Hospital       },
+  { key: 'predictions',        label: 'Prédictions',            icon: TrendingUp     },
   { key: 'base_connaissances', label: 'Base de Connaissances',  icon: BookOpen       },
   { key: 'sav',                label: 'SAV & Interventions',    icon: Wrench         },
   { key: 'demandes',           label: "Demandes d'intervention", icon: ClipboardList  },
@@ -55,8 +56,8 @@ const DEFAULT_PROFILES: Profile[] = [
     couleur: 'text-amber-400',
     bg: 'bg-amber-500/10',
     border: 'border-amber-500/30',
-    description: 'Pièces de rechange, commandes',
-    pages: ['dashboard', 'pieces', 'reports'],
+    description: 'Pièces de rechange, prédictions, commandes',
+    pages: ['dashboard', 'pieces', 'predictions', 'reports'],
   },
   {
     id: 'technicien',
