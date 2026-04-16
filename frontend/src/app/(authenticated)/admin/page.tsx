@@ -124,6 +124,9 @@ interface Technicien {
 const emptyUser = () => ({
   username: '', password: '', nom_complet: '', email: '', profileId: 'lecteur', client: '', actif: true,
 });
+const SPECIALITES = ['Scanner CT', 'IRM', 'Radiographie', 'Mammographie', 'Échographie', 'DICOM / Informatique médicale', 'Général'];
+const NIVEAUX = ['Junior', 'Intermédiaire', 'Senior', 'Expert'];
+
 const emptyTech = () => ({
   nom: '', prenom: '', specialite: '', qualification: '',
   niveau_competence: 'Intermédiaire', email: '', telephone: '', telegram_id: '',
