@@ -130,6 +130,10 @@ export const demandes = {
     const qs = statuts ? `?statuts=${statuts}` : '';
     return request<Array<Record<string, unknown>>>(`/api/demandes${qs}`);
   },
+  create: (body: Record<string, unknown>) =>
+    request<{ success: boolean }>('/api/demandes', { method: 'POST', body: JSON.stringify(body) }),
+  updateStatut: (id: number, body: Record<string, unknown>) =>
+    request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body: JSON.stringify(body) }),
 };
 
 // --- Autres modules ---
