@@ -43,18 +43,18 @@ export default function Sidebar() {
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-64 bg-savia-surface border-r border-savia-border flex flex-col z-40">
       {/* Logo */}
-      <div className="p-4 text-center border-b border-savia-border">
+      <div className="p-3 text-center border-b border-savia-border">
         <div className="flex items-center justify-center">
           <Image
-            src="/logo-savia.svg"
+            src="/logo-savia.png"
             alt="SAVIA"
-            width={130}
-            height={82}
+            width={150}
+            height={95}
             priority
             className="object-contain"
           />
         </div>
-        <div className={`text-xs mt-1 font-semibold ${ROLE_COLOR[user.role] || 'text-savia-text-muted'}`}>
+        <div className={`text-xs mt-0.5 font-semibold ${ROLE_COLOR[user.role] || 'text-savia-text-muted'}`}>
           {user.nom} · {user.role}
         </div>
       </div>
