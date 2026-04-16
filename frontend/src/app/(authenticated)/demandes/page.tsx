@@ -130,13 +130,22 @@ export default function DemandesPage() {
   };
 
   const handleCreate = async () => {
-    if (!form.demandeur || !form.equipement || !form.description) {
-      alert('Veuillez remplir les champs obligatoires : Demandeur, Équipement, Description');
+    // Pour Lecteur : le demandeur est auto-rempli depuis le contexte
+    const formToSend = isLecteur
+      ? { ...form, demandeur: demandeurNom || clientNom, client: clientNom }
+      : form;
+
+    if (!formToSend.equipement || !formToSend.description) {
+      alert('Veuillez remplir les champs obligatoires : Équipement et Description');
+      return;
+    }
+    if (!isLecteur && !formToSend.demandeur) {
+      alert('Veuillez remplir le champ Demandeur');
       return;
     }
     setIsSaving(true);
     try {
-      await demandes.create(form as any);
+      await demandes.create(formToSend as any);
       setShowNewModal(false);
       await loadData();
     } catch (err) {
@@ -331,25 +340,27 @@ export default function DemandesPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Demandeur */}
+                {/* Demandeur — visible seulement pour non-Lecteur */}
+                {!isLecteur && (
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <User className="w-3.5 h-3.5" /> Demandeur *
                   </label>
                   <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
-                    onChange={e => setForm({...form, demandeur: e.target.value})}
-                    readOnly={isLecteur} />
+                    onChange={e => setForm({...form, demandeur: e.target.value})} />
                 </div>
+                )}
                 {/* Client — verrouillé pour Lecteur */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
-                    {isLecteur && <span className="text-xs text-green-400 font-normal">(auto)</span>}
+                    {isLecteur && <span className="text-xs text-savia-accent font-normal ml-1">🔒 {clientNom}</span>}
                   </label>
-                  <input className={`${INPUT_CLS} ${isLecteur ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  {!isLecteur && (
+                  <input className={INPUT_CLS}
                     placeholder="Nom du client" value={form.client}
-                    onChange={e => setForm({...form, client: e.target.value})}
-                    readOnly={isLecteur} />
+                    onChange={e => setForm({...form, client: e.target.value})} />
+                  )}
                 </div>
                 {/* Equipement — liste filtrée pour Lecteur */}
                 <div>
