@@ -366,7 +366,7 @@ export default function SavPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Suivi complet des interventions techniques</p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
           <Plus className="w-4 h-4" /> Nouvelle intervention
         </button>
       </div>

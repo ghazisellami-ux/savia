@@ -853,3 +853,4 @@ export default function SupervisionPage() {
     </div>
   );
 }
+
