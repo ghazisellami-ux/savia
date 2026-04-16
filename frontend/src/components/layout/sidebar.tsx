@@ -6,31 +6,30 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import {
-  BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
+  BarChart3, Monitor, Hospital, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
-  ClipboardCheck, ShieldCheck, Settings, Building, LogOut,
+  ClipboardCheck, Settings, LogOut, Radio,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const NAV_ITEMS = [
-  { key: 'dashboard', label: 'Dashboard', href: '/dashboard', icon: BarChart3 },
-  { key: 'supervision', label: 'Supervision', href: '/supervision', icon: Monitor },
-  { key: 'equipements', label: 'Équipements', href: '/equipements', icon: Hospital },
-  { key: 'predictions', label: 'Prédictions', href: '/predictions', icon: TrendingUp },
-  { key: 'base_connaissances', label: 'Base de Connaissances', href: '/knowledge', icon: BookOpen },
-  { key: 'sav', label: 'SAV & Interventions', href: '/sav', icon: Wrench },
-  { key: 'demandes', label: "Demandes d'Intervention", href: '/demandes', icon: ClipboardList },
-  { key: 'planning', label: 'Planning', href: '/planning', icon: CalendarDays },
-  { key: 'pieces', label: 'Pièces de Rechange', href: '/pieces', icon: Cog },
-  { key: 'reports', label: 'Rapports', href: '/reports', icon: FileText },
-  { key: 'contrats', label: 'Contrats & SLA', href: '/contrats', icon: ClipboardCheck },
-  { key: 'admin', label: 'Administration', href: '/admin', icon: Settings },
-  { key: 'clients_savia', label: 'Clients SAVIA', href: '/clients', icon: Building },
+  { key: 'dashboard',          label: 'Dashboard',                href: '/dashboard',  icon: BarChart3     },
+  { key: 'supervision',        label: 'Supervision',              href: '/supervision', icon: Monitor       },
+  { key: 'equipements',        label: 'Équipements',              href: '/equipements', icon: Hospital      },
+  { key: 'base_connaissances', label: 'Base de Connaissances',   href: '/knowledge',   icon: BookOpen      },
+  { key: 'sav',                label: 'SAV & Interventions',     href: '/sav',         icon: Wrench        },
+  { key: 'demandes',           label: "Demandes d'Intervention", href: '/demandes',    icon: ClipboardList },
+  { key: 'planning',           label: 'Planning',                href: '/planning',    icon: CalendarDays  },
+  { key: 'pieces',             label: 'Pièces de Rechange',      href: '/pieces',      icon: Cog           },
+  { key: 'reports',            label: 'Rapports & Exports',      href: '/reports',     icon: FileText      },
+  { key: 'contrats',           label: 'Contrats & SLA',          href: '/contrats',    icon: ClipboardCheck},
+  { key: 'admin',              label: 'Administration',          href: '/admin',       icon: Settings      },
 ];
 
-const ROLE_EMOJI: Record<string, string> = {
-  Admin: '👑', Manager: '💼', 'Responsable Technique': '🎯',
-  'Gestionnaire de stock': '📦', Technicien: '🔧', Lecteur: '👁️',
+const ROLE_COLOR: Record<string, string> = {
+  Admin: 'text-purple-400', Manager: 'text-purple-400',
+  'Responsable Technique': 'text-blue-400', Technicien: 'text-cyan-400',
+  Gestionnaire: 'text-amber-400', Lecteur: 'text-green-400',
 };
 
 export default function Sidebar() {
@@ -43,11 +42,11 @@ export default function Sidebar() {
     <aside className="fixed left-0 top-0 bottom-0 w-64 bg-savia-surface border-r border-savia-border flex flex-col z-40">
       {/* Logo */}
       <div className="p-4 text-center border-b border-savia-border">
-        <div className="text-2xl font-black gradient-text tracking-tight">
-          📡 SAVIA
+        <div className="flex items-center justify-center gap-2 text-2xl font-black gradient-text tracking-tight">
+          <Radio className="w-6 h-6 text-savia-accent" /> SAVIA
         </div>
-        <div className="text-xs text-savia-text-dim mt-1">
-          {ROLE_EMOJI[user.role] || '❓'} {user.nom} · {user.role}
+        <div className={`text-xs mt-1 font-semibold ${ROLE_COLOR[user.role] || 'text-savia-text-muted'}`}>
+          {user.nom} · {user.role}
         </div>
       </div>
 
