@@ -156,6 +156,12 @@ export const planning = {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return request<Array<Record<string, unknown>>>(`/api/planning?${qs}`);
   },
+  create: (body: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/planning', { method: 'POST', body: JSON.stringify(body) }),
+  updateStatut: (id: number, body: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: (id: number) =>
+    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
 export const knowledge = {
   list: () => request<Array<Record<string, unknown>>>('/api/knowledge'),
