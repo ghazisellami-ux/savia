@@ -95,6 +95,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # --- SAVIA Site — PWA Techniciens (port 3001) ---
+  pwa-site:
+    build:
+      context: ./pwa-site
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - PORT=3001
+      - HOSTNAME=0.0.0.0
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   pgdata:
   minio_data:
