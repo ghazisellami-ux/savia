@@ -154,6 +154,7 @@ export default function AdminPage() {
 
   // Tech modal
   const [showAddTech, setShowAddTech] = useState(false);
+  const [editingTech, setEditingTech] = useState<Technicien | null>(null);
   const [techForm, setTechForm] = useState(emptyTech());
   const [isSavingTech, setIsSavingTech] = useState(false);
   const [techMsg, setTechMsg] = useState('');
@@ -250,9 +251,14 @@ export default function AdminPage() {
     if (!techForm.nom.trim()) return;
     setIsSavingTech(true); setTechMsg('');
     try {
-      await techniciens.create(techForm);
+      if (editingTech) {
+        await techniciens.update(editingTech.id, techForm as any);
+      } else {
+        await techniciens.create(techForm);
+      }
       setTechForm(emptyTech());
       setShowAddTech(false);
+      setEditingTech(null);
       setTechMsg('');
       await load();
     } catch (err: any) {
@@ -260,6 +266,14 @@ export default function AdminPage() {
     } finally { setIsSavingTech(false); }  
   };
   const setT = (k: string, v: string) => setTechForm(f => ({ ...f, [k]: v }));
+
+  const openAddTech = () => { setEditingTech(null); setTechForm(emptyTech()); setTechMsg(''); setShowAddTech(true); };
+  const openEditTech = (t: Technicien) => {
+    setEditingTech(t);
+    setTechForm({ nom: t.nom, prenom: t.prenom, specialite: t.specialite, qualification: t.qualification, niveau_competence: t.niveau_competence || 'Intermédiaire', email: t.email, telephone: t.telephone, telegram_id: t.telegram_id });
+    setTechMsg('');
+    setShowAddTech(true);
+  };
   const handleDeleteTech = async (id: number) => {
     if (!confirm('Supprimer ce technicien ?')) return;
     try { await techniciens.delete(id); await load(); } catch { /* noop */ }
@@ -298,7 +312,7 @@ export default function AdminPage() {
             </button>
           )}
           {tab === 'techs' && (
-            <button onClick={() => { setTechForm(emptyTech()); setTechMsg(''); setShowAddTech(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
+            <button onClick={openAddTech} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
               <Plus className="w-4 h-4" /> Nouveau Technicien
             </button>
           )}
@@ -365,9 +379,11 @@ export default function AdminPage() {
                         <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all" title="Modifier">
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-all" title="Supprimer">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {u.username !== 'admin' && (
+                          <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-all" title="Supprimer">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -460,9 +476,14 @@ export default function AdminPage() {
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${String(t.dispo).toLowerCase().includes('dispo') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>{t.dispo}</span>
                     </td>
                     <td className="py-2.5 px-3">
-                      <button onClick={() => handleDeleteTech(t.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => openEditTech(t)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer" title="Modifier">
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleDeleteTech(t.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -640,7 +661,7 @@ export default function AdminPage() {
           <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-xl shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
               <h2 className="text-lg font-black gradient-text flex items-center gap-2">
-                <Wrench className="w-5 h-5 text-savia-accent" /> Nouveau Technicien
+                <Wrench className="w-5 h-5 text-savia-accent" /> {editingTech ? 'Modifier le technicien' : 'Nouveau Technicien'}
               </h2>
               <button onClick={() => setShowAddTech(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
                 <X className="w-5 h-5" />
@@ -722,7 +743,7 @@ export default function AdminPage() {
               <button onClick={handleSaveTech} disabled={isSavingTech || !techForm.nom.trim()}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
                 {isSavingTech ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {isSavingTech ? 'Enregistrement...' : 'Ajouter le technicien'}
+                {isSavingTech ? 'Enregistrement...' : editingTech ? 'Mettre à jour' : 'Ajouter le technicien'}
               </button>
             </div>
           </div>
