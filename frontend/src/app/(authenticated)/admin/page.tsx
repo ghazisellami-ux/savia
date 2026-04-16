@@ -113,7 +113,10 @@ interface Technicien { id: number; nom: string; specialite: string; qualificatio
 const emptyUser = () => ({
   username: '', password: '', nom_complet: '', email: '', profileId: 'lecteur', client: '', actif: true,
 });
-const emptyTech = { nom: '', prenom: '', specialite: '', qualification: '', email: '', telephone: '' };
+const emptyTech = () => ({
+  nom: '', prenom: '', specialite: '', qualification: '',
+  niveau_competence: 'Intermédiaire', email: '', telephone: '', telegram_id: '',
+});
 
 export default function AdminPage() {
   const [tab, setTab] = useState<'users' | 'profiles' | 'techs'>('users');
