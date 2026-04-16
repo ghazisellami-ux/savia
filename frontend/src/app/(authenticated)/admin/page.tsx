@@ -138,11 +138,13 @@ export default function AdminPage() {
   const [techs, setTechs] = useState<Technicien[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>(DEFAULT_PROFILES);
   const [isLoading, setIsLoading] = useState(true);
+  const [clientsList, setClientsList] = useState<string[]>([]);
 
   // User modal
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userForm, setUserForm] = useState(emptyUser());
+  const [selectedTechId, setSelectedTechId] = useState<number | ''>('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [userMsg, setUserMsg] = useState('');
@@ -158,7 +160,8 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [usersRes, techsRes] = await Promise.all([admin.users(), techniciens.list()]);
+      const [usersRes, techsRes, clientsRes] = await Promise.all([admin.users(), techniciens.list(), clients.list()]);
+      setClientsList((clientsRes as any[]).map((c: any) => c.nom || c.client || '').filter(Boolean));
       setUsers((usersRes as any[]).map((item: any, i: number) => ({
         id: item.id || i + 1,
         username: item.username || '',
@@ -221,11 +224,21 @@ export default function AdminPage() {
     } finally { setIsSavingUser(false); }
   };
 
-  const openAdd = () => { setEditingUser(null); setUserForm(emptyUser()); setUserMsg(''); setShowPassword(false); setShowUserModal(true); };
+  const openAdd = () => {
+    setEditingUser(null);
+    setUserForm(emptyUser());
+    setSelectedTechId('');
+    setUserMsg('');
+    setShowPassword(false);
+    setShowUserModal(true);
+  };
   const openEdit = (u: User) => {
     setEditingUser(u);
     setUserForm({ username: u.username, password: '', nom_complet: u.nom_complet, email: u.email || '', profileId: u.profileId || 'lecteur', client: u.client, actif: u.actif === 1 });
-    setUserMsg(''); setShowPassword(false); setShowUserModal(true);
+    setSelectedTechId('');
+    setUserMsg('');
+    setShowPassword(false);
+    setShowUserModal(true);
   };
   const handleDeleteUser = async (id: number) => {
     if (!confirm('Supprimer cet utilisateur ?')) return;
@@ -498,7 +511,43 @@ export default function AdminPage() {
 
               <div className="border-t border-savia-border" />
 
-              {/* Identifiants */}
+              {/* ── Technicien : sélecteur de tech enregistré ── */}
+              {userForm.profileId === 'technicien' && (
+                <div>
+                  <label className={LABEL}>Lier à un technicien existant *</label>
+                  <select className={INPUT} value={selectedTechId}
+                    onChange={e => {
+                      const id = Number(e.target.value);
+                      setSelectedTechId(id || '');
+                      if (id) {
+                        const t = techs.find(x => x.id === id);
+                        if (t) setUserForm(f => ({ ...f, nom_complet: `${t.nom} ${t.prenom}`.trim(), email: t.email }));
+                      }
+                    }}>
+                    <option value="">— Sélectionner un technicien —</option>
+                    {techs.map(t => (
+                      <option key={t.id} value={t.id}>{t.nom} {t.prenom} — {t.specialite}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* ── Lecteur : sélecteur client obligatoire (avant identifiants) ── */}
+              {userForm.profileId === 'lecteur' && (
+                <div>
+                  <label className={LABEL}>Client associé *</label>
+                  <select className={INPUT} value={userForm.client}
+                    onChange={e => setUserForm(f => ({ ...f, client: e.target.value }))}>
+                    <option value="">— Sélectionner un client —</option>
+                    {clientsList.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  {!userForm.client && <p className="text-xs text-amber-400 mt-1">⚠ Client requis pour le profil Lecteur</p>}
+                </div>
+              )}
+
+              {/* ── Identifiants (toujours visibles) ── */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className={LABEL}>Nom d'utilisateur *</label>
@@ -522,20 +571,17 @@ export default function AdminPage() {
                 <div>
                   <label className={LABEL}>Nom complet</label>
                   <input className={INPUT} placeholder="ex: Jean Dupont" value={userForm.nom_complet}
-                    onChange={e => setUserForm(f => ({ ...f, nom_complet: e.target.value }))} />
+                    onChange={e => setUserForm(f => ({ ...f, nom_complet: e.target.value }))}
+                    readOnly={userForm.profileId === 'technicien' && !!selectedTechId} />
                 </div>
                 <div>
                   <label className={LABEL}>Adresse email</label>
                   <input type="email" className={INPUT} placeholder="ex: j.dupont@savia.tn" value={userForm.email}
-                    onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))} />
+                    onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))}
+                    readOnly={userForm.profileId === 'technicien' && !!selectedTechId} />
                 </div>
-                <div>
-                  <label className={LABEL}>Client (optionnel)</label>
-                  <input className={INPUT} placeholder="ex: CHU Tunis" value={userForm.client}
-                    onChange={e => setUserForm(f => ({ ...f, client: e.target.value }))} />
-                </div>
-                <div className="flex items-end pb-1">
-                  <label className="flex items-center gap-2 cursor-pointer group">
+                <div className="flex items-end pb-1 col-span-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
                     <div onClick={() => setUserForm(f => ({ ...f, actif: !f.actif }))}
                       className={`w-10 h-5 rounded-full transition-all relative ${userForm.actif ? 'bg-savia-accent' : 'bg-savia-surface-hover border border-savia-border'}`}>
                       <div className={`w-4 h-4 rounded-full bg-white absolute top-0.5 transition-all ${userForm.actif ? 'left-5' : 'left-0.5'}`} />
@@ -577,7 +623,8 @@ export default function AdminPage() {
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer">
                 Annuler
               </button>
-              <button onClick={handleSaveUser} disabled={isSavingUser || !userForm.username.trim()}
+              <button onClick={handleSaveUser}
+                disabled={isSavingUser || !userForm.username.trim() || (userForm.profileId === 'lecteur' && !userForm.client)}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 shadow-lg shadow-cyan-500/20">
                 {isSavingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 {isSavingUser ? 'Enregistrement...' : editingUser ? 'Mettre à jour' : 'Créer l\'utilisateur'}
