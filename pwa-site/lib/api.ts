@@ -1,7 +1,8 @@
 // ==========================================
 // 🔌 API Client — SAVIA Site
+// All /api/* calls go through Next.js proxy → backend
 // ==========================================
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE = ''; // Uses Next.js rewrites proxy
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_site_token') : null;
