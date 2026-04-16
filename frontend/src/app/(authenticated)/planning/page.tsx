@@ -8,6 +8,7 @@ import {
   Wrench, CheckCircle, Trash2, X
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 const MONTHS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -51,6 +52,8 @@ const emptyForm = {
 };
 
 export default function PlanningPage() {
+  const { user } = useAuth();
+  const isLecteur = user?.role === 'Lecteur';
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
@@ -216,10 +219,12 @@ export default function PlanningPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Planification et suivi des maintenances préventives</p>
         </div>
+        {!isLecteur && (
         <button onClick={() => { setForm({...emptyForm, date_planifiee: todayStr}); setError(''); setShowAddModal(true); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
           <Plus className="w-4 h-4" /> Planifier une maintenance
         </button>
+        )}
       </div>
 
       {/* KPIs */}
