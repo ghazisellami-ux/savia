@@ -55,6 +55,8 @@ export default function SavPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [ficheFile, setFicheFile] = useState<File | null>(null);
   const [fiches, setFiches] = useState<any[]>([]);
+  const [allPieces, setAllPieces] = useState<any[]>([]);
+  const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
   const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   // Technicien: voir par défaut seulement ses interventions "En cours"
@@ -144,6 +146,10 @@ export default function SavPage() {
 
   useEffect(() => {
     interventions.listFiches().then(setFiches).catch(() => {});
+    // Charger toutes les pièces pour le sélecteur rupture
+    import('@/lib/api').then(({ pieces: piecesApi }) => {
+      piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
+    });
   }, []);
 
 
@@ -170,13 +176,22 @@ export default function SavPage() {
     if (!selectedIntervention) return;
     setIsSaving(true);
     try {
-      await interventions.update(selectedIntervention.id, {
+      const payload: any = {
         statut: statusForm.statut,
         probleme: statusForm.probleme,
         cause: statusForm.cause,
         solution: statusForm.solution,
         duree_minutes: Number(statusForm.duree_minutes) || selectedIntervention.duree_minutes,
-      });
+      };
+      // Envoyer les pièces en rupture sélectionnées pour générer des notifications
+      if (statusForm.statut.toLowerCase().includes('attente') && statusForm.statut.toLowerCase().includes('pi')) {
+        payload.pieces_rupture = rupturePieces.map((p: any) => ({
+          reference: p.reference || '',
+          designation: p.designation || p.nom || '',
+          ref: p.reference || '',
+        }));
+      }
+      await interventions.update(selectedIntervention.id, payload);
       // Upload fiche photo si clôture + fichier sélectionné
       if (statusForm.statut.toLowerCase().includes('tur') && ficheFile) {
         try {
@@ -186,6 +201,7 @@ export default function SavPage() {
         }
       }
       setFicheFile(null);
+      setRupturePieces([]);
       setShowStatusModal(false);
       setSelectedIntervention(null);
       await loadData();
@@ -1056,9 +1072,63 @@ export default function SavPage() {
       <Modal isOpen={showStatusModal} onClose={() => setShowStatusModal(false)} title={`Modifier — ${selectedIntervention?.machine || ''}`} size="lg">
         <div className="space-y-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Activity className="w-3.5 h-3.5" /> Statut</label>
-            <select className={INPUT_CLS} value={statusForm.statut} onChange={e => setStatusForm({...statusForm, statut: e.target.value})}>
-              <option>En cours</option><option>Clôturée</option><option>Planifiée</option>
+            <select className={INPUT_CLS} value={statusForm.statut} onChange={e => {
+              setStatusForm({...statusForm, statut: e.target.value});
+              setRupturePieces([]); // reset pièces sélectionnées si on change de statut
+            }}>
+              <option>En cours</option>
+              <option>En attente de pièce</option>
+              <option>Clôturée</option>
+              <option>Planifiée</option>
             </select></div>
+          {/* Sélecteur pièces en rupture si statut = En attente de pièce */}
+          {statusForm.statut === 'En attente de pièce' && (() => {
+            const piecesRupture = allPieces.filter((p: any) => Number(p.stock_actuel ?? 0) <= 0);
+            return (
+              <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-3">
+                <label className="block text-sm font-semibold text-orange-400 mb-2 flex items-center gap-1.5">
+                  <span>⚠️</span> Pièces en rupture de stock requises
+                  <span className="text-xs font-normal text-savia-text-muted ml-1">(sélectionnez celles qu'il vous faut)</span>
+                </label>
+                {piecesRupture.length === 0 ? (
+                  <p className="text-xs text-savia-text-muted italic">Aucune pièce en rupture de stock actuellement.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {piecesRupture.map((p: any) => {
+                      const isSelected = rupturePieces.some((r: any) => r.reference === p.reference);
+                      return (
+                        <label key={p.reference} className={`flex items-center gap-2 cursor-pointer p-2 rounded-lg transition-colors ${
+                          isSelected ? 'bg-orange-500/20 border border-orange-500/50' : 'hover:bg-savia-surface-hover'
+                        }`}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setRupturePieces(prev => [...prev, p]);
+                              } else {
+                                setRupturePieces(prev => prev.filter((r: any) => r.reference !== p.reference));
+                              }
+                            }}
+                            className="accent-orange-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-savia-text truncate">{p.designation || p.nom}</div>
+                            <div className="text-xs text-savia-text-muted">{p.reference} · Stock: <span className="text-red-400 font-bold">{p.stock_actuel ?? 0}</span></div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                {rupturePieces.length > 0 && (
+                  <div className="mt-2 text-xs text-orange-300 font-medium">
+                    ✅ {rupturePieces.length} pièce(s) sélectionnée(s) → notification envoyée au gestionnaire
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Problème identifié</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.probleme} onChange={e => setStatusForm({...statusForm, probleme: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>

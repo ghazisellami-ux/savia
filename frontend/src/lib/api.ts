@@ -152,6 +152,14 @@ export const pieces = {
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
 };
 
+// --- Notifications ---
+export const notifications = {
+  list: () => request<Array<Record<string, unknown>>>('/api/notifications'),
+  count: () => request<{ count: number }>('/api/notifications/count'),
+  markRead: (id: number) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'PATCH' }),
+  markDone: (id: number) => request<{ ok: boolean }>(`/api/notifications/${id}/done`, { method: 'PATCH' }),
+};
+
 // --- Demandes ---
 export const demandes = {
   list: (statuts?: string) => {
@@ -240,4 +248,4 @@ export const logs = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
