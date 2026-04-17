@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '@/lib/auth-context';
+import { useEffect, useState, useCallback } from 'react';
 import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
@@ -36,9 +37,58 @@ const ROLE_COLOR: Record<string, string> = {
   Gestionnaire: 'text-amber-400', Lecteur: 'text-green-400',
 };
 
+// Rôles qui reçoivent les notifications de nouvelles demandes
+const NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire'];
+const LAST_SEEN_KEY = 'demandes_last_seen';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, hasPermission } = useAuth();
+  const [newDemandesCount, setNewDemandesCount] = useState(0);
+
+  const canSeeNotif = !!(user && NOTIF_ROLES.includes(user.role));
+
+  // Compte les nouvelles demandes depuis la dernière visite
+  const fetchNewCount = useCallback(async () => {
+    if (!canSeeNotif) return;
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+      if (!token) return;
+      const res = await fetch(`${API_BASE}/api/demandes`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data: any[] = await res.json();
+      const lastSeen = typeof window !== 'undefined' ? localStorage.getItem(LAST_SEEN_KEY) : null;
+      const lastSeenDate = lastSeen ? new Date(lastSeen) : new Date(0);
+      const newCount = data.filter((d: any) => {
+        const isNew = new Date(d.date_demande) > lastSeenDate;
+        const isPending = !d.statut || ['En attente', 'Nouvelle', ''].includes(d.statut);
+        return isNew && isPending;
+      }).length;
+      setNewDemandesCount(newCount);
+    } catch {
+      // silencieux
+    }
+  }, [canSeeNotif]);
+
+  // Poll toutes les 30 secondes
+  useEffect(() => {
+    fetchNewCount();
+    const interval = setInterval(fetchNewCount, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchNewCount]);
+
+  // Quand on arrive sur /demandes, marquer comme vu et effacer le badge
+  useEffect(() => {
+    if (pathname === '/demandes') {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString());
+      }
+      setNewDemandesCount(0);
+    }
+  }, [pathname]);
 
   if (!user) return null;
 
@@ -68,6 +118,7 @@ export default function Sidebar() {
         {visibleItems.map((item) => {
           const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
           const Icon = item.icon;
+          const showBadge = item.key === 'demandes' && canSeeNotif && newDemandesCount > 0;
           return (
             <Link
               key={item.key}
@@ -80,7 +131,12 @@ export default function Sidebar() {
               )}
             >
               <Icon className={clsx('w-4 h-4 flex-shrink-0', isActive ? 'text-savia-accent' : '')} />
-              <span className="truncate">{item.label}</span>
+              <span className="truncate flex-1">{item.label}</span>
+              {showBadge && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center animate-pulse shadow-lg shadow-red-500/40">
+                  {newDemandesCount > 99 ? '99+' : newDemandesCount}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -89,9 +145,12 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="p-3 border-t border-savia-border">
         <button
-          onClick={() => { localStorage.removeItem('savia_token'); localStorage.removeItem('savia_user'); window.location.href = '/login'; }}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-savia-text-muted
-                     hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+          onClick={() => {
+            localStorage.removeItem('savia_token');
+            localStorage.removeItem('savia_user');
+            window.location.href = '/login';
+          }}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-savia-text-muted hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
         >
           <LogOut className="w-4 h-4" />
           Déconnexion
