@@ -566,17 +566,6 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 @app.post("/api/interventions/{intervention_id}/fiche")
 async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Upload la photo de la fiche signée pour une intervention clôturée."""
-    # Migration colonnes si nécessaire
-    with get_db() as conn:
-        try:
-            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_nom TEXT DEFAULT ''")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_data BYTEA")
-        except Exception:
-            pass
-
     contents = await file.read()
     with get_db() as conn:
         conn.execute(
@@ -585,6 +574,26 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
         )
     logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
     return {"ok": True, "filename": file.filename}
+
+
+@app.post("/api/interventions/{intervention_id}/photo")
+async def upload_photo_alias(intervention_id: int,
+                             photo: UploadFile = File(None),
+                             file: UploadFile = File(None),
+                             user: dict = Depends(_verify_token)):
+    """Alias /photo → /fiche pour compatibilité avec l'ancien api_server.py (Streamlit).
+    Accepte le champ 'photo' ou 'file'."""
+    upload = photo or file
+    if not upload:
+        raise HTTPException(status_code=400, detail="Aucun fichier fourni")
+    contents = await upload.read()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            (upload.filename, contents, intervention_id)
+        )
+    logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
+    return {"ok": True, "message": "Photo enregistrée", "filename": upload.filename}
 
 
 @app.get("/api/interventions/{intervention_id}/fiche")

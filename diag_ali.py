@@ -1,43 +1,35 @@
 import psycopg2
 import psycopg2.extras
 import os
+import requests
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-# 1. Toutes les interventions Ali Dridi du 17/04/2026
-print("=== Interventions Ali Dridi aujourd'hui ===")
+# Derniere intervention cloturee d'Ali Dridi
 cur.execute("""
-    SELECT id, statut, machine, technicien, description, notes, date
+    SELECT id, statut, machine, technicien, fiche_photo_nom,
+           CASE WHEN fiche_photo_data IS NOT NULL THEN length(fiche_photo_data) ELSE 0 END as photo_bytes
     FROM interventions
-    WHERE technicien ILIKE '%ali%dridi%'
-    ORDER BY id DESC
+    WHERE (statut ILIKE '%clotur%' OR statut ILIKE '%termin%')
+      AND technicien ILIKE '%ali%dridi%'
+    ORDER BY id DESC LIMIT 5
 """)
-for r in cur.fetchall():
+rows = cur.fetchall()
+print("=== Interventions cloturees Ali Dridi ===")
+for r in rows:
     print(dict(r))
 
-# 2. Compter les doublons "Scanner CT Philips"
-print("\n=== Doublons Scanner CT Philips ===")
-cur.execute("""
-    SELECT id, date, machine, technicien, statut, notes
-    FROM interventions
-    WHERE machine ILIKE '%scanner ct philips%'
-    ORDER BY id DESC
-""")
-for r in cur.fetchall():
-    print(dict(r))
-
-# 3. Etat demandes_intervention et leurs intervention_id
-print("\n=== Demandes et leurs intervention_id ===")
-cur.execute("""
-    SELECT id, client, equipement, technicien_assigne, statut, intervention_id
-    FROM demandes_intervention
-    WHERE technicien_assigne ILIKE '%ali%dridi%'
-    ORDER BY id DESC
-""")
-for r in cur.fetchall():
-    print(dict(r))
+# Tester l'api GET /api/interventions/fiches
+print("\n=== Test GET /api/interventions/fiches via HTTP ===")
+try:
+    r = requests.get("http://localhost:8000/api/interventions/fiches", 
+                     headers={"Authorization": "Bearer test"}, timeout=5)
+    print(f"Status: {r.status_code}")
+    print(f"Response: {r.text[:500]}")
+except Exception as e:
+    print(f"Erreur: {e}")
 
 cur.close()
 conn.close()
