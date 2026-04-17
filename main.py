@@ -685,43 +685,49 @@ def get_demandes(
 def create_demande(body: dict, user: dict = Depends(_verify_token)):
     from db_engine import get_db
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    demandeur  = body.get("demandeur") or user.get("username", "")
-    client     = body.get("client") or ""
-    equipement = body.get("equipement") or ""
-    urgence    = body.get("urgence") or "Moyenne"
-    description = body.get("description") or ""
-    code_erreur = body.get("code_erreur") or ""
-    contact_nom = body.get("contact_nom") or ""
-    contact_tel = body.get("contact_tel") or ""
+    demandeur          = body.get("demandeur") or user.get("username", "")
+    client             = body.get("client") or ""
+    equipement         = body.get("equipement") or ""
+    urgence            = body.get("urgence") or "Moyenne"
+    description        = body.get("description") or ""
+    code_erreur        = body.get("code_erreur") or ""
+    contact_nom        = body.get("contact_nom") or ""
+    contact_tel        = body.get("contact_tel") or ""
+    technicien_assigne = body.get("technicien_assigne") or ""
+    # Si technicien assigné dès la création → statut "Assignée"
+    statut = body.get("statut") or ("Assignée" if technicien_assigne else "En attente")
 
     with get_db() as conn:
         conn.execute("""
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence,
-               description, code_erreur, contact_nom, contact_tel, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               description, code_erreur, contact_nom, contact_tel,
+               statut, technicien_assigne)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence,
             description, code_erreur, contact_nom, contact_tel,
-            body.get("statut") or "En attente",
+            statut, technicien_assigne,
         ))
 
     # --- Notification Telegram ---
     urg_icon = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
     contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
     code_line    = f"\n\U0001f522 Code erreur : <code>{code_erreur}</code>" if code_erreur else ""
+    tech_line    = f"\n\U0001f477 Assigné à : <b>{technicien_assigne}</b>" if technicien_assigne else ""
     msg = (
         f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
-        f"\U0001f3e5 \u00c9quipement : <b>{equipement}</b>\n"
+        f"\U0001f3e5 Équipement : <b>{equipement}</b>\n"
         f"{urg_icon} Urgence : <b>{urgence}</b>\n"
-        f"\U0001f4dd Probl\u00e8me : {description[:300]}"
+        f"\U0001f4dd Problème : {description[:300]}"
         f"{code_line}"
-        f"{contact_line}\n"
+        f"{contact_line}"
+        f"{tech_line}\n"
         f"\U0001f464 Demandeur : <b>{demandeur}</b>\n"
         f"\U0001f550 Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-        f"\U0001f449 Connectez-vous \u00e0 <b>SAVIA</b> pour traiter cette demande."
+        f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
 
