@@ -457,14 +457,17 @@ def get_interventions(
     df = lire_interventions(machine=machine)
     # Si le user est un Technicien → filtrer automatiquement ses interventions
     if user.get("role") == "Technicien" and not df.empty:
-        user_nom = (user.get("nom") or "").strip()
-        user_prenom = (user.get("prenom") or "").strip()
-        # Cherche par nom complet ou nom seul dans le champ technicien
-        search_terms = [t.lower() for t in [user_nom, user_prenom] if t]
-        if search_terms and "technicien" in df.columns:
+        user_nom_complet = (user.get("nom") or "").strip()
+        # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
+        # Gère "Dridi Ali" vs "Ali Dridi" et autres variations d'ordre
+        name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+        if name_words and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
-                lambda t: any(term in t.lower() for term in search_terms)
+                lambda t: all(word in t.lower() for word in name_words)
             )]
+        elif not name_words:
+            # Aucun nom disponible → ne rien filtrer (afficher tout)
+            pass
     elif technicien and not df.empty and "technicien" in df.columns:
         words = technicien.lower().split()
         df = df[df["technicien"].astype(str).apply(
