@@ -105,6 +105,11 @@ export const interventions = {
   },
   listFiches: () =>
     request<Array<Record<string, unknown>>>('/api/interventions/fiches'),
+  updateFicheValidation: (id: number, validation: string) =>
+    request<{ ok: boolean; validation: string }>(`/api/interventions/${id}/fiche-validation`, {
+      method: 'PATCH',
+      body: { validation },
+    }),
 };
 
 // --- Équipements ---
