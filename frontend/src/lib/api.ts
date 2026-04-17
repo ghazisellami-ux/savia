@@ -114,7 +114,10 @@ export const interventions = {
 
 // --- Équipements ---
 export const equipements = {
-  list: () => request<Array<Record<string, unknown>>>('/api/equipements'),
+  list: (client?: string) => {
+    const qs = client ? `?client=${encodeURIComponent(client)}` : '';
+    return request<Array<Record<string, unknown>>>(`/api/equipements${qs}`);
+  },
   create: (data: Record<string, unknown>) => request<{ok: boolean; id: number | null}>('/api/equipements', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
