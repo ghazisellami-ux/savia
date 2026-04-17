@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
+import { useAuth } from '@/lib/auth-context';
 
 interface Intervention {
   id: number;
@@ -48,12 +49,16 @@ const MONTHS = [
 ];
 
 export default function SavPage() {
+  const { user } = useAuth();
+  const isTechnicien = user?.role === 'Technicien';
+
   const [activeTab, setActiveTab] = useState(0);
   const [ficheFile, setFicheFile] = useState<File | null>(null);
   const [fiches, setFiches] = useState<any[]>([]);
   const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [filterStatut, setFilterStatut] = useState('Tous');
+  // Technicien: voir par défaut seulement ses interventions "En cours"
+  const [filterStatut, setFilterStatut] = useState(isTechnicien ? 'En cours' : 'Tous');
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterEquip, setFilterEquip] = useState('Tous');
@@ -383,17 +388,41 @@ export default function SavPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-black gradient-text flex items-center gap-3">
-            <Wrench className="w-7 h-7" /> SAV & Interventions
+            <Wrench className="w-7 h-7" /> SAV &amp; Interventions
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Suivi complet des interventions techniques</p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
-          <Plus className="w-4 h-4" /> Nouvelle intervention
-        </button>
+        {!isTechnicien && (
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
+            <Plus className="w-4 h-4" /> Nouvelle intervention
+          </button>
+        )}
       </div>
 
-      {/* Period Filter Bar (Mensuel / Annuel) */}
-      <div className="glass rounded-xl p-4 space-y-3">
+      {/* Bandeau Technicien */}
+      {isTechnicien && (
+        <div className="glass rounded-xl px-4 py-3 border border-savia-accent/20 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2 text-sm text-savia-accent">
+            <Wrench className="w-4 h-4" />
+            <span>Vos interventions assignées —
+              <strong className="ml-1">{data.filter(i => i.statut.toLowerCase().includes('cours')).length} en cours</strong>
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setFilterStatut('En cours')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                filterStatut === 'En cours' ? 'bg-savia-accent text-white' : 'bg-savia-surface border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+              }`}>En cours</button>
+            <button onClick={() => setFilterStatut('Tous')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
+                filterStatut === 'Tous' ? 'bg-savia-accent text-white' : 'bg-savia-surface border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+              }`}>Tout l&apos;historique</button>
+          </div>
+        </div>
+      )}
+
+      {/* Period Filter Bar — masqué pour Technicien */}
+      {!isTechnicien && <div className="glass rounded-xl p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
           {/* Period Mode Toggle */}
           <div>
@@ -465,7 +494,7 @@ export default function SavPage() {
             | {filtered.length} intervention{filtered.length > 1 ? 's' : ''}
           </span>
         </div>
-      </div>
+      </div>}
 
       {/* KPIs Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
