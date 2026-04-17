@@ -1941,8 +1941,10 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         total_cout_pieces = 0.0
         if pieces_a_deduire:
             for p in pieces_a_deduire:
-                ref = p['ref']
-                qty = p['qty']
+                if not isinstance(p, dict):
+                    continue
+                ref = p.get('ref') or p.get('reference') or ''
+                qty = int(p.get('qty') or p.get('quantite') or 0)
                 prix = float(p.get('prix_unitaire', 0) or 0)
                 if qty > 0:
                     print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}")

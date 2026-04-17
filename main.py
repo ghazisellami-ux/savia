@@ -474,15 +474,30 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
 def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
-        ok, msg = cloturer_intervention(
-            intervention_id,
-            body.get("probleme", ""),
-            body.get("cause", ""),
-            body.get("solution", ""),
-            pieces_a_deduire=body.get("pieces_a_deduire", []),
-            duree_minutes=body.get("duree_minutes", 0),
-        )
-        return {"ok": ok, "message": msg}
+        # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref'
+        raw_pieces = body.get("pieces_a_deduire") or []
+        if not isinstance(raw_pieces, list):
+            raw_pieces = []
+        # Filtrer les entrées invalides (sans clé 'ref')
+        pieces_valides = [p for p in raw_pieces if isinstance(p, dict) and p.get("ref")]
+
+        try:
+            ok, msg = cloturer_intervention(
+                intervention_id,
+                body.get("probleme", ""),
+                body.get("cause", ""),
+                body.get("solution", ""),
+                pieces_a_deduire=pieces_valides if pieces_valides else None,
+                duree_minutes=body.get("duree_minutes", 0),
+            )
+            if not ok:
+                raise HTTPException(status_code=400, detail=msg)
+            return {"ok": True, "message": msg}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erreur clôture intervention #{intervention_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Erreur lors de la clôture: {str(e)}")
     if new_statut:
         update_intervention_statut(intervention_id, new_statut)
     # Update other fields
