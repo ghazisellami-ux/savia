@@ -1,35 +1,34 @@
 import psycopg2
 import psycopg2.extras
 import os
-import requests
+import json
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-# Derniere intervention cloturee d'Ali Dridi
+# Tester la sous-requete exacte
 cur.execute("""
-    SELECT id, statut, machine, technicien, fiche_photo_nom,
-           CASE WHEN fiche_photo_data IS NOT NULL THEN length(fiche_photo_data) ELSE 0 END as photo_bytes
-    FROM interventions
-    WHERE (statut ILIKE '%clotur%' OR statut ILIKE '%termin%')
-      AND technicien ILIKE '%ali%dridi%'
-    ORDER BY id DESC LIMIT 5
+    SELECT i.*,
+           (SELECT e.client FROM equipements e
+            WHERE LOWER(e.nom) = LOWER(i.machine)
+            LIMIT 1) AS client
+    FROM interventions i
+    ORDER BY i.date DESC LIMIT 3
 """)
 rows = cur.fetchall()
-print("=== Interventions cloturees Ali Dridi ===")
-for r in rows:
-    print(dict(r))
-
-# Tester l'api GET /api/interventions/fiches
-print("\n=== Test GET /api/interventions/fiches via HTTP ===")
-try:
-    r = requests.get("http://localhost:8000/api/interventions/fiches", 
-                     headers={"Authorization": "Bearer test"}, timeout=5)
-    print(f"Status: {r.status_code}")
-    print(f"Response: {r.text[:500]}")
-except Exception as e:
-    print(f"Erreur: {e}")
+print(f"Rows count: {len(rows)}")
+if rows:
+    r = dict(rows[0])
+    print("Colonnes:", list(r.keys()))
+    for k, v in r.items():
+        t = type(v).__name__
+        print(f"  {k}: type={t}, val={repr(v)[:60]}")
+        # Test JSON
+        try:
+            json.dumps(v, default=str)
+        except Exception as e:
+            print(f"    !! JSON ERROR: {e}")
 
 cur.close()
 conn.close()
