@@ -1054,12 +1054,23 @@ def lire_tous_documents_techniques():
 # ==========================================
 
 def lire_interventions(machine=None):
-    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via sous-requête."""
+    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via sous-requête.
+    Note: fiche_photo_data (BYTEA) est exclu intentionnellement pour éviter les erreurs de sérialisation JSON.
+    Utiliser GET /api/interventions/{id}/fiche pour télécharger la photo."""
     with get_db() as conn:
         # Sous-requête LIMIT 1 au lieu de LEFT JOIN → évite la multiplication des lignes
-        # quand le même nom de machine existe chez plusieurs clients
+        # quand le même nom de machine existe chez plusieurs clients.
+        # fiche_photo_data exclu car type memoryview non sérialisable JSON.
         base_query = """
-            SELECT i.*,
+            SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
+                   i.description, i.probleme, i.cause, i.solution,
+                   i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
+                   i.code_erreur, i.statut, i.notes,
+                   i.date_debut_intervention, i.date_cloture,
+                   i.type_erreur, i.priorite,
+                   COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
+                   COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
+                   (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
                    (SELECT e.client FROM equipements e
                     WHERE LOWER(e.nom) = LOWER(i.machine)
                     LIMIT 1) AS client
@@ -1081,6 +1092,7 @@ def lire_interventions(machine=None):
             lambda s: "Cloturee" if "tur" in str(s).lower() else str(s)
         )
     return df
+
 
 
 def ajouter_intervention(intervention_dict):
