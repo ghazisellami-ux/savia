@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Search, Clock, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
@@ -65,8 +65,9 @@ export default function DemandesPage() {
 
   // All clients list (for Admin/Manager/Resp. Tech.)
   const [allClients, setAllClients] = useState<string[]>([]);
-  // All equipments with their client association
-  const [allEquipsRaw, setAllEquipsRaw] = useState<{ nom: string; client: string }[]>([]);
+  // Equipments for the selected client (loaded on client change via API)
+  const [filteredEquips, setFilteredEquips] = useState<string[]>([]);
+  const [equipsLoading, setEquipsLoading] = useState(false);
   const [techs, setTechs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -80,27 +81,13 @@ export default function DemandesPage() {
   const [selectedDemande, setSelectedDemande] = useState<Demande | null>(null);
   const [updateForm, setUpdateForm] = useState({ statut: '', technicien_assigne: '', notes_traitement: '' });
 
-  // Equipments filtered by selected client (for non-Lecteur, reactive on client change)
-  const filteredEquips = useMemo(() => {
-    if (isLecteur) {
-      return allEquipsRaw
-        .filter(e => e.client.toLowerCase() === clientNom.toLowerCase())
-        .map(e => e.nom)
-        .filter(Boolean);
-    }
-    if (!form.client) return allEquipsRaw.map(e => e.nom).filter(Boolean);
-    return allEquipsRaw
-      .filter(e => e.client.toLowerCase() === form.client.toLowerCase())
-      .map(e => e.nom)
-      .filter(Boolean);
-  }, [allEquipsRaw, form.client, isLecteur, clientNom]);
-
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       const [res, eqRes, techRes, clientRes] = await Promise.all([
         demandes.list(),
-        equipements.list().catch(() => []),
+        // For Lecteur: pre-load their client's equipment
+        isLecteur ? equipements.list(clientNom) : equipements.list(),
         techApi.list().catch(() => []),
         clientsApi.list().catch(() => []),
       ]);
@@ -121,16 +108,15 @@ export default function DemandesPage() {
       }));
       setData(mapped);
 
-      // Parse equipments with client
-      const rawEquips = (eqRes as any[]).map((e: any) => ({
-        nom: e.Nom || e.nom || '',
-        client: e.Client || e.client || '',
-      }));
-      setAllEquipsRaw(rawEquips);
+      // For Lecteur: set their pre-filtered equipment list
+      if (isLecteur) {
+        const lecteurEquips = (eqRes as any[]).map((e: any) => e.Nom || e.nom || '').filter(Boolean);
+        setFilteredEquips(lecteurEquips);
+      }
 
-      // Parse clients list
+      // Parse clients list (for non-Lecteur dropdowns)
       const clientNames = (clientRes as any[])
-        .map((c: any) => c.Nom || c.nom || c.name || c.raison_sociale || '')
+        .map((c: any) => c.nom || c.Nom || c.name || '')
         .filter(Boolean)
         .sort();
       setAllClients(clientNames);
@@ -142,9 +128,24 @@ export default function DemandesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isLecteur, clientNom]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // When selected client changes (non-Lecteur): load equipment from API for that client
+  useEffect(() => {
+    if (isLecteur || !form.client) {
+      if (!isLecteur) setFilteredEquips([]);
+      return;
+    }
+    setEquipsLoading(true);
+    equipements.list(form.client)
+      .then((res: any[]) => {
+        setFilteredEquips(res.map((e: any) => e.Nom || e.nom || '').filter(Boolean));
+      })
+      .catch(() => setFilteredEquips([]))
+      .finally(() => setEquipsLoading(false));
+  }, [form.client, isLecteur]);
 
   const openNewModal = () => {
     setForm({ ...emptyForm });
@@ -398,27 +399,30 @@ export default function DemandesPage() {
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Server className="w-3.5 h-3.5" /> Équipement concerné *
-                    {!isLecteur && form.client && (
-                      <span className="text-xs font-normal text-savia-accent">
-                        ({filteredEquips.length} disponible{filteredEquips.length !== 1 ? 's' : ''})
-                      </span>
-                    )}
+                    {equipsLoading && <Loader2 className="w-3 h-3 animate-spin text-savia-accent" />}
                   </label>
                   <select
                     className={INPUT_CLS}
                     value={form.equipement}
                     onChange={e => setForm({...form, equipement: e.target.value})}
-                    disabled={!isLecteur && !form.client}
+                    disabled={(!isLecteur && !form.client) || equipsLoading}
                   >
                     <option value="">
-                      {!isLecteur && !form.client
-                        ? '← Choisir un client d\'abord'
-                        : '— Sélectionner un équipement —'}
+                      {equipsLoading
+                        ? 'Chargement...'
+                        : (!isLecteur && !form.client)
+                          ? '← Choisir un client d\'abord'
+                          : '— Sélectionner un équipement —'}
                     </option>
                     {filteredEquips.map(e => (
                       <option key={e} value={e}>{e}</option>
                     ))}
                   </select>
+                  {!isLecteur && form.client && !equipsLoading && (
+                    <p className="text-xs text-savia-text-muted mt-1 pl-1">
+                      {filteredEquips.length} équipement{filteredEquips.length !== 1 ? 's' : ''} disponible{filteredEquips.length !== 1 ? 's' : ''}
+                    </p>
+                  )}
                 </div>
 
                 {/* Code erreur */}

@@ -359,9 +359,10 @@ def get_health_scores(
 # ==========================================
 
 @app.get("/api/equipements")
-def get_equipements(user: dict = Depends(_verify_token)):
+def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     df = lire_equipements()
-    client_filter = _get_client_filter(user)
+    # Priority: explicit ?client= param, then user's client filter
+    client_filter = client or _get_client_filter(user)
     if client_filter and not df.empty and "Client" in df.columns:
         df = df[df["Client"].astype(str).str.lower() == client_filter.lower()]
     return _df_to_records(df)
