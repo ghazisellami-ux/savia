@@ -85,6 +85,26 @@ export const interventions = {
     request<{ ok: boolean; message: string }>('/api/interventions', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean; message: string }>(`/api/interventions/${id}`, { method: 'PUT', body: data }),
+
+  // Fiche signée
+  uploadFiche: async (id: number, file: File): Promise<{ ok: boolean; filename: string }> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json();
+  },
+  downloadFicheUrl: (id: number): string => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
+    return `${API_BASE}/api/interventions/${id}/fiche?token=${token}`;
+  },
+  listFiches: () =>
+    request<Array<Record<string, unknown>>>('/api/interventions/fiches'),
 };
 
 // --- Équipements ---

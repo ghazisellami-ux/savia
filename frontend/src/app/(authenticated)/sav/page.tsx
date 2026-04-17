@@ -8,7 +8,7 @@ import {
   ChevronUp, Edit, Calendar, BarChart3, Timer, Wallet, Activity, Target,
   ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
-  Filter, CalendarDays, CalendarRange
+  Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
 
@@ -48,6 +48,9 @@ const MONTHS = [
 
 export default function SavPage() {
   const [activeTab, setActiveTab] = useState(0);
+  const [ficheFile, setFicheFile] = useState<File | null>(null);
+  const [fiches, setFiches] = useState<any[]>([]);
+  const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('Tous');
   const [filterType, setFilterType] = useState('Tous');
@@ -133,6 +136,12 @@ export default function SavPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Charger les fiches au montage
+  useEffect(() => {
+    interventions.listFiches().then(setFiches).catch(() => {});
+  }, []);
+
+
   const handleSave = async () => {
     if (!form.machine.trim()) return;
     setIsSaving(true);
@@ -163,9 +172,20 @@ export default function SavPage() {
         solution: statusForm.solution,
         duree_minutes: Number(statusForm.duree_minutes) || selectedIntervention.duree_minutes,
       });
+      // Upload fiche photo si clôture + fichier sélectionné
+      if (statusForm.statut.toLowerCase().includes('tur') && ficheFile) {
+        try {
+          await interventions.uploadFiche(selectedIntervention.id, ficheFile);
+        } catch (fe) {
+          console.error('Erreur upload fiche:', fe);
+        }
+      }
+      setFicheFile(null);
       setShowStatusModal(false);
       setSelectedIntervention(null);
       await loadData();
+      // Rafraîchir les fiches
+      interventions.listFiches().then(setFiches).catch(() => {});
     } catch (err) {
       console.error("Status update failed", err);
     } finally {
@@ -350,6 +370,7 @@ export default function SavPage() {
     { icon: <Wallet className="w-4 h-4" />, label: 'Charge Financière' },
     { icon: <FileText className="w-4 h-4" />, label: 'Rapport PDF' },
     { icon: <Sparkles className="w-4 h-4" />, label: 'Analyse IA' },
+    { icon: <Camera className="w-4 h-4" />, label: 'Fiches Signées' },
   ];
 
   if (isLoading) {
@@ -1013,6 +1034,35 @@ export default function SavPage() {
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (min)</label><input type="number" className={INPUT_CLS} value={statusForm.duree_minutes} onChange={e => setStatusForm({...statusForm, duree_minutes: e.target.value})} /></div>
+          {/* Upload fiche signée si clôture */}
+          {statusForm.statut.toLowerCase().includes('tur') && (
+            <div>
+              <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
+                <Camera className="w-3.5 h-3.5" /> Photo fiche signée <span className="text-xs text-savia-text-muted/60">(optionnel)</span>
+              </label>
+              <div
+                className="border-2 border-dashed border-savia-border/50 rounded-lg p-4 text-center cursor-pointer hover:border-savia-accent/50 transition-colors"
+                onClick={() => document.getElementById('fiche-upload')?.click()}
+              >
+                {ficheFile ? (
+                  <div className="flex items-center justify-center gap-2 text-green-400">
+                    <CheckCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium">{ficheFile.name}</span>
+                    <button onClick={e => { e.stopPropagation(); setFicheFile(null); }} className="ml-2 text-red-400 hover:text-red-300">
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-savia-text-muted">
+                    <Upload className="w-6 h-6 mx-auto mb-1 opacity-50" />
+                    <p className="text-xs">Cliquez pour sélectionner une photo (JPG, PNG, PDF)</p>
+                  </div>
+                )}
+              </div>
+              <input id="fiche-upload" type="file" accept="image/*,.pdf" className="hidden"
+                onChange={e => setFicheFile(e.target.files?.[0] || null)} />
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-savia-border/30">
           <button onClick={() => setShowStatusModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">Annuler</button>
@@ -1021,7 +1071,104 @@ export default function SavPage() {
           </button>
         </div>
       </Modal>
+      {/* === ONGLET 5 : FICHES SIGNÉES === */}
+      {activeTab === 5 && (
+        <SectionCard>
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center">
+                <Camera className="w-5 h-5 text-green-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-savia-text">Fiches d'Intervention Signées</h3>
+                <p className="text-xs text-savia-text-muted">{fiches.length} interventions clôturées</p>
+              </div>
+            </div>
+          </div>
 
+          {fiches.length === 0 ? (
+            <div className="text-center py-16 text-savia-text-muted">
+              <Camera className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Aucune fiche signée enregistrée</p>
+              <p className="text-xs mt-1 opacity-60">Les fiches apparaissent ici lors de la clôture d’une intervention</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {fiches.map((f: any) => (
+                <div key={f.id} className="bg-savia-surface-hover rounded-xl border border-savia-border/40 overflow-hidden hover:border-savia-accent/40 transition-all group">
+                  {/* Photo ou placeholder */}
+                  <div className="relative h-40 bg-savia-surface flex items-center justify-center">
+                    {f.has_fiche ? (
+                      <img
+                        src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/interventions/${f.id}/fiche?token=${typeof window !== 'undefined' ? localStorage.getItem('savia_token') : ''}`}
+                        alt={`Fiche #${f.id}`}
+                        className="w-full h-full object-cover"
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <div className="text-center text-savia-text-muted">
+                        <ImageOff className="w-8 h-8 mx-auto mb-1 opacity-30" />
+                        <p className="text-xs opacity-50">Pas de fiche</p>
+                      </div>
+                    )}
+                    {/* Overlay actions */}
+                    {f.has_fiche && (
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                        <a
+                          href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/interventions/${f.id}/fiche?token=${typeof window !== 'undefined' ? localStorage.getItem('savia_token') : ''}`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+                          title="Voir"
+                        >
+                          <Eye className="w-5 h-5 text-white" />
+                        </a>
+                        <a
+                          href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/interventions/${f.id}/fiche?token=${typeof window !== 'undefined' ? localStorage.getItem('savia_token') : ''}`}
+                          download={f.fiche_photo_nom || `fiche_${f.id}.jpg`}
+                          className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+                          title="Télécharger"
+                        >
+                          <Download className="w-5 h-5 text-white" />
+                        </a>
+                      </div>
+                    )}
+                    {/* Upload si pas encore de fiche */}
+                    {!f.has_fiche && (
+                      <label className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer hover:bg-savia-accent/5 transition-colors" title="Ajouter une fiche">
+                        <Upload className="w-6 h-6 text-savia-accent opacity-60 mb-1" />
+                        <span className="text-xs text-savia-accent opacity-60">Ajouter</span>
+                        <input type="file" accept="image/*,.pdf" className="hidden" onChange={async e => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            await interventions.uploadFiche(Number(f.id), file);
+                            const updated = await interventions.listFiches();
+                            setFiches(updated);
+                          } catch (err) { console.error(err); }
+                        }} />
+                      </label>
+                    )}
+                  </div>
+                  {/* Info */}
+                  <div className="p-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-mono text-savia-accent">#{ f.id}</span>
+                      <span className="text-xs font-semibold text-savia-text truncate">{f.machine}</span>
+                    </div>
+                    <p className="text-xs text-savia-text-muted truncate">{f.technicien}</p>
+                    <p className="text-xs text-savia-text-muted/60">{String(f.date || '').substring(0, 10)}</p>
+                    {f.has_fiche && (
+                      <span className="inline-flex items-center gap-1 mt-2 text-xs text-green-400">
+                        <CheckCircle className="w-3 h-3" /> Fiche attachée
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      )}
 
     </div>
   );
