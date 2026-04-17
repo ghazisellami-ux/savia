@@ -1073,17 +1073,12 @@ export default function SavPage() {
       </Modal>
       {/* === ONGLET 5 : FICHES SIGNÉES === */}
       {activeTab === 5 && (
-        <SectionCard>
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center">
-                <Camera className="w-5 h-5 text-green-400" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-savia-text">Fiches d'Intervention Signées</h3>
-                <p className="text-xs text-savia-text-muted">{fiches.length} interventions clôturées</p>
-              </div>
+        <SectionCard title="Fiches d'Intervention Signées">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-9 h-9 rounded-lg bg-green-500/15 flex items-center justify-center">
+              <Camera className="w-5 h-5 text-green-400" />
             </div>
+            <p className="text-sm text-savia-text-muted">{fiches.length} interventions clôturées</p>
           </div>
 
           {fiches.length === 0 ? (
