@@ -85,6 +85,44 @@ def _df_to_records(df) -> list:
     return records
 
 
+def _send_telegram(message: str) -> bool:
+    """
+    Envoie un message Telegram en lisant token + chat_id depuis la DB config.
+    Utilise urllib (pas de dépendance externe).
+    """
+    import urllib.request, urllib.parse, json as _json
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
+                (["telegram_token", "telegram_chat_id"],)
+            ).fetchall()
+        config = {r["cle"]: r["valeur"] for r in rows}
+        token   = config.get("telegram_token", "").strip()
+        chat_id = config.get("telegram_chat_id", "").strip()
+        if not token or not chat_id:
+            logger.warning("Telegram non configuré — notification ignorée")
+            return False
+
+        url  = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({
+            "chat_id":    chat_id,
+            "text":       message,
+            "parse_mode": "HTML",
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read().decode())
+        if result.get("ok"):
+            logger.info("Message Telegram envoyé")
+            return True
+        logger.error(f"Telegram API error: {result}")
+        return False
+    except Exception as e:
+        logger.error(f"Erreur Telegram: {e}")
+        return False
+
+
 def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Verify JWT and return user payload. Returns guest user if no token (allows public read)."""
     if not credentials:
@@ -481,6 +519,16 @@ def get_demandes(
 @app.post("/api/demandes")
 def create_demande(body: dict, user: dict = Depends(_verify_token)):
     from db_engine import get_db
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    demandeur  = body.get("demandeur") or user.get("username", "")
+    client     = body.get("client") or ""
+    equipement = body.get("equipement") or ""
+    urgence    = body.get("urgence") or "Moyenne"
+    description = body.get("description") or ""
+    code_erreur = body.get("code_erreur") or ""
+    contact_nom = body.get("contact_nom") or ""
+    contact_tel = body.get("contact_tel") or ""
+
     with get_db() as conn:
         conn.execute("""
             INSERT INTO demandes_intervention
@@ -488,35 +536,98 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                description, code_erreur, contact_nom, contact_tel, statut)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            body.get("date_demande") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            body.get("demandeur") or "",
-            body.get("client") or "",
-            body.get("equipement") or "",
-            body.get("urgence") or "Moyenne",
-            body.get("description") or "",
-            body.get("code_erreur") or "",
-            body.get("contact_nom") or "",
-            body.get("contact_tel") or "",
+            body.get("date_demande") or now_str,
+            demandeur, client, equipement, urgence,
+            description, code_erreur, contact_nom, contact_tel,
             body.get("statut") or "En attente",
         ))
+
+    # --- Notification Telegram ---
+    urg_icon = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
+    contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
+    code_line    = f"\n\U0001f522 Code erreur : <code>{code_erreur}</code>" if code_erreur else ""
+    msg = (
+        f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
+        f"\U0001f3e2 Client : <b>{client}</b>\n"
+        f"\U0001f3e5 \u00c9quipement : <b>{equipement}</b>\n"
+        f"{urg_icon} Urgence : <b>{urgence}</b>\n"
+        f"\U0001f4dd Probl\u00e8me : {description[:300]}"
+        f"{code_line}"
+        f"{contact_line}\n"
+        f"\U0001f464 Demandeur : <b>{demandeur}</b>\n"
+        f"\U0001f550 Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+        f"\U0001f449 Connectez-vous \u00e0 <b>SAVIA</b> pour traiter cette demande."
+    )
+    _send_telegram(msg)
+
     return {"success": True}
 
 
 @app.put("/api/demandes/{demande_id}/statut")
 def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_verify_token)):
     from db_engine import get_db
+    nouveau_statut      = body.get("statut") or "En cours"
+    technicien_assigne  = body.get("technicien_assigne") or ""
+    notes_traitement    = body.get("notes_traitement") or ""
+
+    # Récupérer les données de la demande AVANT mise à jour pour le message
+    demande_info = {}
     with get_db() as conn:
+        row = conn.execute(
+            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
+            (demande_id,)
+        ).fetchone()
+        if row:
+            demande_info = dict(row)
         conn.execute("""
             UPDATE demandes_intervention
             SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
                 date_traitement = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (
-            body.get("statut") or "En cours",
-            body.get("technicien_assigne") or "",
-            body.get("notes_traitement") or "",
-            demande_id,
-        ))
+        """, (nouveau_statut, technicien_assigne, notes_traitement, demande_id))
+
+    # --- Notification Telegram (tous les changements de statut) ---
+    statut_icons = {
+        "En attente": "\u23f3",
+        "En cours":   "\U0001f527",
+        "Assign\u00e9e": "\U0001f477",
+        "R\u00e9solue":  "\u2705",
+        "Cl\u00f4tur\u00e9e": "\U0001f3c1",
+        "Plan\u00e0fi\u00e9e": "\U0001f4c5",
+        "Planifi\u00e9e":  "\U0001f4c5",
+        "Rejet\u00e9e":    "\u274c",
+        "Accept\u00e9e":  "\u2705",
+    }
+    icon = statut_icons.get(nouveau_statut, "\U0001f4cb")
+    client     = demande_info.get("client", "")
+    equipement = demande_info.get("equipement", "")
+    urgence    = demande_info.get("urgence", "")
+    description = str(demande_info.get("description", ""))[:300]
+    demandeur  = demande_info.get("demandeur", "")
+    contact_nom = demande_info.get("contact_nom", "")
+    contact_tel = demande_info.get("contact_tel", "")
+
+    urg_icon     = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
+    tech_line    = f"\n\U0001f477 Technicien : <b>{technicien_assigne}</b>" if technicien_assigne else ""
+    notes_line   = f"\n\U0001f4cc Notes : {notes_traitement}" if notes_traitement else ""
+    contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
+    demandeur_line = f"\n\U0001f464 Demandeur : <b>{demandeur}</b>" if demandeur else ""
+
+    msg = (
+        f"{icon} <b>DEMANDE #{demande_id} \u2014 MISE \u00c0 JOUR STATUT</b>\n\n"
+        f"\U0001f3e2 Client : <b>{client}</b>\n"
+        f"\U0001f3e5 \u00c9quipement : <b>{equipement}</b>\n"
+        f"{urg_icon} Urgence : <b>{urgence}</b>\n"
+        f"\U0001f4ca Statut : <b>{nouveau_statut}</b>\n"
+        f"\U0001f4dd Probl\u00e8me : {description}"
+        f"{tech_line}"
+        f"{notes_line}"
+        f"{contact_line}"
+        f"{demandeur_line}\n"
+        f"\U0001f550 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    _send_telegram(msg)
+
     return {"success": True}
 
 
