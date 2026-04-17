@@ -51,8 +51,6 @@ export default function SavPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [ficheFile, setFicheFile] = useState<File | null>(null);
   const [fiches, setFiches] = useState<any[]>([]);
-  const [ficheFile, setFicheFile] = useState<File | null>(null);
-  const [fiches, setFiches] = useState<any[]>([]);
   const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('Tous');
