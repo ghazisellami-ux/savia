@@ -455,7 +455,17 @@ def get_interventions(
     user: dict = Depends(_verify_token),
 ):
     df = lire_interventions(machine=machine)
-    if technicien and not df.empty and "technicien" in df.columns:
+    # Si le user est un Technicien → filtrer automatiquement ses interventions
+    if user.get("role") == "Technicien" and not df.empty:
+        user_nom = (user.get("nom") or "").strip()
+        user_prenom = (user.get("prenom") or "").strip()
+        # Cherche par nom complet ou nom seul dans le champ technicien
+        search_terms = [t.lower() for t in [user_nom, user_prenom] if t]
+        if search_terms and "technicien" in df.columns:
+            df = df[df["technicien"].astype(str).apply(
+                lambda t: any(term in t.lower() for term in search_terms)
+            )]
+    elif technicien and not df.empty and "technicien" in df.columns:
         words = technicien.lower().split()
         df = df[df["technicien"].astype(str).apply(
             lambda t: all(w in t.lower() for w in words)
@@ -463,7 +473,6 @@ def get_interventions(
     # Filtrage par client pour Lecteur
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
-        # Obtenir les machines du client
         df_eq = lire_equipements()
         if not df_eq.empty and "Client" in df_eq.columns and "Nom" in df_eq.columns:
             machines_client = set(
@@ -711,6 +720,11 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             description, code_erreur, contact_nom, contact_tel,
             statut, technicien_assigne,
         ))
+        # Récupérer l'id de la demande créée
+        new_demande = conn.execute(
+            "SELECT id FROM demandes_intervention ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        demande_id = new_demande["id"] if new_demande else None
 
     # --- Notification Telegram ---
     urg_icon = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
@@ -731,6 +745,41 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
+
+    # --- Auto-créer une intervention SAV si technicien assigné dès la création ---
+    if technicien_assigne and demande_id:
+        try:
+            with get_db() as conn:
+                today = datetime.now().strftime("%Y-%m-%d")
+                notes_interv = f"[{client}] Demande #{demande_id}"
+                conn.execute("""
+                    INSERT INTO interventions
+                      (date, machine, technicien, type_intervention, description,
+                       probleme, code_erreur, statut, priorite, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    today,
+                    equipement,
+                    technicien_assigne,
+                    "Corrective",
+                    description[:500],
+                    description[:500],
+                    code_erreur,
+                    "En cours",
+                    urgence,
+                    notes_interv,
+                ))
+                new_interv = conn.execute(
+                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if new_interv:
+                    conn.execute(
+                        "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
+                        (new_interv["id"], demande_id)
+                    )
+                    logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
+        except Exception as e:
+            logger.error(f"Erreur auto-création intervention depuis demande: {e}")
 
     return {"success": True}
 
