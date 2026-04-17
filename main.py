@@ -69,6 +69,7 @@ def startup():
         with get_db() as conn:
             conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_nom TEXT DEFAULT ''")
             conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_data BYTEA")
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_validation TEXT DEFAULT 'En attente'")
         logger.info("✅ Migration fiche_photo: colonnes OK")
     except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
@@ -606,18 +607,19 @@ def download_fiche(intervention_id: int, token: Optional[str] = Query(None), use
 
 @app.get("/api/interventions/fiches")
 def list_fiches(user: dict = Depends(_verify_token)):
-    """Liste les interventions clôturées avec info fiche photo."""
+    """Liste uniquement les interventions clôturées AVEC photo attachée."""
     with get_db() as conn:
         try:
             rows = conn.execute("""
                 SELECT id, date, machine, technicien, statut, probleme, solution,
                        duree_minutes,
                        COALESCE(fiche_photo_nom, '') AS fiche_photo_nom,
-                       (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0) AS has_fiche
+                       (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0) AS has_fiche,
+                       COALESCE(fiche_validation, 'En attente') AS fiche_validation
                 FROM interventions
-                WHERE statut ILIKE '%lotur%'
-                   OR statut ILIKE '%termin%'
-                   OR statut = 'Cloturee'
+                WHERE (statut ILIKE '%lotur%' OR statut ILIKE '%termin%' OR statut = 'Cloturee')
+                  AND fiche_photo_data IS NOT NULL
+                  AND octet_length(fiche_photo_data) > 0
                 ORDER BY id DESC
                 LIMIT 200
             """).fetchall()
@@ -630,8 +632,37 @@ def list_fiches(user: dict = Depends(_verify_token)):
         if hasattr(d.get('date'), 'isoformat'):
             d['date'] = d['date'].isoformat()
         d['has_fiche'] = bool(d.get('has_fiche'))
+        d['fiche_validation'] = d.get('fiche_validation') or 'En attente'
         result.append(d)
     return result
+
+
+@app.patch("/api/interventions/{intervention_id}/fiche-validation")
+def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Met à jour le statut de validation client d'une fiche.
+    Une fois 'Validée', aucune modification n'est plus possible."""
+    nouveau_statut = body.get("validation", "").strip()
+    valeurs_autorisees = {"En attente", "Validée"}
+    if nouveau_statut not in valeurs_autorisees:
+        raise HTTPException(status_code=400, detail=f"Valeur invalide: {nouveau_statut}. Valeurs autorisées: {valeurs_autorisees}")
+
+    with get_db() as conn:
+        # Vérifier le statut actuel
+        row = conn.execute(
+            "SELECT fiche_validation FROM interventions WHERE id = %s",
+            (intervention_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        statut_actuel = (row["fiche_validation"] or "En attente").strip()
+        if statut_actuel == "Validée":
+            raise HTTPException(status_code=403, detail="Fiche déjà validée — aucune modification possible")
+        conn.execute(
+            "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
+            (nouveau_statut, intervention_id)
+        )
+    logger.info(f"Fiche #{intervention_id}: validation mise à jour → '{nouveau_statut}' par {user.get('nom', '?')}")
+    return {"ok": True, "validation": nouveau_statut}
 
 
 # ==========================================
