@@ -131,9 +131,9 @@ export const demandes = {
     return request<Array<Record<string, unknown>>>(`/api/demandes${qs}`);
   },
   create: (body: Record<string, unknown>) =>
-    request<{ success: boolean }>('/api/demandes', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ success: boolean }>('/api/demandes', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
-    request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body: JSON.stringify(body) }),
+    request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body }),
 };
 
 // --- Autres modules ---
@@ -163,9 +163,9 @@ export const planning = {
     return request<Array<Record<string, unknown>>>(`/api/planning?${qs}`);
   },
   create: (body: Record<string, unknown>) =>
-    request<{ ok: boolean }>('/api/planning', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ ok: boolean }>('/api/planning', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
-    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body }),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
