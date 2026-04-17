@@ -478,7 +478,6 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         raw_pieces = body.get("pieces_a_deduire") or []
         if not isinstance(raw_pieces, list):
             raw_pieces = []
-        # Filtrer les entrées invalides (sans clé 'ref')
         pieces_valides = [p for p in raw_pieces if isinstance(p, dict) and p.get("ref")]
 
         try:
@@ -492,6 +491,33 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             )
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
+
+            # --- Telegram notification clôture ---
+            try:
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes FROM interventions WHERE id = %s",
+                        (intervention_id,)
+                    ).fetchone()
+                if row:
+                    d = dict(row)
+                    duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
+                    notes_line = f"\n📌 Notes : {d['notes']}" if d.get('notes') else ""
+                    msg_tg = (
+                        f"✅ <b>INTERVENTION CLÔTURÉE — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{d.get('machine', '')}</b>\n"
+                        f"👷 Technicien : <b>{d.get('technicien', '')}</b>\n"
+                        f"🔴 Problème : {str(d.get('probleme', ''))[:200]}\n"
+                        f"🔍 Cause : {str(d.get('cause', ''))[:200]}\n"
+                        f"🟢 Solution : {str(d.get('solution', ''))[:200]}\n"
+                        f"⏱️ Durée : <b>{duree_h}h</b>"
+                        f"{notes_line}\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram(msg_tg)
+            except Exception as te:
+                logger.error(f"Telegram clôture erreur: {te}")
+
             return {"ok": True, "message": msg}
         except HTTPException:
             raise
@@ -513,6 +539,87 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         with get_db() as conn:
             conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
     return {"ok": True}
+
+
+@app.post("/api/interventions/{intervention_id}/fiche")
+async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+    """Upload la photo de la fiche signée pour une intervention clôturée."""
+    # Migration colonnes si nécessaire
+    with get_db() as conn:
+        try:
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_nom TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_data BYTEA")
+        except Exception:
+            pass
+
+    contents = await file.read()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            (file.filename, contents, intervention_id)
+        )
+    logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
+    return {"ok": True, "filename": file.filename}
+
+
+@app.get("/api/interventions/{intervention_id}/fiche")
+def download_fiche(intervention_id: int, token: Optional[str] = Query(None), user: dict = Depends(_verify_token)):
+    """Télécharge la photo de fiche pour une intervention (accepte token en query param pour img src)."""
+    from fastapi.responses import Response
+    # Si token en query param, valider manuellement
+    if token:
+        try:
+            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        except Exception:
+            raise HTTPException(status_code=401, detail="Token invalide")
+    with get_db() as conn:
+        try:
+            row = conn.execute(
+                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
+                (intervention_id,)
+            ).fetchone()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Colonne fiche non trouvée")
+    if not row or not row["fiche_photo_data"]:
+        raise HTTPException(status_code=404, detail="Aucune fiche pour cette intervention")
+    nom = row["fiche_photo_nom"] or f"fiche_{intervention_id}.jpg"
+    data = bytes(row["fiche_photo_data"])
+    ext = nom.rsplit('.', 1)[-1].lower() if '.' in nom else 'jpg'
+    mime_map = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+                'pdf': 'application/pdf', 'webp': 'image/webp'}
+    mime = mime_map.get(ext, 'application/octet-stream')
+    return Response(content=data, media_type=mime,
+                    headers={"Content-Disposition": f'inline; filename="{nom}"'})
+
+
+
+@app.get("/api/interventions/fiches")
+def list_fiches(user: dict = Depends(_verify_token)):
+    """Liste les interventions clôturées avec info fiche photo."""
+    with get_db() as conn:
+        try:
+            rows = conn.execute("""
+                SELECT id, date, machine, technicien, statut, probleme, solution,
+                       duree_minutes, fiche_photo_nom,
+                       (fiche_photo_data IS NOT NULL AND fiche_photo_data != '') AS has_fiche
+                FROM interventions
+                WHERE statut ILIKE '%lotur%' OR statut ILIKE '%termin%'
+                ORDER BY id DESC
+                LIMIT 200
+            """).fetchall()
+        except Exception as e:
+            logger.error(f"Erreur list_fiches: {e}")
+            return []
+    result = []
+    for r in rows:
+        d = dict(r)
+        if hasattr(d.get('date'), 'isoformat'):
+            d['date'] = d['date'].isoformat()
+        result.append(d)
+    return result
 
 
 # ==========================================
