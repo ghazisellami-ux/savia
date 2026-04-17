@@ -1,11 +1,11 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Plus, Search, Clock, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
-  Zap, FileText, Tag, Edit, Send
+  Zap, FileText, Tag, Edit, Send, UserCheck
 } from 'lucide-react';
-import { demandes, equipements, techniciens as techApi } from '@/lib/api';
+import { demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 interface Demande {
@@ -42,10 +42,11 @@ const STATUT_COLORS: Record<string, string> = {
 export default function DemandesPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
+  // Manager et Responsable Technique peuvent assigner un technicien à la création
+  const canAssignTech = user?.role === 'Manager' || user?.role === 'Responsable Technique' || user?.role === 'Admin';
   const clientNom = user?.client || '';
   const demandeurNom = user?.nom || '';
 
-  // Formulaire pré-rempli pour Lecteur
   const emptyForm = {
     demandeur: isLecteur ? demandeurNom : '',
     client: isLecteur ? clientNom : '',
@@ -55,32 +56,53 @@ export default function DemandesPage() {
     code_erreur: '',
     contact_nom: isLecteur ? demandeurNom : '',
     contact_tel: '',
+    technicien_assigne: '',
   };
 
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('Tous');
   const [data, setData] = useState<Demande[]>([]);
-  const [equips, setEquips] = useState<string[]>([]);
+
+  // All clients list (for Admin/Manager/Resp. Tech.)
+  const [allClients, setAllClients] = useState<string[]>([]);
+  // All equipments with their client association
+  const [allEquipsRaw, setAllEquipsRaw] = useState<{ nom: string; client: string }[]>([]);
   const [techs, setTechs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   // New demande modal
   const [showNewModal, setShowNewModal] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState({ ...emptyForm });
 
   // Update statut modal
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [selectedDemande, setSelectedDemande] = useState<Demande | null>(null);
   const [updateForm, setUpdateForm] = useState({ statut: '', technicien_assigne: '', notes_traitement: '' });
 
+  // Equipments filtered by selected client (for non-Lecteur, reactive on client change)
+  const filteredEquips = useMemo(() => {
+    if (isLecteur) {
+      return allEquipsRaw
+        .filter(e => e.client.toLowerCase() === clientNom.toLowerCase())
+        .map(e => e.nom)
+        .filter(Boolean);
+    }
+    if (!form.client) return allEquipsRaw.map(e => e.nom).filter(Boolean);
+    return allEquipsRaw
+      .filter(e => e.client.toLowerCase() === form.client.toLowerCase())
+      .map(e => e.nom)
+      .filter(Boolean);
+  }, [allEquipsRaw, form.client, isLecteur, clientNom]);
+
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [res, eqRes, techRes] = await Promise.all([
+      const [res, eqRes, techRes, clientRes] = await Promise.all([
         demandes.list(),
         equipements.list().catch(() => []),
         techApi.list().catch(() => []),
+        clientsApi.list().catch(() => []),
       ]);
       const mapped = (res as any[]).map((item: any) => ({
         id: Number(item.id || 0),
@@ -98,39 +120,38 @@ export default function DemandesPage() {
         notes_traitement: item.notes_traitement || '',
       }));
       setData(mapped);
-      // Pour Lecteur : filtrer les équipements selon son client
-      const allEquips = (eqRes as any[]).map((e: any) => ({ nom: e.Nom || e.nom || '', client: e.Client || e.client || '' }));
-      const filteredEquips = isLecteur && clientNom
-        ? allEquips.filter(e => e.client.toLowerCase() === clientNom.toLowerCase()).map(e => e.nom)
-        : allEquips.map(e => e.nom);
-      setEquips(filteredEquips.filter(Boolean));
+
+      // Parse equipments with client
+      const rawEquips = (eqRes as any[]).map((e: any) => ({
+        nom: e.Nom || e.nom || '',
+        client: e.Client || e.client || '',
+      }));
+      setAllEquipsRaw(rawEquips);
+
+      // Parse clients list
+      const clientNames = (clientRes as any[])
+        .map((c: any) => c.Nom || c.nom || c.name || c.raison_sociale || '')
+        .filter(Boolean)
+        .sort();
+      setAllClients(clientNames);
+
+      // Parse technicians
       setTechs((techRes as any[]).map((t: any) => `${t.prenom || ''} ${t.nom || ''}`.trim()).filter(Boolean));
     } catch (err) {
-      console.error("Failed to fetch demandes", err);
+      console.error('Failed to fetch demandes', err);
     } finally {
       setIsLoading(false);
     }
-  }, [isLecteur, clientNom]);
+  }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
   const openNewModal = () => {
-    // Toujours pré-remplir avec les données du Lecteur à l'ouverture
-    setForm({
-      demandeur: isLecteur ? demandeurNom : '',
-      client: isLecteur ? clientNom : '',
-      equipement: '',
-      urgence: 'Moyenne',
-      description: '',
-      code_erreur: '',
-      contact_nom: isLecteur ? demandeurNom : '',
-      contact_tel: '',
-    });
+    setForm({ ...emptyForm });
     setShowNewModal(true);
   };
 
   const handleCreate = async () => {
-    // Pour Lecteur : le demandeur est auto-rempli depuis le contexte
     const formToSend = isLecteur
       ? { ...form, demandeur: demandeurNom || clientNom, client: clientNom }
       : form;
@@ -157,7 +178,6 @@ export default function DemandesPage() {
   };
 
   const openUpdate = (d: Demande) => {
-    // Lecteur ne peut pas changer le statut (vue seule)
     if (isLecteur) return;
     setSelectedDemande(d);
     setUpdateForm({ statut: d.statut, technicien_assigne: d.technicien_assigne, notes_traitement: d.notes_traitement });
@@ -218,7 +238,7 @@ export default function DemandesPage() {
         </button>
       </div>
 
-      {/* Lecteur badge d'info */}
+      {/* Lecteur info banner */}
       {isLecteur && (
         <div className="glass rounded-xl px-4 py-2.5 border border-savia-accent/20 flex items-center gap-2 text-sm text-savia-accent">
           <Building2 className="w-4 h-4" />
@@ -283,7 +303,6 @@ export default function DemandesPage() {
                   {d.statut}
                 </span>
               </div>
-              {/* Lecteur : pas de bouton "Mettre à jour" */}
               {!isLecteur && (
                 <button onClick={() => openUpdate(d)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-savia-accent/10 text-savia-accent hover:bg-savia-accent/20 transition-colors text-xs font-semibold cursor-pointer">
@@ -300,7 +319,7 @@ export default function DemandesPage() {
             </div>
             {d.technicien_assigne && (
               <div className="mt-2 text-xs text-blue-400 flex items-center gap-1">
-                <User className="w-3 h-3" /> Technicien : <strong>{d.technicien_assigne}</strong>
+                <UserCheck className="w-3 h-3" /> Technicien : <strong>{d.technicien_assigne}</strong>
               </div>
             )}
             {d.notes_traitement && (
@@ -342,45 +361,66 @@ export default function DemandesPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Demandeur — visible seulement pour non-Lecteur */}
                 {!isLecteur && (
-                <div>
-                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <User className="w-3.5 h-3.5" /> Demandeur *
-                  </label>
-                  <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
-                    onChange={e => setForm({...form, demandeur: e.target.value})} />
-                </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                      <User className="w-3.5 h-3.5" /> Demandeur *
+                    </label>
+                    <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
+                      onChange={e => setForm({...form, demandeur: e.target.value})} />
+                  </div>
                 )}
-                {/* Client — verrouillé pour Lecteur */}
+
+                {/* Client — verrouillé pour Lecteur, liste déroulante pour les autres */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
                     {isLecteur && <span className="text-xs text-savia-accent font-normal ml-1">🔒 {clientNom}</span>}
                   </label>
-                  {!isLecteur && (
-                  <input className={INPUT_CLS}
-                    placeholder="Nom du client" value={form.client}
-                    onChange={e => setForm({...form, client: e.target.value})} />
+                  {isLecteur ? (
+                    <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">
+                      {clientNom}
+                    </div>
+                  ) : (
+                    <select
+                      className={INPUT_CLS}
+                      value={form.client}
+                      onChange={e => setForm({ ...form, client: e.target.value, equipement: '' })}
+                    >
+                      <option value="">— Sélectionner un client —</option>
+                      {allClients.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
                   )}
                 </div>
-                {/* Equipement — liste filtrée pour Lecteur */}
+
+                {/* Équipement — liste filtrée selon le client choisi */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Server className="w-3.5 h-3.5" /> Équipement concerné *
+                    {!isLecteur && form.client && (
+                      <span className="text-xs font-normal text-savia-accent">
+                        ({filteredEquips.length} disponible{filteredEquips.length !== 1 ? 's' : ''})
+                      </span>
+                    )}
                   </label>
-                  {isLecteur ? (
-                    <select className={INPUT_CLS} value={form.equipement}
-                      onChange={e => setForm({...form, equipement: e.target.value})}>
-                      <option value="">-- Sélectionner votre équipement --</option>
-                      {equips.map(e => <option key={e} value={e}>{e}</option>)}
-                    </select>
-                  ) : (
-                    <>
-                      <input className={INPUT_CLS} list="equip-list" placeholder="Sélectionner ou saisir" value={form.equipement}
-                        onChange={e => setForm({...form, equipement: e.target.value})} />
-                      <datalist id="equip-list">{equips.map(e => <option key={e} value={e} />)}</datalist>
-                    </>
-                  )}
+                  <select
+                    className={INPUT_CLS}
+                    value={form.equipement}
+                    onChange={e => setForm({...form, equipement: e.target.value})}
+                    disabled={!isLecteur && !form.client}
+                  >
+                    <option value="">
+                      {!isLecteur && !form.client
+                        ? '← Choisir un client d\'abord'
+                        : '— Sélectionner un équipement —'}
+                    </option>
+                    {filteredEquips.map(e => (
+                      <option key={e} value={e}>{e}</option>
+                    ))}
+                  </select>
                 </div>
+
                 {/* Code erreur */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -389,6 +429,7 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="Ex: E-301" value={form.code_erreur}
                     onChange={e => setForm({...form, code_erreur: e.target.value})} />
                 </div>
+
                 {/* Contact nom */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -397,6 +438,7 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="Nom du contact sur place" value={form.contact_nom}
                     onChange={e => setForm({...form, contact_nom: e.target.value})} />
                 </div>
+
                 {/* Contact tel */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -405,6 +447,27 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="+216 XX XXX XXX" value={form.contact_tel}
                     onChange={e => setForm({...form, contact_tel: e.target.value})} />
                 </div>
+
+                {/* Technicien assigné — visble uniquement pour Manager / Responsable Technique / Admin */}
+                {canAssignTech && (
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                      <UserCheck className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="text-blue-400">Assigner un technicien</span>
+                      <span className="text-xs font-normal text-savia-text-muted">(facultatif)</span>
+                    </label>
+                    <select
+                      className={INPUT_CLS}
+                      value={form.technicien_assigne}
+                      onChange={e => setForm({...form, technicien_assigne: e.target.value})}
+                    >
+                      <option value="">— Non assigné pour l&apos;instant —</option>
+                      {techs.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               {/* Description */}
@@ -433,7 +496,7 @@ export default function DemandesPage() {
         </div>
       )}
 
-      {/* ========== MODAL: Mise à jour statut (Admin/Tech uniquement) ========== */}
+      {/* ========== MODAL: Mise à jour statut (non-Lecteur) ========== */}
       {!isLecteur && showUpdateModal && selectedDemande && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl">
@@ -457,10 +520,14 @@ export default function DemandesPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Technicien assigné</label>
-                <input className={INPUT_CLS} list="tech-list" placeholder="Nom du technicien"
-                  value={updateForm.technicien_assigne} onChange={e => setUpdateForm({...updateForm, technicien_assigne: e.target.value})} />
-                <datalist id="tech-list">{techs.map(t => <option key={t} value={t} />)}</datalist>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <UserCheck className="w-3.5 h-3.5 text-blue-400" /> Technicien assigné
+                </label>
+                <select className={INPUT_CLS} value={updateForm.technicien_assigne}
+                  onChange={e => setUpdateForm({...updateForm, technicien_assigne: e.target.value})}>
+                  <option value="">— Non assigné —</option>
+                  {techs.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Notes de traitement</label>
