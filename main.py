@@ -628,6 +628,53 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     )
     _send_telegram(msg)
 
+    # --- Auto-créer une intervention si technicien assigné et pas déjà liée ---
+    if technicien_assigne:
+        try:
+            with get_db() as conn:
+                # Vérifier si une intervention existe déjà pour cette demande
+                existing = conn.execute(
+                    "SELECT intervention_id FROM demandes_intervention WHERE id = %s",
+                    (demande_id,)
+                ).fetchone()
+                already_linked = existing and existing["intervention_id"]
+
+                if not already_linked:
+                    # Créer l'intervention
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    notes_interv = f"[{client}] Demande #{demande_id}"
+                    if notes_traitement:
+                        notes_interv += f" — {notes_traitement}"
+                    conn.execute("""
+                        INSERT INTO interventions
+                          (date, machine, technicien, type_intervention, description,
+                           probleme, code_erreur, statut, priorite, notes)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        today,
+                        equipement,
+                        technicien_assigne,
+                        "Corrective",
+                        description[:500],
+                        description[:500],
+                        demande_info.get("code_erreur", "") or "",
+                        "En cours",
+                        urgence,
+                        notes_interv,
+                    ))
+                    # Récupérer l'id de l'intervention créée
+                    new_interv = conn.execute(
+                        "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    if new_interv:
+                        conn.execute(
+                            "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
+                            (new_interv["id"], demande_id)
+                        )
+                        logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
+        except Exception as e:
+            logger.error(f"Erreur auto-création intervention: {e}")
+
     return {"success": True}
 
 
