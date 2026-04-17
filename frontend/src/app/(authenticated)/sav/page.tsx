@@ -57,7 +57,7 @@ export default function SavPage() {
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterEquip, setFilterEquip] = useState('Tous');
-  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('mensuel');
+  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [data, setData] = useState<Intervention[]>([]);
@@ -137,11 +137,6 @@ export default function SavPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  useEffect(() => {
-    interventions.listFiches().then(setFiches).catch(() => {});
-  }, []);
-
-  // Charger les fiches au montage
   useEffect(() => {
     interventions.listFiches().then(setFiches).catch(() => {});
   }, []);
