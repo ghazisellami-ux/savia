@@ -64,6 +64,14 @@ app.add_middleware(
 def startup():
     init_db()
     auth.creer_admin_defaut()
+    # Migration: colonnes fiche signée
+    try:
+        with get_db() as conn:
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_nom TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_data BYTEA")
+        logger.info("✅ Migration fiche_photo: colonnes OK")
+    except Exception as e:
+        logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
     logger.info("✅ SAVIA FastAPI started — DB initialized")
 
 
@@ -603,10 +611,13 @@ def list_fiches(user: dict = Depends(_verify_token)):
         try:
             rows = conn.execute("""
                 SELECT id, date, machine, technicien, statut, probleme, solution,
-                       duree_minutes, fiche_photo_nom,
-                       (fiche_photo_data IS NOT NULL AND fiche_photo_data != '') AS has_fiche
+                       duree_minutes,
+                       COALESCE(fiche_photo_nom, '') AS fiche_photo_nom,
+                       (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0) AS has_fiche
                 FROM interventions
-                WHERE statut ILIKE '%lotur%' OR statut ILIKE '%termin%'
+                WHERE statut ILIKE '%lotur%'
+                   OR statut ILIKE '%termin%'
+                   OR statut = 'Cloturee'
                 ORDER BY id DESC
                 LIMIT 200
             """).fetchall()
@@ -618,6 +629,7 @@ def list_fiches(user: dict = Depends(_verify_token)):
         d = dict(r)
         if hasattr(d.get('date'), 'isoformat'):
             d['date'] = d['date'].isoformat()
+        d['has_fiche'] = bool(d.get('has_fiche'))
         result.append(d)
     return result
 
