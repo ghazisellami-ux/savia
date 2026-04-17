@@ -25,7 +25,8 @@ from db_engine import (
     lire_equipements, ajouter_equipement, modifier_equipement, supprimer_equipement,
     lire_interventions, ajouter_intervention, update_intervention_statut, cloturer_intervention,
     lire_pieces, ajouter_piece, modifier_piece, supprimer_piece,
-    lire_demandes_intervention,
+    lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
+    marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
     lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
@@ -33,7 +34,6 @@ from db_engine import (
     lire_base,
     lire_audit, log_audit,
     get_config, set_config,
-    lire_notifications_pieces, compter_notifications_non_lues,
 )
 
 logger = logging.getLogger("savia-api")
@@ -546,6 +546,42 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         except Exception as e:
             logger.error(f"Erreur clôture intervention #{intervention_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Erreur lors de la clôture: {str(e)}")
+    if new_statut and "attente" in new_statut.lower() and "pi" in new_statut.lower():
+        # Statut = "En attente de pièce" → notification rupture pour gestionnaires
+        pieces_attente = body.get("pieces_rupture") or []
+        try:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT machine, technicien, notes FROM interventions WHERE id = %s",
+                    (intervention_id,)
+                ).fetchone()
+            if row:
+                machine = row["machine"] or ""
+                technicien = row["technicien"] or ""
+                # Extraire client depuis notes [Client]
+                notes = str(row.get("notes") or "")
+                client = notes[1:notes.index("]")] if notes.startswith("[") and "]" in notes else ""
+                for piece in pieces_attente:
+                    ref = piece.get("reference") or piece.get("ref") or ""
+                    nom = piece.get("designation") or piece.get("nom") or ref
+                    ajouter_notification_piece({
+                        "type": "piece_rupture",
+                        "intervention_id": intervention_id,
+                        "piece_reference": ref,
+                        "piece_nom": nom,
+                        "intervention_ref": f"#{intervention_id}",
+                        "equipement": machine,
+                        "client": client,
+                        "technicien": technicien,
+                        "message": f"⚠️ Intervention #{intervention_id} sur {machine} en attente de la pièce "
+                                   f"{ref} ({nom}) — rupture de stock",
+                        "source": "sav",
+                        "destination": "gestionnaire",
+                    })
+                    logger.info(f"Notif rupture créée: pièce {ref} pour intervention #{intervention_id}")
+        except Exception as ne:
+            logger.error(f"Erreur création notif rupture: {ne}")
+
     if new_statut:
         update_intervention_statut(intervention_id, new_statut)
     # Update other fields
@@ -928,7 +964,70 @@ def create_piece(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/pieces/{piece_id}")
 def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Mise à jour d'une pièce. Si stock passe de 0 → >0, déclenche notifications pour les techniciens en attente."""
+    # Récupérer le stock AVANT modification pour détecter le réapprovisionnement
+    nouveau_stock = body.get("stock_actuel")
+    try:
+        with get_db() as conn:
+            old = conn.execute(
+                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = %s",
+                (piece_id,)
+            ).fetchone()
+        stock_avant = int(old["stock_actuel"]) if old else None
+        reference = old["reference"] if old else ""
+        nom_piece = old["designation"] if old else ""
+    except Exception:
+        stock_avant = None
+        reference = ""
+        nom_piece = ""
+
     modifier_piece(piece_id, body)
+
+    # Détecter réapprovisionnement : stock passe de 0 (ou négatif) → positif
+    if nouveau_stock is not None and stock_avant is not None:
+        try:
+            if int(stock_avant) <= 0 and int(nouveau_stock) > 0 and reference:
+                # Chercher toutes les notifications rupture non traitées pour cette pièce
+                df_notifs = notifications_rupture_pour_piece(reference)
+                if not df_notifs.empty:
+                    # Grouper par technicien
+                    tech_map: dict = {}
+                    for _, n in df_notifs.iterrows():
+                        t = n.get("technicien") or "inconnu"
+                        if t not in tech_map:
+                            tech_map[t] = []
+                        tech_map[t].append({
+                            "machine": n.get("equipement") or "",
+                            "intervention_id": n.get("intervention_id") or "",
+                        })
+
+                    for tech, interventions_list in tech_map.items():
+                        machines = ", ".join(set(i["machine"] for i in interventions_list if i["machine"]))
+                        nb = len(interventions_list)
+                        ajouter_notification_piece({
+                            "type": "piece_dispo",
+                            "piece_reference": reference,
+                            "piece_nom": nom_piece,
+                            "technicien": tech,
+                            "equipement": machines,
+                            "message": (
+                                f"✅ La pièce {reference} ({nom_piece}) est maintenant disponible — "
+                                f"{nb} intervention(s) en attente sur : {machines or 'N/A'}"
+                            ),
+                            "source": "stock",
+                            "destination": "technicien",
+                        })
+                        logger.info(f"Notif piece_dispo créée pour technicien {tech}: pièce {reference}")
+
+                    # Marquer les notifications rupture comme traitées
+                    for _, n in df_notifs.iterrows():
+                        try:
+                            marquer_notification_traitee(int(n["id"]))
+                        except Exception:
+                            pass
+        except Exception as ne:
+            logger.error(f"Erreur notif réappro pièce {piece_id}: {ne}")
+
     return {"ok": True}
 
 
@@ -1754,18 +1853,50 @@ def get_audit_log(limit: int = 100, user: dict = Depends(_verify_token)):
 
 @app.get("/api/notifications")
 def get_notifications(
-    destination: Optional[str] = "radiologie",
+    destination: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    return _df_to_records(lire_notifications_pieces(destination=destination))
+    """Liste les notifications. Destination auto-detectée selon le rôle."""
+    role = user.get("role", "")
+    nom = (user.get("nom") or "").strip()
+    if destination is None:
+        destination = "technicien" if role == "Technicien" else "gestionnaire"
+    df = lire_notifications_pieces(destination=destination)
+    # Pour les techniciens : filtrer par leur nom
+    if role == "Technicien" and nom and not df.empty:
+        from db_engine import read_sql
+        df = df[df["technicien"].fillna("").str.lower().apply(
+            lambda t: all(w in t for w in nom.lower().split() if len(w) > 1)
+        )]
+    return _df_to_records(df)
 
 
 @app.get("/api/notifications/count")
 def get_notification_count(
-    destination: str = "radiologie",
+    destination: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    return {"count": compter_notifications_non_lues(destination)}
+    """Compte les notifications non lues. Destination auto-detectée selon le rôle."""
+    role = user.get("role", "")
+    nom = (user.get("nom") or "").strip()
+    if destination is None:
+        destination = "technicien" if role == "Technicien" else "gestionnaire"
+    count = compter_notifications_non_lues(destination, technicien=nom if role == "Technicien" else None)
+    return {"count": count}
+
+
+@app.patch("/api/notifications/{notif_id}/read")
+def mark_notification_read(notif_id: int, user: dict = Depends(_verify_token)):
+    """Marque une notification comme lue."""
+    marquer_notification_lue(notif_id)
+    return {"ok": True}
+
+
+@app.patch("/api/notifications/{notif_id}/done")
+def mark_notification_done(notif_id: int, user: dict = Depends(_verify_token)):
+    """Marque une notification comme traitée."""
+    marquer_notification_traitee(notif_id)
+    return {"ok": True}
 
 
 # ==========================================

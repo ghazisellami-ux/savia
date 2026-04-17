@@ -4,8 +4,9 @@ import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Sparkles,
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
-  Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock } from 'lucide-react';
-import { pieces, interventions, ai } from '@/lib/api';
+  Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
+  Bell, CheckCheck, Package2 } from 'lucide-react';
+import { pieces, interventions, ai, notifications as notifApi } from '@/lib/api';
 
 interface Piece {
   id: number;
@@ -45,6 +46,8 @@ export default function PiecesPage() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [decaleDate, setDecaleDate] = useState('');
   const [feedbackSuccess, setFeedbackSuccess] = useState('');
+  const [notifData, setNotifData] = useState<any[]>([]);
+  const [notifCount, setNotifCount] = useState(0);
 
   const emptyForm = { reference: '', designation: '', equipement_type: 'Scanner CT', stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -73,6 +76,29 @@ export default function PiecesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Charger les notifications + count
+  const loadNotifs = useCallback(async () => {
+    try {
+      const [lst, cnt] = await Promise.all([notifApi.list(), notifApi.count()]);
+      setNotifData(lst as any[]);
+      setNotifCount((cnt as any).count || 0);
+    } catch { /* silencieux */ }
+  }, []);
+  useEffect(() => { loadNotifs(); }, [loadNotifs]);
+
+  // Quand on ouvre l'onglet Notifications, marquer toutes les non-lues comme lues
+  useEffect(() => {
+    if (activeTab === 4 && notifData.length > 0) {
+      const unread = notifData.filter((n: any) => n.statut === 'non_lu');
+      unread.forEach((n: any) => {
+        notifApi.markRead(Number(n.id)).catch(() => {});
+      });
+      if (unread.length > 0) {
+        setTimeout(() => loadNotifs(), 800);
+      }
+    }
+  }, [activeTab, notifData, loadNotifs]);
 
   // Load feedback from localStorage
   useEffect(() => {
@@ -228,6 +254,19 @@ export default function PiecesPage() {
     { icon: <History className="w-4 h-4" />, label: 'Traçabilité' },
     { icon: <Edit className="w-4 h-4" />, label: 'Modifier / Supprimer' },
     { icon: <Brain className="w-4 h-4" />, label: 'Prédictions & Achats IA' },
+    {
+      icon: <Bell className="w-4 h-4" />,
+      label: (
+        <span className="flex items-center gap-1.5">
+          Notifications
+          {notifCount > 0 && (
+            <span className="min-w-[18px] h-4.5 px-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center">
+              {notifCount > 99 ? '99+' : notifCount}
+            </span>
+          )}
+        </span>
+      ),
+    },
   ];
 
   if (isLoading) {
@@ -697,6 +736,75 @@ export default function PiecesPage() {
                 <div className="mt-2 text-center p-6 text-savia-text-muted text-sm"><History className="w-8 h-8 mx-auto mb-2 text-savia-text-dim" />Aucun feedback enregistré.</div>
               )}
             </div>
+          </SectionCard>
+        </div>
+      )}
+
+      {/* TAB 4: NOTIFICATIONS */}
+      {activeTab === 4 && (
+        <div className="space-y-4">
+          <SectionCard title="🔔 Notifications Pièces">
+            {notifData.length === 0 ? (
+              <div className="text-center py-12 text-savia-text-muted">
+                <Bell className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Aucune notification pour le moment.</p>
+                <p className="text-xs mt-1 opacity-60">Les alertes de rupture et disponibilité apparaîtront ici.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {notifData.map((n: any) => {
+                  const isRupture = n.type === 'piece_rupture';
+                  const isDispo = n.type === 'piece_dispo';
+                  const isUnread = n.statut === 'non_lu';
+                  return (
+                    <div key={n.id} className={`flex items-start gap-3 p-4 rounded-xl border transition-colors ${
+                      isUnread
+                        ? isRupture
+                          ? 'bg-orange-500/10 border-orange-500/30'
+                          : 'bg-green-500/10 border-green-500/30'
+                        : 'bg-savia-surface-hover/40 border-savia-border/30 opacity-70'
+                    }`}>
+                      <div className={`mt-0.5 p-2 rounded-full flex-shrink-0 ${
+                        isRupture ? 'bg-orange-500/20 text-orange-400'
+                        : isDispo ? 'bg-green-500/20 text-green-400'
+                        : 'bg-blue-500/20 text-blue-400'
+                      }`}>
+                        {isRupture ? <AlertTriangle className="w-4 h-4" /> : <Package2 className="w-4 h-4" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                            isRupture ? 'bg-orange-500/20 text-orange-400'
+                            : 'bg-green-500/20 text-green-400'
+                          }`}>
+                            {isRupture ? '⚠️ Rupture' : '✅ Disponible'}
+                          </span>
+                          {isUnread && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold">NOUVEAU</span>
+                          )}
+                          <span className="text-xs text-savia-text-muted ml-auto">
+                            {n.date_creation ? new Date(n.date_creation).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                        </div>
+                        <p className="text-sm text-savia-text leading-relaxed">{n.message}</p>
+                        {n.equipement && (
+                          <div className="mt-1.5 flex items-center gap-1 text-xs text-savia-text-muted">
+                            <Wrench className="w-3 h-3" /> {n.equipement}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => notifApi.markDone(Number(n.id)).then(loadNotifs)}
+                        title="Marquer comme traité"
+                        className="flex-shrink-0 p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-green-400 transition-colors cursor-pointer"
+                      >
+                        <CheckCheck className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </SectionCard>
         </div>
       )}

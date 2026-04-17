@@ -39,17 +39,22 @@ const ROLE_COLOR: Record<string, string> = {
 
 // Rôles qui reçoivent les notifications de nouvelles demandes
 const NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire'];
+// Rôles qui voient le badge pièces (rupture pour gestionnaires, dispo pour techniciens)
+const PIECES_NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire', 'Technicien'];
 const LAST_SEEN_KEY = 'demandes_last_seen';
+const LAST_SEEN_PIECES_KEY = 'pieces_notif_last_seen';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, hasPermission } = useAuth();
   const [newDemandesCount, setNewDemandesCount] = useState(0);
+  const [piecesNotifCount, setPiecesNotifCount] = useState(0);
 
   const canSeeNotif = !!(user && NOTIF_ROLES.includes(user.role));
+  const canSeePiecesNotif = !!(user && PIECES_NOTIF_ROLES.includes(user.role));
 
-  // Compte les nouvelles demandes depuis la dernière visite
+  // ─── Badge demandes (managers/admins) ───
   const fetchNewCount = useCallback(async () => {
     if (!canSeeNotif) return;
     try {
@@ -73,6 +78,23 @@ export default function Sidebar() {
     }
   }, [canSeeNotif]);
 
+  // ─── Badge pièces (rupture pour gestionnaires / dispo pour techniciens) ───
+  const fetchPiecesCount = useCallback(async () => {
+    if (!canSeePiecesNotif) return;
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+      if (!token) return;
+      const res = await fetch(`${API_BASE}/api/notifications/count`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data: { count: number } = await res.json();
+      setPiecesNotifCount(data.count || 0);
+    } catch {
+      // silencieux
+    }
+  }, [canSeePiecesNotif]);
+
   // Poll toutes les 30 secondes
   useEffect(() => {
     fetchNewCount();
@@ -80,7 +102,13 @@ export default function Sidebar() {
     return () => clearInterval(interval);
   }, [fetchNewCount]);
 
-  // Quand on arrive sur /demandes, marquer comme vu et effacer le badge
+  useEffect(() => {
+    fetchPiecesCount();
+    const interval = setInterval(fetchPiecesCount, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchPiecesCount]);
+
+  // Quand on arrive sur /demandes, marquer comme vu
   useEffect(() => {
     if (pathname === '/demandes') {
       if (typeof window !== 'undefined') {
@@ -89,6 +117,14 @@ export default function Sidebar() {
       setNewDemandesCount(0);
     }
   }, [pathname]);
+
+  // Quand on arrive sur /pieces, rafraîchir le count (les notifs sont marquées lues depuis la page)
+  useEffect(() => {
+    if (pathname === '/pieces') {
+      // Petit délai pour laisser la page marquer les notifs comme lues
+      setTimeout(fetchPiecesCount, 1500);
+    }
+  }, [pathname, fetchPiecesCount]);
 
   if (!user) return null;
 
@@ -119,6 +155,7 @@ export default function Sidebar() {
           const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
           const Icon = item.icon;
           const showBadge = item.key === 'demandes' && canSeeNotif && newDemandesCount > 0;
+          const showPiecesBadge = item.key === 'pieces' && canSeePiecesNotif && piecesNotifCount > 0;
           return (
             <Link
               key={item.key}
@@ -135,6 +172,11 @@ export default function Sidebar() {
               {showBadge && (
                 <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center animate-pulse shadow-lg shadow-red-500/40">
                   {newDemandesCount > 99 ? '99+' : newDemandesCount}
+                </span>
+              )}
+              {showPiecesBadge && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-xs font-bold flex items-center justify-center animate-pulse shadow-lg shadow-orange-500/40">
+                  {piecesNotifCount > 99 ? '99+' : piecesNotifCount}
                 </span>
               )}
             </Link>

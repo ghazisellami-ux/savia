@@ -685,7 +685,7 @@ def init_db():
         # Table Notifications pièces (cross-app SIC Terrain ↔ SIC Radiologie)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS notifications_pieces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             type TEXT NOT NULL,
             intervention_id INTEGER,
             piece_reference TEXT,
@@ -695,7 +695,7 @@ def init_db():
             client TEXT,
             technicien TEXT,
             message TEXT,
-            source TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
             destination TEXT NOT NULL,
             statut TEXT DEFAULT 'non_lu',
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1290,7 +1290,7 @@ def ajouter_notification_piece(notif_dict):
             INSERT INTO notifications_pieces
             (type, intervention_id, piece_reference, piece_nom, intervention_ref,
              equipement, client, technicien, message, source, destination, statut)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'non_lu')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'non_lu')
         """, (
             notif_dict.get("type", ""),
             notif_dict.get("intervention_id"),
@@ -1312,36 +1312,36 @@ def lire_notifications_pieces(destination=None, statut=None, technicien=None):
     query = "SELECT * FROM notifications_pieces WHERE 1=1"
     params = []
     if destination:
-        query += " AND destination = ?"
+        query += " AND destination = %s"
         params.append(destination)
     if statut:
-        query += " AND statut = ?"
+        query += " AND statut = %s"
         params.append(statut)
     if technicien:
-        query += " AND LOWER(technicien) = LOWER(?)"
-        params.append(technicien)
-    query += " ORDER BY date_creation DESC"
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
+    query += " ORDER BY date_creation DESC LIMIT 200"
     with get_db() as conn:
         return read_sql(query, conn, params=params)
 
 
 def compter_notifications_non_lues(destination, technicien=None):
     """Compte les notifications non lues pour une destination (et optionnellement un technicien)."""
-    query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = ? AND statut = 'non_lu'"
+    query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = %s AND statut = 'non_lu'"
     params = [destination]
     if technicien:
-        query += " AND LOWER(technicien) = LOWER(?)"
-        params.append(technicien)
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
     with get_db() as conn:
         row = conn.execute(query, tuple(params)).fetchone()
-        return row["cnt"] if row else 0
+        return int(row["cnt"]) if row else 0
 
 
 def marquer_notification_lue(notif_id):
     """Marque une notification comme lue."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE notifications_pieces SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE notifications_pieces SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = %s",
             (notif_id,)
         )
     return True
@@ -1351,7 +1351,7 @@ def marquer_notification_traitee(notif_id):
     """Marque une notification comme traitée."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE notifications_pieces SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE notifications_pieces SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = %s",
             (notif_id,)
         )
     return True
@@ -1361,7 +1361,7 @@ def notifications_rupture_pour_piece(piece_reference):
     """Retourne les notifications de rupture non traitées pour une pièce donnée."""
     with get_db() as conn:
         return read_sql(
-            "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = ? AND statut != 'traite'",
+            "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = %s AND statut != 'traite'",
             conn, params=(piece_reference,)
         )
 
