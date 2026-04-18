@@ -685,7 +685,7 @@ def init_db():
         # Table Notifications pièces (cross-app SIC Terrain ↔ SIC Radiologie)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS notifications_pieces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             type TEXT NOT NULL,
             intervention_id INTEGER,
             piece_reference TEXT,
@@ -695,7 +695,7 @@ def init_db():
             client TEXT,
             technicien TEXT,
             message TEXT,
-            source TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
             destination TEXT NOT NULL,
             statut TEXT DEFAULT 'non_lu',
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1054,21 +1054,45 @@ def lire_tous_documents_techniques():
 # ==========================================
 
 def lire_interventions(machine=None):
-    """Lit les interventions, optionnellement filtrées par machine."""
+    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via sous-requête.
+    Note: fiche_photo_data (BYTEA) est exclu intentionnellement pour éviter les erreurs de sérialisation JSON.
+    Utiliser GET /api/interventions/{id}/fiche pour télécharger la photo."""
     with get_db() as conn:
+        # Sous-requête LIMIT 1 au lieu de LEFT JOIN → évite la multiplication des lignes
+        # quand le même nom de machine existe chez plusieurs clients.
+        # fiche_photo_data exclu car type memoryview non sérialisable JSON.
+        base_query = """
+            SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
+                   i.description, i.probleme, i.cause, i.solution,
+                   i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
+                   i.code_erreur, i.statut, i.notes,
+                   i.date_debut_intervention, i.date_cloture,
+                   i.type_erreur, i.priorite,
+                   COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
+                   COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
+                   (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
+                   (SELECT e.client FROM equipements e
+                    WHERE LOWER(e.nom) = LOWER(i.machine)
+                    LIMIT 1) AS client
+            FROM interventions i
+        """
         if machine:
             df = read_sql(
-                "SELECT * FROM interventions WHERE machine = ? ORDER BY date DESC",
+                base_query + " WHERE i.machine = ? ORDER BY i.date DESC",
                 conn, params=(machine,))
         else:
-            df = read_sql("SELECT * FROM interventions ORDER BY date DESC", conn)
+            df = read_sql(base_query + " ORDER BY i.date DESC", conn)
     df = _fix_df_text(df)
-    # Normaliser le statut (gère TOUTE corruption d'encodage)
+    # Fill remaining NaN with empty string
+    if "client" in df.columns:
+        df["client"] = df["client"].fillna("")
+    # Normaliser le statut
     if not df.empty and "statut" in df.columns:
         df["statut"] = df["statut"].apply(
             lambda s: "Cloturee" if "tur" in str(s).lower() else str(s)
         )
     return df
+
 
 
 def ajouter_intervention(intervention_dict):
@@ -1266,7 +1290,7 @@ def ajouter_notification_piece(notif_dict):
             INSERT INTO notifications_pieces
             (type, intervention_id, piece_reference, piece_nom, intervention_ref,
              equipement, client, technicien, message, source, destination, statut)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'non_lu')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'non_lu')
         """, (
             notif_dict.get("type", ""),
             notif_dict.get("intervention_id"),
@@ -1288,36 +1312,36 @@ def lire_notifications_pieces(destination=None, statut=None, technicien=None):
     query = "SELECT * FROM notifications_pieces WHERE 1=1"
     params = []
     if destination:
-        query += " AND destination = ?"
+        query += " AND destination = %s"
         params.append(destination)
     if statut:
-        query += " AND statut = ?"
+        query += " AND statut = %s"
         params.append(statut)
     if technicien:
-        query += " AND LOWER(technicien) = LOWER(?)"
-        params.append(technicien)
-    query += " ORDER BY date_creation DESC"
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
+    query += " ORDER BY date_creation DESC LIMIT 200"
     with get_db() as conn:
         return read_sql(query, conn, params=params)
 
 
 def compter_notifications_non_lues(destination, technicien=None):
     """Compte les notifications non lues pour une destination (et optionnellement un technicien)."""
-    query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = ? AND statut = 'non_lu'"
+    query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = %s AND statut = 'non_lu'"
     params = [destination]
     if technicien:
-        query += " AND LOWER(technicien) = LOWER(?)"
-        params.append(technicien)
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
     with get_db() as conn:
         row = conn.execute(query, tuple(params)).fetchone()
-        return row["cnt"] if row else 0
+        return int(row["cnt"]) if row else 0
 
 
 def marquer_notification_lue(notif_id):
     """Marque une notification comme lue."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE notifications_pieces SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE notifications_pieces SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = %s",
             (notif_id,)
         )
     return True
@@ -1327,7 +1351,7 @@ def marquer_notification_traitee(notif_id):
     """Marque une notification comme traitée."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE notifications_pieces SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE notifications_pieces SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = %s",
             (notif_id,)
         )
     return True
@@ -1337,7 +1361,7 @@ def notifications_rupture_pour_piece(piece_reference):
     """Retourne les notifications de rupture non traitées pour une pièce donnée."""
     with get_db() as conn:
         return read_sql(
-            "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = ? AND statut != 'traite'",
+            "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = %s AND statut != 'traite'",
             conn, params=(piece_reference,)
         )
 
@@ -1914,22 +1938,24 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         total_cout_pieces = 0.0
         if pieces_a_deduire:
             for p in pieces_a_deduire:
-                ref = p['ref']
-                qty = p['qty']
+                if not isinstance(p, dict):
+                    continue
+                ref = p.get('ref') or p.get('reference') or ''
+                qty = int(p.get('qty') or p.get('quantite') or 0)
                 prix = float(p.get('prix_unitaire', 0) or 0)
                 if qty > 0:
                     print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}")
                     conn.execute("""
                         UPDATE pieces_rechange
-                        SET stock_actuel = stock_actuel - ?
-                        WHERE reference = ?
+                        SET stock_actuel = stock_actuel - %s
+                        WHERE reference = %s
                     """, (qty, ref))
                     cout_piece = prix * qty
                     total_cout_pieces += cout_piece
-                    synthese_pieces.append(f"{p['designation']} (x{qty} @ {prix:.0f})")
+                    synthese_pieces.append(f"{p.get('designation', ref)} (x{qty} @ {prix:.0f})")
         else:
             print(f"[CLOTURE] Aucune pièce à déduire (pieces_a_deduire={pieces_a_deduire})")
-        
+
         pieces_str = ", ".join(synthese_pieces)
 
         # Calculer le coût (taux_horaire × durée)
@@ -1948,20 +1974,20 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             # Utiliser COALESCE pour éviter le problème NULL || text = NULL en PostgreSQL
             conn.execute("""
                 UPDATE interventions
-                SET statut='Cloturee', probleme=?, cause=?, solution=?,
-                    pieces_utilisees=COALESCE(pieces_utilisees, '') || ?, duree_minutes=?,
-                    cout_pieces=?, cout=?, date=?
-                WHERE id=?
+                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s,
+                    pieces_utilisees=COALESCE(pieces_utilisees, '') || %s, duree_minutes=%s,
+                    cout_pieces=%s, cout=%s, date=%s
+                WHERE id=%s
             """, (probleme, cause, solution, f" | {pieces_str}", duree_val, total_cout_pieces, cout_total, date_cloture, intervention_id))
         else:
             conn.execute("""
                 UPDATE interventions
-                SET statut='Cloturee', probleme=?, cause=?, solution=?, duree_minutes=?, cout=?, date=?
-                WHERE id=?
+                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s, duree_minutes=%s, cout=%s, date=%s
+                WHERE id=%s
             """, (probleme, cause, solution, duree_val, cout_total, date_cloture, intervention_id))
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
-        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=?", (intervention_id,)).fetchone()
+        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()
         code_erreur = row["code_erreur"] if row else ""
 
         # 4. Auto-Learning : Alimenter la table solutions si un code erreur existe
@@ -1971,7 +1997,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         if code_erreur and type_intervention != "Formation":
             conn.execute("""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     cause=excluded.cause,
                     solution=excluded.solution,
@@ -1980,6 +2006,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             """, (code_erreur, type_erreur_val or "Hardware", "MOYENNE", cause, solution, "SAV-Auto", datetime.now().isoformat()))
 
     return True, "Intervention clôturée, stock mis à jour et connaissances sauvegardées !"
+
 
 
 # ==========================================

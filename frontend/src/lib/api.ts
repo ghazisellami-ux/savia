@@ -85,14 +85,55 @@ export const interventions = {
     request<{ ok: boolean; message: string }>('/api/interventions', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean; message: string }>(`/api/interventions/${id}`, { method: 'PUT', body: data }),
+
+  // Fiche signée
+  uploadFiche: async (id: number, file: File): Promise<{ ok: boolean; filename: string }> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json();
+  },
+  downloadFicheUrl: (id: number): string => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
+    return `${API_BASE}/api/interventions/${id}/fiche?token=${token}`;
+  },
+  listFiches: () =>
+    request<Array<Record<string, unknown>>>('/api/interventions/fiches'),
+  updateFicheValidation: (id: number, validation: string) =>
+    request<{ ok: boolean; validation: string }>(`/api/interventions/${id}/fiche-validation`, {
+      method: 'PATCH',
+      body: { validation },
+    }),
 };
 
 // --- Équipements ---
 export const equipements = {
-  list: () => request<Array<Record<string, unknown>>>('/api/equipements'),
-  create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/equipements', { method: 'POST', body: data }),
+  list: (client?: string) => {
+    const qs = client ? `?client=${encodeURIComponent(client)}` : '';
+    return request<Array<Record<string, unknown>>>(`/api/equipements${qs}`);
+  },
+  create: (data: Record<string, unknown>) => request<{ok: boolean; id: number | null}>('/api/equipements', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
+};
+
+// --- Documents Techniques ---
+export const documentsTechniques = {
+  listAll: () => request<Array<Record<string, unknown>>>('/api/documents-techniques'),
+  listByEquipment: (equipId: number) => request<Array<Record<string, unknown>>>(`/api/documents-techniques/${equipId}`),
+  upload: (equipementId: number, nomFichier: string, contenuBase64: string) =>
+    request<{ok: boolean}>('/api/documents-techniques/upload', {
+      method: 'POST',
+      body: { equipement_id: equipementId, nom_fichier: nomFichier, contenu_base64: contenuBase64 }
+    }),
+  download: (docId: number) => request<{ contenu_base64: string; nom_fichier: string }>(`/api/documents-techniques/download/${docId}`),
+  delete: (docId: number) => request<{ok: boolean}>(`/api/documents-techniques/${docId}`, { method: 'DELETE' }),
 };
 
 // --- Techniciens ---
@@ -111,12 +152,24 @@ export const pieces = {
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
 };
 
+// --- Notifications ---
+export const notifications = {
+  list: () => request<Array<Record<string, unknown>>>('/api/notifications'),
+  count: () => request<{ count: number }>('/api/notifications/count'),
+  markRead: (id: number) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'PATCH' }),
+  markDone: (id: number) => request<{ ok: boolean }>(`/api/notifications/${id}/done`, { method: 'PATCH' }),
+};
+
 // --- Demandes ---
 export const demandes = {
   list: (statuts?: string) => {
     const qs = statuts ? `?statuts=${statuts}` : '';
     return request<Array<Record<string, unknown>>>(`/api/demandes${qs}`);
   },
+  create: (body: Record<string, unknown>) =>
+    request<{ success: boolean }>('/api/demandes', { method: 'POST', body }),
+  updateStatut: (id: number, body: Record<string, unknown>) =>
+    request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body }),
 };
 
 // --- Autres modules ---
@@ -125,6 +178,12 @@ export const contrats = {
     const qs = client ? `?client=${client}` : '';
     return request<Array<Record<string, unknown>>>(`/api/contrats${qs}`);
   },
+  create: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/contrats', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
+  delete: (id: number) =>
+    request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'DELETE' }),
 };
 
 export const conformite = {
@@ -139,6 +198,12 @@ export const planning = {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return request<Array<Record<string, unknown>>>(`/api/planning?${qs}`);
   },
+  create: (body: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/planning', { method: 'POST', body }),
+  updateStatut: (id: number, body: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body }),
+  delete: (id: number) =>
+    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
 export const knowledge = {
   list: () => request<Array<Record<string, unknown>>>('/api/knowledge'),
@@ -150,6 +215,12 @@ export const clients = {
 
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
+  createUser: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/admin/users', { method: 'POST', body: data }),
+  updateUser: (id: number, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'PUT', body: data }),
+  deleteUser: (id: number) =>
+    request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
 };
 
 // --- AI Engine ---
@@ -158,6 +229,10 @@ export const ai = {
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
   analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "") =>
     request<{ok: boolean, result: any}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
+  analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
+    request<{ok: boolean, result: any}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
+  analyzePieces: (pieces: any[], sym: string = "TND") =>
+    request<{ok: boolean, result: any}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
 };
 
 // --- Logs / S3 ---
@@ -173,4 +248,4 @@ export const logs = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, techniciens, pieces, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };

@@ -4,6 +4,7 @@
 // ==========================================
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { auth } from '@/lib/api';
 import { Lock, User, Loader2 } from 'lucide-react';
 
@@ -48,13 +49,17 @@ export default function LoginPage() {
         <div className="glass rounded-2xl p-8 shadow-2xl shadow-black/20">
           {/* Logo */}
           <div className="text-center mb-8">
-            <div className="text-5xl mb-3">📡🏥</div>
-            <h1 className="text-2xl font-black gradient-text tracking-tight">
-              SAVIA
-            </h1>
-            <p className="text-savia-text-muted text-sm mt-1">
-              Superviseur Intelligent Clinique — Maintenance Prédictive
-            </p>
+            <div className="flex justify-center mb-3">
+              <Image
+                src="/logo-savia.png"
+                alt="SAVIA"
+                width={360}
+                height={234}
+                priority
+                className="object-contain"
+                style={{ maxWidth: '80%', height: 'auto' }}
+              />
+            </div>
           </div>
 
           {/* Form */}
@@ -112,7 +117,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-lg font-bold text-white
+              className="w-full py-3 rounded-lg font-bold text-savia-text
                          bg-gradient-to-r from-savia-accent to-savia-accent-blue
                          hover:from-savia-accent/90 hover:to-savia-accent-blue/90
                          disabled:opacity-50 disabled:cursor-not-allowed

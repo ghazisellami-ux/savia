@@ -119,30 +119,26 @@ export default function SupervisionPage() {
   const [importSuccess, setImportSuccess] = useState('');
   const [rawLogContent, setRawLogContent] = useState<string>('');
   const [deletingLog, setDeletingLog] = useState<string>('');
+  const [confirmDelete, setConfirmDelete] = useState<MachineFleet | null>(null);
 
-  // Delete log handler
-  const handleDeleteLog = async (machine: MachineFleet) => {
-    const confirmed = window.confirm(`Supprimer tous les logs de "${machine.machine}" ?\n\nCette action est irréversible.`);
-    if (!confirmed) return;
-
+  // Delete log handler — called after user confirms via modal
+  const executeDeleteLog = async (machine: MachineFleet) => {
+    setConfirmDelete(null);
     setDeletingLog(machine.machine);
     try {
-      const result = await logsApi.deleteMachine(machine.machine);
-      // Remove from local fleet state
-      setFleet(prev => prev.filter(m => m.machine !== machine.machine));
-      if (selectedMachine === machine.machine) {
-        setSelectedMachine('');
-        setSelectedError('');
-        setAiResult(null);
-        setShowAiDiag(false);
-      }
-      alert(`✓ ${result.message}`);
+      await logsApi.deleteMachine(machine.machine);
     } catch (err) {
-      console.error('Delete log failed', err);
-      alert('Erreur lors de la suppression des logs.');
-    } finally {
-      setDeletingLog('');
+      console.warn('S3 delete skipped (no logs on S3 or S3 unavailable)', err);
     }
+    // Always remove from local fleet state
+    setFleet(prev => prev.filter(m => m.machine !== machine.machine));
+    if (selectedMachine === machine.machine) {
+      setSelectedMachine('');
+      setSelectedError('');
+      setAiResult(null);
+      setShowAiDiag(false);
+    }
+    setDeletingLog('');
   };
 
   useEffect(() => {
@@ -423,7 +419,7 @@ export default function SupervisionPage() {
             <button
               onClick={handleImportLog}
               disabled={!importFile || !importEquip || importLoading}
-              className="w-full py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {importLoading ? 'Analyse en cours...' : 'Enregistrer et analyser'}
             </button>
@@ -498,7 +494,7 @@ export default function SupervisionPage() {
         <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-savia-accent" /> Erreurs détectées sur {currentMachine.machine}</span>}>
           <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-900 z-10">
+              <thead className="sticky top-0 bg-savia-bg z-10">
                 <tr className="border-b border-savia-border">
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Code</th>
                   <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Message</th>
@@ -562,7 +558,7 @@ export default function SupervisionPage() {
               <button
                 onClick={handleAnalyzeAI}
                 disabled={aiLoading}
-                className="w-full py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-blue-600
+                className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600
                            hover:from-purple-500 hover:to-blue-500 disabled:opacity-50
                            transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
@@ -686,7 +682,7 @@ export default function SupervisionPage() {
                     </select>
                   </div>
                 </div>
-                <button className="w-full py-3 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
+                <button className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
                   <Save className="w-5 h-5 inline mr-2 -mt-1" /> Enregistrer dans la base
                 </button>
               </div>
@@ -745,7 +741,7 @@ export default function SupervisionPage() {
         {/* Fleet Table */}
         <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-slate-900 z-10">
+            <thead className="sticky top-0 bg-savia-bg z-10">
               <tr className="border-b border-savia-border">
                 <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">État</th>
                 <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Server className="w-3 h-3 inline mr-1 -mt-0.5" /> Équipement</th>
@@ -781,7 +777,7 @@ export default function SupervisionPage() {
                   <td className="py-2.5 px-3 text-center font-mono font-bold text-red-400">{m.critiques}</td>
                   <td className="py-2.5 px-3 text-center">
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteLog(m); }}
+                      onClick={(e) => { e.stopPropagation(); setConfirmDelete(m); }}
                       disabled={deletingLog === m.machine}
                       title={`Supprimer les logs de ${m.machine}`}
                       className="p-1.5 rounded-lg text-savia-text-muted hover:text-red-400 hover:bg-red-500/10
@@ -815,6 +811,46 @@ export default function SupervisionPage() {
           ))}
         </div>
       )}
+      {/* ===== Delete Confirmation Modal ===== */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-savia-surface border border-savia-border rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 rounded-full bg-red-500/10">
+                <Trash2 className="w-6 h-6 text-red-400" />
+              </div>
+              <h3 className="text-lg font-bold text-savia-text">Confirmer la suppression</h3>
+            </div>
+            <p className="text-savia-text-muted text-sm mb-2">
+              Voulez-vous supprimer tous les logs de :
+            </p>
+            <p className="text-savia-text font-bold text-base mb-4 bg-savia-bg rounded-lg px-3 py-2">
+              <Server className="w-4 h-4 inline mr-2 -mt-0.5 text-savia-accent" />
+              {confirmDelete.machine}
+            </p>
+            <p className="text-red-400/80 text-xs mb-6 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" /> Cette action est irréversible.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 py-2.5 rounded-lg font-semibold text-savia-text bg-savia-bg border border-savia-border
+                           hover:bg-savia-surface-hover transition-all cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => executeDeleteLog(confirmDelete)}
+                className="flex-1 py-2.5 rounded-lg font-semibold text-savia-text bg-red-600 hover:bg-red-500
+                           transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" /> Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
