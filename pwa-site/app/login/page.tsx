@@ -48,6 +48,7 @@ export default function LoginPage() {
           width={396}
           height={252}
           priority
+          unoptimized
           style={{ objectFit: 'contain', maxWidth: '80vw', height: 'auto' }}
         />
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px', marginBottom: '28px', fontWeight: 600 }}>Interface Technicien</p>
