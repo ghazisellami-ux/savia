@@ -38,7 +38,7 @@ const ROLE_COLOR: Record<string, string> = {
 };
 
 // Rôles qui reçoivent les notifications de nouvelles demandes
-const NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire'];
+const NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire', 'Lecteur', 'Technicien'];
 // Rôles qui voient le badge pièces (rupture pour gestionnaires, dispo pour techniciens)
 const PIECES_NOTIF_ROLES = ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire', 'Technicien'];
 const LAST_SEEN_KEY = 'demandes_last_seen';
@@ -54,7 +54,7 @@ export default function Sidebar() {
   const canSeeNotif = !!(user && NOTIF_ROLES.includes(user.role));
   const canSeePiecesNotif = !!(user && PIECES_NOTIF_ROLES.includes(user.role));
 
-  // ─── Badge demandes (managers/admins) ───
+  // ─── Badge demandes : compte les demandes non traitées ───
   const fetchNewCount = useCallback(async () => {
     if (!canSeeNotif) return;
     try {
@@ -65,18 +65,25 @@ export default function Sidebar() {
       });
       if (!res.ok) return;
       const data: any[] = await res.json();
-      const lastSeen = typeof window !== 'undefined' ? localStorage.getItem(LAST_SEEN_KEY) : null;
-      const lastSeenDate = lastSeen ? new Date(lastSeen) : new Date(0);
-      const newCount = data.filter((d: any) => {
-        const isNew = new Date(d.date_demande) > lastSeenDate;
-        const isPending = !d.statut || ['En attente', 'Nouvelle', ''].includes(d.statut);
-        return isNew && isPending;
+
+      const PENDING = ['En attente', 'Nouvelle', ''];
+      const ACTIVE  = ['En attente', 'Nouvelle', 'Assignée', 'En cours'];
+
+      const isTechnicien = user?.role === 'Technicien';
+
+      const count = data.filter((d: any) => {
+        const s = d.statut || '';
+        // Technicien : voit les demandes qui le concernent et sont actives
+        if (isTechnicien) return ACTIVE.includes(s);
+        // Autres (Admin, Lecteur, Gestionnaire…) : demandes en attente non résolues
+        return PENDING.includes(s);
       }).length;
-      setNewDemandesCount(newCount);
+
+      setNewDemandesCount(count);
     } catch {
       // silencieux
     }
-  }, [canSeeNotif]);
+  }, [canSeeNotif, user?.role]);
 
   // ─── Badge pièces (rupture pour gestionnaires / dispo pour techniciens) ───
   const fetchPiecesCount = useCallback(async () => {
@@ -108,15 +115,12 @@ export default function Sidebar() {
     return () => clearInterval(interval);
   }, [fetchPiecesCount]);
 
-  // Quand on arrive sur /demandes, marquer comme vu
+  // Quand on arrive sur /demandes, rafraîchir le compteur
   useEffect(() => {
     if (pathname === '/demandes') {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString());
-      }
-      setNewDemandesCount(0);
+      setTimeout(fetchNewCount, 1000); // rafraîchir après que la page a chargé
     }
-  }, [pathname]);
+  }, [pathname, fetchNewCount]);
 
   // Quand on arrive sur /pieces, rafraîchir le count (les notifs sont marquées lues depuis la page)
   useEffect(() => {
@@ -138,13 +142,13 @@ export default function Sidebar() {
           <Image
             src="/logo-savia.png"
             alt="SAVIA"
-            width={150}
-            height={95}
+            width={300}
+            height={190}
             priority
-            className="object-contain"
+            className="object-contain w-full"
           />
         </div>
-        <div className={`text-xs mt-0.5 font-semibold ${ROLE_COLOR[user.role] || 'text-savia-text-muted'}`}>
+        <div className="text-xs mt-0.5 font-semibold text-savia-text-muted">
           {user.nom} · {user.role}
         </div>
       </div>

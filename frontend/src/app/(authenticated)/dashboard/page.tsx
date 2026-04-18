@@ -557,10 +557,10 @@ export default function DashboardPage() {
                 cornerRadius={8}
                 background={{ fill: '#1e293b' }}
               />
-              <text x="50%" y="55%" textAnchor="middle" fill="#f1f5f9" fontSize="32" fontWeight="800">
+              <text x="50%" y="55%" textAnchor="middle" fill="#94a3b8" fontSize="32" fontWeight="800">
                 {scoreGlobal}%
               </text>
-              <text x="50%" y="68%" textAnchor="middle" fill="#94a3b8" fontSize="12">
+              <text x="50%" y="68%" textAnchor="middle" fill="#94a3b8" fontSize="12" opacity="0.75">
                 Santé Globale
               </text>
             </RadialBarChart>

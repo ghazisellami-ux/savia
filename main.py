@@ -34,6 +34,7 @@ from db_engine import (
     lire_base,
     lire_audit, log_audit,
     get_config, set_config,
+    lire_demandes_intervention,
 )
 
 logger = logging.getLogger("savia-api")
@@ -138,11 +139,24 @@ def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security))
         return {"sub": "guest", "role": "Lecteur", "nom": "Visiteur"}
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
+        # Rétrocompatibilité : si Lecteur mais client absent du token, le récupérer en DB
+        if payload.get("role") == "Lecteur" and not payload.get("client"):
+            try:
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT client FROM utilisateurs WHERE username = %s",
+                        (payload.get("sub", ""),)
+                    ).fetchone()
+                    if row and row["client"]:
+                        payload["client"] = row["client"]
+            except Exception:
+                pass
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expiré")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token invalide")
+
 
 
 def _optional_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
@@ -540,6 +554,21 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             except Exception as te:
                 logger.error(f"Telegram clôture erreur: {te}")
 
+            # --- Mettre à jour la demande liée (si elle existe) → statut "Résolue" ---
+            try:
+                with get_db() as conn:
+                    conn.execute(
+                        """UPDATE demandes_intervention
+                           SET statut = 'Résolue',
+                               date_traitement = %s
+                         WHERE intervention_id = %s
+                           AND statut != 'Résolue'""",
+                        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), intervention_id)
+                    )
+                    logger.info(f"Demande liée à l'intervention #{intervention_id} marquée Résolue")
+            except Exception as de:
+                logger.error(f"Erreur mise à jour demande liée: {de}")
+
             return {"ok": True, "message": msg}
         except HTTPException:
             raise
@@ -588,15 +617,17 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     fields = []
     params = []
     for f in ["probleme", "cause", "solution", "pieces_utilisees", "cout",
-              "duree_minutes", "description", "notes", "type_erreur", "priorite"]:
+              "duree_minutes", "description", "notes", "type_erreur", "priorite",
+              "fiche_validation"]:
         if f in body:
-            fields.append(f"{f} = ?")
+            fields.append(f"{f} = %s")
             params.append(body[f])
     if fields:
         params.append(intervention_id)
         with get_db() as conn:
-            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
+            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = %s", params)
     return {"ok": True}
+
 
 
 @app.post("/api/interventions/{intervention_id}/fiche")
@@ -733,6 +764,10 @@ def get_demandes(
     user: dict = Depends(_verify_token),
 ):
     df = lire_demandes_intervention()
+    # Lecteur : ne voit que les demandes de son client
+    client_filter = _get_client_filter(user)
+    if client_filter and not df.empty and "client" in df.columns:
+        df = df[df["client"].astype(str).str.lower() == client_filter.lower()]
     if statuts and not df.empty and "statut" in df.columns:
         lst = [s.strip() for s in statuts.split(",")]
         df = df[df["statut"].isin(lst)]
@@ -1004,6 +1039,9 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
                     for tech, interventions_list in tech_map.items():
                         machines = ", ".join(set(i["machine"] for i in interventions_list if i["machine"]))
                         nb = len(interventions_list)
+                        inter_ids = ", ".join(
+                            f"#{i['intervention_id']}" for i in interventions_list if i.get("intervention_id")
+                        )
                         ajouter_notification_piece({
                             "type": "piece_dispo",
                             "piece_reference": reference,
@@ -1019,6 +1057,32 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
                         })
                         logger.info(f"Notif piece_dispo créée pour technicien {tech}: pièce {reference}")
 
+                    # --- Telegram : pièce à nouveau disponible ---
+                    try:
+                        all_techs = ", ".join(tech_map.keys()) or "N/A"
+                        all_machines = ", ".join(
+                            set(i["machine"] for ivs in tech_map.values() for i in ivs if i.get("machine"))
+                        ) or "N/A"
+                        all_inter_ids = ", ".join(
+                            f"#{i['intervention_id']}"
+                            for ivs in tech_map.values() for i in ivs
+                            if i.get("intervention_id")
+                        ) or "N/A"
+                        msg_tg = (
+                            f"🟢 <b>PIÈCE DISPONIBLE</b>\n\n"
+                            f"🔩 Pièce : <b>{nom_piece}</b>\n"
+                            f"🏷 Référence : <b>{reference}</b>\n"
+                            f"📦 Stock actuel : <b>{nouveau_stock}</b>\n\n"
+                            f"🔗 Intervention(s) concernée(s) : {all_inter_ids}\n"
+                            f"🏥 Équipement(s) : {all_machines}\n"
+                            f"👷 Technicien(s) : {all_techs}\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        _send_telegram(msg_tg)
+                        logger.info(f"Telegram pièce disponible envoyé: {reference}")
+                    except Exception as tg_err:
+                        logger.error(f"Telegram pièce dispo erreur: {tg_err}")
+
                     # Marquer les notifications rupture comme traitées
                     for _, n in df_notifs.iterrows():
                         try:
@@ -1027,6 +1091,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
                             pass
         except Exception as ne:
             logger.error(f"Erreur notif réappro pièce {piece_id}: {ne}")
+
 
     return {"ok": True}
 

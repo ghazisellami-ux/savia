@@ -1947,15 +1947,15 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                     print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}")
                     conn.execute("""
                         UPDATE pieces_rechange
-                        SET stock_actuel = stock_actuel - ?
-                        WHERE reference = ?
+                        SET stock_actuel = stock_actuel - %s
+                        WHERE reference = %s
                     """, (qty, ref))
                     cout_piece = prix * qty
                     total_cout_pieces += cout_piece
-                    synthese_pieces.append(f"{p['designation']} (x{qty} @ {prix:.0f})")
+                    synthese_pieces.append(f"{p.get('designation', ref)} (x{qty} @ {prix:.0f})")
         else:
             print(f"[CLOTURE] Aucune pièce à déduire (pieces_a_deduire={pieces_a_deduire})")
-        
+
         pieces_str = ", ".join(synthese_pieces)
 
         # Calculer le coût (taux_horaire × durée)
@@ -1974,20 +1974,20 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             # Utiliser COALESCE pour éviter le problème NULL || text = NULL en PostgreSQL
             conn.execute("""
                 UPDATE interventions
-                SET statut='Cloturee', probleme=?, cause=?, solution=?,
-                    pieces_utilisees=COALESCE(pieces_utilisees, '') || ?, duree_minutes=?,
-                    cout_pieces=?, cout=?, date=?
-                WHERE id=?
+                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s,
+                    pieces_utilisees=COALESCE(pieces_utilisees, '') || %s, duree_minutes=%s,
+                    cout_pieces=%s, cout=%s, date=%s
+                WHERE id=%s
             """, (probleme, cause, solution, f" | {pieces_str}", duree_val, total_cout_pieces, cout_total, date_cloture, intervention_id))
         else:
             conn.execute("""
                 UPDATE interventions
-                SET statut='Cloturee', probleme=?, cause=?, solution=?, duree_minutes=?, cout=?, date=?
-                WHERE id=?
+                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s, duree_minutes=%s, cout=%s, date=%s
+                WHERE id=%s
             """, (probleme, cause, solution, duree_val, cout_total, date_cloture, intervention_id))
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
-        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=?", (intervention_id,)).fetchone()
+        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()
         code_erreur = row["code_erreur"] if row else ""
 
         # 4. Auto-Learning : Alimenter la table solutions si un code erreur existe
@@ -1997,7 +1997,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         if code_erreur and type_intervention != "Formation":
             conn.execute("""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     cause=excluded.cause,
                     solution=excluded.solution,
@@ -2006,6 +2006,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             """, (code_erreur, type_erreur_val or "Hardware", "MOYENNE", cause, solution, "SAV-Auto", datetime.now().isoformat()))
 
     return True, "Intervention clôturée, stock mis à jour et connaissances sauvegardées !"
+
 
 
 # ==========================================

@@ -14,7 +14,15 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
       ...opts.headers,
     },
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+
   return res.json();
 }
 

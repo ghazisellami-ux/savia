@@ -1,19 +1,22 @@
 # ============================================
-# Savia — .gitignore (Version Zéro)
+# SAVIA — .gitignore (Production Clean)
 # ============================================
 
 # ---- Sécurité & Configuration locale ----
 .env
 .env.*
 !.env.example
-license.key
-.streamlit/secrets.toml
 
 # ---- Base de données ----
 *.db
 *.db-journal
 *.db-wal
 *.sqlite3
+
+# ---- Fichiers sensibles ----
+pgpass
+pgadmin_servers.json
+*.key
 
 # ---- Python ----
 __pycache__/
@@ -33,33 +36,18 @@ env/
 # ---- Logs ----
 logs/
 *.log
-*.elg2
 
 # ---- Backups & données générées ----
 backups/
 backup_complet.json
-data/backup_complet.json
+data/
 
 # ---- Rapports générés ----
-reports/*.pdf
+reports/
 
-# ---- Fichiers binaires / présentations ----
-SIC_Radiologie_Pitch.pptx
+# ---- Fichiers binaires ----
 *.zip
-
-# ---- Scripts d'archives (obsolètes) ----
-z_archives_scripts/
-
-# ---- Scripts utilitaires locaux ----
-lancer.bat
-lancer.vbs
-start_hidden.py
-get_chat_id.py
-get_vps_models.py
-list_models.py
-test_gemini.py
-test_global.py
-deploy_key.py
+*.pptx
 
 # ---- IDE & Outils ----
 .qodo/
@@ -76,3 +64,7 @@ desktop.ini
 
 # ---- Docker (runtime) ----
 docker-compose.override.yml
+
+# ---- Node.js ----
+node_modules/
+.next/
