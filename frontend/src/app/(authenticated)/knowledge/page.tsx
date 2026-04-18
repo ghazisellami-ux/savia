@@ -53,10 +53,10 @@ export default function KnowledgePage() {
     setImportLoading(true);
     setImportMsg('');
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('savia_token');
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/knowledge/import`, {
+      const res = await fetch(`/api/knowledge/import`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: formData,

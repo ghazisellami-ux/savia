@@ -9,8 +9,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Copy all files and build
+# Copy all files
 COPY . .
+
+# NEXT_PUBLIC_* vars are baked at build time — set empty so frontend uses relative URLs
+# (Nginx proxies /api/* to the backend, no hardcoded host needed)
+ENV NEXT_PUBLIC_API_URL=
+
 RUN npm run build
 
 # Production image
@@ -18,7 +23,6 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000
 
 # Copy built assets from builder
 COPY --from=builder /app/.next/standalone ./
