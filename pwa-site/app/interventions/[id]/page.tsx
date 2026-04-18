@@ -53,11 +53,13 @@ export default function InterventionDetailPage() {
   const [photoFile, setPhotoFile]       = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState('');
   const [piecesQty, setPiecesQty]       = useState<PiecesQty>({});
+  const [piecesRupture, setPiecesRupture] = useState<any[]>([]); // pièces demandées (rupture)
+  const [searchRupture, setSearchRupture] = useState('');
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
-    duree_minutes: 0,
+    duree_minutes: 0, fiche_validation: 'En attente',
   });
 
   useEffect(() => {
@@ -79,15 +81,16 @@ export default function InterventionDetailPage() {
       setIntervention(found);
       setAllPieces(pieces as any[]);
       setForm({
-        statut:        found.statut || 'En cours',
-        probleme:      found.probleme || '',
-        cause:         found.cause || '',
-        solution:      found.solution || '',
-        description:   found.description || '',
-        notes:         found.notes || '',
-        type_erreur:   found.type_erreur || '',
-        priorite:      found.priorite || '',
-        duree_minutes: found.duree_minutes || 0,
+        statut:           found.statut || 'En cours',
+        probleme:         found.probleme || '',
+        cause:            found.cause || '',
+        solution:         found.solution || '',
+        description:      found.description || '',
+        notes:            found.notes || '',
+        type_erreur:      found.type_erreur || '',
+        priorite:         found.priorite || '',
+        duree_minutes:    found.duree_minutes || 0,
+        fiche_validation: found.fiche_validation || 'En attente',
       });
     } catch {
       setError('Erreur lors du chargement.');
@@ -119,18 +122,32 @@ export default function InterventionDetailPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(''); setSuccess(''); setSaving(true);
+    setError(''); setSuccess('');
+
+    // Validation frontend : solution obligatoire pour clôturer
+    if (form.statut === 'Cloturee' && !form.solution.trim()) {
+      setError('⚠️ La "Solution appliquée" est obligatoire pour clôturer l\'intervention.');
+      document.getElementById('field-solution')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    setSaving(true);
     try {
       const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
         const p = allPieces.find(x => x.id === Number(pieceId));
         return { id: Number(pieceId), reference: p?.reference || '', quantite: qty };
       });
-      await api.interventions.update(id, { ...form, pieces_a_deduire });
+      const pieces_rupture = piecesRupture.map(p => ({
+        id: p.id,
+        reference: p.reference || '',
+        designation: p.designation || p.nom || '',
+      }));
+      await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture });
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(() => {});
       setSuccess('✅ Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
-    } catch {
-      setError('Erreur lors de la mise à jour.');
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de la mise à jour.');
     } finally {
       setSaving(false);
     }
@@ -138,7 +155,21 @@ export default function InterventionDetailPage() {
 
   const set = (k: keyof typeof form, v: any) => setForm(f => ({ ...f, [k]: v }));
   const statutStyle = STATUT_STYLES[form.statut] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
-  const isClotured = form.statut === 'Cloturee';
+  const isClotured    = form.statut === 'Cloturee';
+  const isAttenteP    = form.statut === 'En attente de piece';
+
+  const toggleRupture = (p: any) => {
+    setPiecesRupture(prev =>
+      prev.find(x => x.id === p.id) ? prev.filter(x => x.id !== p.id) : [...prev, p]
+    );
+  };
+
+  const searchedPieces = allPieces.filter(p => {
+    if (!searchRupture) return true;
+    const q = searchRupture.toLowerCase();
+    return (p.designation || p.nom || '').toLowerCase().includes(q)
+        || (p.reference || '').toLowerCase().includes(q);
+  });
 
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -194,14 +225,27 @@ export default function InterventionDetailPage() {
             {[
               { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
               { key: 'cause',    label: 'Cause racine',      ph: 'Analyse de la cause...' },
-              { key: 'solution', label: 'Solution appliquée',ph: 'Actions correctives...' },
+              { key: 'solution', label: 'Solution appliquée', ph: 'Actions correctives...' },
             ].map(({ key, label, ph }) => (
-              <div key={key} style={{ marginBottom: '12px' }}>
-                <label style={LABEL}>{label}</label>
-                <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder={ph}
-                  value={(form as any)[key]} onChange={e => set(key as any, e.target.value)} />
+              <div key={key} id={key === 'solution' ? 'field-solution' : undefined} style={{ marginBottom: '12px' }}>
+                <label style={LABEL}>
+                  {label}
+                  {key === 'solution' && isClotured && (
+                    <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>
+                  )}
+                </label>
+                <textarea
+                  style={{
+                    ...INPUT, resize: 'vertical',
+                    borderColor: key === 'solution' && isClotured && !(form as any)[key] ? '#ef4444' : undefined,
+                  }}
+                  rows={2} placeholder={ph}
+                  value={(form as any)[key]}
+                  onChange={e => set(key as any, e.target.value)}
+                />
               </div>
             ))}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Type d&apos;erreur</label>
@@ -335,17 +379,97 @@ export default function InterventionDetailPage() {
             </div>
           </div>
 
-          {/* ⑥ Photo fiche signée — uniquement si Clôturée, juste après le statut */}
+          {/* □ Pièces requises — visible uniquement quand statut = En attente de piece */}
+          {isAttenteP && (
+            <div style={{ ...SECTION, border: '2px dashed #B45309', background: 'rgba(245,158,11,0.03)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                  ⚠️ Pièces requises (rupture)
+                </h3>
+                {piecesRupture.length > 0 && (
+                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', animation: 'pulse 2s infinite' }}>
+                    {piecesRupture.length} sélectionnée{piecesRupture.length > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize: '0.72rem', color: '#B45309', background: 'rgba(245,158,11,0.08)', padding: '6px 10px', borderRadius: '8px', marginBottom: '10px' }}>
+                Sélectionnez les pièces nécessaires — un badge rouge sera créé dans Pièces de rechange
+              </p>
+
+              {/* Recherche */}
+              <input
+                type="search"
+                placeholder="🔍 Rechercher une pièce..."
+                value={searchRupture}
+                onChange={e => setSearchRupture(e.target.value)}
+                style={{ ...INPUT, marginBottom: '10px' }}
+              />
+
+              {/* Liste des pièces */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', maxHeight: '280px', overflowY: 'auto' }}>
+                {searchedPieces.length === 0 && (
+                  <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px' }}>Aucune pièce trouvée</p>
+                )}
+                {searchedPieces.map((p: any) => {
+                  const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                  const rupture = enStock === 0;
+                  const selected = !!piecesRupture.find(x => x.id === p.id);
+                  return (
+                    <button key={p.id} type="button" onClick={() => toggleRupture(p)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        padding: '10px 12px', borderRadius: '10px', border: 'none',
+                        background: selected ? (rupture ? 'rgba(239,68,68,0.08)' : 'rgba(86,124,141,0.08)') : '#fafafa',
+                        outline: selected ? `2px solid ${rupture ? '#ef4444' : 'var(--teal)'}` : '2px solid transparent',
+                        cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
+                      }}>
+                      <span style={{ fontSize: '1.1rem' }}>{selected ? '✅' : (rupture ? '⚠️' : '○')}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {p.designation || p.nom}
+                        </p>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
+                          <span style={{
+                            fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                            background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                            color: rupture ? '#ef4444' : '#15803D',
+                          }}>
+                            {rupture ? '🔴 Rupture' : `✅ ${enStock} en stock`}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Résumé sélection */}
+              {piecesRupture.length > 0 && (
+                <div style={{ marginTop: '10px', padding: '8px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <p style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ef4444', marginBottom: '4px' }}>📣 Pièces qui seront notifiées :</p>
+                  {piecesRupture.map(p => (
+                    <p key={p.id} style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: '1px 0' }}>
+                      • {p.designation || p.nom} ({p.reference})
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {isClotured && (
             <div style={{ ...SECTION, border: '2px dashed var(--teal)' }}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche de clôture signée</h3>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche d&apos;intervention signée</h3>
+
+              {/* Prise de photo */}
               <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
                 const f = e.target.files?.[0];
                 if (!f) return;
                 setPhotoFile(f);
                 setPhotoPreview(URL.createObjectURL(f));
               }} />
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                 <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
                   style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}>
                   📷 {photoFile ? 'Changer la photo' : 'Prendre / Importer photo'}
@@ -356,13 +480,41 @@ export default function InterventionDetailPage() {
                 )}
               </div>
               {photoPreview && (
-                <img src={photoPreview} alt="Aperçu fiche" style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginTop: '12px', display: 'block' }} />
+                <img src={photoPreview} alt="Aperçu fiche" style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginBottom: '12px', display: 'block' }} />
               )}
               {!photoFile && (
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '12px' }}>
                   Joignez une photo de la fiche d&apos;intervention signée par le client
                 </p>
               )}
+
+              {/* Statut de la fiche */}
+              <div style={{ marginTop: '4px' }}>
+                <label style={LABEL}>Statut de la fiche signée</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  {[
+                    { val: 'En attente', icon: '⏳', bg: 'rgba(245,158,11,0.1)', color: '#B45309' },
+                    { val: 'Validée',    icon: '✅', bg: 'rgba(34,197,94,0.1)',  color: '#15803D' },
+                  ].map(({ val, icon, bg, color }) => (
+                    <button key={val} type="button"
+                      onClick={() => set('fiche_validation', val)}
+                      style={{
+                        padding: '12px 8px',
+                        border: `2px solid ${form.fiche_validation === val ? color : 'var(--border)'}`,
+                        borderRadius: '10px',
+                        background: form.fiche_validation === val ? bg : '#fff',
+                        color: form.fiche_validation === val ? color : 'var(--text-muted)',
+                        fontWeight: form.fiche_validation === val ? 800 : 500,
+                        fontSize: '0.82rem',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        textAlign: 'center',
+                      }}>
+                      {icon} {val}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

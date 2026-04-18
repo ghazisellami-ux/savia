@@ -84,10 +84,8 @@ export default function DemandesPage() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [res, eqRes, techRes, clientRes] = await Promise.all([
+      const [res, techRes, clientRes] = await Promise.all([
         demandes.list(),
-        // For Lecteur: pre-load their client's equipment
-        isLecteur ? equipements.list(clientNom) : equipements.list(),
         techApi.list().catch(() => []),
         clientsApi.list().catch(() => []),
       ]);
@@ -108,12 +106,6 @@ export default function DemandesPage() {
       }));
       setData(mapped);
 
-      // For Lecteur: set their pre-filtered equipment list
-      if (isLecteur) {
-        const lecteurEquips = (eqRes as any[]).map((e: any) => e.Nom || e.nom || '').filter(Boolean);
-        setFilteredEquips(lecteurEquips);
-      }
-
       // Parse clients list (for non-Lecteur dropdowns)
       const clientNames = (clientRes as any[])
         .map((c: any) => c.nom || c.Nom || c.name || '')
@@ -128,16 +120,27 @@ export default function DemandesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [isLecteur, clientNom]);
+  }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Pour Lecteur : charger les équipements dès que user est disponible (évite la race condition)
+  useEffect(() => {
+    if (!isLecteur) return;
+    setEquipsLoading(true);
+    equipements.list() // Le backend filtre automatiquement via JWT pour les Lecteurs
+      .then((res: any[]) => {
+        const names = res.map((e: any) => e.Nom || e.nom || '').filter(Boolean);
+        setFilteredEquips(names);
+      })
+      .catch(() => setFilteredEquips([]))
+      .finally(() => setEquipsLoading(false));
+  }, [isLecteur]);
+
   // When selected client changes (non-Lecteur): load equipment from API for that client
   useEffect(() => {
-    if (isLecteur || !form.client) {
-      if (!isLecteur) setFilteredEquips([]);
-      return;
-    }
+    if (isLecteur) return; // Lecteur: equipment loaded in loadData(), do not reset
+    if (!form.client) { setFilteredEquips([]); return; }
     setEquipsLoading(true);
     equipements.list(form.client)
       .then((res: any[]) => {
@@ -359,23 +362,23 @@ export default function DemandesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Demandeur — visible seulement pour non-Lecteur */}
-                {!isLecteur && (
-                  <div>
-                    <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                      <User className="w-3.5 h-3.5" /> Demandeur *
-                    </label>
-                    <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
-                      onChange={e => setForm({...form, demandeur: e.target.value})} />
-                  </div>
-                )}
+              {/* Demandeur — visible seulement pour non-Lecteur */}
+              {!isLecteur && (
+                <div>
+                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <User className="w-3.5 h-3.5" /> Demandeur *
+                  </label>
+                  <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
+                    onChange={e => setForm({...form, demandeur: e.target.value})} />
+                </div>
+              )}
 
+              {/* Client + Équipement : toujours côte à côte */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Client — verrouillé pour Lecteur, liste déroulante pour les autres */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
-                    {isLecteur && <span className="text-xs text-savia-accent font-normal ml-1">🔒 {clientNom}</span>}
                   </label>
                   {isLecteur ? (
                     <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">
@@ -424,6 +427,9 @@ export default function DemandesPage() {
                     </p>
                   )}
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
                 {/* Code erreur */}
                 <div>

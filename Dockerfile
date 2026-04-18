@@ -1,19 +1,15 @@
-# ==========================================
-# 🐳 Dockerfile — SAVIA FastAPI Backend
-# ==========================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies (from freeze)
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
+# Copy application files (only what's needed)
 COPY main.py db_engine.py ai_engine.py auth.py config.py ./
-COPY log_preprocessor.py log_analyzer.py database.py ./
+COPY log_preprocessor.py ./
 COPY s3_storage.py ./
-COPY views/ ./views/
 COPY knowledge_base.xlsx ./
 
 # Create data directory

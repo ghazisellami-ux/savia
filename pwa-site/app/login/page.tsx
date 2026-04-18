@@ -41,8 +41,17 @@ export default function LoginPage() {
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px' }}>
       {/* Logo */}
-      <Image src="/logo-savia.png" alt="SAVIA" width={160} height={100} priority className="mb-2 object-contain" />
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '32px', fontWeight: 600 }}>Interface Technicien</p>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px' }}>
+        <Image
+          src="/logo-savia.png"
+          alt="SAVIA"
+          width={396}
+          height={252}
+          priority
+          style={{ objectFit: 'contain', maxWidth: '80vw', height: 'auto' }}
+        />
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px', marginBottom: '28px', fontWeight: 600 }}>Interface Technicien</p>
+      </div>
 
       <form onSubmit={handleSubmit} style={{ width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {/* Identifiant */}
