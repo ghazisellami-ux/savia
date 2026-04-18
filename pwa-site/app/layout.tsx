@@ -4,7 +4,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'SAVIA Site',
   description: 'Interface Technicien — SAVIA Maintenance',
-  manifest: '/manifest.json',
+  manifest: '/site/manifest.json',
   appleWebApp: { capable: true, statusBarStyle: 'default', title: 'SAVIA Site' },
 };
 
@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="fr">
       <head>
-        <link rel="apple-touch-icon" href="/logo-savia.png" />
+        <link rel="apple-touch-icon" href="/site/logo-savia.png" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />

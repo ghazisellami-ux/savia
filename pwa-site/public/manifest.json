@@ -1,15 +1,16 @@
 {
+  "id": "/site/",
   "name": "SAVIA Site",
   "short_name": "SAVIA Site",
   "description": "SAVIA — Interface Technicien Terrain",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "/site/",
+  "scope": "/site/",
   "display": "standalone",
   "background_color": "#FAF6ED",
   "theme_color": "#2F4156",
   "orientation": "portrait",
   "icons": [
-    { "src": "/logo-savia.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/logo-savia.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/site/logo-savia.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/site/logo-savia.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
