@@ -8,7 +8,8 @@ import { SectionCard, HealthBadge } from '@/components/ui/cards';
 import {
   AlertTriangle, Upload, Search, Cpu, Building2, FileText,
   Trash2, Send, Brain, ChevronDown, ChevronUp, Server, Activity, 
-  CheckCircle2, Database, Settings, ShieldAlert, Folder, Zap, Save, Lightbulb
+  CheckCircle2, Database, Settings, ShieldAlert, Folder, Zap, Save, Lightbulb,
+  History, Clock, RefreshCw
 } from 'lucide-react';
 import { equipements as equipApi, clients as clientsApi, ai as aiApi, logs as logsApi } from '@/lib/api';
 
@@ -113,6 +114,7 @@ export default function SupervisionPage() {
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
+  const [expandHistory, setExpandHistory] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importEquip, setImportEquip] = useState('');
   const [importLoading, setImportLoading] = useState(false);
@@ -120,6 +122,8 @@ export default function SupervisionPage() {
   const [rawLogContent, setRawLogContent] = useState<string>('');
   const [deletingLog, setDeletingLog] = useState<string>('');
   const [confirmDelete, setConfirmDelete] = useState<MachineFleet | null>(null);
+  const [logHistory, setLogHistory] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Delete log handler — called after user confirms via modal
   const executeDeleteLog = async (machine: MachineFleet) => {
@@ -141,6 +145,18 @@ export default function SupervisionPage() {
     setDeletingLog('');
   };
 
+  const loadLogHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const token = localStorage.getItem('savia_token');
+      const res = await fetch('/api/logs', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) setLogHistory(await res.json());
+    } catch { /* silencieux */ }
+    finally { setHistoryLoading(false); }
+  };
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -155,6 +171,7 @@ export default function SupervisionPage() {
       }
     }
     loadData();
+    loadLogHistory();
   }, []);
 
   // Filter machines
@@ -319,10 +336,10 @@ export default function SupervisionPage() {
       setImportSuccess(`✓ ${lines.length} lignes parsées — ${errCount} erreur(s) détectée(s) dont ${critCount} critique(s)`);
       setImportFile(null);
 
-      // Save log to backend database
+      // Save log to backend database (relative URL via Nginx proxy)
       try {
         const token = localStorage.getItem('savia_token');
-        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/logs/upload`, {
+        await fetch(`/api/logs/upload`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
           body: JSON.stringify({
@@ -333,6 +350,8 @@ export default function SupervisionPage() {
             nb_critiques: critCount,
           }),
         });
+        // Refresh history after save
+        loadLogHistory();
       } catch (saveErr) {
         console.warn('Log save to DB failed (non-blocking):', saveErr);
       }
@@ -690,6 +709,84 @@ export default function SupervisionPage() {
           </>
         );
       })()}
+
+      {/* ===== Historique des Logs ===== */}
+      <div className="glass rounded-xl overflow-hidden">
+        <button
+          onClick={() => { setExpandHistory(!expandHistory); if (!expandHistory) loadLogHistory(); }}
+          className="w-full flex items-center justify-between p-4 hover:bg-savia-surface-hover/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3">
+            <History className="w-5 h-5 text-savia-accent" />
+            <span className="font-semibold">Logs enregistrés</span>
+            {logHistory.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-savia-accent/20 text-savia-accent text-xs font-bold">
+                {logHistory.length}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); loadLogHistory(); }}
+              title="Rafraîchir"
+              className="p-1 rounded hover:bg-savia-surface-hover text-savia-text-muted hover:text-savia-accent transition-all"
+            >
+              <RefreshCw className={`w-4 h-4 ${historyLoading ? 'animate-spin' : ''}`} />
+            </button>
+            {expandHistory ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </div>
+        </button>
+        {expandHistory && (
+          <div className="p-4 pt-0 border-t border-savia-border/50">
+            {logHistory.length === 0 ? (
+              <div className="text-center py-8 text-savia-text-muted">
+                <History className="w-10 h-10 mx-auto mb-2 text-savia-text-dim" />
+                <p className="text-sm">Aucun log enregistré.</p>
+                <p className="text-xs mt-1">Importez un fichier log pour le sauvegarder.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-savia-border">
+                      <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Clock className="w-3 h-3 inline mr-1" />Date</th>
+                      <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><Server className="w-3 h-3 inline mr-1" />Équipement</th>
+                      <th className="text-left py-2 px-3 text-savia-text-muted font-semibold"><FileText className="w-3 h-3 inline mr-1" />Fichier</th>
+                      <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Erreurs</th>
+                      <th className="text-center py-2 px-3 text-savia-text-muted font-semibold">Critiques</th>
+                      <th className="text-left py-2 px-3 text-savia-text-muted font-semibold">Par</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logHistory.map((log: any) => (
+                      <tr key={log.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
+                        <td className="py-2 px-3 text-xs text-savia-text-muted">
+                          {log.uploaded_at ? new Date(log.uploaded_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+                        </td>
+                        <td className="py-2 px-3 font-semibold">{log.equipement}</td>
+                        <td className="py-2 px-3">
+                          <code className="text-xs bg-savia-bg px-2 py-0.5 rounded text-savia-accent">{log.filename}</code>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className={`font-mono font-bold ${log.nb_errors > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                            {log.nb_errors}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className={`font-mono font-bold ${log.nb_critiques > 0 ? 'text-red-400' : 'text-savia-text-muted'}`}>
+                            {log.nb_critiques}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-xs text-savia-text-muted">{log.uploaded_by}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Raw Logs (collapsible) */}
       <div className="glass rounded-xl overflow-hidden">
