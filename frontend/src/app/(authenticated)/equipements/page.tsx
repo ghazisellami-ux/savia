@@ -7,7 +7,7 @@ import {
   Plus, Search, Edit2, Trash2, Loader2, Save, X, Server, Building2,
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
-  Download, FolderOpen, Scan, Package, Wind,
+  Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
 } from 'lucide-react';
 import { equipements, documentsTechniques } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -30,6 +30,9 @@ interface Equipment {
   healthScore: number;
   statut: string;
   documentTechnique: string;
+  garantieDebut: string;
+  garantieDuree: number;
+  garantieFin: string;
 }
 
 interface DocTechnique {
@@ -117,6 +120,21 @@ function getStatutBadge(statut: string) {
   return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
 }
 
+function computeGarantieFin(debut: string, duree: number): string {
+  if (!debut || !duree) return '';
+  try { const d = new Date(debut); d.setFullYear(d.getFullYear() + duree); return d.toISOString().split('T')[0]; }
+  catch { return ''; }
+}
+
+function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; cls: string } | null {
+  if (!fin) return null;
+  const finD = new Date(fin); const today = new Date(); today.setHours(0,0,0,0);
+  const in30 = new Date(today); in30.setDate(in30.getDate() + 30);
+  if (finD < today)  return { label: 'Garantie expirée',                             icon: <ShieldOff   className="w-3 h-3" />, cls: 'bg-red-500/10   text-red-400   border-red-500/20'   };
+  if (finD <= in30)  return { label: `Expire le ${fin.split('-').reverse().join('/')}`, icon: <ShieldAlert className="w-3 h-3" />, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+  return               { label: 'Garantie valide',                                    icon: <ShieldCheck className="w-3 h-3" />, cls: 'bg-green-500/10 text-green-400 border-green-500/20' };
+}
+
 export default function EquipementsPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
@@ -146,6 +164,7 @@ export default function EquipementsPage() {
     Nom: '', Type: 'Scanner CT', Domaine: 'Radiologie' as string, EstAnnexe: false,
     Fabricant: '', Modele: '', NumSerie: '',
     Client: '', MatriculeFiscale: '', Notes: '', Statut: 'Opérationnel',
+    GarantieDebut: '', GarantieDuree: 0,
     DateInstallation: new Date().toISOString().split('T')[0],
     DernieresMaintenance: new Date().toISOString().split('T')[0],
   };
@@ -182,6 +201,12 @@ export default function EquipementsPage() {
   const allMatricules = useMemo(() => Array.from(matriculeClientMap.keys()), [matriculeClientMap]);
   const allClientNames = useMemo(() => Array.from(clientMatriculeMap.keys()), [clientMatriculeMap]);
 
+  // Computed warranty end date from form state
+  const formGarantieFin = useMemo(
+    () => computeGarantieFin(form.GarantieDebut, Number(form.GarantieDuree)),
+    [form.GarantieDebut, form.GarantieDuree]
+  );
+
   const docEquipOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.equipement_nom).filter(Boolean)))], [docs]);
   const docClientOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.client).filter(Boolean)))], [docs]);
 
@@ -206,6 +231,9 @@ export default function EquipementsPage() {
         healthScore: item.Score_Sante || (item.Statut && (item.Statut === 'Actif' || item.Statut === 'Opérationnel') ? 95 : 50),
         statut: item.Statut || 'Actif',
         documentTechnique: item.DocumentTechnique || '',
+        garantieDebut: item.garantie_debut || '',
+        garantieDuree: Number(item.garantie_duree) || 0,
+        garantieFin: computeGarantieFin(item.garantie_debut || '', Number(item.garantie_duree) || 0),
       }));
       setData(mapped);
     } catch (err) {
@@ -246,6 +274,8 @@ export default function EquipementsPage() {
       Statut: eq.statut || 'Opérationnel',
       DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : new Date().toISOString().split('T')[0],
       DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],
+      GarantieDebut: eq.garantieDebut || '',
+      GarantieDuree: eq.garantieDuree || 0,
     });
     setShowAddForm(true);
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
@@ -602,7 +632,48 @@ export default function EquipementsPage() {
                     </div>
                   </div>
 
-                  {/* ── 4. Documents ── */}
+                  {/* ── 4. Garantie ── */}
+                  <div>
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-savia-accent" /> Garantie
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Calendar className="w-3.5 h-3.5" /> Date début garantie
+                        </label>
+                        <input type="date" className={INPUT_CLS} value={form.GarantieDebut}
+                          onChange={e => setForm({ ...form, GarantieDebut: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Settings className="w-3.5 h-3.5" /> Durée de garantie
+                        </label>
+                        <select className={INPUT_CLS} value={form.GarantieDuree}
+                          onChange={e => setForm({ ...form, GarantieDuree: Number(e.target.value) })}>
+                          <option value={0}>Aucune garantie</option>
+                          <option value={1}>1 an</option>
+                          <option value={2}>2 ans</option>
+                          <option value={3}>3 ans</option>
+                          <option value={5}>5 ans</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <ShieldCheck className="w-3.5 h-3.5" /> Fin de garantie (calculée)
+                        </label>
+                        {formGarantieFin ? (
+                          <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border font-semibold text-sm ${getGarantieBadge(formGarantieFin)?.cls ?? 'bg-green-500/10 text-green-400 border-green-500/20'}`}>
+                            {getGarantieBadge(formGarantieFin)?.icon} {formGarantieFin.split('-').reverse().join('/')}
+                          </div>
+                        ) : (
+                          <div className="px-4 py-2.5 rounded-lg border border-savia-border bg-savia-bg/30 text-savia-text-dim text-sm">—</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── 5. Documents ── */}
                   <div>
                     <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
                       <FileText className="w-4 h-4 text-savia-accent" /> Documents techniques
@@ -687,6 +758,13 @@ export default function EquipementsPage() {
                   </div>
                   <span className={`px-3 py-1 rounded-full text-xs font-bold border ml-2 flex-shrink-0 ${getStatutBadge(eq.statut)}`}>{eq.statut}</span>
                 </div>
+
+                {/* Warranty badge */}
+                {eq.garantieFin && (() => { const gb = getGarantieBadge(eq.garantieFin); return gb ? (
+                  <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border mb-2 w-fit ${gb.cls}`}>
+                    {gb.icon} {gb.label}
+                  </div>
+                ) : null; })()}
 
                 <div className="grid grid-cols-2 gap-3 text-sm mb-3">
                   <div className="flex items-center gap-2"><Building2 className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.client}</div>

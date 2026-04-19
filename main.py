@@ -74,12 +74,82 @@ def startup():
         logger.info("✅ Migration fiche_photo: colonnes OK")
     except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
+    _start_garantie_daemon()
     logger.info("✅ SAVIA FastAPI started — DB initialized")
 
 
 # ==========================================
 # HELPERS
 # ==========================================
+
+
+def check_garantie_expiry():
+    """
+    Vérifie les garanties équipements qui expirent dans les 30 prochains jours
+    et envoie une notification Telegram pour chaque équipement concerné.
+    """
+    from datetime import date, timedelta
+    try:
+        df = lire_equipements()
+        if df is None or df.empty:
+            return []
+        today = date.today()
+        alert_limit = today + timedelta(days=30)
+        alerts = []
+        for _, row in df.iterrows():
+            debut_str = str(row.get('garantie_debut', '') or '').strip()
+            duree = int(row.get('garantie_duree', 0) or 0)
+            if not debut_str or not duree:
+                continue
+            try:
+                debut = date.fromisoformat(debut_str[:10])
+                # Add years without dateutil
+                try:
+                    fin = debut.replace(year=debut.year + duree)
+                except ValueError:  # Feb 29 edge case
+                    fin = debut.replace(year=debut.year + duree, day=28)
+                if today <= fin <= alert_limit:
+                    alerts.append({
+                        'nom': row.get('Nom') or row.get('nom', '?'),
+                        'client': row.get('Client') or row.get('client', '?'),
+                        'fin': fin.strftime('%d/%m/%Y'),
+                        'jours': (fin - today).days,
+                    })
+            except Exception:
+                continue
+        if alerts:
+            lines = '\n'.join(
+                f"  • <b>{a['nom']}</b> ({a['client']}) — expire le {a['fin']} ({a['jours']}j)"
+                for a in alerts
+            )
+            msg = (
+                f"⚠️ <b>Garanties expirant bientôt</b>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram(msg)
+            logger.info(f"Garantie check: {len(alerts)} alerte(s) envoyée(s)")
+        return alerts
+    except Exception as e:
+        logger.error(f"Garantie expiry check error: {e}")
+        return []
+
+
+def _start_garantie_daemon():
+    """Lance un thread démon qui vérifie les garanties toutes les 24h."""
+    import threading, time
+    def _run():
+        # First check 30s after startup to let other services boot
+        time.sleep(30)
+        while True:
+            try:
+                check_garantie_expiry()
+            except Exception as e:
+                logger.error(f"Garantie daemon error: {e}")
+            time.sleep(86400)  # 24 heures
+    threading.Thread(target=_run, daemon=True, name="garantie-checker").start()
+    logger.info("⏰ Garantie expiry daemon: démarré (vérification toutes les 24h)")
+
 
 def _df_to_records(df) -> list:
     """Convert DataFrame to JSON-safe list of dicts."""

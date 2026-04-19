@@ -523,6 +523,8 @@ def init_db():
         _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
         _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         try:
@@ -925,15 +927,16 @@ def ajouter_equipement(equipement_dict):
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
-                                     domaine, est_annexe)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     domaine, est_annexe, garantie_debut, garantie_duree)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
                 derniere_maintenance=excluded.derniere_maintenance, statut=excluded.statut,
                 notes=excluded.notes, matricule_fiscale=excluded.matricule_fiscale,
                 document_technique=excluded.document_technique,
-                domaine=excluded.domaine, est_annexe=excluded.est_annexe
+                domaine=excluded.domaine, est_annexe=excluded.est_annexe,
+                garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -949,6 +952,8 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("DocumentTechnique", ""),
             equipement_dict.get("Domaine", "Radiologie"),
             bool(equipement_dict.get("EstAnnexe", False)),
+            equipement_dict.get("GarantieDebut", ""),
+            int(equipement_dict.get("GarantieDuree", 0) or 0),
         ))
     _trigger_backup()
     return True
@@ -970,7 +975,7 @@ def modifier_equipement(equip_id, equipement_dict):
                 nom = ?, type = ?, fabricant = ?, modele = ?, num_serie = ?,
                 date_installation = ?, derniere_maintenance = ?, statut = ?,
                 notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
-                domaine = ?, est_annexe = ?
+                domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?
             WHERE id = ?
         """, (
             equipement_dict.get("Nom", ""),
@@ -987,6 +992,8 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("DocumentTechnique", ""),
             equipement_dict.get("Domaine", "Radiologie"),
             bool(equipement_dict.get("EstAnnexe", False)),
+            equipement_dict.get("GarantieDebut", ""),
+            int(equipement_dict.get("GarantieDuree", 0) or 0),
             equip_id,
         ))
     _trigger_backup()
