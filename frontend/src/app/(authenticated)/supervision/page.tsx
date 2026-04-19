@@ -546,6 +546,7 @@ export default function SupervisionPage() {
             <option value="Tous">Tous les équipements</option>
             {equipOptions.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
+
         </div>
         <div>
           <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
