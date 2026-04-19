@@ -227,7 +227,7 @@ export default function SupervisionPage() {
     fleet[0]
   );
   // Single source of truth: use real log errors if available, else simulated fleet errors
-  const displayErrors = loadedErrors ?? currentMachine.errors;
+  const displayErrors = loadedErrors ?? (currentMachine?.errors ?? []);
 
   const handleAnalyzeAI = async () => {
     setAiLoading(true);
