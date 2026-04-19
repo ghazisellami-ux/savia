@@ -122,7 +122,6 @@ export default function SupervisionPage() {
   const [importClient, setImportClient] = useState('');
   const [importEquip, setImportEquip] = useState('');
   const [rawEquipments, setRawEquipments] = useState<any[]>([]);
-  const [clientEquipList, setClientEquipList] = useState<string[]>([]);
   const [importLoading, setImportLoading] = useState(false);
   const [importSuccess, setImportSuccess] = useState('');
   const [rawLogContent, setRawLogContent] = useState<string>('');
@@ -171,7 +170,6 @@ export default function SupervisionPage() {
         setFleet(mapped);
         setRawEquipments(equipRes);
         if (mapped.length > 0) setSelectedMachine(mapped[0].machine);
-        setClientEquipList(mapped.map(m => m.machine));
         const names = clientRes.map((c: any) => c.Nom || c.nom || '').filter(Boolean);
         setClientList(names.length > 0 ? names : ['Client 1']);
       } catch (err) {
@@ -182,57 +180,38 @@ export default function SupervisionPage() {
     loadLogHistory();
   }, []);
 
-  // Fetch equipment for selected client using equipApi (proper auth, same as loadData)
-  useEffect(() => {
-    const fetchEquipForClient = async () => {
-      try {
-        const clientFilter = selectedClient !== 'Tous' ? selectedClient : undefined;
-        const data = await equipApi.list(clientFilter);
-        const names = (data as any[]).map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
-        setClientEquipList(names);
-        // Auto-select first equipment of new client if current not in list
-        if (selectedClient !== 'Tous' && names.length > 0 && !names.includes(selectedMachine)) {
-          const firstInFleet = fleet.find((m: MachineFleet) => names.includes(m.machine));
-          if (firstInFleet) {
-            setSelectedMachine(firstInFleet.machine);
-            setSelectedError('');
-            setAiResult(null);
-            setShowAiDiag(false);
-          }
-        }
-      } catch (err) {
-        console.error('Equipment filter error:', err);
-      }
-    };
-    fetchEquipForClient();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClient]);
 
-  // Build equipment names for selected client (from rawEquipments — direct API data)
-  const clientEquipNames = useMemo(() => {
-    if (selectedClient === 'Tous') return rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
-    return rawEquipments
-      .filter((eq: any) => (eq.Client || eq.client || '').toLowerCase() === selectedClient.toLowerCase())
+  // equipOptions: equipment names for Filter 2 — computed synchronously from rawEquipments
+  // This is the SINGLE source of truth for the Equipment dropdown
+  const equipOptions = useMemo(() => {
+    if (rawEquipments.length === 0) return fleet.map(m => m.machine);
+    if (selectedClient === 'Tous') {
+      return rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
+    }
+    const target = selectedClient.toLowerCase().trim();
+    const filtered = rawEquipments
+      .filter((eq: any) => (eq.Client || eq.client || '').toLowerCase().trim() === target)
       .map((eq: any) => (eq.Nom || eq.nom || '').trim())
       .filter(Boolean);
-  }, [rawEquipments, selectedClient]);
+    return filtered.length > 0 ? filtered : [];
+  }, [rawEquipments, selectedClient, fleet]);
 
   // Filter machines — cascade: client -> equip (uses clientEquipNames from rawEquipments)
   const filteredFleet = useMemo(() => {
     return fleet.filter(m => {
-      if (selectedClient !== 'Tous' && !clientEquipNames.includes(m.machine)) return false;
+      if (selectedClient !== 'Tous' && !equipOptions.includes(m.machine)) return false;
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
-  }, [selectedClient, selectedEquip, fleet, clientEquipNames]);
+  }, [selectedClient, selectedEquip, fleet, equipOptions]);
 
   // Auto-select first machine from filteredFleet when client/equip filter changes
   useEffect(() => {
-    if (clientEquipNames.length > 0) {
-      const currentIsValid = clientEquipNames.includes(selectedMachine);
+    if (equipOptions.length > 0) {
+      const currentIsValid = selectedClient === 'Tous' || equipOptions.includes(selectedMachine);
       if (!currentIsValid) {
-        // Find first machine in fleet that matches clientEquipNames
-        const firstMatch = fleet.find(m => clientEquipNames.includes(m.machine));
+        // Find first machine in fleet that matches equipOptions
+        const firstMatch = fleet.find(m => equipOptions.includes(m.machine));
         if (firstMatch) {
           setSelectedMachine(firstMatch.machine);
           setSelectedError('');
@@ -242,7 +221,8 @@ export default function SupervisionPage() {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientEquipNames.join(',')]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipOptions]);
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
@@ -564,7 +544,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {clientEquipList.map(name => <option key={name} value={name}>{name}</option>)}
+            {equipOptions.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </div>
         <div>
