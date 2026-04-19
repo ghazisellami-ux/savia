@@ -180,28 +180,41 @@ export default function SupervisionPage() {
     loadLogHistory();
   }, []);
 
-  // Filter machines — cascade: client -> equip
+  // Build equipment names for selected client (from rawEquipments — direct API data)
+  const clientEquipNames = useMemo(() => {
+    if (selectedClient === 'Tous') return rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
+    return rawEquipments
+      .filter((eq: any) => (eq.Client || eq.client || '').toLowerCase() === selectedClient.toLowerCase())
+      .map((eq: any) => (eq.Nom || eq.nom || '').trim())
+      .filter(Boolean);
+  }, [rawEquipments, selectedClient]);
+
+  // Filter machines — cascade: client -> equip (uses clientEquipNames from rawEquipments)
   const filteredFleet = useMemo(() => {
     return fleet.filter(m => {
-      if (selectedClient !== 'Tous' && m.client.toLowerCase() !== selectedClient.toLowerCase()) return false;
+      if (selectedClient !== 'Tous' && !clientEquipNames.includes(m.machine)) return false;
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
-  }, [selectedClient, selectedEquip, fleet]);
+  }, [selectedClient, selectedEquip, fleet, clientEquipNames]);
 
-  // Auto-select first machine from filteredFleet when filter changes
+  // Auto-select first machine from filteredFleet when client/equip filter changes
   useEffect(() => {
-    if (filteredFleet.length > 0) {
-      const currentIsInFleet = filteredFleet.some(m => m.machine === selectedMachine);
-      if (!currentIsInFleet) {
-        setSelectedMachine(filteredFleet[0].machine);
-        setSelectedError('');
-        setAiResult(null);
-        setShowAiDiag(false);
+    if (clientEquipNames.length > 0) {
+      const currentIsValid = clientEquipNames.includes(selectedMachine);
+      if (!currentIsValid) {
+        // Find first machine in fleet that matches clientEquipNames
+        const firstMatch = fleet.find(m => clientEquipNames.includes(m.machine));
+        if (firstMatch) {
+          setSelectedMachine(firstMatch.machine);
+          setSelectedError('');
+          setAiResult(null);
+          setShowAiDiag(false);
+        }
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredFleet.map(m => m.machine).join(',')]);
+  }, [clientEquipNames.join(',')]);
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
@@ -523,8 +536,8 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {(selectedClient === 'Tous' ? fleet : fleet.filter(m => m.client.toLowerCase() === selectedClient.toLowerCase()))
-              .map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
+            {(selectedClient === 'Tous' ? fleet.map(m => m.machine) : clientEquipNames)
+              .map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </div>
         <div>
