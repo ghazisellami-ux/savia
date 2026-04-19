@@ -395,7 +395,7 @@ export default function ContratsPage() {
                           const dsg = p.designation || p.reference || '—';
                           const sel = form.pieces_selectionnees.find(s => s.ref === ref);
                           return (
-                            <div key={ref} className={`transition-colors ${sel ? 'bg-savia-accent/5' : 'bg-white'}`}>
+                            <div key={ref} className={`transition-colors ${sel ? 'bg-savia-accent/5' : 'bg-savia-surface-hover/30'}`}>
                               <label className="flex items-center gap-3 cursor-pointer px-3 py-2.5 hover:bg-savia-surface-hover">
                                 <input type="checkbox" className="accent-cyan-400 w-4 h-4 shrink-0"
                                   checked={!!sel}
@@ -413,7 +413,7 @@ export default function ContratsPage() {
                                 <div className="flex items-center gap-2 px-10 pb-2.5">
                                   <span className="text-xs text-savia-text-muted shrink-0">Quota contrat :</span>
                                   <input type="number" min={1} value={sel.quota}
-                                    className="w-20 text-sm font-bold border-2 border-savia-accent/40 rounded-lg px-2 py-1.5 bg-white text-[#2F4156] outline-none focus:border-savia-accent"
+                                    className="w-20 text-sm font-bold border-2 border-savia-accent/40 rounded-lg px-2 py-1.5 bg-savia-surface-hover text-savia-text outline-none focus:border-savia-accent"
                                     style={{ appearance: 'textfield' }}
                                     onChange={e => setPieceQuota(ref, Number(e.target.value))} />
                                   <span className="text-xs text-savia-text-muted">unités sur la durée du contrat</span>
@@ -443,7 +443,7 @@ export default function ContratsPage() {
                     <label className={LABEL}>Rappel avant expiration</label>
                     <div className="grid grid-cols-2 gap-2">
                       <input type="number" min={1} max={365}
-                        className="w-full border-2 border-savia-accent/40 rounded-lg px-3 py-2 bg-white text-[#2F4156] font-bold outline-none focus:border-savia-accent"
+                        className="w-full border-2 border-savia-accent/40 rounded-lg px-3 py-2 bg-savia-surface-hover text-savia-text font-bold outline-none focus:border-savia-accent"
                         style={{ appearance: 'textfield' }}
                         value={form.rappel_avant}
                         onChange={e => set('rappel_avant', Number(e.target.value))} />
