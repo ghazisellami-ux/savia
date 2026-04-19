@@ -226,11 +226,13 @@ export default function SupervisionPage() {
     filteredFleet[0] ||
     fleet[0]
   );
+  // Single source of truth: use real log errors if available, else simulated fleet errors
+  const displayErrors = loadedErrors ?? currentMachine.errors;
 
   const handleAnalyzeAI = async () => {
     setAiLoading(true);
     try {
-      const err = currentMachine.errors.find((e: any) => e.code === selectedError);
+      const err = displayErrors.find((e: any) => e.code === selectedError);
       if (!err) return;
       
       const response = await aiApi.analyzeDiagnostic(
@@ -257,7 +259,7 @@ export default function SupervisionPage() {
       }
     } catch (error) {
       console.error("AI Error", error);
-      const err = currentMachine.errors.find((e: any) => e.code === selectedError);
+      const err = displayErrors.find((e: any) => e.code === selectedError);
       // Dynamic fallback on error — specific to this error code
       setAiResult({
         probleme: `Erreur ${err?.code || selectedError} — ${err?.message || 'Erreur inconnue'}`,
@@ -686,7 +688,7 @@ export default function SupervisionPage() {
             onClick={() => { setExpandImport(true); setTimeout(() => document.getElementById('import-section')?.scrollIntoView({behavior:'smooth'}), 100); }}
           >↑ Aller à l'import</button>
         </div>
-      ) : (loadedErrors ?? currentMachine.errors).length === 0 ? (
+      ) : displayErrors.length === 0 ? (
         <div className="glass rounded-xl p-8 text-center">
           <CheckCircle2 className="w-12 h-12 mb-3 mx-auto text-savia-success" />
           <p className="text-savia-success font-bold text-lg">{currentMachine.machine} — Système sain</p>
@@ -706,7 +708,7 @@ export default function SupervisionPage() {
                 </tr>
               </thead>
               <tbody>
-                {(loadedErrors ?? currentMachine.errors).map((err) => (
+                {displayErrors.map((err) => (
                   <tr
                     key={err.code}
                     onClick={() => { setSelectedError(err.code); setAiResult(null); setShowAiDiag(false); }}
@@ -740,7 +742,7 @@ export default function SupervisionPage() {
 
       {/* Error Detail + AI Diagnostic */}
       {selectedError && (() => {
-        const err = currentMachine.errors.find(e => e.code === selectedError);
+        const err = displayErrors.find(e => e.code === selectedError);
         if (!err) return null;
 
         return (
