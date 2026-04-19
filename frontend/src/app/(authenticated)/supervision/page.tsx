@@ -114,7 +114,7 @@ export default function SupervisionPage() {
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
-  const [expandHistory, setExpandHistory] = useState(true);
+  const [expandHistory, setExpandHistory] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importClient, setImportClient] = useState('');
   const [importEquip, setImportEquip] = useState('');
@@ -319,9 +319,10 @@ export default function SupervisionPage() {
         parsedErrors.push({ code: 'INFO', message: `${lines.length} lignes - aucune erreur`, statut: 'OK', type: 'Info', frequence: lines.length });
       }
 
-      // Update fleet for the selected equipment
+      // Update fleet for the selected equipment (case-insensitive name match)
+      const importEquipTrimmed = importEquip.trim();
       setFleet(prev => prev.map(m => {
-        if (m.machine !== importEquip) return m;
+        if (m.machine.toLowerCase() !== importEquipTrimmed.toLowerCase()) return m;
         return {
           ...m,
           chemin: importFile.name,
@@ -331,11 +332,19 @@ export default function SupervisionPage() {
           errors: parsedErrors,
         };
       }));
-      // Select this machine and its first error if any
-      setSelectedMachine(importEquip);
-      if (parsedErrors.length > 0 && parsedErrors[0].statut !== 'OK') {
-        setSelectedError(parsedErrors[0].code);
+      // Select this machine and its first real error
+      setSelectedMachine(importEquipTrimmed);
+      const firstRealError = parsedErrors.find(e => e.statut !== 'OK');
+      if (firstRealError) {
+        setSelectedError(firstRealError.code);
       }
+      // Collapse import form and scroll to error analysis
+      setExpandImport(false);
+      setTimeout(() => {
+        const el = document.getElementById('error-analysis-section');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 200);
+      setExpandHistory(false);
       setImportSuccess(`✓ ${lines.length} lignes parsées — ${errCount} erreur(s) détectée(s) dont ${critCount} critique(s)`);
       setImportFile(null);
 
@@ -528,6 +537,7 @@ export default function SupervisionPage() {
       </div>
 
       {/* Errors Table */}
+      <div id="error-analysis-section" />
       {currentMachine.errors.length === 0 ? (
         <div className="glass rounded-xl p-8 text-center">
           <CheckCircle2 className="w-12 h-12 mb-3 mx-auto text-savia-success" />
