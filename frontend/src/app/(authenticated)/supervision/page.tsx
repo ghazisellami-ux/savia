@@ -182,29 +182,31 @@ export default function SupervisionPage() {
     loadLogHistory();
   }, []);
 
-  // Fetch equipment for selected client via API (reliable server-side filter)
+  // Filter clientEquipList from rawEquipments (already loaded, no extra auth needed)
   useEffect(() => {
-    const fetchClientEquip = async () => {
-      const token = localStorage.getItem('savia_token');
-      const h: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-      try {
-        const url = selectedClient === 'Tous' ? '/api/equipements' : `/api/equipements?client=${encodeURIComponent(selectedClient)}`;
-        const res = await fetch(url, { headers: h });
-        if (res.ok) {
-          const data = await res.json();
-          const names = (Array.isArray(data) ? data : []).map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
-          setClientEquipList(names);
-          // Auto-select first equipment if current is not in list
-          if (names.length > 0 && !names.includes(selectedMachine)) {
-            const firstInFleet = fleet.find(m => names.includes(m.machine));
-            if (firstInFleet) { setSelectedMachine(firstInFleet.machine); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }
-          }
-        }
-      } catch { /* silent */ }
-    };
-    fetchClientEquip();
+    if (rawEquipments.length === 0) return;
+    const filtered = selectedClient === 'Tous'
+      ? rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean)
+      : rawEquipments
+          .filter((eq: any) => {
+            const c = (eq.Client || eq.client || '').toLowerCase().trim();
+            return c === selectedClient.toLowerCase().trim();
+          })
+          .map((eq: any) => (eq.Nom || eq.nom || '').trim())
+          .filter(Boolean);
+    setClientEquipList(filtered);
+    // Auto-select first equipment of new client if current not in list
+    if (selectedClient !== 'Tous' && filtered.length > 0 && !filtered.includes(selectedMachine)) {
+      const firstInFleet = fleet.find((m: MachineFleet) => filtered.includes(m.machine));
+      if (firstInFleet) {
+        setSelectedMachine(firstInFleet.machine);
+        setSelectedError('');
+        setAiResult(null);
+        setShowAiDiag(false);
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClient]);
+  }, [rawEquipments, selectedClient]);
 
   // Build equipment names for selected client (from rawEquipments — direct API data)
   const clientEquipNames = useMemo(() => {
