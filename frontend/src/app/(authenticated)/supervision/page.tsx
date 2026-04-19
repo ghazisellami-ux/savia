@@ -112,6 +112,8 @@ export default function SupervisionPage() {
   const [selectedEquip, setSelectedEquip] = useState('Tous');
   const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [selectedError, setSelectedError] = useState<string>('');
+  const [loadedErrors, setLoadedErrors] = useState<{code:string;message:string;statut:string;type:string;frequence:number}[]|null>(null);
+  const [selectedLogId, setSelectedLogId] = useState<number|null>(null);
   const [showAiDiag, setShowAiDiag] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
@@ -266,6 +268,92 @@ export default function SupervisionPage() {
     }
   };
 
+  // Parse log content and return structured errors (shared by import + log viewer)
+  const parseLogContent = (text: string): {code:string;message:string;statut:string;type:string;frequence:number}[] => {
+    const lines = text.split('\n').filter(l => l.trim());
+    const isCSV = lines.slice(0, 20).filter(l => l.trim().startsWith('"') && l.includes('","')).length >= 3;
+    const rawEvents: Array<{code: string; message: string; severite: string}> = [];
+    if (isCSV) {
+      for (const line of lines) {
+        const row: string[] = [];
+        let cur = '', inQ = false;
+        for (let c = 0; c < line.length; c++) {
+          if (line[c] === '"') { inQ = !inQ; continue; }
+          if (line[c] === ',' && !inQ) { row.push(cur.trim()); cur = ''; continue; }
+          cur += line[c];
+        }
+        row.push(cur.trim());
+        if (row.length < 6) continue;
+        const level = row[3], codeNum = row[4], msg = row[5];
+        const subMsg = row.length > 7 ? row[7] : '';
+        if (level === 'Info' && !msg.includes('Error') && !msg.includes('Fault')) continue;
+        let sev = 'ATTENTION';
+        if (level === 'Alarm') sev = 'ERREUR';
+        else if (level === 'Critical' || level === 'Fatal') sev = 'CRITIQUE';
+        let msgClean = msg;
+        if (subMsg && subMsg !== msg) msgClean = `${msg} — ${subMsg}`;
+        const stErr: string[] = [];
+        for (let s = 8; s + 1 < row.length; s += 2) { if (row[s+1] === 'State Error') stErr.push(row[s]); }
+        if (stErr.length > 0) msgClean += ` [${stErr.join(', ')}]`;
+        rawEvents.push({ code: codeNum, message: msgClean, severite: sev });
+      }
+    } else {
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        const tsM = t.match(/(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}:\d{2})/);
+        const noTs = tsM ? t.replace(tsM[0], '').trim() : t;
+        let sev = '';
+        if (/\b(CRITICAL|FATAL|CRITIQUE)\b/i.test(t)) sev = 'CRITIQUE';
+        else if (/\b(ERROR|ERREUR)\b/i.test(t)) sev = 'ERREUR';
+        else if (/\b(WARNING|WARN|ATTENTION|ALARM)\b/i.test(t)) sev = 'ATTENTION';
+        const sM = noTs.match(/(?:Code|code|ERR|Err|ERROR|error|FAULT|fault)[:\s]+([0-9A-Fa-f]{2,8})/);
+        if (sM) {
+          const code = sM[1].toUpperCase();
+          const mM = noTs.match(/(?:Code|ERR|ERROR|FAULT)[:\s]+[0-9A-Fa-f]{2,8}\s*[-:]\s*(.+)/i);
+          rawEvents.push({ code, message: mM ? mM[1].trim().substring(0, 120) : 'Erreur Inconnue', severite: sev || 'ATTENTION' });
+          continue;
+        }
+        const hM = noTs.match(/(?<![0-9A-Za-z])0x([0-9A-Fa-f]{2,8})(?![0-9A-Za-z])/);
+        if (hM) { rawEvents.push({ code: hM[1].toUpperCase(), message: 'Erreur Inconnue', severite: sev || 'ATTENTION' }); continue; }
+        if (sev) {
+          const mc = noTs.replace(/\[.*?\]/g, '').trim().replace(/^\d+\s*/, '').trim();
+          const nc = t.match(/\b(\d{2,4})\b/);
+          rawEvents.push({ code: nc ? nc[1] : 'TXT', message: (mc || t).substring(0, 120), severite: sev });
+        }
+      }
+    }
+    const parsedErrors: Array<{code:string;message:string;statut:string;type:string;frequence:number}> = [];
+    for (const evt of rawEvents) {
+      const ex = parsedErrors.find(e => e.code === evt.code);
+      if (ex) { ex.frequence++; }
+      else { parsedErrors.push({ code: evt.code, message: evt.message, statut: 'INCONNU', type: evt.severite === 'CRITIQUE' ? 'Critique' : evt.severite === 'ERREUR' ? 'Erreur' : 'Warning', frequence: 1 }); }
+    }
+    parsedErrors.sort((a, b) => b.frequence - a.frequence);
+    if (parsedErrors.length === 0 && lines.length > 0) {
+      parsedErrors.push({ code: 'INFO', message: `${lines.length} lignes - aucune erreur`, statut: 'OK', type: 'Info', frequence: lines.length });
+    }
+    return parsedErrors;
+  };
+
+  // Fetch a stored log by ID and parse its errors
+  const fetchLogErrors = async (logId: number) => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+      const res = await fetch(`/api/logs/${logId}`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const errors = parseLogContent(data.content || '');
+        setLoadedErrors(errors);
+      }
+    } catch (e) {
+      console.warn('fetchLogErrors failed:', e);
+      setLoadedErrors(null);
+    }
+  };
+
   const handleImportLog = async () => {
     if (!importFile || !importEquip) return;
     setImportLoading(true);
@@ -274,76 +362,11 @@ export default function SupervisionPage() {
       const text = await importFile.text();
       setRawLogContent(text);
       const lines = text.split('\n').filter(l => l.trim());
-      // ---- V0-compatible log parser (matches Streamlit log_analyzer.py) ----
-      const isCSV = lines.slice(0, 20).filter(l => l.trim().startsWith('"') && l.includes('","')).length >= 3;
-      const rawEvents: Array<{code: string; message: string; severite: string}> = [];
-
-      if (isCSV) {
-        // CSV Parser (Giotto/IMS format)
-        for (const line of lines) {
-          const row: string[] = [];
-          let cur = '', inQ = false;
-          for (let c = 0; c < line.length; c++) {
-            if (line[c] === '"') { inQ = !inQ; continue; }
-            if (line[c] === ',' && !inQ) { row.push(cur.trim()); cur = ''; continue; }
-            cur += line[c];
-          }
-          row.push(cur.trim());
-          if (row.length < 6) continue;
-          const level = row[3], codeNum = row[4], msg = row[5];
-          const subMsg = row.length > 7 ? row[7] : '';
-          if (level === 'Info' && !msg.includes('Error') && !msg.includes('Fault')) continue;
-          let sev = 'ATTENTION';
-          if (level === 'Alarm') sev = 'ERREUR';
-          else if (level === 'Critical' || level === 'Fatal') sev = 'CRITIQUE';
-          let msgClean = msg;
-          if (subMsg && subMsg !== msg) msgClean = `${msg} \u2014 ${subMsg}`;
-          const stErr: string[] = [];
-          for (let s = 8; s + 1 < row.length; s += 2) { if (row[s+1] === 'State Error') stErr.push(row[s]); }
-          if (stErr.length > 0) msgClean += ` [${stErr.join(', ')}]`;
-          rawEvents.push({ code: codeNum, message: msgClean, severite: sev });
-        }
-      } else {
-        // Text Log Parser
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t) continue;
-          const tsM = t.match(/(\d{4}[-/]\d{2}[-/]\d{2}[\sT]\d{2}:\d{2}:\d{2})/);
-          const noTs = tsM ? t.replace(tsM[0], '').trim() : t;
-          let sev = '';
-          if (/\b(CRITICAL|FATAL|CRITIQUE)\b/i.test(t)) sev = 'CRITIQUE';
-          else if (/\b(ERROR|ERREUR)\b/i.test(t)) sev = 'ERREUR';
-          else if (/\b(WARNING|WARN|ATTENTION|ALARM)\b/i.test(t)) sev = 'ATTENTION';
-          const sM = noTs.match(/(?:Code|code|ERR|Err|ERROR|error|FAULT|fault)[:\s]+([0-9A-Fa-f]{2,8})/);
-          if (sM) {
-            const code = sM[1].toUpperCase();
-            const mM = noTs.match(/(?:Code|ERR|ERROR|FAULT)[:\s]+[0-9A-Fa-f]{2,8}\s*[-:]\s*(.+)/i);
-            rawEvents.push({ code, message: mM ? mM[1].trim().substring(0, 120) : 'Erreur Inconnue', severite: sev || 'ATTENTION' });
-            continue;
-          }
-          const hM = noTs.match(/(?<![0-9A-Za-z])0x([0-9A-Fa-f]{2,8})(?![0-9A-Za-z])/);
-          if (hM) { rawEvents.push({ code: hM[1].toUpperCase(), message: 'Erreur Inconnue', severite: sev || 'ATTENTION' }); continue; }
-          if (sev) {
-            const mc = noTs.replace(/\[.*?\]/g, '').trim().replace(/^\d+\s*/, '').trim();
-            const nc = t.match(/\b(\d{2,4})\b/);
-            rawEvents.push({ code: nc ? nc[1] : 'TXT', message: (mc || t).substring(0, 120), severite: sev });
-          }
-        }
-      }
-      // Aggregate by code with frequency (like V0)
-      const parsedErrors: Array<{code: string; message: string; statut: string; type: string; frequence: number}> = [];
-      let errCount = 0, critCount = 0;
-      for (const evt of rawEvents) {
-        errCount++;
-        if (evt.severite === 'CRITIQUE') critCount++;
-        const ex = parsedErrors.find(e => e.code === evt.code);
-        if (ex) { ex.frequence++; }
-        else { parsedErrors.push({ code: evt.code, message: evt.message, statut: 'INCONNU', type: '?', frequence: 1 }); }
-      }
-      parsedErrors.sort((a, b) => b.frequence - a.frequence);
-      if (parsedErrors.length === 0 && lines.length > 0) {
-        parsedErrors.push({ code: 'INFO', message: `${lines.length} lignes - aucune erreur`, statut: 'OK', type: 'Info', frequence: lines.length });
-      }
+      // Use shared parseLogContent function
+      const parsedErrors = parseLogContent(text);
+      // Calculate error counts from parsedErrors (aggregated by parseLogContent)
+      const errCount = parsedErrors.reduce((s: number, e: {frequence:number}) => s + e.frequence, 0);
+      const critCount = parsedErrors.filter((e: {type:string}) => e.type === 'Critique').reduce((s: number, e: {frequence:number}) => s + e.frequence, 0);
 
       // Update fleet for the selected equipment (case-insensitive name match)
       const importEquipTrimmed = importEquip.trim();
@@ -519,7 +542,7 @@ export default function SupervisionPage() {
           </label>
           <select
             value={selectedClient}
-            onChange={e => { setSelectedClient(e.target.value); setSelectedEquip('Tous'); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }}
+            onChange={e => { setSelectedClient(e.target.value); setSelectedEquip('Tous'); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les clients</option>
@@ -533,7 +556,7 @@ export default function SupervisionPage() {
           <select
             key={`equip-${selectedClient}`}
             value={selectedEquip}
-            onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }}
+            onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
@@ -549,7 +572,20 @@ export default function SupervisionPage() {
             key={`log-${selectedClient}-${selectedEquip}`}
             value={selectedMachine}
             onChange={e => {
-              setSelectedMachine(e.target.value);
+              const val = e.target.value;
+              // Check if value is a log entry: 'logId::equipement'
+              const sepIdx = val.indexOf('::')
+              if (sepIdx > 0) {
+                const logId = parseInt(val.substring(0, sepIdx));
+                const equip = val.substring(sepIdx + 2);
+                setSelectedMachine(equip);
+                setSelectedLogId(logId);
+                fetchLogErrors(logId);
+              } else {
+                setSelectedMachine(val);
+                setSelectedLogId(null);
+                setLoadedErrors(null);
+              }
               setSelectedError('');
               setAiResult(null);
               setShowAiDiag(false);
@@ -566,7 +602,7 @@ export default function SupervisionPage() {
                     .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
                     .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                     .map(log => (
-                      <option key={log.id} value={log.equipement}>
+                      <option key={log.id} value={`${log.id}::${log.equipement}`}>
                         {log.filename} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
                       </option>
                     ))
@@ -585,7 +621,7 @@ export default function SupervisionPage() {
 
       {/* Errors Table */}
       <div id="error-analysis-section" />
-      {currentMachine.errors.length === 0 ? (
+      {(loadedErrors ?? currentMachine.errors).length === 0 ? (
         <div className="glass rounded-xl p-8 text-center">
           <CheckCircle2 className="w-12 h-12 mb-3 mx-auto text-savia-success" />
           <p className="text-savia-success font-bold text-lg">{currentMachine.machine} — Système sain</p>
@@ -605,7 +641,7 @@ export default function SupervisionPage() {
                 </tr>
               </thead>
               <tbody>
-                {currentMachine.errors.map((err) => (
+                {(loadedErrors ?? currentMachine.errors).map((err) => (
                   <tr
                     key={err.code}
                     onClick={() => { setSelectedError(err.code); setAiResult(null); setShowAiDiag(false); }}
