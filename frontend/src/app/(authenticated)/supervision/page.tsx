@@ -114,6 +114,7 @@ export default function SupervisionPage() {
   const [selectedError, setSelectedError] = useState<string>('');
   const [loadedErrors, setLoadedErrors] = useState<{code:string;message:string;statut:string;type:string;frequence:number}[]|null>(null);
   const [selectedLogId, setSelectedLogId] = useState<number|null>(null);
+  const [logLoadFailed, setLogLoadFailed] = useState<boolean>(false); // true when log selected but content unavailable
   const [showAiDiag, setShowAiDiag] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
@@ -352,6 +353,7 @@ export default function SupervisionPage() {
       });
       if (res.ok) {
         const data = await res.json();
+        setLogLoadFailed(false); // reset before attempting
         // 1. Use stored parsed_errors from DB (most reliable)
         if (data.parsed_errors && Array.isArray(data.parsed_errors) && data.parsed_errors.length > 0) {
           setLoadedErrors(data.parsed_errors);
@@ -365,14 +367,17 @@ export default function SupervisionPage() {
             return;
           }
         }
-        // 3. Neither source has errors → null fallback (shows currentMachine simulated errors)
+        // 3. Neither source has errors → content unavailable, signal re-import needed
         setLoadedErrors(null);
+        setLogLoadFailed(true);
       } else {
         setLoadedErrors(null);
+        setLogLoadFailed(true);
       }
     } catch (e) {
       console.warn('fetchLogErrors failed:', e);
       setLoadedErrors(null);
+      setLogLoadFailed(true);
     }
   };
 
@@ -590,7 +595,7 @@ export default function SupervisionPage() {
           </label>
           <select
             value={selectedClient}
-            onChange={e => { setSelectedClient(e.target.value); setSelectedEquip('Tous'); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); }}
+            onChange={e => { setSelectedClient(e.target.value); setSelectedEquip('Tous'); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); setLogLoadFailed(false); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les clients</option>
@@ -604,7 +609,7 @@ export default function SupervisionPage() {
           <select
             key={`equip-${selectedClient}`}
             value={selectedEquip}
-            onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); }}
+            onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); setLoadedErrors(null); setSelectedLogId(null); setLogLoadFailed(false); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
@@ -669,7 +674,19 @@ export default function SupervisionPage() {
 
       {/* Errors Table */}
       <div id="error-analysis-section" />
-      {(loadedErrors ?? currentMachine.errors).length === 0 ? (
+      {logLoadFailed && selectedLogId !== null ? (
+        /* Log selected but content not available → show re-import message */
+        <div className="glass rounded-xl p-8 text-center">
+          <div className="text-4xl mb-4">📂</div>
+          <p className="text-savia-warning font-bold text-lg mb-2">Contenu du log non disponible</p>
+          <p className="text-savia-text-muted text-sm mb-4">Ce log a été importé avant la mise à jour. Le contenu n'est plus accessible en base de données.</p>
+          <p className="text-savia-text text-sm font-semibold">→ Veuillez ré-importer le fichier log ({currentMachine.machine}) pour voir ses erreurs.</p>
+          <button
+            className="mt-4 px-4 py-2 bg-savia-accent rounded-lg text-white text-sm font-semibold hover:bg-savia-accent/80 transition-colors"
+            onClick={() => { setExpandImport(true); setTimeout(() => document.getElementById('import-section')?.scrollIntoView({behavior:'smooth'}), 100); }}
+          >↑ Aller à l'import</button>
+        </div>
+      ) : (loadedErrors ?? currentMachine.errors).length === 0 ? (
         <div className="glass rounded-xl p-8 text-center">
           <CheckCircle2 className="w-12 h-12 mb-3 mx-auto text-savia-success" />
           <p className="text-savia-success font-bold text-lg">{currentMachine.machine} — Système sain</p>
