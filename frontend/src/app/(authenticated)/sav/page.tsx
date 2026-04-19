@@ -227,11 +227,15 @@ export default function SavPage() {
       const nb_correctives = allInterv.filter(i => i.type.toLowerCase().includes('correct')).length;
       const nb_preventives = allInterv.filter(i => i.type.toLowerCase().includes('ventive')).length;
       const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
-      const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
-      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
-      const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
-      const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
-      const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
+      const nb_formations = allInterv.filter(i => i.type.toLowerCase().includes('format')).length;
+      // MTTR et coûts : Installation + Formation exclus
+      const maintenanceOnlyAll = allInterv.filter(i => !i.type.toLowerCase().includes('install') && !i.type.toLowerCase().includes('format'));
+      const totalCoutInterv = maintenanceOnlyAll.reduce((a, b) => a + (b.cout || 0), 0);
+      const totalCoutPieces = maintenanceOnlyAll.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalDureeMin = maintenanceOnlyAll.reduce((a, b) => a + b.duree_minutes, 0);
+      const tauxRes = maintenanceOnlyAll.length > 0 ? Math.round((maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length / maintenanceOnlyAll.length) * 100) : 0;
+      const nb_cloturees_maint = maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
+      const mttrH = nb_cloturees_maint > 0 ? Math.round(maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees_maint / 60 * 10) / 10 : 0;
 
       // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
@@ -276,7 +280,7 @@ export default function SavPage() {
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
         duree_totale_h: Math.round(totalDureeMin / 60),
-        nb_correctives, nb_preventives, nb_installations,
+        nb_correctives, nb_preventives, nb_installations, nb_formations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
         cout_interventions: totalCoutInterv, cout_pieces: totalCoutPieces,
         cout_total: totalCoutInterv + totalCoutPieces,
@@ -350,21 +354,28 @@ export default function SavPage() {
     });
   }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
-  // ===== KPI CALCULATIONS (based on filtered data) =====
-  const totalInterv = filtered.length;
-  const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
+  // Types hors maintenance (tracéabilité seule, exclus des KPIs)
+  const TRACABILITE_TYPES = ['installation', 'formation'];
+  const maintenanceFiltered = useMemo(
+    () => filtered.filter(i => !TRACABILITE_TYPES.some(t => i.type.toLowerCase().includes(t))),
+    [filtered]
+  );
+
+  // ===== KPI CALCULATIONS — based on maintenanceFiltered (Installation + Formation exclus) =====
+  const totalInterv = filtered.length; // comptage total toutes catégories
+  const terminees = maintenanceFiltered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
-  const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
-  const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
-  const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
-  const correctifs = filtered.filter(i => i.type.toLowerCase().includes('correct')).length;
-  const preventifs = filtered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
+  const totalCout = maintenanceFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+  const totalDureeH = Math.round(maintenanceFiltered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
+  const tauxResolution = maintenanceFiltered.length > 0 ? Math.round((terminees / maintenanceFiltered.length) * 100) : 0;
+  const mttr = terminees > 0 ? Math.round(maintenanceFiltered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
+  const correctifs = maintenanceFiltered.filter(i => i.type.toLowerCase().includes('correct')).length;
+  const preventifs = maintenanceFiltered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
 
   // Tech performance
   const techStats = useMemo(() => {
     const map = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
-    filtered.forEach(i => {
+    maintenanceFiltered.forEach(i => {
       const t = i.technicien || 'Inconnu';
       const prev = map.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
       prev.nb++;
@@ -379,11 +390,11 @@ export default function SavPage() {
       mttr: s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0,
       cout: s.cout,
     })).sort((a, b) => b.taux - a.taux);
-  }, [filtered]);
+  }, [maintenanceFiltered]);
 
   // Financial summary
-  const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const coutInterventions = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutPieces = maintenanceFiltered.reduce((a, b) => a + (b.coutPieces || 0), 0);
+  const coutInterventions = maintenanceFiltered.reduce((a, b) => a + (b.cout || 0), 0);
 
   const tabs = [
     { icon: <Wrench className="w-4 h-4" />, label: 'Interventions' },
@@ -566,6 +577,7 @@ export default function SavPage() {
               <option value="Corrective">Corrective</option>
               <option value="Préventive">Préventive</option>
               <option value="Installation">Installation</option>
+              <option value="Formation">Formation</option>
             </select>
             <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
@@ -788,16 +800,29 @@ export default function SavPage() {
               <BarChart3 className="w-4 h-4 text-savia-accent" /> Répartition par Type
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {['Corrective', 'Préventive', 'Installation'].map(type => {
-                const typeData = filtered.filter(i => i.type.toLowerCase().includes(type.toLowerCase().substring(0, 5)));
+              {['Corrective', 'Préventive'].map(type => {
+                const typeData = maintenanceFiltered.filter(i => i.type.toLowerCase().includes(type.toLowerCase().substring(0, 5)));
                 const typeCout = typeData.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
-                const color = type === 'Corrective' ? 'red' : type === 'Préventive' ? 'green' : 'blue';
-                const Icon = type === 'Corrective' ? XCircle : type === 'Préventive' ? Shield : Wrench;
+                const color = type === 'Corrective' ? 'red' : 'green';
+                const Icon = type === 'Corrective' ? XCircle : Shield;
                 return (
                   <div key={type} className={`glass rounded-xl p-4 border border-${color}-500/20`}>
                     <div className={`text-sm font-bold text-${color}-400 mb-2 flex items-center gap-2`}><Icon className="w-4 h-4" /> {type}</div>
                     <div className="text-2xl font-black text-savia-text">{typeData.length} <span className="text-sm text-savia-text-muted">interventions</span></div>
                     <div className="text-sm text-savia-text-muted mt-1">Coût: {typeCout.toLocaleString('fr')} TND</div>
+                  </div>
+                );
+              })}
+              {/* Tracéabilité (hors KPI) */}
+              {(['Installation', 'Formation'] as const).map(type => {
+                const typeData = filtered.filter(i => i.type.toLowerCase().includes(type.toLowerCase()));
+                return (
+                  <div key={type} className="glass rounded-xl p-4 border border-slate-500/20">
+                    <div className="text-sm font-bold text-slate-400 mb-2 flex items-center gap-2">
+                      <Briefcase className="w-4 h-4" /> {type}
+                    </div>
+                    <div className="text-2xl font-black text-savia-text">{typeData.length} <span className="text-sm text-savia-text-muted">enregistrements</span></div>
+                    <div className="text-xs text-slate-500 mt-1 italic">Tracéabilité — hors KPI maintenance</div>
                   </div>
                 );
               })}
@@ -1044,7 +1069,7 @@ export default function SavPage() {
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Type</label>
             <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>
-              <option>Corrective</option><option>Préventive</option><option>Installation</option>
+              <option>Corrective</option><option>Préventive</option><option>Installation</option><option>Formation</option>
             </select></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Zap className="w-3.5 h-3.5" /> Code erreur</label><input className={INPUT_CLS} placeholder="Ex: E147" value={form.code_erreur} onChange={e => setForm({...form, code_erreur: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Type erreur</label>

@@ -280,10 +280,15 @@ def get_dashboard_kpis(
         cout_total = 0.0
         mttr = 0.0
         if not df_int.empty:
-            if "cout" in df_int.columns:
-                cout_total = float(df_int["cout"].sum()) if df_int["cout"].notna().any() else 0
-            if "duree_minutes" in df_int.columns:
-                durees = df_int["duree_minutes"].dropna()
+            # Exclure Installation et Formation des KPIs de maintenance
+            TRACABILITE = ['installation', 'formation']
+            df_maint = df_int
+            if "type_intervention" in df_int.columns:
+                df_maint = df_int[~df_int["type_intervention"].str.lower().isin(TRACABILITE)]
+            if "cout" in df_maint.columns:
+                cout_total = float(df_maint["cout"].sum()) if df_maint["cout"].notna().any() else 0
+            if "duree_minutes" in df_maint.columns:
+                durees = df_maint["duree_minutes"].dropna()
                 mttr = round(float(durees.mean()) / 60, 1) if len(durees) > 0 else 0
 
         # Disponibilité = % équipements opérationnels
