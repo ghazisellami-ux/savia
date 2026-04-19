@@ -91,9 +91,10 @@ function mapEquipToFleet(items: any[]): MachineFleet[] {
       simulatedErrors = item.errors;
     }
 
+    const clientVal = item.Client || item.client || '';
     return {
       machine: item.Nom || item.nom || 'Équipement',
-      client: item.Client || item.client || '',
+      client: clientVal,
       chemin: `logs/${(item.Nom || 'equip').replace(/\s+/g, '_')}.log`,
       etat,
       erreurs: errCount,
@@ -182,7 +183,7 @@ export default function SupervisionPage() {
   // Filter machines — cascade: client -> equip
   const filteredFleet = useMemo(() => {
     return fleet.filter(m => {
-      if (selectedClient !== 'Tous' && m.client !== selectedClient) return false;
+      if (selectedClient !== 'Tous' && m.client.toLowerCase() !== selectedClient.toLowerCase()) return false;
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
@@ -508,7 +509,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {(selectedClient === 'Tous' ? fleet : fleet.filter(m => m.client === selectedClient))
+            {(selectedClient === 'Tous' ? fleet : fleet.filter(m => m.client.toLowerCase() === selectedClient.toLowerCase()))
               .map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
           </select>
         </div>
@@ -529,11 +530,11 @@ export default function SupervisionPage() {
             {selectedEquip !== 'Tous' ? (
               /* Show uploaded log files for selected equipment, most recent first */
               [...logHistory]
-                .filter(log => log.equipement === selectedEquip)
+                .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
                 .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                 .length > 0
                 ? [...logHistory]
-                    .filter(log => log.equipement === selectedEquip)
+                    .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
                     .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                     .map(log => (
                       <option key={log.id} value={log.equipement}>
