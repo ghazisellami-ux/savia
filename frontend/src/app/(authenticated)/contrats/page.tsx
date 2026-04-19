@@ -38,7 +38,7 @@ const emptyForm = () => ({
   sla_temps_reponse_h: 4,
   montant: 0,
   avec_pieces: false,
-  pieces_selectionnees: [] as string[],
+  pieces_selectionnees: [] as { ref: string; designation: string; quota: number }[],
   rappel_avant: 30,
   rappel_unite: 'jours' as 'jours' | 'mois',
   recurrence_maintenance: RECURRENCES[2],
@@ -89,16 +89,16 @@ export default function ContratsPage() {
     ? equips.filter((e: any) => e.Client === form.client)
     : [];
 
-  // Filter pieces by equipment type (match on nom or type)
+  // Filter pieces — use designation + equipement_type (correct DB fields)
   const filteredPieces = form.equipement
     ? stockPieces.filter((p: any) => {
         const eq = equips.find((e: any) => e.Nom === form.equipement);
-        const eqType = (eq?.Type_Equipement || eq?.type || '').toLowerCase();
-        return (p.nom || '').toLowerCase().includes(eqType.split(' ')[0]) ||
-               (p.type_piece || '').toLowerCase().includes(eqType.split(' ')[0]) ||
-               eqType === '';
+        const eqType = (eq?.Type_Equipement || eq?.type || '').toLowerCase().split(' ')[0];
+        if (!eqType) return true;
+        return (p.designation || '').toLowerCase().includes(eqType) ||
+               (p.equipement_type || '').toLowerCase().includes(eqType);
       })
-    : stockPieces.slice(0, 20);
+    : stockPieces;
 
   const handleSave = async () => {
     if (!form.client) { setSaveMsg('Veuillez sélectionner un client.'); return; }
@@ -114,7 +114,7 @@ export default function ContratsPage() {
         sla_temps_reponse_h: Number(form.sla_temps_reponse_h),
         montant: Number(form.montant),
         avec_pieces: form.avec_pieces,
-        pieces_incluses: form.avec_pieces ? form.pieces_selectionnees.join(',') : '',
+        pieces_incluses: form.avec_pieces ? JSON.stringify(form.pieces_selectionnees) : '',
         rappel_avant_jours: form.rappel_unite === 'jours' ? form.rappel_avant : form.rappel_avant * 30,
         recurrence_maintenance: form.recurrence_maintenance,
         date_premiere_maintenance: form.date_premiere_maintenance,
@@ -133,11 +133,21 @@ export default function ContratsPage() {
   };
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
-  const togglePiece = (nom: string) => setForm(f => ({
+
+  // Toggle a piece in/out of selection (identified by unique reference)
+  const togglePiece = (ref: string, designation: string) => setForm(f => {
+    const exists = f.pieces_selectionnees.find(s => s.ref === ref);
+    return {
+      ...f,
+      pieces_selectionnees: exists
+        ? f.pieces_selectionnees.filter(s => s.ref !== ref)
+        : [...f.pieces_selectionnees, { ref, designation, quota: 1 }],
+    };
+  });
+
+  const setPieceQuota = (ref: string, quota: number) => setForm(f => ({
     ...f,
-    pieces_selectionnees: f.pieces_selectionnees.includes(nom)
-      ? f.pieces_selectionnees.filter(p => p !== nom)
-      : [...f.pieces_selectionnees, nom]
+    pieces_selectionnees: f.pieces_selectionnees.map(s => s.ref === ref ? { ...s, quota: Math.max(1, quota) } : s),
   }));
 
   const filtered = data.filter(c =>
@@ -374,23 +384,50 @@ export default function ContratsPage() {
                   <span className="text-sm font-semibold">Contrat avec pièces incluses</span>
                 </label>
                 {form.avec_pieces && (
-                  <div className="space-y-3">
-                    <p className="text-xs text-savia-text-muted">Sélectionnez les pièces du stock associées à ce contrat :</p>
-                    <div className="max-h-36 overflow-y-auto space-y-1 border border-savia-border rounded-lg p-2 bg-savia-bg/50">
-                      {filteredPieces.length === 0 ? (
-                        <p className="text-xs text-savia-text-muted p-2">Aucune pièce disponible</p>
-                      ) : filteredPieces.map((p: any) => (
-                        <label key={p.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-savia-surface-hover text-sm text-savia-text">
-                          <input type="checkbox" className="accent-cyan-400"
-                            checked={form.pieces_selectionnees.includes(p.nom)}
-                            onChange={() => togglePiece(p.nom)} />
-                          <span className="font-semibold text-xs text-savia-text">{p.nom}</span>
-                          <span className="text-xs text-savia-text-muted ml-auto">Stock : {p.stock_actuel} {p.unite || 'u.'}</span>
-                        </label>
-                      ))}
+                  <div className="space-y-3 mt-2">
+                    <p className="text-xs text-savia-text-muted">Cochez les pièces incluses et définissez un quota pour la durée du contrat :</p>
+                    <div className="border border-savia-border rounded-xl overflow-hidden">
+                      <div className="max-h-64 overflow-y-auto divide-y divide-savia-border">
+                        {filteredPieces.length === 0 ? (
+                          <p className="text-xs text-savia-text-muted p-3">Aucune pièce disponible.</p>
+                        ) : filteredPieces.map((p: any) => {
+                          const ref = p.reference || String(p.id || Math.random());
+                          const dsg = p.designation || p.reference || '—';
+                          const sel = form.pieces_selectionnees.find(s => s.ref === ref);
+                          return (
+                            <div key={ref} className={`transition-colors ${sel ? 'bg-savia-accent/5' : 'bg-white'}`}>
+                              <label className="flex items-center gap-3 cursor-pointer px-3 py-2.5 hover:bg-savia-surface-hover">
+                                <input type="checkbox" className="accent-cyan-400 w-4 h-4 shrink-0"
+                                  checked={!!sel}
+                                  onChange={() => togglePiece(ref, dsg)} />
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-bold text-[#2F4156] truncate">{dsg}</div>
+                                  <div className="text-[10px] font-mono text-savia-text-muted">{ref}</div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <div className="text-sm font-bold text-[#2F4156]">{p.stock_actuel}</div>
+                                  <div className="text-[10px] text-savia-text-dim">en stock</div>
+                                </div>
+                              </label>
+                              {sel && (
+                                <div className="flex items-center gap-2 px-10 pb-2.5">
+                                  <span className="text-xs text-savia-text-muted shrink-0">Quota contrat :</span>
+                                  <input type="number" min={1} value={sel.quota}
+                                    className="w-20 text-sm font-bold border-2 border-savia-accent/50 rounded-lg px-2 py-1 bg-white text-[#2F4156] outline-none focus:border-savia-accent"
+                                    style={{ appearance: 'textfield' }}
+                                    onChange={e => setPieceQuota(ref, Number(e.target.value))} />
+                                  <span className="text-xs text-savia-text-muted">unités sur la durée du contrat</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                     {form.pieces_selectionnees.length > 0 && (
-                      <p className="text-xs text-savia-accent">{form.pieces_selectionnees.length} pièce(s) sélectionnée(s)</p>
+                      <p className="text-xs font-semibold text-savia-accent">
+                        {form.pieces_selectionnees.length} pièce(s) sélectionnée(s) — quota total : {form.pieces_selectionnees.reduce((a, b) => a + b.quota, 0)} unités
+                      </p>
                     )}
                   </div>
                 )}
@@ -404,12 +441,13 @@ export default function ContratsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={LABEL}>Rappel avant expiration</label>
-                    <div className="flex gap-2">
-                      <input type="number"
-                        className={`${INPUT} flex-1 font-bold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
-                        value={form.rappel_avant} min={1} max={365}
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="number" min={1} max={365}
+                        className="w-full border-2 border-savia-accent/40 rounded-lg px-3 py-2.5 bg-white text-[#2F4156] font-bold text-base outline-none focus:border-savia-accent"
+                        style={{ appearance: 'textfield' }}
+                        value={form.rappel_avant}
                         onChange={e => set('rappel_avant', Number(e.target.value))} />
-                      <select className={`${INPUT} w-28`} value={form.rappel_unite} onChange={e => set('rappel_unite', e.target.value)}>
+                      <select className={INPUT} value={form.rappel_unite} onChange={e => set('rappel_unite', e.target.value)}>
                         <option value="jours">jours</option>
                         <option value="mois">mois</option>
                       </select>
