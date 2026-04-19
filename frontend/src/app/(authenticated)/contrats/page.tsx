@@ -192,6 +192,39 @@ export default function ContratsPage() {
         ))}
       </div>
 
+      {/* ===== BANNER : contrats expirant dans 30j ===== */}
+      {(() => {
+        const expiring30 = data.filter(c => {
+          const diff = (new Date(c.date_fin).getTime() - Date.now()) / 86400000;
+          return diff >= 0 && diff <= 30 && (c.statut || '').toLowerCase() === 'actif';
+        });
+        if (expiring30.length === 0) return null;
+        return (
+          <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+              <span className="font-bold text-amber-800">
+                ⚠️ {expiring30.length} contrat(s) expire(nt) dans moins de 30 jours
+              </span>
+            </div>
+            <div className="space-y-1 pl-7">
+              {expiring30.map(c => {
+                const daysLeft = Math.round((new Date(c.date_fin).getTime() - Date.now()) / 86400000);
+                return (
+                  <div key={c.id} className="flex items-center gap-2 text-sm text-amber-700">
+                    <span className="font-mono text-xs bg-amber-100 px-1.5 py-0.5 rounded">#{c.id}</span>
+                    <span className="font-semibold">{c.client}</span>
+                    {c.equipement && <span className="text-amber-500">— {c.equipement}</span>}
+                    <span className="ml-auto font-bold">{daysLeft}j restant(s)</span>
+                    <span className="text-amber-500">• {c.date_fin}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
@@ -347,12 +380,12 @@ export default function ContratsPage() {
                       {filteredPieces.length === 0 ? (
                         <p className="text-xs text-savia-text-muted p-2">Aucune pièce disponible</p>
                       ) : filteredPieces.map((p: any) => (
-                        <label key={p.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-savia-surface-hover text-sm">
+                        <label key={p.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-savia-surface-hover text-sm text-savia-text">
                           <input type="checkbox" className="accent-cyan-400"
                             checked={form.pieces_selectionnees.includes(p.nom)}
                             onChange={() => togglePiece(p.nom)} />
-                          <span className="font-semibold text-xs">{p.nom}</span>
-                          <span className="text-xs text-savia-text-muted ml-auto">Stock: {p.stock_actuel} {p.unite || 'u.'}</span>
+                          <span className="font-semibold text-xs text-savia-text">{p.nom}</span>
+                          <span className="text-xs text-savia-text-muted ml-auto">Stock : {p.stock_actuel} {p.unite || 'u.'}</span>
                         </label>
                       ))}
                     </div>
@@ -372,7 +405,9 @@ export default function ContratsPage() {
                   <div>
                     <label className={LABEL}>Rappel avant expiration</label>
                     <div className="flex gap-2">
-                      <input type="number" className={`${INPUT} flex-1`} value={form.rappel_avant} min={1} max={365}
+                      <input type="number"
+                        className={`${INPUT} flex-1 font-bold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                        value={form.rappel_avant} min={1} max={365}
                         onChange={e => set('rappel_avant', Number(e.target.value))} />
                       <select className={`${INPUT} w-28`} value={form.rappel_unite} onChange={e => set('rappel_unite', e.target.value)}>
                         <option value="jours">jours</option>
