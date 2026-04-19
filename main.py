@@ -1594,6 +1594,9 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
     content = body.get("content", "")
     nb_errors = body.get("nb_errors", 0)
     nb_critiques = body.get("nb_critiques", 0)
+    import json as _json_import
+    parsed_errors_raw = body.get("parsed_errors", None)
+    parsed_errors_str = _json_import.dumps(parsed_errors_raw) if parsed_errors_raw is not None else None
 
     if not equipement or not content:
         raise HTTPException(status_code=400, detail="Équipement et contenu requis")
@@ -1627,9 +1630,9 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
 
             # Métadonnées en PostgreSQL
             cursor = conn.execute(
-                """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username)
+                """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
             )
             conn.execute(
                 "INSERT INTO audit_log (username, action, details) VALUES (?, ?, ?)",
@@ -1670,7 +1673,7 @@ def get_log(log_id: int, user: dict = Depends(_verify_token)):
     """Récupère le contenu d'un log depuis S3/MinIO."""
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT s3_key, equipement, filename FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
+            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Log non trouvé")
             # Support both dict (PG) and tuple (SQLite) rows
@@ -1681,11 +1684,23 @@ def get_log(log_id: int, user: dict = Depends(_verify_token)):
             else:
                 s3_key, equipement, filename = row[0], row[1], row[2]
             if not s3_key:
-                return {"id": log_id, "equipement": equipement, "filename": filename, "content": ""}
+                import json as _json_nk
+                _pe_nk = None
+                if (isinstance(row, dict) and row.get("parsed_errors")) or (not isinstance(row, dict) and len(row) > 3 and row[3]):
+                    _pe_nk_raw = row.get("parsed_errors") if isinstance(row, dict) else row[3]
+                    try: _pe_nk = _json_nk.loads(_pe_nk_raw)
+                    except: _pe_nk = None
+                return {"id": log_id, "equipement": equipement, "filename": filename, "content": "", "parsed_errors": _pe_nk}
             try:
                 from s3_storage import download_file
                 content = download_file(s3_key)
-                return {"id": log_id, "equipement": equipement, "filename": filename, "content": content or "", "s3_key": s3_key}
+                import json as _json_ret
+                _pe = None
+                if (isinstance(row, dict) and row.get("parsed_errors")) or (not isinstance(row, dict) and len(row) > 3 and row[3]):
+                    _pe_raw = row.get("parsed_errors") if isinstance(row, dict) else row[3]
+                    try: _pe = _json_ret.loads(_pe_raw)
+                    except: _pe = None
+                return {"id": log_id, "equipement": equipement, "filename": filename, "content": content or "", "s3_key": s3_key, "parsed_errors": _pe}
             except Exception:
                 return {"id": log_id, "equipement": equipement, "filename": filename, "content": ""}
     except HTTPException:

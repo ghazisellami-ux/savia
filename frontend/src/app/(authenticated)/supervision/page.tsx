@@ -342,7 +342,8 @@ export default function SupervisionPage() {
     return parsedErrors;
   };
 
-  // Fetch a stored log by ID and parse its errors
+  // Fetch a stored log by ID and return its errors
+  // Priority: 1) parsed_errors from DB, 2) parse raw content, 3) null (show simulated)
   const fetchLogErrors = async (logId: number) => {
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
@@ -351,8 +352,23 @@ export default function SupervisionPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        const errors = parseLogContent(data.content || '');
-        setLoadedErrors(errors);
+        // 1. Use stored parsed_errors from DB (most reliable)
+        if (data.parsed_errors && Array.isArray(data.parsed_errors) && data.parsed_errors.length > 0) {
+          setLoadedErrors(data.parsed_errors);
+          return;
+        }
+        // 2. Try to parse raw content from MinIO
+        if (data.content && data.content.length > 0) {
+          const errors = parseLogContent(data.content);
+          if (errors.length > 0) {
+            setLoadedErrors(errors);
+            return;
+          }
+        }
+        // 3. Neither source has errors → null fallback (shows currentMachine simulated errors)
+        setLoadedErrors(null);
+      } else {
+        setLoadedErrors(null);
       }
     } catch (e) {
       console.warn('fetchLogErrors failed:', e);
@@ -439,6 +455,7 @@ export default function SupervisionPage() {
             content: text,
             nb_errors: errCount,
             nb_critiques: critCount,
+            parsed_errors: parsedErrors, // store parsed errors in DB permanently
           }),
         });
         // Refresh history after save
