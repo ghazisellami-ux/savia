@@ -114,7 +114,7 @@ export default function SupervisionPage() {
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
-  const [expandHistory, setExpandHistory] = useState(false);
+  const [expandHistory, setExpandHistory] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importEquip, setImportEquip] = useState('');
   const [importLoading, setImportLoading] = useState(false);
@@ -343,7 +343,7 @@ export default function SupervisionPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
           body: JSON.stringify({
-            equipement: importEquip,
+            equipement: importEquip.trim(),
             filename: importFile.name,
             content: text,
             nb_errors: errCount,
@@ -763,7 +763,15 @@ export default function SupervisionPage() {
                         <td className="py-2 px-3 text-xs text-savia-text-muted">
                           {log.uploaded_at ? new Date(log.uploaded_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
                         </td>
-                        <td className="py-2 px-3 font-semibold">{log.equipement}</td>
+                        <td className="py-2 px-3 font-semibold">
+                          <button
+                            onClick={() => { setSelectedMachine((log.equipement || '').trim()); }}
+                            title="Recharger pour analyse"
+                            className="text-left hover:text-savia-accent transition-colors cursor-pointer"
+                          >
+                            {log.equipement}
+                          </button>
+                        </td>
                         <td className="py-2 px-3">
                           <code className="text-xs bg-savia-bg px-2 py-0.5 rounded text-savia-accent">{log.filename}</code>
                         </td>
