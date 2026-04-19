@@ -218,7 +218,13 @@ export default function SupervisionPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machinesForClient]);
 
-  const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
+  // Use filteredFleet[0] as fallback to stay within client context
+  const currentMachine = (
+    filteredFleet.find(m => m.machine === selectedMachine) ||
+    fleet.find(m => m.machine === selectedMachine) ||
+    filteredFleet[0] ||
+    fleet[0]
+  );
 
   const handleAnalyzeAI = async () => {
     setAiLoading(true);
@@ -369,10 +375,12 @@ export default function SupervisionPage() {
       .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
     if (matchingLogs.length > 0) {
       setSelectedLogId(matchingLogs[0].id);
+      setSelectedMachine(selectedEquip); // set machine name for currentMachine lookup
       fetchLogErrors(matchingLogs[0].id);
     } else {
       setLoadedErrors(null);
       setSelectedLogId(null);
+      setSelectedMachine(selectedEquip); // still point to the equip even without logs
     }
   }, [selectedEquip, logHistory]);
 
@@ -449,9 +457,10 @@ export default function SupervisionPage() {
     }
   };
 
-  const critCount = fleet.filter(m => m.etat === 'CRITIQUE').length;
-  const attCount = fleet.filter(m => m.etat === 'ATTENTION').length;
-  const okCount = fleet.filter(m => m.etat === 'OK').length;
+  // Use filteredFleet for KPIs so they reflect the current client filter
+  const critCount = filteredFleet.filter(m => m.etat === 'CRITIQUE').length;
+  const attCount = filteredFleet.filter(m => m.etat === 'ATTENTION').length;
+  const okCount = filteredFleet.filter(m => m.etat === 'OK').length;
 
   if (fleet.length === 0 || !currentMachine) {
     return <div className="flex justify-center items-center h-64"><div className="w-8 h-8 border-4 border-savia-accent border-t-transparent rounded-full animate-spin" /></div>;
