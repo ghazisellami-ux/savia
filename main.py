@@ -1607,6 +1607,12 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
             ).fetchone()
             if existing:
                 eid = existing.get("id") if isinstance(existing, dict) else existing[0]
+                # Update parsed_errors on duplicate if not already stored
+                if parsed_errors_str:
+                    conn.execute(
+                        "UPDATE logs_uploaded SET parsed_errors = ? WHERE id = ? AND (parsed_errors IS NULL OR parsed_errors = '')",
+                        (parsed_errors_str, eid)
+                    )
                 return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
 
             # Upload contenu vers S3/MinIO
