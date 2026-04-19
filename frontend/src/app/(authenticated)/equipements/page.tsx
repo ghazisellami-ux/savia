@@ -66,10 +66,10 @@ const DOMAINE_COLORS: Record<string, string> = {
 };
 
 const DOMAINE_ACTIVE: Record<string, string> = {
-  'Radiologie':             'bg-blue-500/20   border-blue-500/50   text-blue-200',
-  'POC / Soins Intensifs':  'bg-orange-500/20 border-orange-500/50 text-orange-200',
-  'Laboratoire':            'bg-purple-500/20 border-purple-500/50 text-purple-200',
-  'Anesthésie / Bloc Op.':  'bg-teal-500/20   border-teal-500/50   text-teal-200',
+  'Radiologie':             'bg-blue-600/40   border-blue-400/70   text-white',
+  'POC / Soins Intensifs':  'bg-orange-600/40 border-orange-400/70 text-white',
+  'Laboratoire':            'bg-purple-600/40 border-purple-400/70 text-white',
+  'Anesthésie / Bloc Op.':  'bg-teal-600/40   border-teal-400/70   text-white',
 };
 
 const TYPES_PAR_DOMAINE: Record<string, string[]> = {
@@ -110,8 +110,10 @@ const TYPES_ANNEXES_RADIOLOGIE = [
 function getStatutBadge(statut: string) {
   const s = statut.toLowerCase();
   if (s.includes('opérationnel') || s.includes('actif')) return 'bg-green-500/10 text-green-400 border-green-500/20';
-  if (s.includes('maintenance')) return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+  if (s.includes('maintenance'))   return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
   if (s.includes('hors service') || s.includes('critique')) return 'bg-red-500/10 text-red-400 border-red-500/20';
+  if (s.includes('atelier'))       return 'bg-amber-500/10  text-amber-400  border-amber-500/20';
+  if (s.includes('stock'))         return 'bg-slate-500/10  text-slate-400  border-slate-500/20';
   return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
 }
 
@@ -586,7 +588,7 @@ export default function EquipementsPage() {
                           <Activity className="w-3.5 h-3.5" /> Statut
                         </label>
                         <select className={INPUT_CLS} value={form.Statut} onChange={e => setForm({ ...form, Statut: e.target.value })}>
-                          {['Opérationnel', 'En maintenance', 'Hors Service', 'En attente'].map(s => <option key={s} value={s}>{s}</option>)}
+                          {['Opérationnel', 'En maintenance', 'Hors Service', 'En atelier', 'En stock'].map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </div>
                       <div className="md:col-span-2">
