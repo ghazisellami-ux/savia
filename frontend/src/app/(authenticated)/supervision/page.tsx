@@ -115,6 +115,7 @@ export default function SupervisionPage() {
   const [loadedErrors, setLoadedErrors] = useState<{code:string;message:string;statut:string;type:string;frequence:number}[]|null>(null);
   const [selectedLogId, setSelectedLogId] = useState<number|null>(null);
   const [logLoadFailed, setLogLoadFailed] = useState<boolean>(false); // true when log selected but content unavailable
+  const [logMergeApplied, setLogMergeApplied] = useState<boolean>(false); // prevents infinite loop in fleet/log merge
   const [showAiDiag, setShowAiDiag] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
@@ -198,6 +199,27 @@ export default function SupervisionPage() {
       return true;
     });
   }, [machinesForClient, selectedEquip]);
+
+  // Merge real log error counts into fleet items (runs once after both fleet + logHistory loaded)
+  useEffect(() => {
+    if (logMergeApplied || fleet.length === 0 || logHistory.length === 0) return;
+    setLogMergeApplied(true);
+    setFleet(prev => prev.map(m => {
+      // Find most recent log for this machine
+      const machineLogs = logHistory.filter(
+        (l: any) => (l.equipement || '').toLowerCase().trim() === m.machine.toLowerCase().trim()
+      );
+      if (machineLogs.length === 0) return m; // no log for this machine, keep simulated
+      const latestLog = machineLogs.sort(
+        (a: any, b: any) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
+      )[0];
+      const nbErrors = latestLog.nb_errors || 0;
+      const nbCritiques = latestLog.nb_critiques || 0;
+      const newEtat: 'OK' | 'ATTENTION' | 'CRITIQUE' =
+        nbCritiques > 0 ? 'CRITIQUE' : nbErrors > 0 ? 'ATTENTION' : 'OK';
+      return { ...m, erreurs: nbErrors, critiques: nbCritiques, etat: newEtat };
+    }));
+  }, [fleet, logHistory, logMergeApplied]);
 
   // Auto-select first machine from machinesForClient when client filter changes
   useEffect(() => {
