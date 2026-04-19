@@ -117,7 +117,7 @@ export default function SupervisionPage() {
   const [aiResult, setAiResult] = useState<AiDiagnostic | null>(null);
   const [expandLogs, setExpandLogs] = useState(false);
   const [expandImport, setExpandImport] = useState(false);
-  const [expandHistory, setExpandHistory] = useState(false);
+  const [expandHistory, setExpandHistory] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importClient, setImportClient] = useState('');
   const [importEquip, setImportEquip] = useState('');
@@ -157,7 +157,7 @@ export default function SupervisionPage() {
       const res = await fetch('/api/logs', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (res.ok) setLogHistory(await res.json());
+      if (res.ok) { const data = await res.json(); setLogHistory(data); if (data.length > 0) setExpandHistory(true); }
     } catch { /* silencieux */ }
     finally { setHistoryLoading(false); }
   };
@@ -188,6 +188,20 @@ export default function SupervisionPage() {
       return true;
     });
   }, [selectedClient, selectedEquip, fleet]);
+
+  // Auto-select first machine from filteredFleet when filter changes
+  useEffect(() => {
+    if (filteredFleet.length > 0) {
+      const currentIsInFleet = filteredFleet.some(m => m.machine === selectedMachine);
+      if (!currentIsInFleet) {
+        setSelectedMachine(filteredFleet[0].machine);
+        setSelectedError('');
+        setAiResult(null);
+        setShowAiDiag(false);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredFleet.map(m => m.machine).join(',')]);
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
