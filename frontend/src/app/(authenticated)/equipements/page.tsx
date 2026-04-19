@@ -7,7 +7,7 @@ import {
   Plus, Search, Edit2, Trash2, Loader2, Save, X, Server, Building2,
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
-  Download, FolderOpen, Scan, Package,
+  Download, FolderOpen, Scan, Package, Wind,
 } from 'lucide-react';
 import { equipements, documentsTechniques } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -48,25 +48,28 @@ const INPUT_CLS = "w-full bg-savia-bg/50 border border-savia-border rounded-lg p
 
 // ======================= CATALOGUE DOMAINES & TYPES =======================
 
-const DOMAINES = ['Radiologie', 'POC / Soins Intensifs', 'Laboratoire'] as const;
+const DOMAINES = ['Radiologie', 'POC / Soins Intensifs', 'Laboratoire', 'Anesthésie / Bloc Op.'] as const;
 type Domaine = typeof DOMAINES[number];
 
 const DOMAINE_ICONS: Record<string, React.ReactNode> = {
-  'Radiologie':            <Scan      className="w-4 h-4" />,
-  'POC / Soins Intensifs': <Activity  className="w-4 h-4" />,
-  'Laboratoire':           <Microscope className="w-4 h-4" />,
+  'Radiologie':             <Scan       className="w-4 h-4" />,
+  'POC / Soins Intensifs':  <Activity   className="w-4 h-4" />,
+  'Laboratoire':            <Microscope className="w-4 h-4" />,
+  'Anesthésie / Bloc Op.':  <Wind       className="w-4 h-4" />,
 };
 
 const DOMAINE_COLORS: Record<string, string> = {
-  'Radiologie':            'text-blue-400   bg-blue-500/10   border-blue-500/20',
-  'POC / Soins Intensifs': 'text-orange-400 bg-orange-500/10 border-orange-500/20',
-  'Laboratoire':           'text-purple-400 bg-purple-500/10 border-purple-500/20',
+  'Radiologie':             'text-blue-400   bg-blue-500/10   border-blue-500/20',
+  'POC / Soins Intensifs':  'text-orange-400 bg-orange-500/10 border-orange-500/20',
+  'Laboratoire':            'text-purple-400 bg-purple-500/10 border-purple-500/20',
+  'Anesthésie / Bloc Op.':  'text-teal-400   bg-teal-500/10   border-teal-500/20',
 };
 
 const DOMAINE_ACTIVE: Record<string, string> = {
-  'Radiologie':            'bg-blue-500/20   border-blue-500/50   text-blue-200',
-  'POC / Soins Intensifs': 'bg-orange-500/20 border-orange-500/50 text-orange-200',
-  'Laboratoire':           'bg-purple-500/20 border-purple-500/50 text-purple-200',
+  'Radiologie':             'bg-blue-500/20   border-blue-500/50   text-blue-200',
+  'POC / Soins Intensifs':  'bg-orange-500/20 border-orange-500/50 text-orange-200',
+  'Laboratoire':            'bg-purple-500/20 border-purple-500/50 text-purple-200',
+  'Anesthésie / Bloc Op.':  'bg-teal-500/20   border-teal-500/50   text-teal-200',
 };
 
 const TYPES_PAR_DOMAINE: Record<string, string[]> = {
@@ -84,6 +87,13 @@ const TYPES_PAR_DOMAINE: Record<string, string[]> = {
     "Automate d'hématologie", "Automate de biochimie", 'Centrifugeuse',
     'Microscope', "Automate d'immunologie", 'Spectrophotomètre',
     'PCR (thermocycleur)', 'Automate de coagulation', 'Chambre froide', 'Incubateur',
+  ],
+  'Anesthésie / Bloc Op.': [
+    'Machine d\'anesthésie', 'Respirateur (bloc opératoire)',
+    'Moniteur multiparamétrique (bloc)', 'Bistouri électrique (diathermie)',
+    'Lampe scialytique', 'Table d\'opération',
+    'Pousse-seringue électrique', 'Aspirateur chirurgical',
+    'Réchauffeur de perfusion', 'Scope anesthésie (capnographe)',
   ],
 };
 
@@ -155,6 +165,20 @@ export default function EquipementsPage() {
     });
     return map;
   }, [data]);
+
+  // Reverse map: client name → matricule (for auto-fill when selecting client)
+  const clientMatriculeMap = useMemo(() => {
+    const map = new Map<string, string>();
+    data.forEach(eq => {
+      if (eq.client && eq.matriculeFiscale && !map.has(eq.client)) {
+        map.set(eq.client, eq.matriculeFiscale);
+      }
+    });
+    return map;
+  }, [data]);
+
+  const allMatricules = useMemo(() => Array.from(matriculeClientMap.keys()), [matriculeClientMap]);
+  const allClientNames = useMemo(() => Array.from(clientMatriculeMap.keys()), [clientMatriculeMap]);
 
   const docEquipOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.equipement_nom).filter(Boolean)))], [docs]);
   const docClientOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.client).filter(Boolean)))], [docs]);
@@ -321,7 +345,7 @@ export default function EquipementsPage() {
         <h1 className="text-2xl font-black gradient-text flex items-center gap-3">
           <Server className="w-7 h-7" /> Parc Équipements Médicaux
         </h1>
-        <p className="text-savia-text-muted text-sm mt-1">Gestion multi-domaines : Radiologie · POC · Laboratoire</p>
+        <p className="text-savia-text-muted text-sm mt-1">Gestion multi-domaines : Radiologie · POC · Laboratoire · Anesthésie</p>
       </div>
 
       {/* KPIs */}
@@ -379,20 +403,33 @@ export default function EquipementsPage() {
                     <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
                       <BadgeCheck className="w-4 h-4 text-savia-accent" /> Identification du Client
                     </h3>
+                    {/* Datalists for auto-complete */}
+                    <datalist id="matricule-suggestions">
+                      {allMatricules.map(m => <option key={m} value={m} />)}
+                    </datalist>
+                    <datalist id="client-suggestions">
+                      {allClientNames.map(c => <option key={c} value={c} />)}
+                    </datalist>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Hash className="w-3.5 h-3.5" /> Matricule Fiscale *
                         </label>
                         <div className="relative">
-                          <input className={INPUT_CLS} placeholder="Ex: 1234567/A/P/M/000" value={form.MatriculeFiscale}
+                          <input
+                            list="matricule-suggestions"
+                            className={INPUT_CLS}
+                            placeholder="Ex: 1234567/A/P/M/000"
+                            value={form.MatriculeFiscale}
                             onChange={e => {
                               const val = e.target.value;
                               const matched = matriculeClientMap.get(val.trim().toLowerCase());
                               setForm(matched ? { ...form, MatriculeFiscale: val, Client: matched } : { ...form, MatriculeFiscale: val });
-                            }} />
+                            }}
+                          />
                           {form.MatriculeFiscale && matriculeClientMap.has(form.MatriculeFiscale.trim().toLowerCase()) && (
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-green-400">
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-green-400 pointer-events-none">
                               <CheckCircle2 className="w-4 h-4" /><span className="text-xs font-semibold">Client trouvé</span>
                             </div>
                           )}
@@ -405,8 +442,17 @@ export default function EquipementsPage() {
                             <span className="text-green-400 text-[10px] font-normal">(auto-rempli)</span>
                           )}
                         </label>
-                        <input className={INPUT_CLS} placeholder="Ex: Clinique du Parc" value={form.Client}
-                          onChange={e => setForm({ ...form, Client: e.target.value })} />
+                        <input
+                          list="client-suggestions"
+                          className={INPUT_CLS}
+                          placeholder="Ex: Clinique du Parc"
+                          value={form.Client}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const mat = clientMatriculeMap.get(val);
+                            setForm(mat ? { ...form, Client: val, MatriculeFiscale: mat } : { ...form, Client: val });
+                          }}
+                        />
                       </div>
                     </div>
                   </div>
@@ -422,7 +468,7 @@ export default function EquipementsPage() {
                       <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
                         Domaine médical *
                       </label>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {DOMAINES.map(d => (
                           <button key={d} type="button"
                             onClick={() => setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] })}
