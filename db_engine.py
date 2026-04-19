@@ -521,6 +521,8 @@ def init_db():
         _run_migration("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''", "telegram_id sur techniciens")
         _run_migration("ALTER TABLE planning_maintenance ADD COLUMN client TEXT DEFAULT ''", "client sur planning")
         _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
+        _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         try:
@@ -921,14 +923,17 @@ def ajouter_equipement(equipement_dict):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
-                                     date_installation, derniere_maintenance, statut, notes, client, matricule_fiscale, document_technique)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     date_installation, derniere_maintenance, statut, notes,
+                                     client, matricule_fiscale, document_technique,
+                                     domaine, est_annexe)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
                 derniere_maintenance=excluded.derniere_maintenance, statut=excluded.statut,
                 notes=excluded.notes, matricule_fiscale=excluded.matricule_fiscale,
-                document_technique=excluded.document_technique
+                document_technique=excluded.document_technique,
+                domaine=excluded.domaine, est_annexe=excluded.est_annexe
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -942,6 +947,8 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("Client", "Centre Principal"),
             equipement_dict.get("MatriculeFiscale", ""),
             equipement_dict.get("DocumentTechnique", ""),
+            equipement_dict.get("Domaine", "Radiologie"),
+            bool(equipement_dict.get("EstAnnexe", False)),
         ))
     _trigger_backup()
     return True
@@ -962,7 +969,8 @@ def modifier_equipement(equip_id, equipement_dict):
             UPDATE equipements SET
                 nom = ?, type = ?, fabricant = ?, modele = ?, num_serie = ?,
                 date_installation = ?, derniere_maintenance = ?, statut = ?,
-                notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?
+                notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
+                domaine = ?, est_annexe = ?
             WHERE id = ?
         """, (
             equipement_dict.get("Nom", ""),
@@ -977,6 +985,8 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("Client", "Centre Principal"),
             equipement_dict.get("MatriculeFiscale", ""),
             equipement_dict.get("DocumentTechnique", ""),
+            equipement_dict.get("Domaine", "Radiologie"),
+            bool(equipement_dict.get("EstAnnexe", False)),
             equip_id,
         ))
     _trigger_backup()

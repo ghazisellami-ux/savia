@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Search, Clock, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
-  Zap, FileText, Tag, Edit, Send, UserCheck
+  Zap, FileText, Tag, Edit, Send, UserCheck, Lock
 } from 'lucide-react';
 import { demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -24,25 +24,41 @@ interface Demande {
   notes_traitement: string;
 }
 
+// === 3 statuts officiels ===
+const STATUTS = ['En attente', 'Assignée', 'Clôturée'] as const;
+type Statut = typeof STATUTS[number];
+
+/** Normalise les anciens statuts vers les 3 officiels */
+function normalizeStatut(s: string): Statut {
+  if (s === 'Planifiée' || s === 'En cours' || s === 'Assignée') return 'Assignée';
+  if (s === 'Résolue' || s === 'Clôturée') return 'Clôturée';
+  return 'En attente'; // 'Nouvelle', '', undefined → En attente
+}
+
 const INPUT_CLS = "w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 focus:border-savia-accent/40 outline-none transition-all";
+
 const URGENCE_COLORS: Record<string, string> = {
   'Critique': 'bg-red-500/15 text-red-400 border border-red-500/30',
   'Haute': 'bg-orange-500/15 text-orange-400 border border-orange-500/30',
   'Moyenne': 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30',
   'Basse': 'bg-green-500/15 text-green-400 border border-green-500/30',
 };
+
 const STATUT_COLORS: Record<string, string> = {
   'En attente': 'bg-red-500/10 text-red-400',
-  'En cours': 'bg-yellow-500/10 text-yellow-400',
-  'Assignée': 'bg-blue-500/10 text-blue-400',
-  'Résolue': 'bg-green-500/10 text-green-400',
-  'Clôturée': 'bg-gray-500/10 text-gray-400',
+  'Assignée':   'bg-blue-500/10 text-blue-400',
+  'Clôturée':   'bg-green-500/10 text-green-400',
+};
+
+const STATUT_ICONS: Record<string, React.ReactNode> = {
+  'En attente': <AlertTriangle className="w-3 h-3 inline mr-1" />,
+  'Assignée':   <UserCheck    className="w-3 h-3 inline mr-1" />,
+  'Clôturée':   <Lock         className="w-3 h-3 inline mr-1" />,
 };
 
 export default function DemandesPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  // Manager et Responsable Technique peuvent assigner un technicien à la création
   const canAssignTech = user?.role === 'Manager' || user?.role === 'Responsable Technique' || user?.role === 'Admin';
   const clientNom = user?.client || '';
   const demandeurNom = user?.nom || '';
@@ -63,20 +79,16 @@ export default function DemandesPage() {
   const [filterStatut, setFilterStatut] = useState('Tous');
   const [data, setData] = useState<Demande[]>([]);
 
-  // All clients list (for Admin/Manager/Resp. Tech.)
   const [allClients, setAllClients] = useState<string[]>([]);
-  // Equipments for the selected client (loaded on client change via API)
   const [filteredEquips, setFilteredEquips] = useState<string[]>([]);
   const [equipsLoading, setEquipsLoading] = useState(false);
   const [techs, setTechs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  // New demande modal
   const [showNewModal, setShowNewModal] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
 
-  // Update statut modal
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [selectedDemande, setSelectedDemande] = useState<Demande | null>(null);
   const [updateForm, setUpdateForm] = useState({ statut: '', technicien_assigne: '', notes_traitement: '' });
@@ -96,7 +108,7 @@ export default function DemandesPage() {
         client: item.client || '',
         demandeur: item.demandeur || '',
         urgence: item.urgence || 'Moyenne',
-        statut: item.statut || 'En attente',
+        statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         code_erreur: item.code_erreur || '',
         contact_nom: item.contact_nom || '',
@@ -106,14 +118,12 @@ export default function DemandesPage() {
       }));
       setData(mapped);
 
-      // Parse clients list (for non-Lecteur dropdowns)
       const clientNames = (clientRes as any[])
         .map((c: any) => c.nom || c.Nom || c.name || '')
         .filter(Boolean)
         .sort();
       setAllClients(clientNames);
 
-      // Parse technicians
       setTechs((techRes as any[]).map((t: any) => `${t.prenom || ''} ${t.nom || ''}`.trim()).filter(Boolean));
     } catch (err) {
       console.error('Failed to fetch demandes', err);
@@ -124,11 +134,10 @@ export default function DemandesPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Pour Lecteur : charger les équipements dès que user est disponible (évite la race condition)
   useEffect(() => {
     if (!isLecteur) return;
     setEquipsLoading(true);
-    equipements.list() // Le backend filtre automatiquement via JWT pour les Lecteurs
+    equipements.list()
       .then((res: any[]) => {
         const names = res.map((e: any) => e.Nom || e.nom || '').filter(Boolean);
         setFilteredEquips(names);
@@ -137,9 +146,8 @@ export default function DemandesPage() {
       .finally(() => setEquipsLoading(false));
   }, [isLecteur]);
 
-  // When selected client changes (non-Lecteur): load equipment from API for that client
   useEffect(() => {
-    if (isLecteur) return; // Lecteur: equipment loaded in loadData(), do not reset
+    if (isLecteur) return;
     if (!form.client) { setFilteredEquips([]); return; }
     setEquipsLoading(true);
     equipements.list(form.client)
@@ -150,16 +158,12 @@ export default function DemandesPage() {
       .finally(() => setEquipsLoading(false));
   }, [form.client, isLecteur]);
 
-  const openNewModal = () => {
-    setForm({ ...emptyForm });
-    setShowNewModal(true);
-  };
+  const openNewModal = () => { setForm({ ...emptyForm }); setShowNewModal(true); };
 
   const handleCreate = async () => {
     const formToSend = isLecteur
       ? { ...form, demandeur: demandeurNom || clientNom, client: clientNom }
       : form;
-
     if (!formToSend.equipement || !formToSend.description) {
       alert('Veuillez remplir les champs obligatoires : Équipement et Description');
       return;
@@ -203,9 +207,10 @@ export default function DemandesPage() {
     }
   };
 
-  const enAttente = data.filter(d => d.statut === 'En attente').length;
-  const enCours = data.filter(d => d.statut === 'En cours' || d.statut === 'Assignée').length;
-  const resolues = data.filter(d => d.statut === 'Résolue' || d.statut === 'Clôturée').length;
+  // KPI counters — 3 statuts seulement
+  const nbAttente  = data.filter(d => d.statut === 'En attente').length;
+  const nbAssignee = data.filter(d => d.statut === 'Assignée').length;
+  const nbCloturee = data.filter(d => d.statut === 'Clôturée').length;
 
   const filtered = data.filter(d => {
     if (filterStatut !== 'Tous' && d.statut !== filterStatut) return false;
@@ -250,22 +255,22 @@ export default function DemandesPage() {
         </div>
       )}
 
-      {/* KPIs */}
+      {/* KPIs — 3 statuts */}
       <div className="grid grid-cols-3 gap-4">
         <div className="glass rounded-xl p-4 text-center">
           <div className="flex justify-center mb-2"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
-          <div className="text-3xl font-black text-red-400">{enAttente}</div>
+          <div className="text-3xl font-black text-red-400">{nbAttente}</div>
           <div className="text-xs text-savia-text-muted mt-1">En attente</div>
         </div>
         <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2"><Clock className="w-5 h-5 text-yellow-400" /></div>
-          <div className="text-3xl font-black text-yellow-400">{enCours}</div>
-          <div className="text-xs text-savia-text-muted mt-1">En cours / Assignée</div>
+          <div className="flex justify-center mb-2"><UserCheck className="w-5 h-5 text-blue-400" /></div>
+          <div className="text-3xl font-black text-blue-400">{nbAssignee}</div>
+          <div className="text-xs text-savia-text-muted mt-1">Assignée</div>
         </div>
         <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2"><CheckCircle className="w-5 h-5 text-green-400" /></div>
-          <div className="text-3xl font-black text-green-400">{resolues}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Résolues</div>
+          <div className="flex justify-center mb-2"><Lock className="w-5 h-5 text-green-400" /></div>
+          <div className="text-3xl font-black text-green-400">{nbCloturee}</div>
+          <div className="text-xs text-savia-text-muted mt-1">Clôturée</div>
         </div>
       </div>
 
@@ -280,9 +285,7 @@ export default function DemandesPage() {
           className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
           <option value="Tous">Tous les statuts</option>
           <option value="En attente">En attente</option>
-          <option value="En cours">En cours</option>
           <option value="Assignée">Assignée</option>
-          <option value="Résolue">Résolue</option>
           <option value="Clôturée">Clôturée</option>
         </select>
       </div>
@@ -304,7 +307,7 @@ export default function DemandesPage() {
                   <Zap className="w-3 h-3 inline mr-1" />{d.urgence}
                 </span>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${STATUT_COLORS[d.statut] || 'bg-gray-500/10 text-gray-400'}`}>
-                  {d.statut}
+                  {STATUT_ICONS[d.statut]}{d.statut}
                 </span>
               </div>
               {!isLecteur && (
@@ -362,7 +365,7 @@ export default function DemandesPage() {
                 </div>
               </div>
 
-              {/* Demandeur — visible seulement pour non-Lecteur */}
+              {/* Demandeur */}
               {!isLecteur && (
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -373,53 +376,33 @@ export default function DemandesPage() {
                 </div>
               )}
 
-              {/* Client + Équipement : toujours côte à côte */}
+              {/* Client + Équipement */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Client — verrouillé pour Lecteur, liste déroulante pour les autres */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
                   </label>
                   {isLecteur ? (
-                    <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">
-                      {clientNom}
-                    </div>
+                    <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">{clientNom}</div>
                   ) : (
-                    <select
-                      className={INPUT_CLS}
-                      value={form.client}
-                      onChange={e => setForm({ ...form, client: e.target.value, equipement: '' })}
-                    >
+                    <select className={INPUT_CLS} value={form.client} onChange={e => setForm({ ...form, client: e.target.value, equipement: '' })}>
                       <option value="">— Sélectionner un client —</option>
-                      {allClients.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
+                      {allClients.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   )}
                 </div>
-
-                {/* Équipement — liste filtrée selon le client choisi */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Server className="w-3.5 h-3.5" /> Équipement concerné *
                     {equipsLoading && <Loader2 className="w-3 h-3 animate-spin text-savia-accent" />}
                   </label>
-                  <select
-                    className={INPUT_CLS}
-                    value={form.equipement}
+                  <select className={INPUT_CLS} value={form.equipement}
                     onChange={e => setForm({...form, equipement: e.target.value})}
-                    disabled={(!isLecteur && !form.client) || equipsLoading}
-                  >
+                    disabled={(!isLecteur && !form.client) || equipsLoading}>
                     <option value="">
-                      {equipsLoading
-                        ? 'Chargement...'
-                        : (!isLecteur && !form.client)
-                          ? '← Choisir un client d\'abord'
-                          : '— Sélectionner un équipement —'}
+                      {equipsLoading ? 'Chargement...' : (!isLecteur && !form.client) ? "← Choisir un client d'abord" : '— Sélectionner un équipement —'}
                     </option>
-                    {filteredEquips.map(e => (
-                      <option key={e} value={e}>{e}</option>
-                    ))}
+                    {filteredEquips.map(e => <option key={e} value={e}>{e}</option>)}
                   </select>
                   {!isLecteur && form.client && !equipsLoading && (
                     <p className="text-xs text-savia-text-muted mt-1 pl-1">
@@ -430,8 +413,6 @@ export default function DemandesPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                {/* Code erreur */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Tag className="w-3.5 h-3.5" /> Code erreur (facultatif)
@@ -439,8 +420,6 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="Ex: E-301" value={form.code_erreur}
                     onChange={e => setForm({...form, code_erreur: e.target.value})} />
                 </div>
-
-                {/* Contact nom */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <User className="w-3.5 h-3.5" /> Personne à contacter
@@ -448,8 +427,6 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="Nom du contact sur place" value={form.contact_nom}
                     onChange={e => setForm({...form, contact_nom: e.target.value})} />
                 </div>
-
-                {/* Contact tel */}
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Phone className="w-3.5 h-3.5" /> Téléphone contact
@@ -457,8 +434,6 @@ export default function DemandesPage() {
                   <input className={INPUT_CLS} placeholder="+216 XX XXX XXX" value={form.contact_tel}
                     onChange={e => setForm({...form, contact_tel: e.target.value})} />
                 </div>
-
-                {/* Technicien assigné — visble uniquement pour Manager / Responsable Technique / Admin */}
                 {canAssignTech && (
                   <div className="md:col-span-2">
                     <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -466,21 +441,15 @@ export default function DemandesPage() {
                       <span className="text-blue-400">Assigner un technicien</span>
                       <span className="text-xs font-normal text-savia-text-muted">(facultatif)</span>
                     </label>
-                    <select
-                      className={INPUT_CLS}
-                      value={form.technicien_assigne}
-                      onChange={e => setForm({...form, technicien_assigne: e.target.value})}
-                    >
+                    <select className={INPUT_CLS} value={form.technicien_assigne}
+                      onChange={e => setForm({...form, technicien_assigne: e.target.value})}>
                       <option value="">— Non assigné pour l&apos;instant —</option>
-                      {techs.map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
+                      {techs.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
                 )}
               </div>
 
-              {/* Description */}
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                   <FileText className="w-3.5 h-3.5" /> Description du problème *
@@ -490,7 +459,6 @@ export default function DemandesPage() {
                   value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
               </div>
             </div>
-
             <div className="flex justify-end gap-3 p-5 border-t border-savia-border">
               <button onClick={() => setShowNewModal(false)}
                 className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
@@ -506,7 +474,7 @@ export default function DemandesPage() {
         </div>
       )}
 
-      {/* ========== MODAL: Mise à jour statut (non-Lecteur) ========== */}
+      {/* ========== MODAL: Mise à jour statut ========== */}
       {!isLecteur && showUpdateModal && selectedDemande && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl">
@@ -521,13 +489,24 @@ export default function DemandesPage() {
             <div className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Statut</label>
-                <select className={INPUT_CLS} value={updateForm.statut} onChange={e => setUpdateForm({...updateForm, statut: e.target.value})}>
-                  <option value="En attente">En attente</option>
-                  <option value="Assignée">Assignée</option>
-                  <option value="En cours">En cours</option>
-                  <option value="Résolue">Résolue</option>
-                  <option value="Clôturée">Clôturée</option>
-                </select>
+                {/* 3 boutons visuels pour les 3 statuts */}
+                <div className="grid grid-cols-3 gap-2">
+                  {STATUTS.map(s => (
+                    <button key={s} onClick={() => setUpdateForm({...updateForm, statut: s})}
+                      className={`py-2.5 rounded-lg text-sm font-bold transition-all cursor-pointer border ${
+                        updateForm.statut === s
+                          ? s === 'En attente' ? 'bg-red-500/20 border-red-500/50 text-red-300'
+                          : s === 'Assignée'   ? 'bg-blue-500/20 border-blue-500/50 text-blue-300'
+                          :                      'bg-green-500/20 border-green-500/50 text-green-300'
+                          : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+                      }`}>
+                      {s === 'En attente' && <AlertTriangle className="w-4 h-4 inline mr-1 -mt-0.5" />}
+                      {s === 'Assignée'   && <UserCheck    className="w-4 h-4 inline mr-1 -mt-0.5" />}
+                      {s === 'Clôturée'   && <Lock         className="w-4 h-4 inline mr-1 -mt-0.5" />}
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
