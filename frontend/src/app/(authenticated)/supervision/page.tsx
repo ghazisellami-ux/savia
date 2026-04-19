@@ -181,37 +181,28 @@ export default function SupervisionPage() {
   }, []);
 
 
-  // equipOptions: equipment names for Filter 2 — computed synchronously from rawEquipments
-  // This is the SINGLE source of truth for the Equipment dropdown
-  const equipOptions = useMemo(() => {
-    if (rawEquipments.length === 0) return fleet.map(m => m.machine);
-    if (selectedClient === 'Tous') {
-      return rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
-    }
+  // machinesForClient: filter fleet by m.client directly (most reliable - same source as clientList)
+  const machinesForClient = useMemo(() => {
+    if (selectedClient === 'Tous') return fleet;
     const target = selectedClient.toLowerCase().trim();
-    const filtered = rawEquipments
-      .filter((eq: any) => (eq.Client || eq.client || '').toLowerCase().trim() === target)
-      .map((eq: any) => (eq.Nom || eq.nom || '').trim())
-      .filter(Boolean);
-    return filtered.length > 0 ? filtered : [];
-  }, [rawEquipments, selectedClient, fleet]);
+    return fleet.filter(m => (m.client || '').toLowerCase().trim() === target);
+  }, [fleet, selectedClient]);
 
-  // Filter machines — cascade: client -> equip (uses clientEquipNames from rawEquipments)
+  // filteredFleet: filter by client (via m.client) then by selected equip
   const filteredFleet = useMemo(() => {
-    return fleet.filter(m => {
-      if (selectedClient !== 'Tous' && !equipOptions.includes(m.machine)) return false;
+    return machinesForClient.filter(m => {
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
-  }, [selectedClient, selectedEquip, fleet, equipOptions]);
+  }, [machinesForClient, selectedEquip]);
 
-  // Auto-select first machine from filteredFleet when client/equip filter changes
+  // Auto-select first machine from machinesForClient when client filter changes
   useEffect(() => {
-    if (equipOptions.length > 0) {
-      const currentIsValid = selectedClient === 'Tous' || equipOptions.includes(selectedMachine);
+    if (machinesForClient.length > 0) {
+      const currentIsValid = selectedClient === 'Tous' || machinesForClient.some(m => m.machine === selectedMachine);
       if (!currentIsValid) {
-        // Find first machine in fleet that matches equipOptions
-        const firstMatch = fleet.find(m => equipOptions.includes(m.machine));
+        // Find first machine in fleet for this client
+        const firstMatch = machinesForClient[0];
         if (firstMatch) {
           setSelectedMachine(firstMatch.machine);
           setSelectedError('');
@@ -222,7 +213,8 @@ export default function SupervisionPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [equipOptions]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machinesForClient]);
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
@@ -539,12 +531,13 @@ export default function SupervisionPage() {
             <Server className="w-4 h-4" /> Équipement
           </label>
           <select
+            key={`equip-${selectedClient}`}
             value={selectedEquip}
             onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {equipOptions.map(name => <option key={name} value={name}>{name}</option>)}
+            {machinesForClient.map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
           </select>
 
         </div>
@@ -553,6 +546,7 @@ export default function SupervisionPage() {
             <FileText className="w-4 h-4" /> Fichier Log
           </label>
           <select
+            key={`log-${selectedClient}-${selectedEquip}`}
             value={selectedMachine}
             onChange={e => {
               setSelectedMachine(e.target.value);
