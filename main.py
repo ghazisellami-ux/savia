@@ -136,19 +136,79 @@ def check_garantie_expiry():
 
 
 def _start_garantie_daemon():
-    """Lance un thread démon qui vérifie les garanties toutes les 24h."""
+    """Lance un thread démon qui vérifie garanties + contrats toutes les 24h."""
     import threading, time
     def _run():
-        # First check 30s after startup to let other services boot
         time.sleep(30)
         while True:
             try:
                 check_garantie_expiry()
             except Exception as e:
                 logger.error(f"Garantie daemon error: {e}")
-            time.sleep(86400)  # 24 heures
-    threading.Thread(target=_run, daemon=True, name="garantie-checker").start()
-    logger.info("⏰ Garantie expiry daemon: démarré (vérification toutes les 24h)")
+            try:
+                check_contrat_expiry()
+            except Exception as e:
+                logger.error(f"Contrat daemon error: {e}")
+            time.sleep(86400)
+    threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats, 24h)")
+
+
+def check_contrat_expiry():
+    """Vérifie les contrats actifs expirant dans les 30 prochains jours."""
+    from datetime import date, timedelta
+    try:
+        df = lire_contrats()
+        if df is None or df.empty:
+            return []
+        today = date.today()
+        alert_limit = today + timedelta(days=30)
+        alerts = []
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip().lower()
+            if statut not in ('actif', 'active', ''):
+                continue
+            date_fin_str = str(row.get('date_fin', '') or '').strip()
+            if not date_fin_str:
+                continue
+            try:
+                date_fin = date.fromisoformat(date_fin_str[:10])
+                if today <= date_fin <= alert_limit:
+                    jours = (date_fin - today).days
+                    alerts.append({
+                        'id': row.get('id', '?'),
+                        'client': row.get('client') or row.get('Client', '?'),
+                        'equipement': row.get('equipement', ''),
+                        'type_contrat': row.get('type_contrat', ''),
+                        'fin': date_fin.strftime('%d/%m/%Y'),
+                        'jours': jours,
+                    })
+            except Exception:
+                continue
+        if alerts:
+            lines = '
+'.join(
+                f"  • <b>#{a['id']}</b> {a['client']}"
+                + (f" ({a['equipement']})" if a['equipement'] else "")
+                + f" — <i>{a['type_contrat']}</i>"
+                + f" — expire le {a['fin']} ({a['jours']}j)"
+                for a in alerts
+            )
+            msg = (
+                f"📄 <b>Contrats expirant bientôt</b>
+
+"
+                f"{lines}
+
+"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram(msg)
+            logger.info(f"Contrat check: {len(alerts)} alerte(s) envoyée(s)")
+        return alerts
+    except Exception as e:
+        logger.error(f"Contrat expiry check error: {e}")
+        return []
 
 
 def _df_to_records(df) -> list:
@@ -418,24 +478,68 @@ def get_health_scores(
         if df_eq.empty:
             return []
 
+        # Compute period duration in months (for rate-based scoring)
+        period_months = 12.0  # default: 1 year
+        if date_start and date_end:
+            import datetime as _dt
+            try:
+                d0 = _dt.date.fromisoformat(str(date_start))
+                d1 = _dt.date.fromisoformat(str(date_end))
+                days = max(1, (d1 - d0).days + 1)
+                period_months = max(0.1, days / 30.0)
+            except Exception:
+                period_months = 12.0
+
+        # Exclude tracabilite interventions from panne count
+        TRACABILITE = {"installation", "formation"}
+        df_sav = df_int.copy()
+        if not df_sav.empty and "type_intervention" in df_sav.columns:
+            df_sav = df_sav[~df_sav["type_intervention"].str.lower().isin(TRACABILITE)]
+
+        seen_keys = set()
         for _, eq in df_eq.iterrows():
             nom = eq.get("Nom", "")
+            client_val = str(eq.get("Client", "") or "")
+            dedup_key = (nom.lower(), client_val.lower())
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
             pannes = 0
-            if not df_int.empty and "machine" in df_int.columns:
-                pannes = len(df_int[df_int["machine"] == nom])
-            # Simple scoring: 100 - (pannes * 8), min 5
-            score = max(5, 100 - pannes * 8)
+            if not df_sav.empty and "machine" in df_sav.columns:
+                pannes = len(df_sav[df_sav["machine"] == nom])
+
+            # Rate-based scoring: pannes per month
+            panne_rate = pannes / period_months if period_months > 0 else pannes
+            if panne_rate <= 0:
+                score = 100
+            elif panne_rate <= 0.25:
+                score = 90
+            elif panne_rate <= 0.5:
+                score = 78
+            elif panne_rate <= 1.0:
+                score = 65
+            elif panne_rate <= 2.0:
+                score = 48
+            elif panne_rate <= 4.0:
+                score = 30
+            elif panne_rate <= 8.0:
+                score = 18
+            else:
+                score = 10
+
             tendance = "stable"
-            if pannes > 4:
+            if panne_rate > 1.0:
                 tendance = "baisse"
-            elif pannes == 0:
+            elif panne_rate == 0:
                 tendance = "hausse"
+
             scores.append({
                 "machine": nom,
                 "score": score,
                 "tendance": tendance,
                 "pannes": pannes,
-                "client": eq.get("Client", ""),
+                "client": client_val,
             })
 
         return sorted(scores, key=lambda x: x["score"])

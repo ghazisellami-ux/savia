@@ -328,7 +328,7 @@ export default function DashboardPage() {
       {/* KPIs Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
-        <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(kpis.nb_critiques)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
         <KpiCard icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
         <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
         <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
@@ -384,9 +384,10 @@ export default function DashboardPage() {
           {showAnomalies && (
             <div className="px-4 pb-4 space-y-2">
               {healthScores.filter(h => h.score < 40).map(h => (
-                <div key={h.machine} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
+                <div key={`${h.machine}-${h.client || ""}`} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
                   <div>
                     <span className="font-bold text-sm">{h.machine}</span>
+                    {h.client && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-400">{h.client}</span>}
                     <span className="text-xs text-savia-text-muted ml-2">Score: {h.score}% — {h.pannes} pannes</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-500/20 text-red-400">
