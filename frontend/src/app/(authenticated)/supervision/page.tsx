@@ -122,6 +122,7 @@ export default function SupervisionPage() {
   const [importClient, setImportClient] = useState('');
   const [importEquip, setImportEquip] = useState('');
   const [rawEquipments, setRawEquipments] = useState<any[]>([]);
+  const [clientEquipList, setClientEquipList] = useState<string[]>([]);
   const [importLoading, setImportLoading] = useState(false);
   const [importSuccess, setImportSuccess] = useState('');
   const [rawLogContent, setRawLogContent] = useState<string>('');
@@ -170,6 +171,7 @@ export default function SupervisionPage() {
         setFleet(mapped);
         setRawEquipments(equipRes);
         if (mapped.length > 0) setSelectedMachine(mapped[0].machine);
+        setClientEquipList(mapped.map(m => m.machine));
         const names = clientRes.map((c: any) => c.Nom || c.nom || '').filter(Boolean);
         setClientList(names.length > 0 ? names : ['Client 1']);
       } catch (err) {
@@ -179,6 +181,30 @@ export default function SupervisionPage() {
     loadData();
     loadLogHistory();
   }, []);
+
+  // Fetch equipment for selected client via API (reliable server-side filter)
+  useEffect(() => {
+    const fetchClientEquip = async () => {
+      const token = localStorage.getItem('savia_token');
+      const h: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      try {
+        const url = selectedClient === 'Tous' ? '/api/equipements' : `/api/equipements?client=${encodeURIComponent(selectedClient)}`;
+        const res = await fetch(url, { headers: h });
+        if (res.ok) {
+          const data = await res.json();
+          const names = (Array.isArray(data) ? data : []).map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
+          setClientEquipList(names);
+          // Auto-select first equipment if current is not in list
+          if (names.length > 0 && !names.includes(selectedMachine)) {
+            const firstInFleet = fleet.find(m => names.includes(m.machine));
+            if (firstInFleet) { setSelectedMachine(firstInFleet.machine); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }
+          }
+        }
+      } catch { /* silent */ }
+    };
+    fetchClientEquip();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClient]);
 
   // Build equipment names for selected client (from rawEquipments — direct API data)
   const clientEquipNames = useMemo(() => {
@@ -536,8 +562,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {(selectedClient === 'Tous' ? fleet.map(m => m.machine) : clientEquipNames)
-              .map(name => <option key={name} value={name}>{name}</option>)}
+            {clientEquipList.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </div>
         <div>
