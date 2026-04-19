@@ -182,31 +182,31 @@ export default function SupervisionPage() {
     loadLogHistory();
   }, []);
 
-  // Filter clientEquipList from rawEquipments (already loaded, no extra auth needed)
+  // Fetch equipment for selected client using equipApi (proper auth, same as loadData)
   useEffect(() => {
-    if (rawEquipments.length === 0) return;
-    const filtered = selectedClient === 'Tous'
-      ? rawEquipments.map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean)
-      : rawEquipments
-          .filter((eq: any) => {
-            const c = (eq.Client || eq.client || '').toLowerCase().trim();
-            return c === selectedClient.toLowerCase().trim();
-          })
-          .map((eq: any) => (eq.Nom || eq.nom || '').trim())
-          .filter(Boolean);
-    setClientEquipList(filtered);
-    // Auto-select first equipment of new client if current not in list
-    if (selectedClient !== 'Tous' && filtered.length > 0 && !filtered.includes(selectedMachine)) {
-      const firstInFleet = fleet.find((m: MachineFleet) => filtered.includes(m.machine));
-      if (firstInFleet) {
-        setSelectedMachine(firstInFleet.machine);
-        setSelectedError('');
-        setAiResult(null);
-        setShowAiDiag(false);
+    const fetchEquipForClient = async () => {
+      try {
+        const clientFilter = selectedClient !== 'Tous' ? selectedClient : undefined;
+        const data = await equipApi.list(clientFilter);
+        const names = (data as any[]).map((eq: any) => (eq.Nom || eq.nom || '').trim()).filter(Boolean);
+        setClientEquipList(names);
+        // Auto-select first equipment of new client if current not in list
+        if (selectedClient !== 'Tous' && names.length > 0 && !names.includes(selectedMachine)) {
+          const firstInFleet = fleet.find((m: MachineFleet) => names.includes(m.machine));
+          if (firstInFleet) {
+            setSelectedMachine(firstInFleet.machine);
+            setSelectedError('');
+            setAiResult(null);
+            setShowAiDiag(false);
+          }
+        }
+      } catch (err) {
+        console.error('Equipment filter error:', err);
       }
-    }
+    };
+    fetchEquipForClient();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawEquipments, selectedClient]);
+  }, [selectedClient]);
 
   // Build equipment names for selected client (from rawEquipments — direct API data)
   const clientEquipNames = useMemo(() => {
