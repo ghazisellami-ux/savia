@@ -186,8 +186,7 @@ def check_contrat_expiry():
             except Exception:
                 continue
         if alerts:
-            lines = '
-'.join(
+            lines = '\n'.join(
                 f"  • <b>#{a['id']}</b> {a['client']}"
                 + (f" ({a['equipement']})" if a['equipement'] else "")
                 + f" — <i>{a['type_contrat']}</i>"
@@ -195,12 +194,8 @@ def check_contrat_expiry():
                 for a in alerts
             )
             msg = (
-                f"📄 <b>Contrats expirant bientôt</b>
-
-"
-                f"{lines}
-
-"
+                f"📄 <b>Contrats expirant bientôt</b>\n"
+                f"{lines}\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
             _send_telegram(msg)
