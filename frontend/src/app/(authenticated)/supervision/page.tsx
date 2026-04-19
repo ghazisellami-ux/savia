@@ -116,7 +116,9 @@ export default function SupervisionPage() {
   const [expandImport, setExpandImport] = useState(false);
   const [expandHistory, setExpandHistory] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importClient, setImportClient] = useState('');
   const [importEquip, setImportEquip] = useState('');
+  const [rawEquipments, setRawEquipments] = useState<any[]>([]);
   const [importLoading, setImportLoading] = useState(false);
   const [importSuccess, setImportSuccess] = useState('');
   const [rawLogContent, setRawLogContent] = useState<string>('');
@@ -163,6 +165,7 @@ export default function SupervisionPage() {
         const [equipRes, clientRes] = await Promise.all([equipApi.list(), clientsApi.list()]);
         const mapped = mapEquipToFleet(equipRes);
         setFleet(mapped);
+        setRawEquipments(equipRes);
         if (mapped.length > 0) setSelectedMachine(mapped[0].machine);
         const names = clientRes.map((c: any) => c.Nom || c.nom || '').filter(Boolean);
         setClientList(names.length > 0 ? names : ['Client 1']);
@@ -403,25 +406,47 @@ export default function SupervisionPage() {
             <p className="text-savia-text-muted text-sm">
               Uploadez un fichier de log machine et associez-le à un équipement du parc.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Step 1: Client */}
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Server className="w-4 h-4" /> Associer à l&apos;équipement
+                  <Building2 className="w-4 h-4" /> 1. Client
+                </label>
+                <select
+                  value={importClient}
+                  onChange={e => { setImportClient(e.target.value); setImportEquip(''); }}
+                  className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
+                >
+                  <option value="">— Tous les clients —</option>
+                  {clientList.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              {/* Step 2: Equipement filtered by client */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Server className="w-4 h-4" /> 2. Équipement
                 </label>
                 <select
                   value={importEquip}
                   onChange={e => setImportEquip(e.target.value)}
                   className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
                 >
-                  <option value="">— Sélectionner un équipement —</option>
-                  {fleet.map(m => (
-                    <option key={m.machine} value={m.machine}>{m.machine}</option>
-                  ))}
+                  <option value="">— Sélectionner —</option>
+                  {(importClient
+                    ? rawEquipments.filter((eq: any) => (eq.Client || eq.client || '').toLowerCase() === importClient.toLowerCase())
+                    : rawEquipments
+                  ).map((eq: any) => {
+                    const nm = (eq.Nom || eq.nom || '').trim();
+                    return <option key={eq.id || nm} value={nm}>{nm}</option>;
+                  })}
                 </select>
               </div>
+              {/* Step 3: File */}
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <FileText className="w-4 h-4" /> Fichier Log
+                  <FileText className="w-4 h-4" /> 3. Fichier Log
                 </label>
                 <input
                   id="log-file-input"
@@ -719,11 +744,9 @@ export default function SupervisionPage() {
           <div className="flex items-center gap-3">
             <History className="w-5 h-5 text-savia-accent" />
             <span className="font-semibold">Logs enregistrés</span>
-            {logHistory.length > 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-savia-accent/20 text-savia-accent text-xs font-bold">
-                {logHistory.length}
-              </span>
-            )}
+            <span className="px-2 py-0.5 rounded-full bg-savia-accent/20 text-savia-accent text-xs font-bold">
+              {importEquip ? logHistory.filter((l: any) => l.equipement === importEquip.trim()).length : logHistory.length}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -738,10 +761,22 @@ export default function SupervisionPage() {
         </button>
         {expandHistory && (
           <div className="p-4 pt-0 border-t border-savia-border/50">
-            {logHistory.length === 0 ? (
+            {/* Filter bar for history */}
+          {importEquip && (
+            <div className="flex items-center gap-2 px-3 py-2 mb-2 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
+              <Server className="w-3.5 h-3.5 text-savia-accent" />
+              <span className="text-xs font-semibold text-savia-accent">Filtré : {importEquip}</span>
+              <button onClick={() => setImportEquip('')} className="ml-auto text-xs text-savia-text-muted hover:text-red-400 transition-colors cursor-pointer">✕ Tout afficher</button>
+            </div>
+          )}
+          {(() => {
+            const filteredHistory = [...(logHistory)]
+              .filter((log: any) => !importEquip || log.equipement === importEquip.trim())
+              .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+            return filteredHistory.length === 0 ? (
               <div className="text-center py-8 text-savia-text-muted">
                 <History className="w-10 h-10 mx-auto mb-2 text-savia-text-dim" />
-                <p className="text-sm">Aucun log enregistré.</p>
+                <p className="text-sm">{importEquip ? `Aucun log pour ${importEquip}.` : 'Aucun log enregistré.'}</p>
                 <p className="text-xs mt-1">Importez un fichier log pour le sauvegarder.</p>
               </div>
             ) : (
@@ -758,7 +793,7 @@ export default function SupervisionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {logHistory.map((log: any) => (
+                    {filteredHistory.map((log: any) => (
                       <tr key={log.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                         <td className="py-2 px-3 text-xs text-savia-text-muted">
                           {log.uploaded_at ? new Date(log.uploaded_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
@@ -791,7 +826,8 @@ export default function SupervisionPage() {
                   </tbody>
                 </table>
               </div>
-            )}
+            );
+          })()}
           </div>
         )}
       </div>
