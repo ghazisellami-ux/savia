@@ -354,6 +354,28 @@ export default function SupervisionPage() {
     }
   };
 
+  // Auto-load most recent log errors when a specific equipment is selected
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (selectedEquip === 'Tous') {
+      setLoadedErrors(null);
+      setSelectedLogId(null);
+      return;
+    }
+    // Find most recent log for this equipment
+    const equip = selectedEquip.toLowerCase();
+    const matchingLogs = logHistory
+      .filter((l: any) => (l.equipement || '').toLowerCase() === equip)
+      .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+    if (matchingLogs.length > 0) {
+      setSelectedLogId(matchingLogs[0].id);
+      fetchLogErrors(matchingLogs[0].id);
+    } else {
+      setLoadedErrors(null);
+      setSelectedLogId(null);
+    }
+  }, [selectedEquip, logHistory]);
+
   const handleImportLog = async () => {
     if (!importFile || !importEquip) return;
     setImportLoading(true);
@@ -570,18 +592,18 @@ export default function SupervisionPage() {
           </label>
           <select
             key={`log-${selectedClient}-${selectedEquip}`}
-            value={selectedMachine}
+            value={selectedLogId !== null ? String(selectedLogId) : selectedMachine}
             onChange={e => {
               const val = e.target.value;
-              // Check if value is a log entry: 'logId::equipement'
-              const sepIdx = val.indexOf('::')
-              if (sepIdx > 0) {
-                const logId = parseInt(val.substring(0, sepIdx));
-                const equip = val.substring(sepIdx + 2);
-                setSelectedMachine(equip);
+              const logId = parseInt(val);
+              if (!isNaN(logId)) {
+                // Selected a specific log file by ID
+                const logEntry = logHistory.find((l: any) => l.id === logId);
+                if (logEntry) setSelectedMachine(logEntry.equipement || selectedEquip);
                 setSelectedLogId(logId);
                 fetchLogErrors(logId);
               } else {
+                // Selected a machine from filteredFleet
                 setSelectedMachine(val);
                 setSelectedLogId(null);
                 setLoadedErrors(null);
@@ -602,7 +624,7 @@ export default function SupervisionPage() {
                     .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
                     .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                     .map(log => (
-                      <option key={log.id} value={`${log.id}::${log.equipement}`}>
+                      <option key={log.id} value={String(log.id)}>
                         {log.filename} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
                       </option>
                     ))
@@ -987,7 +1009,15 @@ export default function SupervisionPage() {
               </tr>
             </thead>
             <tbody>
-              {fleet.map((m, i) => (
+              {[...filteredFleet].sort((a, b) => {
+                // Sort: machines with recent logs first, then by err count
+                const aLog = logHistory.find((l: any) => (l.equipement||"").toLowerCase() === a.machine.toLowerCase());
+                const bLog = logHistory.find((l: any) => (l.equipement||"").toLowerCase() === b.machine.toLowerCase());
+                const aDate = aLog ? new Date(aLog.uploaded_at || 0).getTime() : 0;
+                const bDate = bLog ? new Date(bLog.uploaded_at || 0).getTime() : 0;
+                if (bDate !== aDate) return bDate - aDate; // most recent first
+                return b.erreurs - a.erreurs; // then by error count
+              }).map((m, i) => (
                 <tr
                   key={m.machine}
                   className={`border-b border-savia-border/50 cursor-pointer transition-colors
