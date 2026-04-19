@@ -23,6 +23,7 @@ interface LogEntry {
 
 interface MachineFleet {
   machine: string;
+  client: string;
   chemin: string;
   etat: 'OK' | 'ATTENTION' | 'CRITIQUE';
   erreurs: number;
@@ -92,6 +93,7 @@ function mapEquipToFleet(items: any[]): MachineFleet[] {
 
     return {
       machine: item.Nom || item.nom || 'Équipement',
+      client: item.Client || item.client || '',
       chemin: `logs/${(item.Nom || 'equip').replace(/\s+/g, '_')}.log`,
       etat,
       erreurs: errCount,
@@ -177,18 +179,14 @@ export default function SupervisionPage() {
     loadLogHistory();
   }, []);
 
-  // Filter machines
+  // Filter machines — cascade: client -> equip
   const filteredFleet = useMemo(() => {
     return fleet.filter(m => {
-      if (selectedClient !== 'Tous') {
-        const idx = fleet.indexOf(m);
-        const client = clientList[idx % clientList.length];
-        if (client !== selectedClient) return false;
-      }
+      if (selectedClient !== 'Tous' && m.client !== selectedClient) return false;
       if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
       return true;
     });
-  }, [selectedClient, selectedEquip, fleet, clientList]);
+  }, [selectedClient, selectedEquip, fleet]);
 
   const currentMachine = fleet.find(m => m.machine === selectedMachine) || fleet[0];
 
@@ -493,7 +491,7 @@ export default function SupervisionPage() {
           </label>
           <select
             value={selectedClient}
-            onChange={e => setSelectedClient(e.target.value)}
+            onChange={e => { setSelectedClient(e.target.value); setSelectedEquip('Tous'); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les clients</option>
@@ -506,11 +504,12 @@ export default function SupervisionPage() {
           </label>
           <select
             value={selectedEquip}
-            onChange={e => setSelectedEquip(e.target.value)}
+            onChange={e => { setSelectedEquip(e.target.value); setSelectedMachine(''); setSelectedError(''); setAiResult(null); setShowAiDiag(false); }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {fleet.map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
+            {(selectedClient === 'Tous' ? fleet : fleet.filter(m => m.client === selectedClient))
+              .map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
           </select>
         </div>
         <div>
@@ -527,11 +526,29 @@ export default function SupervisionPage() {
             }}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
-            {filteredFleet.map(m => (
-              <option key={m.machine} value={m.machine}>
-                {m.machine} ({m.erreurs} err.)
-              </option>
-            ))}
+            {selectedEquip !== 'Tous' ? (
+              /* Show uploaded log files for selected equipment, most recent first */
+              [...logHistory]
+                .filter(log => log.equipement === selectedEquip)
+                .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
+                .length > 0
+                ? [...logHistory]
+                    .filter(log => log.equipement === selectedEquip)
+                    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
+                    .map(log => (
+                      <option key={log.id} value={log.equipement}>
+                        {log.filename} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
+                      </option>
+                    ))
+                : <option value={selectedEquip}>{selectedEquip} — aucun log importé</option>
+            ) : (
+              /* No equipment selected: show all machines from filtered fleet */
+              filteredFleet.map(m => (
+                <option key={m.machine} value={m.machine}>
+                  {m.machine} ({m.erreurs} err.)
+                </option>
+              ))
+            )}
           </select>
         </div>
       </div>
