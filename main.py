@@ -59,6 +59,26 @@ def _ensure_dejavu_font():
         logger.warning(f"DejaVu copy failed: {_e}")
 
 _ensure_dejavu_font()
+
+# ── Auto-convert Font Awesome WOFF2 → TTF on startup ─────────────────
+def _ensure_fa_font():
+    import shutil, subprocess as _sp
+    dst = "/app/fa-solid-900.ttf"
+    if os.path.exists(dst): return
+    src_woff2 = "/usr/local/lib/node_modules/@fortawesome/fontawesome-free/webfonts/fa-solid-900.woff2"
+    if not os.path.exists(src_woff2):
+        logger.warning("FA woff2 not found - run: npm install @fortawesome/fontawesome-free")
+        return
+    try:
+        from fontTools.ttLib import TTFont
+        t = TTFont(src_woff2)
+        t.flavor = None
+        t.save(dst)
+        logger.info(f"Font Awesome TTF ready: {os.path.getsize(dst):,} bytes")
+    except Exception as _e:
+        logger.warning(f"FA font conversion failed: {_e}")
+
+_ensure_fa_font()
 # ─────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 
@@ -2568,14 +2588,19 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
 
             W = page_w - 20
 
-            # Load DejaVu for Unicode symbols
+            # Load DejaVu for Unicode bullet symbols
             _DJVU = '/app/DejaVuSans.ttf'
             _has_djvu = os.path.exists(_DJVU)
             if _has_djvu:
-                try:
-                    pdf.add_font('DejaVu', fname=_DJVU)
-                except Exception:
-                    _has_djvu = False
+                try: pdf.add_font('DejaVu', fname=_DJVU)
+                except Exception: _has_djvu = False
+
+            # Load Font Awesome for Lucide-equivalent section icons
+            _FA = '/app/fa-solid-900.ttf'
+            _has_fa = os.path.exists(_FA)
+            if _has_fa:
+                try: pdf.add_font('FA', fname=_FA)
+                except Exception: _has_fa = False
 
             def _sym(size=8):
                 if _has_djvu:
@@ -2586,19 +2611,42 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             def _hel(style='', size=8.5):
                 pdf.set_font('Helvetica', style, size)
 
-            def sec_hdr(lbl, bg):
-                # Web-style: white bg, colored bold title, thin underline
+            # FA section icon codes (matches Lucide React)
+            FA = {
+                'resume':   chr(0xf080),  # bar-chart (BarChart3)
+                'strong':   chr(0xf164),  # thumbs-up (ThumbsUp)
+                'weak':     chr(0xf165),  # thumbs-down (ThumbsDown)
+                'reco':     chr(0xf0eb),  # lightbulb (Lightbulb)
+                'alert':    chr(0xf071),  # triangle-exclamation (AlertTriangle)
+                'trend':    chr(0xf201),  # chart-line (TrendingUp)
+                'team':     chr(0xf0c0),  # users (Users)
+                'cost':     chr(0xf155),  # dollar-sign (DollarSign)
+                'priority': chr(0xf0e7),  # bolt (Zap)
+                'done':     chr(0xf058),  # circle-check (CheckCircle2)
+                'score':    chr(0xf201),  # chart-line (BarChart2)
+            }
+
+            def sec_hdr(lbl, bg, fa_key=None):
+                # Web-style: white bg, FA icon + colored bold title, thin underline
                 if pdf.get_y() > pdf.h - 45: pdf.add_page()
                 yh = pdf.get_y() + 2
                 R_, G_, B_ = bg
-                # Colored vertical bar (3x5.5mm icon block)
-                pdf.set_fill_color(R_, G_, B_)
-                pdf.rect(10, yh, 3, 5.5, style='F')
+                # Font Awesome icon before title
+                if fa_key and _has_fa and fa_key in FA:
+                    pdf.set_xy(10, yh - 0.5)
+                    pdf.set_font('FA', size=9)
+                    pdf.set_text_color(R_, G_, B_)
+                    pdf.cell(7, 6, FA[fa_key])
+                    pdf.set_xy(18, yh)
+                else:
+                    # Fallback: colored rect
+                    pdf.set_fill_color(R_, G_, B_)
+                    pdf.rect(10, yh, 3, 5.5, style='F')
+                    pdf.set_xy(15, yh)
                 # Colored bold title
-                pdf.set_xy(15, yh)
                 _hel('B', 10)
                 pdf.set_text_color(R_, G_, B_)
-                pdf.cell(W - 5, 5.5, _sanitize(lbl))
+                pdf.cell(W - 8, 5.5, _sanitize(lbl))
                 # Thin underline
                 pdf.set_draw_color(R_, G_, B_)
                 pdf.set_line_width(0.4)
@@ -2625,9 +2673,9 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.multi_cell(W - 10, 4.8, _sanitize(str(txt)[:300]))
                 pdf.ln(0.5)
 
-            def add_sec(lbl, items, bg, sym='\u25cf'):
+            def add_sec(lbl, items, bg, sym='\u25cf', fa_key=None):
                 if not items: return
-                sec_hdr(lbl, bg)
+                sec_hdr(lbl, bg, fa_key)
                 _hel('', 8.5)
                 for it in items:
                     txt = it if isinstance(it, str) else it.get('action', it.get('machine', str(it))) if isinstance(it, dict) else str(it)
@@ -2666,7 +2714,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             # Resume Executif - ORANGE #FA8925
             analyse = ai.get('analyse') or ai.get('summary')
             if analyse:
-                sec_hdr('RESUME EXECUTIF', [250,137,37])
+                sec_hdr('RESUME EXECUTIF', [250,137,37], 'resume')
                 _hel('', 8.5)
                 pdf.set_text_color(40, 50, 65)
                 pdf.set_x(13)
@@ -2674,22 +2722,22 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.ln(5)
 
             # Points Forts - GREEN + CHECK
-            add_sec('POINTS FORTS',     ai.get('points_forts', []),    [95,165,90],  '\u2713')
+            add_sec('POINTS FORTS',     ai.get('points_forts', []),    [95,165,90],  '\u2713', 'strong')
             # Points Faibles - CORAL + TRIANGLE
-            add_sec('POINTS FAIBLES',   ai.get('points_faibles', []),  [250,84,87],  '\u25b3')
+            add_sec('POINTS FAIBLES',   ai.get('points_faibles', []),  [250,84,87],  '\u25b3', 'weak')
             # Recommandations - TEAL + ARROW
             recs = ai.get('recommandations', [])
             recs_c = [r if isinstance(r, str) else r.get('action', str(r)) for r in recs]
-            add_sec('RECOMMANDATIONS',  recs_c,                        [1,180,188],  '\u2192')
+            add_sec('RECOMMANDATIONS',  recs_c,                        [1,180,188],  '\u2192', 'reco')
             # Alertes - CORAL + WARNING
-            add_sec('ALERTES CRITIQUES',ai.get('alertes_critiques',[]),[250,84,87],  '\u26a0')
+            add_sec('ALERTES CRITIQUES',ai.get('alertes_critiques',[]),[250,84,87],  '\u26a0', 'alert')
             # Tendances - TEAL + UP-ARROW
-            add_sec('TENDANCES',        ai.get('tendances', []),       [1,180,188],  '\u2197')
+            add_sec('TENDANCES',        ai.get('tendances', []),       [1,180,188],  '\u2197', 'trend')
 
             # Performance Equipe - AMBER
             perf = ai.get('performance_equipe', [])
             if perf:
-                sec_hdr('EVALUATION DE L\'EQUIPE', [155,110,5])
+                sec_hdr('EVALUATION DE L\'EQUIPE', [155,110,5], 'team')
                 _hel('', 8.5)
                 for pe in perf:
                     if isinstance(pe, dict):
@@ -2703,19 +2751,19 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             # Analyse Financiere - ORANGE
             couts = ai.get('analyse_couts')
             if couts and isinstance(couts, dict):
-                sec_hdr('ANALYSE DES COUTS', [250,137,37])
+                sec_hdr('ANALYSE DES COUTS', [250,137,37], 'cost')
                 _hel('', 8.5)
                 for k_, v_ in couts.items():
                     if v_: body_item(str(k_)+' : '+str(v_), [250,137,37], '\u25cf')
                 pdf.ln(4)
 
             # Priorites - ORANGE + LIGHTNING
-            add_sec('PRIORITES IMMEDIATES', ai.get('priorites_immediates',[]),[250,137,37],'\u26a1')
+            add_sec('PRIORITES IMMEDIATES', ai.get('priorites_immediates',[]),[250,137,37],'\u26a1', 'priority')
 
             # Conclusion - TEAL
             conclusion = ai.get('conclusion')
             if conclusion:
-                sec_hdr('CONCLUSION', [1,180,188])
+                sec_hdr('CONCLUSION', [1,180,188], 'done')
                 _hel('', 9)
                 pdf.set_text_color(50, 62, 78)
                 pdf.set_x(13)
