@@ -317,142 +317,62 @@ export default function SavPage() {
     }
   };
 
-  // PDF Generation
-  const handleGeneratePdf = () => {
+  // PDF Generation - via backend (server-side, direct download)
+  const handleGeneratePdf = async () => {
     setIsPdfGenerating(true);
-    const _companyName = localStorage.getItem('savia_company') || 'SAVIA';
-    const _companyLogo = localStorage.getItem('savia_logo') || '';
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const cn = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl = localStorage.getItem('savia_logo') || '';
 
-    const pdfFiltered = data.filter(i => {
-      const d = new Date(i.date);
-      return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const pdfFiltered = data.filter(i => {
+        const d = new Date(i.date);
+        return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
+      }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
-    const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces || 0), 0);
-    const tauxRes = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
+      const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
+      const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces || 0), 0);
+      const tauxRes = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
 
-    // Store data on window for popup to access via window.opener (avoids template literal issues)
-    (window as any)._savia_pdf = {
-      companyName: _companyName,
-      companyLogo: _companyLogo,
-      dateFrom: pdfDateFrom,
-      dateTo: pdfDateTo,
-      stats: { total: pdfFiltered.length, cloturees, taux: tauxRes, cout: coutT },
-      rows: pdfFiltered.map(i => [
-        i.date.substring(0, 10),
-        i.machine || '-',
-        i.client || '-',
-        i.technicien || '-',
-        i.type || '-',
-        i.statut || '-',
-        (i.duree || 0) + 'h',
-        Math.round(i.cout || i.coutPieces || 0),
-      ]),
-    };
-
-    const w = window.open('', '_blank', 'width=480,height=260');
-    if (!w) {
-      setIsPdfGenerating(false);
-      alert('Popup bloqué — autorisez les popups pour ce site et réessayez.');
-      return;
-    }
-
-    w.document.write(`<!DOCTYPE html><html lang="fr"><head>
-<meta charset="utf-8"><title>Rapport SAV PDF</title>
-<style>
-body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',Arial,sans-serif;
-     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.card{text-align:center;padding:36px 56px;background:#1e293b;border-radius:14px;
-      border:1px solid #334155;min-width:320px}
-.spinner{width:44px;height:44px;border:4px solid #1e3a5f;border-top:4px solid #0d9488;
-         border-radius:50%;animation:spin .9s linear infinite;margin:0 auto 18px}
-@keyframes spin{to{transform:rotate(360deg)}}
-#st{color:#64748b;font-size:13px;margin:6px 0 0}
-#er{color:#f87171;font-size:12px;margin-top:10px;display:none}
-</style></head><body>
-<div class="card">
-  <div class="spinner"></div>
-  <p style="font-size:15px;font-weight:600;margin:0">Rapport SAV — PDF</p>
-  <p id="st">Chargement...</p><div id="er"></div>
-</div>
-<script src="/jspdf.umd.min.js"><\/script>
-<script src="/jspdf.plugin.autotable.min.js"><\/script>
-<script src="/savia-pdf.js"><\/script>
-<script>
-(async () => {
-  const st = m => { const e=document.getElementById('st'); if(e) e.textContent=m; };
-  const er = m => { const e=document.getElementById('er'); if(e){e.textContent=m;e.style.display='block';} };
-  try {
-    st('Chargement de jsPDF...');
-    await SAVIA_PDF.waitForJsPDF();
-    const { jsPDF } = window.jspdf;
-
-    // Get data from parent window
-    const pd = window.opener && window.opener._savia_pdf ? window.opener._savia_pdf : {};
-    const companyName = pd.companyName || 'SAVIA';
-    const companyLogo = pd.companyLogo || '';
-    const rows = pd.rows || [];
-    const stats = pd.stats || {};
-    const dateFrom = pd.dateFrom || '';
-    const dateTo = pd.dateTo || '';
-
-    st('Chargement du logo SAVIA...');
-    const saviaLogoB64 = await SAVIA_PDF.loadSaviaLogo();
-
-    st('Création du document...');
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    const pageW = doc.internal.pageSize.getWidth();
-
-    // Header
-    const afterHeader = await SAVIA_PDF.drawHeader(doc, pageW, {
-      companyName, companyLogo, saviaLogoB64,
-      title: 'Rapport SAV — Interventions',
-      subtitle: 'Période : ' + dateFrom + ' au ' + dateTo,
-    });
-
-    // KPIs
-    const kpis = [
-      { label: 'Interventions',   val: String(stats.total || 0),   color: [15, 118, 110] },
-      { label: 'Clôturées',       val: String(stats.cloturees || 0), color: [22, 163, 74] },
-      { label: 'Taux résolution', val: (stats.taux || 0) + '%',    color: [234, 179, 8]  },
-      { label: 'Coût total',      val: SAVIA_PDF.fmt(stats.cout || 0) + ' TND', color: [239, 68, 68] },
-    ];
-    st('Calcul des indicateurs...');
-    const afterKpis = SAVIA_PDF.drawKpis(doc, kpis, afterHeader);
-
-    // Table
-    st('Construction du tableau...');
-    doc.autoTable({
-      startY: afterKpis,
-      head: [['Date','Machine','Client','Technicien(s)','Type','Statut','Durée','Coût (TND)']],
-      body: rows.map(r => [...r.slice(0,7), SAVIA_PDF.fmt(r[7])]),
-      headStyles: {
-        fillColor: [15, 118, 110], textColor: 255, fontSize: 8, fontStyle: 'bold', cellPadding: 3
-      },
-      bodyStyles: { fontSize: 7.5, cellPadding: 2.5, textColor: [25, 30, 50] },
-      alternateRowStyles: { fillColor: [244, 252, 251] },
-      columnStyles: {
-        0:{cellWidth:22}, 1:{cellWidth:38}, 2:{cellWidth:30},
-        3:{cellWidth:44}, 4:{cellWidth:25}, 5:{cellWidth:23},
-        6:{cellWidth:14}, 7:{cellWidth:28, halign:'right'},
-      },
-      margin: { left: 10, right: 10 },
-    });
-
-    SAVIA_PDF.addFooters(doc, companyName);
-
-    st('Téléchargement...');
-    doc.save('rapport_sav_' + dateFrom + '_' + dateTo + '.pdf');
-  } catch(e) {
-    er('Erreur: ' + e.message);
-    console.error(e);
-  }
-})();
-<\/script>
-</body></html>`);
-    w.document.close();
-    setTimeout(() => setIsPdfGenerating(false), 4000);
+      const res = await fetch('/api/reports/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          title: 'Rapport SAV — Interventions',
+          subtitle: `Période : ${pdfDateFrom} au ${pdfDateTo}`,
+          filename: `rapport_sav_${pdfDateFrom}_${pdfDateTo}`,
+          company_name: cn,
+          company_logo: cl,
+          kpis: [
+            { label: 'Interventions',    val: String(pdfFiltered.length), color: [15,118,110] },
+            { label: 'Clôturées',        val: String(cloturees),          color: [22,163,74] },
+            { label: 'Taux résolution',  val: tauxRes + '%',              color: [234,179,8] },
+            { label: 'Coût total (TND)', val: Math.round(coutT),          color: [239,68,68] },
+          ],
+          head: ['Date','Machine','Client','Technicien(s)','Type','Statut','Durée','Coût (TND)'],
+          table_title: 'Détail des interventions SAV',
+          rows: pdfFiltered.map(i => [
+            i.date.substring(0, 10),
+            i.machine || '-',
+            i.client || '-',
+            i.technicien || '-',
+            i.type || '-',
+            i.statut || '-',
+            (i.duree || 0) + 'h',
+            Math.round(i.cout || i.coutPieces || 0),
+          ]),
+        }),
+      });
+      if (!res.ok) throw new Error(`Erreur serveur: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `rapport_sav_${pdfDateFrom}_${pdfDateTo}.pdf`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error(err); alert('Erreur PDF: ' + (err.message || err));
+    } finally { setIsPdfGenerating(false); }
   };
 
 

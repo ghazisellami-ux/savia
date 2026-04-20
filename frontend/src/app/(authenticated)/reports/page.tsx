@@ -73,21 +73,32 @@ export default function ReportsPage() {
     return d.filter((i: any) => machines.includes(i.machine));
   };
 
-  // --- PDF generation with jsPDF ---
-  const generatePdf = (docTitle: string, pdfData: Record<string, any>) => {
+  // --- PDF generation via backend (server-side, direct download) ---
+  const generatePdf = async (docTitle: string, pdfData: Record<string, any>) => {
     setIsPdfGenerating(true);
-    const _cn = localStorage.getItem('savia_company') || 'SAVIA';
-    const _cl = localStorage.getItem('savia_logo') || '';
-    (window as any)._savia_pdf = { companyName: _cn, companyLogo: _cl, ...pdfData };
-    const w = window.open('', '_blank', 'width=480,height=260');
-    if (!w) { setIsPdfGenerating(false); alert('Popup bloqué — autorisez les popups'); return; }
-    const html = '<!DOCTYPE html><html lang=\\"fr\\"><head><meta charset=\\"utf-8\\"><title>PDF...</title><style>body{background:#0f172a;color:#e2e8f0;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}.card{text-align:center;padding:36px 56px;background:#1e293b;border-radius:14px;border:1px solid #334155;min-width:320px}.sp{width:44px;height:44px;border:4px solid #1e3a5f;border-top:4px solid #0d9488;border-radius:50%;animation:spin .9s linear infinite;margin:0 auto 18px}@keyframes spin{to{transform:rotate(360deg)}}#st{color:#64748b;font-size:13px;margin:6px 0 0}#er{color:#f87171;font-size:12px;margin-top:10px;display:none}</style></head><body><div class=\\"card\\"><div class=\\"sp\\"></div><p style=\\"font-size:15px;font-weight:600;margin:0\\">Génération PDF...</p><p id=\\"st\\">Chargement...</p><div id=\\"er\\"></div></div><script src=\\"/jspdf.umd.min.js\\"><\\/script><script src=\\"/jspdf.plugin.autotable.min.js\\"><\\/script><script src=\\"/savia-pdf.js\\"><\\/script><script>(async () => {const st = m => { const e=document.getElementById(\\"st\\"); if(e) e.textContent=m; };const er = m => { const e=document.getElementById(\\"er\\"); if(e){e.textContent=m;e.style.display=\\"block\\";} };try {st(\\"Chargement jsPDF...\\");await SAVIA_PDF.waitForJsPDF();const { jsPDF } = window.jspdf;const pd = (window.opener && window.opener._savia_pdf) ? window.opener._savia_pdf : {};const cN = pd.companyName || \\"SAVIA\\";const cL = pd.companyLogo || \\"\\";st(\\"Chargement logos...\\");const sL = await SAVIA_PDF.loadSaviaLogo();const isLand = !pd.isAiReport;const doc = new jsPDF({ orientation: isLand ? \\"landscape\\" : \\"portrait\\", unit: \\"mm\\", format: \\"a4\\" });const pageW = doc.internal.pageSize.getWidth();const pageH = doc.internal.pageSize.getHeight();let y = await SAVIA_PDF.drawHeader(doc, pageW, { companyName: cN, companyLogo: cL, saviaLogoB64: sL, title: pd.title || \\"Rapport\\", subtitle: pd.subtitle || \\"\\", });if (pd.kpis && pd.kpis.length) { y = SAVIA_PDF.drawKpis(doc, pd.kpis, y); }if (pd.typeData && pd.typeData.length) {doc.setFontSize(10); doc.setTextColor(50,70,90); doc.setFont(undefined,\\"bold\\");doc.text(\\"Répartition par type\\", 10, y); doc.setFont(undefined,\\"normal\\"); y += 4;doc.autoTable({ startY: y, head: [[\\"Type\\",\\"Nombre\\"]], body: pd.typeData,headStyles:{fillColor:[15,118,110],textColor:255,fontSize:8,fontStyle:\\"bold\\"},bodyStyles:{fontSize:8}, alternateRowStyles:{fillColor:[244,252,251]},tableWidth:110, margin:{left:10} });y = doc.lastAutoTable.finalY + 8; }if (pd.isAiReport) {const aiRaw = pd.aiContent || \\"{}\\";let ai; try { ai = JSON.parse(aiRaw); } catch(e) { ai = { summary: aiRaw }; }const MW = pageW - 20;const addS = (lbl, items, rgb) => {if (!items || !items.length) return;if (y > pageH-32) { doc.addPage(); y=18; }doc.setFontSize(9.5); doc.setTextColor(...rgb); doc.setFont(undefined,\\"bold\\");doc.text(lbl, 10, y); doc.setFont(undefined,\\"normal\\"); y+=5;items.forEach(itm => {const txt = typeof itm===\\"string\\" ? itm : (itm.action||itm.machine||JSON.stringify(itm));const lines = doc.splitTextToSize(\\"• \\"+txt, MW-10);doc.setFontSize(8.5); doc.setTextColor(35,45,65); doc.text(lines,14,y); y+=lines.length*4.2+1;if(y>pageH-18){doc.addPage();y=18;}}); y+=4; };if(ai.score_global!==undefined){const sc=Number(ai.score_global);const col=sc>=70?[22,163,74]:sc>=40?[234,179,8]:[220,50,50];doc.setFontSize(13);doc.setFont(undefined,\\"bold\\");doc.setTextColor(...col);doc.text(\\"Score global : \\"+sc+\\"/100\\",10,y);doc.setFont(undefined,\\"normal\\");y+=9;}if(ai.analyse||ai.summary){const txt=String(ai.analyse||ai.summary);doc.setFontSize(9);doc.setTextColor(30,40,60);const lns=doc.splitTextToSize(txt,MW);doc.text(lns,10,y);y+=lns.length*4.2+6;}addS(\\"Points Forts\\",ai.points_forts,[22,163,74]);addS(\\"Points Faibles\\",ai.points_faibles,[220,50,50]);const recs=(ai.recommandations||[]).map(r=>typeof r===\\"string\\"?r:(r.action||JSON.stringify(r)));addS(\\"Recommandations\\",recs,[15,118,110]);addS(\\"Alertes Critiques\\",ai.alertes_critiques,[234,88,12]);addS(\\"Tendances\\",ai.tendances,[99,102,241]);if(ai.conclusion){if(y>pageH-30){doc.addPage();y=18;}doc.setFontSize(9.5);doc.setFont(undefined,\\"bold\\");doc.setTextColor(30,40,60);doc.text(\\"Conclusion\\",10,y);doc.setFont(undefined,\\"normal\\");y+=5;const cls=doc.splitTextToSize(ai.conclusion,MW);doc.setFontSize(9);doc.text(cls,10,y);}} else {if (pd.head && pd.rows) {if(y>pageH-40){doc.addPage();y=18;}doc.setFontSize(10);doc.setTextColor(50,70,90);doc.setFont(undefined,\\"bold\\");doc.text(pd.tableTitle||\\"Détail\\",10,y);doc.setFont(undefined,\\"normal\\");y+=4;doc.autoTable({startY:y, head:[pd.head],body:pd.rows.map(r=>r.map((v,i)=>i>=pd.head.length-1?SAVIA_PDF.fmt(v):(v||\\"-\\"))),headStyles:{fillColor:[15,118,110],textColor:255,fontSize:8,fontStyle:\\"bold\\",cellPadding:3},bodyStyles:{fontSize:7.5,cellPadding:2.5},alternateRowStyles:{fillColor:[244,252,251]},margin:{left:10,right:10} }); } }SAVIA_PDF.addFooters(doc, cN);st(\\"Téléchargement...\\");doc.save((pd.filename||\\"rapport\\")+\\".pdf\\");setTimeout(()=>window.close(),1500);} catch(e) { er(\\"Erreur: \\"+e.message); console.error(e); }})();<\\/script></body></html>';
-    w.document.write(html);
-    w.document.close();
-    setTimeout(() => { setIsPdfGenerating(false); setPdfSuccess('PDF téléchargé !'); setTimeout(() => setPdfSuccess(''), 3000); }, 4500);
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const cn = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl = localStorage.getItem('savia_logo') || '';
+      const res = await fetch('/api/reports/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(Object.assign({}, pdfData, { company_name: cn, company_logo: cl })),
+      });
+      if (!res.ok) throw new Error('Erreur serveur: ' + res.status);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = (pdfData.filename || 'rapport') + '.pdf';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      setPdfSuccess('PDF téléchargé !'); setTimeout(() => setPdfSuccess(''), 3000);
+    } catch (err: any) {
+      console.error(err); alert('Erreur PDF: ' + err.message);
+    } finally { setIsPdfGenerating(false); }
   };
 
-  const handlePdfMensuel = () => {
+  const handlePdfMensuel = async () => {
     const monthData = filterByPeriod(data, selMois, selAnnee);
     const nbIntv = monthData.length;
     const nbClot = monthData.filter((i: any) => (i.statut || '').toLowerCase().includes('tur')).length;
@@ -97,28 +108,31 @@ export default function ReportsPage() {
     const rows = monthData.slice(0, 30).map((i: any) =>
       `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
     ).join('');
-    const label = `${MOIS_LABELS[selMois-1]} ${selAnnee}`;
-    generatePdf(`Rapport Mensuel ${label}`, {
-      title: `Rapport Mensuel — ${label}`,
-      subtitle: `Période : ${label}`,
-      filename: `rapport_mensuel_${selAnnee}_${String(selMois).padStart(2,'0')}`,
+    const label = MOIS_LABELS[selMois-1] + ' ' + selAnnee;
+    const padM = String(selMois).padStart(2,'0');
+    const costStr = Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f');
+    const tauxStr = nbIntv > 0 ? Math.round(nbClot/nbIntv*100) + '%' : '0%';
+    await generatePdf('Rapport Mensuel ' + label, {
+      title: 'Rapport Mensuel \u2014 ' + label,
+      subtitle: 'Période : ' + label,
+      filename: 'rapport_mensuel_' + selAnnee + '_' + padM,
       kpis: [
         { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
         { label: 'Clôturées',     val: String(nbClot), color: [22,163,74] },
-        { label: 'Taux rés.',     val: nbIntv>0?Math.round(nbClot/nbIntv*100)+'%':'0%', color:[234,179,8] },
-        { label: 'Coût (TND)',    val: Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f'), color:[239,68,68] },
+        { label: 'Taux rés.',     val: tauxStr, color: [234,179,8] },
+        { label: 'Coût (TND)',    val: costStr, color: [239,68,68] },
       ],
-      typeData: Object.entries(types).map(([t,n]) => [t, String(n)]),
+      type_data: Object.entries(types).map(function(e) { return [e[0], String(e[1])]; }),
       head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
-      tableTitle: `Détail — ${label}`,
-      rows: monthData.map((i: any) => [
+      table_title: 'Détail \u2014 ' + label,
+      rows: monthData.slice(0,100).map(function(i: any) { return [
         (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
         i.technicien||'', i.statut||'', Math.round(i.cout||0),
-      ]),
+      ]; }),
     });
   };
 
-  const handlePdfClient = () => {
+  const handlePdfClient = async () => {
     const clientMachines = (equips as any[]).filter((e: any) => e.Client === selClient).map((e: any) => e.Nom);
     const clientData = data.filter((i: any) => clientMachines.includes(i.machine)).filter((i: any) => {
       const dt = new Date(i.date);
@@ -130,39 +144,40 @@ export default function ReportsPage() {
     const rows = clientData.map((i: any) =>
       `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
     ).join('');
-    const lbl2 = `${MOIS_LABELS[selClientMois-1]} ${selClientAnnee}`;
-    generatePdf(`Rapport Client ${selClient} — ${lbl2}`, {
-      title: `Rapport Client — ${selClient}`,
-      subtitle: `Période : ${lbl2}`,
-      filename: `rapport_client_${selClient.replace(/\s+/g,'_')}_${selClientAnnee}_${String(selClientMois).padStart(2,'0')}`,
+    const lbl2 = MOIS_LABELS[selClientMois-1] + ' ' + selClientAnnee;
+    const padC = String(selClientMois).padStart(2,'0');
+    const fnameC = 'rapport_client_' + selClient.replace(/\s+/g,'_') + '_' + selClientAnnee + '_' + padC;
+    const moStr = Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + ' TND';
+    const pcStr = Math.round(coutPieces).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + ' TND';
+    await generatePdf('Rapport Client ' + selClient + ' \u2014 ' + lbl2, {
+      title: 'Rapport Client \u2014 ' + selClient,
+      subtitle: 'Période : ' + lbl2,
+      filename: fnameC,
       kpis: [
         { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
-        { label: 'Coût M.O.',     val: Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f')+' TND', color:[22,163,74] },
-        { label: 'Coût Pièces',   val: Math.round(coutPieces).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f')+' TND', color:[234,179,8] },
+        { label: 'Coût M.O.',     val: moStr, color: [22,163,74] },
+        { label: 'Coût Pièces',   val: pcStr, color: [234,179,8] },
       ],
       head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
-      tableTitle: `Interventions — ${selClient} — ${lbl2}`,
-      rows: clientData.map((i: any) => [
+      table_title: 'Interventions \u2014 ' + selClient + ' \u2014 ' + lbl2,
+      rows: clientData.map(function(i: any) { return [
         (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
         i.technicien||'', i.statut||'', Math.round(i.cout||0),
-      ]),
+      ]; }),
     });
   };
 
   // --- AI PDF download ---
-  const handleAiPdf = () => {
+  const handleAiPdf = async () => {
     if (!aiReport) return;
-    const _cn = localStorage.getItem('savia_company') || 'SAVIA';
-    const _cl = localStorage.getItem('savia_logo') || '';
-    const periodeLabel = iaPeriode === 'Mensuel'
-      ? `${MOIS_LABELS[iaMois - 1]} ${iaAnnee}`
-      : `Année ${iaAnnee}`;
-    generatePdf(`Rapport IA — ${periodeLabel}`, {
-      title: 'Rapport IA — Analyse Intelligente',
-      subtitle: `Période : ${periodeLabel}  |  Client : ${iaClient}`,
-      filename: `rapport_ia_${iaAnnee}`,
-      isAiReport: true,
-      aiContent: JSON.stringify(aiReport),
+    const m = MOIS_LABELS[iaMois - 1];
+    const periodeLabel = iaPeriode === 'Mensuel' ? (m + ' ' + iaAnnee) : ('Année ' + iaAnnee);
+    await generatePdf('Rapport IA \u2014 ' + periodeLabel, {
+      title: 'Rapport IA \u2014 Analyse Intelligente',
+      subtitle: 'Période : ' + periodeLabel + '  |  Client : ' + iaClient,
+      filename: 'rapport_ia_' + iaAnnee,
+      is_ai_report: true,
+      ai_content: JSON.stringify(aiReport),
     });
   };
 

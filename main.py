@@ -2311,6 +2311,272 @@ def api_delete_machine_logs(machine_name: str, user=Depends(_verify_token)):
     return {"ok": True, "deleted": deleted, "message": f"{deleted} log(s) supprimé(s) pour {machine_name}"}
 
 
+
+
+# ==========================================
+# PDF REPORT GENERATION (server-side fpdf2)
+# ==========================================
+
+def _fmt_number(n):
+    try:
+        val = int(round(float(n)))
+        s = str(abs(val))
+        result = ""
+        for i, c in enumerate(reversed(s)):
+            if i > 0 and i % 3 == 0:
+                result = " " + result
+            result = c + result
+        return ("-" if val < 0 else "") + result
+    except Exception:
+        return str(n)
+
+
+def _draw_pdf_header(pdf, title, subtitle, company_name, company_logo_b64, savia_logo_path, page_width):
+    from io import BytesIO
+    import base64
+    y_start = 10
+    pdf.set_y(y_start)
+    x_next = 10
+    if savia_logo_path and os.path.exists(savia_logo_path):
+        try:
+            pdf.image(savia_logo_path, x=x_next, y=y_start, w=52)
+            x_next = 66
+        except Exception:
+            x_next = 10
+    if company_logo_b64:
+        try:
+            if "," in company_logo_b64:
+                b64_data = company_logo_b64.split(",", 1)[1]
+            else:
+                b64_data = company_logo_b64
+            logo_bytes = base64.b64decode(b64_data)
+            logo_io = BytesIO(logo_bytes)
+            pdf.set_draw_color(180, 210, 205)
+            pdf.set_line_width(0.4)
+            pdf.line(x_next + 2, y_start + 2, x_next + 2, y_start + 22)
+            x_next += 6
+            pdf.image(logo_io, x=x_next, y=y_start + 4, h=16)
+            x_next += 38
+        except Exception:
+            pass
+    if company_name and company_name != "SAVIA":
+        pdf.set_xy(x_next, y_start + 9)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(15, 118, 110)
+        pdf.cell(page_width - x_next - 10, 8, company_name[:60], align="L")
+        pdf.set_text_color(0, 0, 0)
+    sep_y = y_start + 30
+    pdf.set_draw_color(15, 118, 110)
+    pdf.set_line_width(1.0)
+    pdf.line(10, sep_y, page_width - 10, sep_y)
+    pdf.set_xy(10, sep_y + 5)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(15, 30, 50)
+    pdf.cell(page_width - 20, 8, title[:100], align="L")
+    if subtitle:
+        pdf.set_xy(10, sep_y + 14)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(100, 120, 140)
+        pdf.cell(page_width - 20, 5, subtitle[:120], align="L")
+    return sep_y + 24
+
+
+class PdfRequest(BaseModel):
+    title: str = "Rapport SAVIA"
+    subtitle: str = ""
+    filename: str = "rapport"
+    company_name: str = "SAVIA"
+    company_logo: str = ""
+    kpis: list = []
+    head: list = []
+    rows: list = []
+    type_data: list = []
+    table_title: str = ""
+    is_ai_report: bool = False
+    ai_content: str = ""
+
+
+@app.post("/api/reports/generate-pdf")
+def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    from io import BytesIO
+    from fastapi.responses import Response
+    import json
+
+    SAVIA_LOGO = "/app/logo-savia.png"
+    try:
+        orientation = "P" if data.is_ai_report else "L"
+        pdf = FPDF(orientation=orientation, unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        page_w = pdf.w
+
+        y_now = _draw_pdf_header(
+            pdf, data.title, data.subtitle,
+            data.company_name, data.company_logo,
+            SAVIA_LOGO, page_w
+        )
+        pdf.set_y(y_now)
+
+        # KPIs
+        if data.kpis:
+            box_w, box_h, margin_ = 64, 16, 5
+            kpi_y = pdf.get_y()
+            for i, kpi in enumerate(data.kpis[:4]):
+                kx = 10 + i * (box_w + margin_)
+                color = kpi.get("color", [15, 118, 110])
+                pdf.set_fill_color(242, 252, 250)
+                pdf.set_draw_color(180, 220, 215)
+                pdf.set_line_width(0.3)
+                pdf.rounded_rect(kx, kpi_y, box_w, box_h, 3, "FD")
+                pdf.set_xy(kx, kpi_y + 2)
+                pdf.set_font("Helvetica", "B", 13)
+                pdf.set_text_color(*color)
+                pdf.cell(box_w, 8, str(kpi.get("val", "")), align="C")
+                pdf.set_xy(kx, kpi_y + 10)
+                pdf.set_font("Helvetica", "", 7)
+                pdf.set_text_color(100, 120, 130)
+                pdf.cell(box_w, 4, str(kpi.get("label", "")), align="C")
+            pdf.set_y(kpi_y + box_h + 6)
+            pdf.set_text_color(0, 0, 0)
+
+        # Type distribution table
+        if data.type_data:
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(50, 70, 90)
+            pdf.cell(0, 6, "Répartition par type", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_fill_color(15, 118, 110)
+            pdf.set_text_color(255, 255, 255)
+            pdf.cell(100, 7, "Type", border=1, fill=True)
+            pdf.cell(30, 7, "Nombre", border=1, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Helvetica", "", 8)
+            for idx, row in enumerate(data.type_data):
+                fill = idx % 2 == 0
+                if fill: pdf.set_fill_color(244, 252, 251)
+                else: pdf.set_fill_color(255, 255, 255)
+                pdf.set_text_color(30, 40, 60)
+                pdf.cell(100, 6, str(row[0]) if row else "", border=1, fill=fill)
+                pdf.cell(30, 6, str(row[1]) if len(row) > 1 else "", border=1, fill=fill, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.ln(4)
+
+        # AI Report mode
+        if data.is_ai_report and data.ai_content:
+            try: ai = json.loads(data.ai_content)
+            except Exception: ai = {"summary": data.ai_content}
+
+            def add_section(label, items, rgb):
+                if not items: return
+                if pdf.get_y() > pdf.h - 35: pdf.add_page()
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_text_color(*rgb)
+                pdf.cell(0, 7, label, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_font("Helvetica", "", 8.5)
+                pdf.set_text_color(35, 45, 65)
+                for item in items:
+                    txt = item if isinstance(item, str) else item.get("action", item.get("machine", str(item))) if isinstance(item, dict) else str(item)
+                    pdf.set_x(14)
+                    pdf.multi_cell(pdf.w - 24, 5, "• " + txt[:300])
+                    if pdf.get_y() > pdf.h - 25: pdf.add_page()
+                pdf.ln(2)
+
+            score = ai.get("score_global")
+            if score is not None:
+                sc = int(score)
+                col = [22,163,74] if sc>=70 else [234,179,8] if sc>=40 else [220,50,50]
+                pdf.set_font("Helvetica", "B", 13)
+                pdf.set_text_color(*col)
+                pdf.cell(0, 8, f"Score global : {sc}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_text_color(0, 0, 0)
+            analyse = ai.get("analyse") or ai.get("summary")
+            if analyse:
+                pdf.set_font("Helvetica", "", 9)
+                pdf.set_text_color(30, 40, 60)
+                pdf.multi_cell(0, 5, str(analyse)[:2000])
+                pdf.ln(4)
+            add_section("Points Forts", ai.get("points_forts", []), [22,163,74])
+            add_section("Points Faibles", ai.get("points_faibles", []), [220,50,50])
+            recs = ai.get("recommandations", [])
+            recs_c = [r if isinstance(r, str) else r.get("action", str(r)) for r in recs]
+            add_section("Recommandations", recs_c, [15,118,110])
+            add_section("Alertes Critiques", ai.get("alertes_critiques", []), [234,88,12])
+            add_section("Tendances", ai.get("tendances", []), [99,102,241])
+            conclusion = ai.get("conclusion")
+            if conclusion:
+                if pdf.get_y() > pdf.h - 35: pdf.add_page()
+                pdf.set_font("Helvetica", "B", 9.5)
+                pdf.set_text_color(30, 40, 60)
+                pdf.cell(0, 7, "Conclusion", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_font("Helvetica", "", 9)
+                pdf.multi_cell(0, 5, conclusion[:2000])
+
+        # Standard table
+        elif data.head and data.rows:
+            if pdf.get_y() > pdf.h - 45: pdf.add_page()
+            if data.table_title:
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_text_color(50, 70, 90)
+                pdf.cell(0, 7, data.table_title, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            n_cols = len(data.head)
+            total_w = page_w - 20
+            last_w = 28
+            def_w = (total_w - last_w) / max(n_cols - 1, 1)
+            col_w = [def_w] * (n_cols - 1) + [last_w]
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_fill_color(15, 118, 110)
+            pdf.set_text_color(255, 255, 255)
+            for i, h in enumerate(data.head):
+                pdf.cell(col_w[i], 8, str(h)[:20], border=1, fill=True, align="C")
+            pdf.ln()
+            pdf.set_font("Helvetica", "", 7.5)
+            for row_idx, row in enumerate(data.rows):
+                if pdf.get_y() > pdf.h - 15:
+                    pdf.add_page()
+                    pdf.set_font("Helvetica", "B", 8)
+                    pdf.set_fill_color(15, 118, 110)
+                    pdf.set_text_color(255, 255, 255)
+                    for i, h in enumerate(data.head):
+                        pdf.cell(col_w[i], 8, str(h)[:20], border=1, fill=True, align="C")
+                    pdf.ln()
+                    pdf.set_font("Helvetica", "", 7.5)
+                fill = row_idx % 2 == 0
+                if fill: pdf.set_fill_color(244, 252, 251)
+                else: pdf.set_fill_color(255, 255, 255)
+                pdf.set_text_color(25, 35, 55)
+                for i, cell in enumerate(row[:n_cols]):
+                    val = _fmt_number(cell) if i == n_cols - 1 else str(cell)[:25] if cell else "-"
+                    align = "R" if i == n_cols - 1 else "L"
+                    pdf.cell(col_w[i], 6.5, val, border=1, fill=fill, align=align)
+                pdf.ln()
+
+        # Footer on all pages
+        total_pages = pdf.pages
+        for pg in range(1, total_pages + 1):
+            pdf.page = pg
+            pdf.set_y(pdf.h - 10)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(170, 175, 195)
+            pdf.set_draw_color(200, 205, 220)
+            pdf.set_line_width(0.3)
+            pdf.line(10, pdf.h - 11, page_w - 10, pdf.h - 11)
+            now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+            pdf.cell(page_w - 40, 5, f"Généré par {data.company_name} — {now_str}", align="L")
+            pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
+
+        pdf_bytes = bytes(pdf.output())
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{data.filename}.pdf"',
+                "Content-Length": str(len(pdf_bytes)),
+            }
+        )
+    except Exception as e:
+        logging.error(f"PDF generation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
 # ==========================================
 # ENTRY POINT
 # ==========================================
