@@ -320,6 +320,8 @@ export default function SavPage() {
   // PDF Generation
   const handleGeneratePdf = () => {
     setIsPdfGenerating(true);
+    const _companyName = localStorage.getItem('savia_company') || 'SAVIA';
+    const _companyLogo = localStorage.getItem('savia_logo') || '';
     const pdfFiltered = data.filter(i => {
       const d = new Date(i.date);
       return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
@@ -331,12 +333,23 @@ export default function SavPage() {
     const w = window.open('', '_blank');
     if (!w) { setIsPdfGenerating(false); return; }
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport SAV — ${pdfDateFrom} au ${pdfDateTo}</title>
-    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
+    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}
+    .pdf-header{display:flex;align-items:center;gap:20px;padding-bottom:16px;border-bottom:3px solid #0f766e;margin-bottom:20px}
+    .pdf-header img{max-height:70px;max-width:180px;object-fit:contain}
+    .pdf-header-text h1{color:#0f766e;margin:0 0 4px 0;font-size:22px}
+    .pdf-header-text p{margin:0;color:#666;font-size:12px}
+    h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
     table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{background:#f0f9ff;border:1px solid #d1d5db;padding:8px;text-align:left;font-weight:bold}
     td{border:1px solid #d1d5db;padding:6px 8px}.kpi{display:inline-block;background:#f8fafc;border:1px solid #d1d5db;border-radius:8px;padding:12px 24px;margin:8px;text-align:center}
     .kpi .val{font-size:28px;font-weight:bold;color:#0f766e}.kpi .lab{font-size:11px;color:#666;margin-top:4px}
     @media print{body{margin:20px}}</style></head><body>
-    <h1>Rapport SAV — Interventions</h1>
+    <div class="pdf-header">
+      ${_companyLogo ? `<img src="${_companyLogo}" alt="Logo" />` : ''}
+      <div class="pdf-header-text">
+        <h1>${_companyName}</h1>
+        <p>Rapport SAV — Interventions</p>
+      </div>
+    </div>
     <p>Période : <strong>${pdfDateFrom}</strong> au <strong>${pdfDateTo}</strong></p>
     <div style="margin:20px 0">
       <div class="kpi"><div class="val">${pdfFiltered.length}</div><div class="lab">Interventions</div></div>
@@ -346,7 +359,7 @@ export default function SavPage() {
     </div>
     <table><thead><tr>${['Date','Machine','Client','Technicien','Type','Statut','Durée','Coût (TND)'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
     <tbody>${pdfFiltered.map(i => `<tr><td>${i.date.substring(0,10)}</td><td>${i.machine}</td><td>${i.client||'-'}</td><td>${i.technicien}</td><td>${i.type}</td><td>${i.statut}</td><td>${i.duree}h</td><td>${(i.cout||i.coutPieces).toLocaleString('fr')}</td></tr>`).join('')}</tbody></table>
-    <p style="margin-top:24px;font-size:11px;color:#999">Généré par SAVIA — ${new Date().toLocaleString('fr-FR')}</p>
+    <p style="margin-top:24px;font-size:11px;color:#999">Généré par ${_companyName} — ${new Date().toLocaleString('fr-FR')}</p>
     </body></html>`);
     w.document.close();
     setTimeout(() => { w.print(); setIsPdfGenerating(false); }, 500);
