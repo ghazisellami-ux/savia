@@ -2355,24 +2355,25 @@ def _fmt_number(n):
 
 class SaviaPDF(FPDF):
     """FPDF subclass with auto-repeated compact header on every page."""
-    _savia_logo  = None    # path
-    _client_logo = None    # BytesIO (seekable)
+    _savia_logo   = None    # path
+    _client_logo  = None    # BytesIO (seekable)
     _company_name = ''
     _company_sub  = ''
-    HEADER_H = 24          # header height mm
+    _report_title = ''     # centered between logos
+    HEADER_H = 26           # header height mm
 
     def header(self):
         from io import BytesIO
         H = self.HEADER_H
         y0 = 5
         W  = self.w - 16   # 8mm each side
-        
+
         # ── SAVIA logo (left) ──────────────────────────────────────
         savia_w = 0
         if self._savia_logo and os.path.exists(self._savia_logo):
             try:
-                self.image(self._savia_logo, x=8, y=y0, h=H - 2)
-                savia_w = 26
+                self.image(self._savia_logo, x=8, y=y0, h=H - 4)
+                savia_w = 24
             except Exception:
                 savia_w = 0
 
@@ -2381,24 +2382,34 @@ class SaviaPDF(FPDF):
         if self._client_logo:
             try:
                 self._client_logo.seek(0)
-                self.image(self._client_logo, x=self.w - 8 - 28, y=y0, h=H - 2)
+                self.image(self._client_logo, x=self.w - 8 - 28, y=y0, h=H - 4)
                 client_w = 30
             except Exception:
                 client_w = 0
 
-        # ── Company name + subtitle (centered) ────────────────────
+        # ── Center zone: report title + company name ───────────────
         cx = 8 + savia_w + 2
         cw = W - savia_w - client_w - 4
+
+        # Report title (top, bold, centered between logos)
+        if self._report_title:
+            self.set_xy(cx, y0 + 1)
+            self.set_font('Helvetica', 'B', 11)
+            self.set_text_color(30, 40, 55)
+            self.cell(cw, 7, _sanitize(self._report_title[:70]), align='C')
+
+        # Company name (below title, smaller)
         if self._company_name:
-            self.set_xy(cx, y0 + 4)
-            self.set_font('Helvetica', 'B', 12)
+            y_cn = y0 + 9 if self._report_title else y0 + 4
+            self.set_xy(cx, y_cn)
+            self.set_font('Helvetica', 'B', 9)
             self.set_text_color(1, 180, 188)
-            self.cell(cw, 7, _sanitize(self._company_name[:55]), align='C')
+            self.cell(cw, 6, _sanitize(self._company_name[:55]), align='C')
             if self._company_sub:
-                self.set_xy(cx, y0 + 11)
+                self.set_xy(cx, y_cn + 6)
                 self.set_font('Helvetica', '', 7)
-                self.set_text_color(100, 120, 140)
-                self.cell(cw, 5, _sanitize(self._company_sub[:90]), align='C')
+                self.set_text_color(130, 145, 160)
+                self.cell(cw, 4.5, _sanitize(self._company_sub[:90]), align='C')
 
         # ── Separator line ─────────────────────────────────────────
         sep = y0 + H
@@ -2407,11 +2418,12 @@ class SaviaPDF(FPDF):
         self.set_y(sep + 3)
         self.set_text_color(40, 50, 65)
 
-    def set_header_data(self, savia_logo, client_logo_bytes, company_name, company_sub):
-        self._savia_logo  = savia_logo
-        self._client_logo = client_logo_bytes
+    def set_header_data(self, savia_logo, client_logo_bytes, company_name, company_sub, report_title=""):
+        self._savia_logo   = savia_logo
+        self._client_logo  = client_logo_bytes
         self._company_name = company_name
         self._company_sub  = company_sub
+        self._report_title = report_title
 
 
 
@@ -2465,20 +2477,15 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         pdf.set_header_data(
             SAVIA_LOGO, _client_logo_io,
             data.company_name if data.company_name != "SAVIA" else "",
-            data.subtitle if data.subtitle else "Systeme Intelligent de Gestion - SAVIA"
+            data.subtitle if data.subtitle else "Systeme Intelligent de Gestion - SAVIA",
+            report_title=data.title if data.title and data.title != "Rapport SAVIA" else ""
         )
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.set_top_margin(pdf.HEADER_H + 10)  # content starts below header
         pdf.add_page()
         page_w = pdf.w
 
-        # First-page title block (below header)
-        if data.title and data.title != "Rapport SAVIA":
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.set_text_color(15, 30, 50)
-            pdf.cell(page_w - 20, 9, _sanitize(data.title[:100]), align="L",
-                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.ln(3)
+        # Title is now shown in header (between logos)
 
 
         # KPIs
@@ -2541,19 +2548,15 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
 
             W = page_w - 20
 
-            def sec_hdr(lbl, bg, fg=None, dot=True):
+            def sec_hdr(lbl, bg, fg=None):
                 """Section header: solid color band + small white circle icon"""
                 if fg is None: fg = [255,255,255]
                 if pdf.get_y() > pdf.h - 40: pdf.add_page()
                 yh = pdf.get_y()
                 pdf.set_fill_color(bg[0], bg[1], bg[2])
                 pdf.rect(10, yh, W, 8.5, style="F")
-                # Small white circle icon
-                if dot:
-                    pdf.set_fill_color(255, 255, 255)
-                    pdf.ellipse(13.5, yh + 2.5, 3, 3, style="F")
-                # Label
-                pdf.set_xy(19, yh + 1.8)
+                # Label (no white dot)
+                pdf.set_xy(14, yh + 1.8)
                 pdf.set_font("Helvetica", "B", 9)
                 pdf.set_text_color(fg[0], fg[1], fg[2])
                 pdf.cell(W - 9, 5.5, _sanitize(lbl.upper()))
