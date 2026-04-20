@@ -73,6 +73,12 @@ export default function PlanningPage() {
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
   const [dayDetailEvents, setDayDetailEvents] = useState<PlanItem[]>([]);
 
+  // Table filters — Toutes les Maintenances
+  const [filterClient,  setFilterClient]  = useState('Tous');
+  const [filterEquip,   setFilterEquip]   = useState('Tous');
+  const [filterTech,    setFilterTech]    = useState('Tous');
+  const [filterStatut,  setFilterStatut]  = useState('Tous');
+
   // Equipements filtered by selected client
   const filteredEquips = useMemo(() => {
     if (!form.client) return equipsAll.map(e => e.nom);
@@ -333,9 +339,68 @@ export default function PlanningPage() {
       </div>
 
       {/* Upcoming list */}
-      <SectionCard title={`Toutes les Maintenances (${data.length})`}>
+      {/* ── Filter options derived from data ── */}
+      {(() => {
+        const fClients  = ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean))).sort()];
+        const fEquips   = ['Tous', ...Array.from(new Set(
+          data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
+        )).sort()];
+        const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
+        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'Réalisée', 'En retard'];
+        const filteredData = data
+          .filter(d => filterClient === 'Tous' || d.client === filterClient)
+          .filter(d => filterEquip  === 'Tous' || d.machine === filterEquip)
+          .filter(d => filterTech   === 'Tous' || d.technicien === filterTech)
+          .filter(d => {
+            if (filterStatut === 'Tous') return true;
+            const hasDate = !!d.date_planifiee;
+            const isOverdue = hasDate && new Date(d.date_planifiee) < now && d.statut !== 'Réalisée' && d.statut !== 'Terminée' && d.statut !== 'Annulée';
+            if (filterStatut === 'En retard') return isOverdue;
+            return d.statut === filterStatut && !isOverdue;
+          });
+        const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
+        return (
+      <SectionCard title={"Toutes les Maintenances (" + filteredData.length + (filteredData.length !== data.length ? " / " + data.length : "") + ")"}>
+        {/* Filter bar */}
+        <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
+          {/* Client */}
+          <div className="flex items-center gap-2">
+            <Building2 className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <select value={filterClient} onChange={e => { setFilterClient(e.target.value); setFilterEquip('Tous'); }} className={selCls}>
+              {fClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
+            </select>
+          </div>
+          {/* Équipement */}
+          <div className="flex items-center gap-2">
+            <Server className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <select value={filterEquip} onChange={e => setFilterEquip(e.target.value)} className={selCls}>
+              {fEquips.map(e => <option key={e} value={e}>{e === 'Tous' ? 'Tous les équipements' : e}</option>)}
+            </select>
+          </div>
+          {/* Technicien */}
+          <div className="flex items-center gap-2">
+            <User className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <select value={filterTech} onChange={e => setFilterTech(e.target.value)} className={selCls}>
+              {fTechs.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les techniciens' : t}</option>)}
+            </select>
+          </div>
+          {/* Statut */}
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className={selCls}>
+              {fStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
+            </select>
+          </div>
+          {/* Reset */}
+          {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous') && (
+            <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all cursor-pointer">
+              <X className="w-3 h-3" /> Réinitialiser
+            </button>
+          )}
+        </div>
         <div className="overflow-x-auto">
-          <div className="overflow-y-auto" style={{maxHeight: '420px'}}>
+          <div className="overflow-y-auto" style={{maxHeight: '400px'}}>
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-surface z-10">
                 <tr className="border-b border-savia-border">
@@ -345,7 +410,9 @@ export default function PlanningPage() {
                 </tr>
               </thead>
               <tbody>
-                {data
+                {filteredData.length === 0 ? (
+                  <tr><td colSpan={7} className="text-center py-8 text-savia-text-muted text-sm">Aucune maintenance ne correspond aux filtres sélectionnés.</td></tr>
+                ) : filteredData
                   .slice()
                   .sort((a, b) => {
                     // Items avec date en premier, triés chronologiquement
@@ -381,6 +448,8 @@ export default function PlanningPage() {
           </div>
         </div>
       </SectionCard>
+        );
+      })()}
 
       {/* ADD MODAL */}
       <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setSelectedDay(null); }} title={`Planifier une Maintenance${selectedDay ? ` — ${String(selectedDay).padStart(2,'0')}/${String(currentMonth+1).padStart(2,'0')}/${currentYear}` : ''}`}>
