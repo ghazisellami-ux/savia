@@ -30,7 +30,7 @@ def mask_pii_locally(text):
     return text
 
 # Modèles à essayer par ordre de préférence (chacun a son propre quota)
-MODELS = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"]
+MODELS = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
 
 # --- Initialisation multi-clés ---
 AI_AVAILABLE = False
@@ -53,7 +53,7 @@ else:
 client = _clients[0] if _clients else None
 
 
-def _call_ia(prompt, timeout=60, is_json=False):
+def _call_ia(prompt, timeout=120, is_json=False):
     """
     Appelle l'IA avec rotation automatique et audit trail.
     
@@ -99,7 +99,8 @@ def _call_ia(prompt, timeout=60, is_json=False):
                 if is_json:
                     gen_config["response_mime_type"] = "application/json"
 
-                with ThreadPoolExecutor(max_workers=1) as executor:
+                executor = ThreadPoolExecutor(max_workers=1)
+                try:
                     future = executor.submit(
                         current_client.models.generate_content,
                         model=model_name,
@@ -107,6 +108,9 @@ def _call_ia(prompt, timeout=60, is_json=False):
                         config=gen_config
                     )
                     resp = future.result(timeout=timeout)
+                finally:
+                    try: executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError: executor.shutdown(wait=False)
                 
                 # Succès Log (Pillier 3)
                 logger.info(f"✅ Décision IA OK | Modèle: {model_name} | Clé: ...{key_suffix}")
@@ -348,7 +352,7 @@ Réponds en JSON strict uniquement :
     "Confidence_Score": 95
 }}"""
         # Appel IA avec rotation automatique des clés et contrainte JSON strict
-        raw_response = _call_ia(prompt, timeout=60, is_json=True)
+        raw_response = _call_ia(prompt, timeout=120, is_json=True)
         if raw_response:
             result = clean_json_response(raw_response)
             if result:

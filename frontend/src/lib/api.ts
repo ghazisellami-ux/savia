@@ -30,11 +30,24 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const isAiEndpoint = endpoint.includes('/ai/');
+  const timeoutMs = isAiEndpoint ? 180000 : 30000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${endpoint}`, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+  } catch(fetchErr: any) {
+    clearTimeout(timer);
+    if (fetchErr.name === 'AbortError') throw new ApiError('Timeout: L\'IA mettra trop de temps. Reessayez.', 408);
+    throw new ApiError('Erreur reseau: ' + (fetchErr.message || 'indisponible'), 0);
+  }
+  clearTimeout(timer);
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));

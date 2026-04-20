@@ -169,7 +169,12 @@ export default function ReportsPage() {
 
   // --- AI PDF download ---
   const handleAiPdf = async () => {
-    if (!aiReport) return;
+    if (!aiReport) { alert("Veuillez generer l'analyse IA d'abord."); return; }
+    const summ: any = (aiReport as any)?.summary;
+    if (typeof summ === "string" && (summ.startsWith("Erreur") || summ.includes("pas pu"))) {
+      alert("L'analyse IA a echoue. Relancez l'analyse avant de telecharger.");
+      return;
+    }
     const m = MOIS_LABELS[iaMois - 1];
     const periodeLabel = iaPeriode === 'Mensuel' ? (m + ' ' + iaAnnee) : ('Année ' + iaAnnee);
     await generatePdf('Rapport IA \u2014 ' + periodeLabel, {
@@ -222,7 +227,9 @@ export default function ReportsPage() {
         setAiReport({ summary: "L'IA n'a pas pu générer le rapport." });
       }
     } catch (err: any) {
-      setAiReport({ summary: `Erreur: ${err?.message || 'Indisponible'}` });
+      console.error('AI analyze error:', err);
+      alert('Erreur analyse IA: ' + (err?.message || 'Service indisponible') + '\nVeuillez reessayer.');
+      setAiReport(null);
     } finally { setIsGenerating(false); }
   };
 
