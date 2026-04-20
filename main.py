@@ -2405,7 +2405,7 @@ class SaviaPDF(FPDF):
             self.set_font('Helvetica', 'B', 9)
             self.set_text_color(1, 180, 188)
             self.cell(cw, 6, _sanitize(self._company_name[:55]), align='C')
-            if self._company_sub:
+            if self._company_sub and not self._company_sub.lower().startswith("gen"):
                 self.set_xy(cx, y_cn + 6)
                 self.set_font('Helvetica', '', 7)
                 self.set_text_color(130, 145, 160)
@@ -2477,7 +2477,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         pdf.set_header_data(
             SAVIA_LOGO, _client_logo_io,
             data.company_name if data.company_name != "SAVIA" else "",
-            data.subtitle if data.subtitle else "Systeme Intelligent de Gestion - SAVIA",
+            (data.subtitle if (data.subtitle and not data.subtitle.lower().startswith("gen")) else "Systeme Intelligent de Gestion - SAVIA"),
             report_title=data.title if data.title and data.title != "Rapport SAVIA" else ""
         )
         pdf.set_auto_page_break(auto=True, margin=15)
@@ -2601,9 +2601,8 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 else:
                     s_bg = [250,84,87]     # CORAL  #FA5457
                 y_sc = pdf.get_y()
-                # Pastel bg + colored border + left bar
-                s_pastr = min(s_bg[0]+160,255); s_pastg = min(s_bg[1]+80,255); s_pastb = min(s_bg[2]+80,255)
-                pdf.set_fill_color(s_pastr, s_pastg, s_pastb)
+                # White bg + colored border + colored left bar
+                pdf.set_fill_color(255, 255, 255)
                 pdf.set_draw_color(s_bg[0], s_bg[1], s_bg[2])
                 pdf.set_line_width(0.8)
                 pdf.rect(10, y_sc, W, 16, style="FD")
@@ -2723,6 +2722,16 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     align = "R" if i == n_cols - 1 else "L"
                     pdf.cell(col_w[i], 6.5, val, border=1, fill=fill, align=align)
                 pdf.ln()
+
+        # Remove last page if it only contains the header (empty)
+        try:
+            threshold = (pdf.t_margin if pdf.t_margin else 34) + 8
+            if pdf.get_y() <= threshold and len(pdf.pages) > 1:
+                last_pg_num = max(pdf.pages.keys())
+                del pdf.pages[last_pg_num]
+                pdf.page = last_pg_num - 1
+        except Exception:
+            pass
 
         # Footer on all pages
         total_pages = len(pdf.pages)
