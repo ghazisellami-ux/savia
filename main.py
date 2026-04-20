@@ -2318,18 +2318,22 @@ def api_delete_machine_logs(machine_name: str, user=Depends(_verify_token)):
 # ==========================================
 
 def _sanitize(text):
-    """Replace non-Latin-1 chars for fpdf2 standard fonts."""
-    if not text: return ""
+    if not text:
+        return ""
     text = str(text)
-    repl = {
-        "\u2014": " - ", "\u2013": " - ",
-        " ": " ",   "\u00a0": " ",
-        "\u2022": "-",   "\u2019": "'",
-        "\u2018": "'",  "\u201c": '"', "\u201d": '"',
-        "\u2026": "...", "\u20ac": "EUR",
-    }
-    for k, v in repl.items():
-        text = text.replace(k, v)
+    # Replace specific chars with ASCII equivalents
+    text = text.replace(chr(0x2014), " - ")  # em dash
+    text = text.replace(chr(0x2013), " - ")  # en dash
+    text = text.replace(chr(0x202F), " ")     # narrow no-break space
+    text = text.replace(chr(0x00A0), " ")     # no-break space
+    text = text.replace(chr(0x2022), "-")     # bullet
+    text = text.replace(chr(0x2019), "'")    # right single quote
+    text = text.replace(chr(0x2018), "'")    # left single quote
+    text = text.replace(chr(0x201C), '"')    # left double quote
+    text = text.replace(chr(0x201D), '"')    # right double quote
+    text = text.replace(chr(0x2026), "...")   # ellipsis
+    text = text.replace(chr(0x20AC), "EUR")   # euro sign
+    # Final fallback: encode to Latin-1, unknown chars become ?
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
@@ -2340,7 +2344,7 @@ def _fmt_number(n):
         result = ""
         for i, c in enumerate(reversed(s)):
             if i > 0 and i % 3 == 0:
-                result = " " + result
+                result = " " + result
             result = c + result
         return ("-" if val < 0 else "") + result
     except Exception:
@@ -2449,11 +2453,11 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.set_xy(kx, kpi_y + 2)
                 pdf.set_font("Helvetica", "B", 13)
                 r,g,b = int(color[0]),int(color[1]),int(color[2]); pdf.set_text_color(r,g,b)
-                pdf.cell(box_w, 8, str(kpi.get("val", "")), align="C")
+                pdf.cell(box_w, 8, _sanitize(str(kpi.get("val", ""))), align="C")
                 pdf.set_xy(kx, kpi_y + 10)
                 pdf.set_font("Helvetica", "", 7)
                 pdf.set_text_color(100, 120, 130)
-                pdf.cell(box_w, 4, str(kpi.get("label", "")), align="C")
+                pdf.cell(box_w, 4, _sanitize(str(kpi.get("label", ""))), align="C")
             pdf.set_y(kpi_y + box_h + 6)
             pdf.set_text_color(0, 0, 0)
 
@@ -2553,7 +2557,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.set_fill_color(15, 118, 110)
                     pdf.set_text_color(255, 255, 255)
                     for i, h in enumerate(data.head):
-                        pdf.cell(col_w[i], 8, str(h)[:20], border=1, fill=True, align="C")
+                        pdf.cell(col_w[i], 8, _sanitize(str(h)[:20]), border=1, fill=True, align="C")
                     pdf.ln()
                     pdf.set_font("Helvetica", "", 7.5)
                 fill = row_idx % 2 == 0
