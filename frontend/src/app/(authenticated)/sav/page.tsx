@@ -91,7 +91,16 @@ export default function SavPage() {
 
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicTechs = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).values()].sort(), [data]);
+  const dynamicTechs = useMemo(() => {
+    const allTechs = new Set<string>();
+    data.forEach(d => {
+      (d.technicien || '').split(',').forEach((t: string) => {
+        const name = t.trim();
+        if (name && name !== 'Non assigné') allTechs.add(name);
+      });
+    });
+    return ['Tous', ...Array.from(allTechs).sort()];
+  }, [data]);
   const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
   const availableYears = useMemo(() => {
     const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
@@ -159,10 +168,15 @@ export default function SavPage() {
     if (!form.machine.trim()) return;
     setIsSaving(true);
     try {
+      const _techs = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+      const _nbTechs = _techs.length || 1;
+      const TAUX_HORAIRE = 80; // TND/h par technicien
+      const _coutMainOeuvre = Math.round((Number(form.duree_minutes) / 60) * TAUX_HORAIRE * _nbTechs);
       await interventions.create({
         ...form,
         duree_minutes: Number(form.duree_minutes),
         cout_pieces: Number(form.cout_pieces),
+        cout: _coutMainOeuvre,
       });
       setForm(emptyForm);
       setShowAddModal(false);
@@ -351,7 +365,10 @@ export default function SavPage() {
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
       if (filterClient !== 'Tous' && i.client !== filterClient) return false;
       if (filterEquip !== 'Tous' && i.machine !== filterEquip) return false;
-      if (filterTech !== 'Tous' && (i.technicien || '').trim() !== filterTech.trim()) return false;
+      if (filterTech !== 'Tous') {
+        const techs = (i.technicien || '').split(',').map((s: string) => s.trim());
+        if (!techs.some(t => t === filterTech)) return false;
+      }
       if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
@@ -379,13 +396,16 @@ export default function SavPage() {
   const techStats = useMemo(() => {
     const map = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
     maintenanceFiltered.forEach(i => {
-      const t = i.technicien || 'Inconnu';
+      const tNames = (i.technicien || 'Inconnu').split(',').map((s: string) => s.trim()).filter(Boolean);
+      const tCount = tNames.length || 1;
+      tNames.forEach(t => {
       const prev = map.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
       prev.nb++;
       if (i.statut.toLowerCase().includes('tur')) prev.clot++;
       prev.duree += i.duree_minutes;
-      prev.cout += (i.cout || i.coutPieces);
+      prev.cout += (i.cout || i.coutPieces) / tCount;
       map.set(t, prev);
+      }); // end tNames.forEach
     });
     return Array.from(map.entries()).map(([nom, s]) => ({
       nom, nb: s.nb, clot: s.clot,
@@ -1067,10 +1087,45 @@ export default function SavPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Technicien</label>
-            <select className={INPUT_CLS} value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})}>
-              <option value="">-- Sélectionnez --</option>
-              {techniciens.map(t => <option key={t.nom}>{t.prenom} {t.nom}</option>)}
+          <div className="md:col-span-2">
+            <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
+              <Users className="w-3.5 h-3.5" /> Techniciens
+              <span className="text-xs text-savia-text-dim ml-1">(plusieurs possibles — coût × nb techs)</span>
+            </label>
+            {/* Pills for selected techs */}
+            <div className="flex flex-wrap gap-1.5 mb-2 min-h-[2rem] p-2 bg-savia-surface-hover/40 rounded-lg border border-savia-border/50">
+              {(form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean).map(name => (
+                <span key={name} className="flex items-center gap-1 px-2 py-0.5 bg-savia-accent/20 text-savia-accent border border-savia-accent/30 rounded-full text-xs font-medium">
+                  {name}
+                  <button type="button" onClick={() => {
+                    const techs = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(t => t && t !== name);
+                    setForm({...form, technicien: techs.join(', ')});
+                  }} className="hover:text-red-400 transition-colors ml-0.5">×</button>
+                </span>
+              ))}
+              {!(form.technicien || '').trim() && <span className="text-xs text-savia-text-dim py-0.5 px-1">Aucun technicien sélectionné</span>}
+            </div>
+            {/* Dropdown to add a tech */}
+            <select
+              className={INPUT_CLS}
+              value=""
+              onChange={e => {
+                if (!e.target.value) return;
+                const current = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+                if (!current.includes(e.target.value)) {
+                  setForm({...form, technicien: [...current, e.target.value].join(', ')});
+                }
+              }}
+            >
+              <option value="">-- Ajouter un technicien --</option>
+              {techniciens
+                .filter(t => {
+                  const name = `${t.prenom} ${t.nom}`;
+                  const current = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+                  return !current.includes(name);
+                })
+                .map(t => <option key={t.nom} value={`${t.prenom} ${t.nom}`}>{t.prenom} {t.nom}</option>)
+              }
             </select>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Type</label>
