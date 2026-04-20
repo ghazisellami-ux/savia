@@ -2595,12 +2595,23 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 try: pdf.add_font('DejaVu', fname=_DJVU)
                 except Exception: _has_djvu = False
 
-            # Load Font Awesome for Lucide-equivalent section icons
+            # Font Awesome icons (requires fonttools space-glyph fix)
             _FA = '/app/fa-solid-900.ttf'
-            _has_fa = os.path.exists(_FA)
-            if _has_fa:
-                try: pdf.add_font('FA', fname=_FA)
-                except Exception: _has_fa = False
+            # NOTE: FA TTF converted from WOFF2 lacks 'space' glyph
+            # fpdf2 crashes on output() -> disabled, using test + fallback
+            _has_fa = False
+            if os.path.exists(_FA):
+                try:
+                    pdf.add_font('FA', fname=_FA)
+                    from fpdf import FPDF as _FPDF_TEST
+                    _pt = _FPDF_TEST(); _pt.add_page()
+                    _pt.add_font('FA', fname=_FA); _pt.set_font('FA', size=10)
+                    _pt.cell(10, 10, chr(0xF164))
+                    bytes(_pt.output())  # test that it works
+                    _has_fa = True
+                except Exception as _efa:
+                    _has_fa = False
+                    logger.debug(f"FA font disabled: {_efa}")
 
             def _sym(size=8):
                 if _has_djvu:
