@@ -525,6 +525,8 @@ def init_db():
         _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
+        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur pieces_rechange")
+        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur pieces_rechange")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         try:
@@ -1752,7 +1754,7 @@ def lire_techniciens():
             return read_sql("""
                 SELECT 
                     t.id, t.username, t.nom, t.prenom, t.specialite, 
-                    t.qualification, t.dispo, t.notes,
+                    t.qualification, t.niveau_competence, t.dispo, t.notes,
                     p.nom_complet, 
                     COALESCE(p.email, t.email) as email, 
                     COALESCE(p.telephone, t.telephone) as telephone, 
@@ -1773,13 +1775,14 @@ def ajouter_technicien(tech_dict):
         with get_db() as conn:
             # 1. Info fonctionnelle
             res = conn.execute("""
-                INSERT INTO techniciens (nom, prenom, specialite, qualification, dispo, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", "Généraliste"),
                 tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
                 tech_dict.get("notes", "")
             ))
@@ -1808,13 +1811,14 @@ def update_technicien(tech_id, tech_dict):
             # Update functional data
             conn.execute("""
                 UPDATE techniciens
-                SET nom=?, prenom=?, specialite=?, qualification=?, dispo=?, notes=?
+                SET nom=?, prenom=?, specialite=?, qualification=?, niveau_competence=?, dispo=?, notes=?
                 WHERE id=?
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", ""),
                 tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
                 tech_dict.get("notes", ""),
                 tech_id
