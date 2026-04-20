@@ -2909,12 +2909,20 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             pdf.cell(page_w - 40, 5, _sanitize(f"Genere par {data.company_name} - {now_str}"), align="L")
             pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
 
-        pdf_bytes = bytes(pdf.output())
+        pdf_bytes = bytes(pdf.output()
+        )
+        # Sanitize filename for HTTP headers (latin-1 only)
+        import urllib.parse as _up, unicodedata as _ud
+        _fn = str(data.filename or "rapport")
+        _ascii = _ud.normalize("NFKD", _fn).encode("ascii","ignore").decode()
+        _ascii = "".join(c if c.isalnum() or c in "._-" else "_" for c in _ascii).strip("_") or "rapport"
+        _utf8  = _up.quote(_fn + ".pdf", safe="")
+        _cd = "attachment; filename=" + _ascii + ".pdf; filename*=UTF-8''" + _utf8
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{data.filename}.pdf"',
+                "Content-Disposition": _cd,
                 "Content-Length": str(len(pdf_bytes)),
             }
         )
