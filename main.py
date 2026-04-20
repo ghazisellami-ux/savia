@@ -2535,7 +2535,14 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             for i, kpi in enumerate(data.kpis[:4]):
                 kx = 10 + i * (box_w + margin_)
                 color = kpi.get("color", [15, 118, 110])
-                r1,g1,b1 = int(color[0]),int(color[1]),int(color[2])
+                # Support both hex string "#RRGGBB" and [r,g,b] list
+                if isinstance(color, str) and color.startswith("#") and len(color) >= 7:
+                    h = color.lstrip("#")
+                    r1,g1,b1 = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+                elif isinstance(color, (list,tuple)) and len(color) >= 3:
+                    r1,g1,b1 = int(color[0]),int(color[1]),int(color[2])
+                else:
+                    r1,g1,b1 = 15,118,110
                 lc = [min(r1+215,255), min(g1+215,255), min(b1+215,255)]
                 pdf.set_fill_color(*lc)
                 pdf.set_draw_color(r1,g1,b1)
