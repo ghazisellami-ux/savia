@@ -40,6 +40,26 @@ from db_engine import (
 )
 
 logger = logging.getLogger("savia-api")
+
+# ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
+def _ensure_dejavu_font():
+    import shutil
+    dst = "/app/DejaVuSans.ttf"
+    if os.path.exists(dst): return
+    try:
+        import matplotlib
+        src = os.path.join(os.path.dirname(matplotlib.__file__),
+                           "mpl-data", "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            logger.info(f"DejaVu Sans copied: {os.path.getsize(dst):,} bytes")
+        else:
+            logger.warning("DejaVu not found in matplotlib")
+    except Exception as _e:
+        logger.warning(f"DejaVu copy failed: {_e}")
+
+_ensure_dejavu_font()
+# ─────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 
 # ---- Config ----
