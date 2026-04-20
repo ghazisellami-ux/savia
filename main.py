@@ -2800,9 +2800,12 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.cell(0, 7, _sanitize(str(tbl_title)), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 n_cols = len(tbl_head)
                 total_w = page_w - 20
-                last_w = 28
-                def_w = (total_w - last_w) / max(n_cols - 1, 1)
-                col_w = [def_w] * (n_cols - 1) + [last_w]
+                # Equal distribution: each column gets the same width
+                # Exception: 2-col tables use 38%/62% (label/value)
+                if n_cols == 2:
+                    col_w = [total_w * 0.38, total_w * 0.62]
+                else:
+                    col_w = [total_w / n_cols] * n_cols
                 # Header row
                 pdf.set_font("Helvetica", "B", 7.5)
                 pdf.set_fill_color(1, 180, 188)
@@ -2826,7 +2829,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.set_fill_color(244, 252, 251) if fill else pdf.set_fill_color(255, 255, 255)
                     pdf.set_text_color(25, 35, 55)
                     for i, cell in enumerate(row[:n_cols]):
-                        val_s = _sanitize(str(cell)[:30]) if cell is not None else "-"
+                        val_s = _sanitize(str(cell)[:45]) if cell is not None else "-"
                         align = "R" if i == n_cols - 1 else "L"
                         pdf.cell(col_w[i], 6.5, val_s, border=1, fill=fill, align=align)
                     pdf.ln()
@@ -2845,9 +2848,12 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.cell(0, 7, _sanitize(data.table_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             n_cols = len(data.head)
             total_w = page_w - 20
-            last_w = 28
-            def_w = (total_w - last_w) / max(n_cols - 1, 1)
-            col_w = [def_w] * (n_cols - 1) + [last_w]
+            # Equal distribution: each column gets the same width
+            # Exception: 2-col tables use 38%/62% (label/value)
+            if n_cols == 2:
+                col_w = [total_w * 0.38, total_w * 0.62]
+            else:
+                col_w = [total_w / n_cols] * n_cols
             pdf.set_font("Helvetica", "B", 8)
             pdf.set_fill_color(1, 180, 188)
             pdf.set_text_color(255, 255, 255)
