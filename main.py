@@ -2723,32 +2723,37 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.cell(col_w[i], 6.5, val, border=1, fill=fill, align=align)
                 pdf.ln()
 
-        # Remove last page if only header was drawn (auto-page-break with no content)
-        # HEADER_H=26, header sets y=34, so pages with y<=46 are empty
+        # ── CRITICAL: disable auto-page-break before footer loop ──────────────
+        # cell() at y=h-10=287mm exceeds auto-break threshold (h-15=282mm)
+        # → triggers unwanted new page with "Genere par" at top
+        pdf.set_auto_page_break(auto=False)
+
+        # Also remove last page if only header drawn (extra safety)
         try:
-            _EMPTY_THRESHOLD = 46  # mm: header height(26) + 20 slack
+            _EMPTY_THRESHOLD = 46
             _last_y = pdf.get_y()
             _n_pages = len(pdf.pages)
-            logger.info(f"PDF: {_n_pages} pages, last_y={_last_y:.1f}mm, threshold={_EMPTY_THRESHOLD}mm")
+            logger.info(f"PDF: {_n_pages} pages, last_y={_last_y:.1f}mm")
             if _last_y <= _EMPTY_THRESHOLD and _n_pages > 1:
                 _last_pg = max(pdf.pages.keys())
                 del pdf.pages[_last_pg]
                 pdf.page = _last_pg - 1
                 logger.info(f"Removed empty last page #{_last_pg}")
         except Exception as _ep:
-            logger.warning(f"Empty page removal error: {_ep}")
+            logger.warning(f"Empty page removal: {_ep}")
 
-        # Footer on all pages
+        # Footer on all pages (auto-break already disabled above)
         total_pages = len(pdf.pages)
+        now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         for pg in range(1, total_pages + 1):
             pdf.page = pg
-            pdf.set_y(pdf.h - 10)
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(170, 175, 195)
+            pdf.set_xy(10, pdf.h - 11)
             pdf.set_draw_color(200, 205, 220)
             pdf.set_line_width(0.3)
             pdf.line(10, pdf.h - 11, page_w - 10, pdf.h - 11)
-            now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+            pdf.set_xy(10, pdf.h - 9)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(160, 170, 190)
             pdf.cell(page_w - 40, 5, _sanitize(f"Genere par {data.company_name} - {now_str}"), align="L")
             pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
 
