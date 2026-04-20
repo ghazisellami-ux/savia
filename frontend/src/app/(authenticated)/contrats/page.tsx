@@ -4,7 +4,8 @@ import { SectionCard } from '@/components/ui/cards';
 import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
   X, ChevronDown, Package, Bell, RefreshCcw, CheckSquare, StickyNote,
-  Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Building2
+  Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Building2,
+  Eye, Download
 } from 'lucide-react';
 import { contrats, equipements, pieces as piecesApi } from '@/lib/api';
 
@@ -55,6 +56,8 @@ export default function ContratsPage() {
   const [stockPieces, setStockPieces] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedContrat, setSelectedContrat] = useState<Contrat | null>(null);
+  const [isPdfGen, setIsPdfGen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
@@ -169,6 +172,61 @@ export default function ContratsPage() {
       <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
     </div>
   );
+
+  const handleContratPdf = async (c: Contrat) => {
+    setIsPdfGen(true);
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const cn    = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl    = localStorage.getItem('savia_logo') || '';
+      const fin   = new Date(c.date_fin);
+      const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
+      const statutLabel = daysLeft < 0 ? 'Expiré' : daysLeft <= 60 ? `Expire dans ${daysLeft}j` : c.statut;
+      const payload = {
+        title: `Contrat de Maintenance #${c.id}`,
+        subtitle: `${c.type_contrat} — ${c.client}`,
+        filename: `contrat_${c.id}_${c.client.replace(/\s+/g,'_')}`,
+        company_name: cn, company_logo: cl,
+        is_ai_report: false,
+        kpis: [
+          { label: 'Client',      val: c.client,                                    color: '#01B4BC' },
+          { label: 'Équipement',  val: c.equipement || 'N/A',                       color: '#5FA55A' },
+          { label: 'Type',        val: c.type_contrat,                              color: '#FA8925' },
+          { label: 'Montant/an',  val: (c.montant||0).toLocaleString('fr') + ' TND', color: '#5FA55A' },
+        ],
+        tables: [{
+          title: 'Détails du Contrat',
+          head: ['Champ', 'Valeur'],
+          rows: [
+            ['Référence',         `#${c.id}`],
+            ['Client',            c.client],
+            ['Équipement',        c.equipement || '—'],
+            ['Type de contrat',   c.type_contrat],
+            ['Date de début',     c.date_debut],
+            ['Date de fin',       c.date_fin],
+            ['SLA Temps réponse', c.sla_temps_reponse_h + 'h'],
+            ['Montant annuel',    (c.montant||0).toLocaleString('fr') + ' TND'],
+            ['Statut',            statutLabel],
+            ...(c.conditions ? [['Conditions', c.conditions.substring(0, 200)]] : []),
+            ...(c.notes      ? [['Notes',      c.notes.substring(0, 200)]]      : []),
+          ],
+        }],
+      };
+      const res = await fetch('/api/reports/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Erreur ' + res.status);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `contrat_${c.id}.pdf`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch(err: any) { alert('Erreur PDF: ' + err.message); }
+    finally { setIsPdfGen(false); }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -286,10 +344,103 @@ export default function ContratsPage() {
               {c.conditions && (
                 <p className="text-xs text-savia-text-muted mt-2 italic border-l-2 border-savia-border pl-2 line-clamp-2">{c.conditions}</p>
               )}
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 mt-3 pt-2 border-t border-savia-border/40">
+                <button
+                  onClick={() => setSelectedContrat(c)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/20 transition-all cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" /> Voir les détails
+                </button>
+                <button
+                  onClick={() => handleContratPdf(c)}
+                  disabled={isPdfGen}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" /> {isPdfGen ? 'Génération...' : 'Télécharger PDF'}
+                </button>
+              </div>
             </div>
           );
         })}
       </div>
+
+      {/* ============== DETAIL MODAL ============== */}
+      {selectedContrat && (() => {
+        const c = selectedContrat;
+        const fin = new Date(c.date_fin);
+        const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
+        const isExpired = daysLeft < 0;
+        const isExpiring = daysLeft >= 0 && daysLeft <= 60;
+        const statutLabel = isExpired ? 'Expiré' : isExpiring ? `Expire dans ${daysLeft}j` : c.statut;
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedContrat(null)}>
+            <div className="glass rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between p-5 border-b border-savia-border">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-savia-accent/10 flex items-center justify-center">
+                    <FileText className="w-5 h-5 text-savia-accent" />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-lg">Contrat #{c.id}</h2>
+                    <p className="text-xs text-savia-text-muted">{c.type_contrat}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleContratPdf(c)} disabled={isPdfGen}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                    <Download className="w-4 h-4" /> {isPdfGen ? 'Génération...' : 'Télécharger PDF'}
+                  </button>
+                  <button onClick={() => setSelectedContrat(null)} className="p-2 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-savia-text transition-all cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              {/* Content */}
+              <div className="p-5 space-y-5">
+                {/* Status badge */}
+                <div className="flex items-center gap-3">
+                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${isExpired ? 'bg-red-500/15 text-red-400' : isExpiring ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'}`}>{statutLabel}</span>
+                  {c.montant > 0 && <span className="text-savia-text-muted text-sm">{c.montant.toLocaleString('fr')} TND / an</span>}
+                </div>
+                {/* Grid info */}
+                <div className="grid grid-cols-2 gap-4">
+                  {[{icon: Building2, label: 'Client', val: c.client},
+                    {icon: Wrench, label: 'Équipement', val: c.equipement || '—'},
+                    {icon: Calendar, label: 'Date début', val: c.date_debut},
+                    {icon: Calendar, label: 'Date fin', val: c.date_fin},
+                    {icon: Clock, label: 'SLA Réponse', val: c.sla_temps_reponse_h + 'h'},
+                    {icon: DollarSign, label: 'Montant annuel', val: (c.montant||0).toLocaleString('fr') + ' TND'},
+                  ].map(({icon: Icon, label, val}) => (
+                    <div key={label} className="bg-savia-surface-hover/40 rounded-xl p-3 flex items-start gap-3">
+                      <Icon className="w-4 h-4 text-savia-accent mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs text-savia-text-muted font-semibold uppercase tracking-wider">{label}</p>
+                        <p className="text-sm font-semibold mt-0.5">{val}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Conditions */}
+                {c.conditions && (
+                  <div className="bg-savia-surface-hover/40 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><ShieldCheck className="w-3.5 h-3.5 text-savia-accent" /> Conditions contractuelles</p>
+                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap">{c.conditions}</p>
+                  </div>
+                )}
+                {/* Notes */}
+                {c.notes && (
+                  <div className="bg-savia-surface-hover/40 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><StickyNote className="w-3.5 h-3.5 text-savia-accent" /> Notes internes</p>
+                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap">{c.notes}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ===================== MODAL ===================== */}
       {showModal && (
