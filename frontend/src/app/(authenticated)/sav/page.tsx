@@ -298,40 +298,70 @@ export default function SavPage() {
   };
 
   // PDF Generation
-  const handleGeneratePdf = () => {
+  const handleGeneratePdf = async () => {
     setIsPdfGenerating(true);
-    const pdfFiltered = data.filter(i => {
-      const d = new Date(i.date);
-      return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const cn    = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl    = localStorage.getItem('savia_logo') || '';
 
-    const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
-    const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+      const pdfFiltered = data.filter(i => {
+        const d = new Date(i.date);
+        return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
+      }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    const w = window.open('', '_blank');
-    if (!w) { setIsPdfGenerating(false); return; }
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport SAV — ${pdfDateFrom} au ${pdfDateTo}</title>
-    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
-    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{background:#f0f9ff;border:1px solid #d1d5db;padding:8px;text-align:left;font-weight:bold}
-    td{border:1px solid #d1d5db;padding:6px 8px}.kpi{display:inline-block;background:#f8fafc;border:1px solid #d1d5db;border-radius:8px;padding:12px 24px;margin:8px;text-align:center}
-    .kpi .val{font-size:28px;font-weight:bold;color:#0f766e}.kpi .lab{font-size:11px;color:#666;margin-top:4px}
-    @media print{body{margin:20px}}</style></head><body>
-    <h1>Rapport SAV — Interventions</h1>
-    <p>Période : <strong>${pdfDateFrom}</strong> au <strong>${pdfDateTo}</strong></p>
-    <div style="margin:20px 0">
-      <div class="kpi"><div class="val">${pdfFiltered.length}</div><div class="lab">Interventions</div></div>
-      <div class="kpi"><div class="val">${cloturees}</div><div class="lab">Clôturées</div></div>
-      <div class="kpi"><div class="val">${pdfFiltered.length > 0 ? Math.round((cloturees/pdfFiltered.length)*100) : 0}%</div><div class="lab">Taux résolution</div></div>
-      <div class="kpi"><div class="val">${coutT.toLocaleString('fr')} TND</div><div class="lab">Coût total</div></div>
-    </div>
-    <table><thead><tr>${['Date','Machine','Client','Technicien','Type','Statut','Durée','Coût (TND)'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
-    <tbody>${pdfFiltered.map(i => `<tr><td>${i.date.substring(0,10)}</td><td>${i.machine}</td><td>${i.client||'-'}</td><td>${i.technicien}</td><td>${i.type}</td><td>${i.statut}</td><td>${i.duree}h</td><td>${(i.cout||i.coutPieces).toLocaleString('fr')}</td></tr>`).join('')}</tbody></table>
-    <p style="margin-top:24px;font-size:11px;color:#999">Généré par SAVIA — ${new Date().toLocaleString('fr-FR')}</p>
-    </body></html>`);
-    w.document.close();
-    setTimeout(() => { w.print(); setIsPdfGenerating(false); }, 500);
-  };
+      const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
+      const coutT     = pdfFiltered.reduce((acc, b) => acc + (b.cout || b.coutPieces || 0), 0);
+      const tauxRes   = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
 
+      const payload = {
+        title: 'Rapport SAV — Interventions',
+        subtitle: `Période : ${pdfDateFrom} au ${pdfDateTo}`,
+        filename: 'rapport_sav_interventions',
+        company_name: cn,
+        company_logo: cl,
+        is_ai_report: false,
+        kpis: [
+          { label: 'Interventions', val: String(pdfFiltered.length), color: '#01B4BC' },
+          { label: 'Clôturées',      val: String(cloturees),         color: '#5FA55A' },
+          { label: 'Taux résolution', val: tauxRes + '%',               color: '#FA8925' },
+          { label: 'Coût total (TND)', val: coutT.toLocaleString('fr'), color: '#5FA55A' },
+        ],
+        tables: [{
+          title: 'Détail des interventions',
+          head: ['Date', 'Machine', 'Client', 'Technicien', 'Type', 'Statut', 'Durée', 'Coût (TND)'],
+          rows: pdfFiltered.map(i => [
+            i.date.substring(0, 10),
+            i.machine || '-',
+            i.client  || '-',
+            i.technicien || '-',
+            i.type    || '-',
+            i.statut  || '-',
+            (i.duree  || 0) + 'h',
+            (i.cout   || i.coutPieces || 0).toLocaleString('fr'),
+          ]),
+        }],
+      };
+
+      const res = await fetch('/api/reports/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('Erreur ' + res.status);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = `rapport_sav_${pdfDateFrom}_${pdfDateTo}.pdf`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('Erreur PDF: ' + err.message);
+    } finally {
+      setIsPdfGenerating(false);
+    }
+  }
   // ---- AI PDF download (SAV analysis) ----
   const handleSavAiPdf = async () => {
     if (!aiResult) return;
