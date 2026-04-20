@@ -344,107 +344,226 @@ export default function SavPage() {
     ]);
 
     const w = window.open('', '_blank');
-    if (!w) { setIsPdfGenerating(false); alert("Popup bloqué — autorisez les popups pour ce site."); return; }
+    if (!w) {
+      setIsPdfGenerating(false);
+      alert('Popup bloqué — autorisez les popups pour ce site et réessayez.');
+      return;
+    }
 
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Génération PDF...</title>
-    <style>body{background:#0f172a;color:#e2e8f0;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .box{text-align:center;padding:40px;background:#1e293b;border-radius:16px;border:1px solid #334155}
-    .spin{display:inline-block;width:40px;height:40px;border:4px solid #334155;border-top:4px solid #0d9488;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:20px}
-    @keyframes spin{to{transform:rotate(360deg)}}</style>
-    </head><body>
-    <div class="box"><div class="spin"></div><p>Génération du PDF en cours...</p></div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"><\/script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"><\/script>
-    <script>
-      const companyName = ${JSON.stringify(_companyName)};
-      const companyLogo = ${JSON.stringify(_companyLogo)};
-      const rows = ${JSON.stringify(rows)};
-      const dateFrom = ${JSON.stringify(pdfDateFrom)};
-      const dateTo = ${JSON.stringify(pdfDateTo)};
-      const stats = { total: ${pdfFiltered.length}, cloturees: ${cloturees}, taux: ${tauxRes}, cout: ${JSON.stringify(coutT.toLocaleString('fr'))} };
+    const escapedCompanyName = _companyName.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+    const escapedCompanyLogo = _companyLogo.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
 
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          try {
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-            const pageW = doc.internal.pageSize.getWidth();
-            let y = 12;
+    w.document.write(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="utf-8"><title>PDF en cours...</title>
+<style>
+  body{background:#0f172a;color:#e2e8f0;font-family:Arial,sans-serif;
+       display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:16px}
+  .box{text-align:center;padding:40px 60px;background:#1e293b;border-radius:16px;border:1px solid #334155}
+  .spin{display:inline-block;width:44px;height:44px;border:4px solid #334155;
+        border-top:4px solid #0d9488;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:16px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  p{margin:4px 0;color:#94a3b8;font-size:14px}
+  .err{color:#f87171;font-size:13px;margin-top:8px}
+</style>
+</head><body>
+<div class="box">
+  <div class="spin"></div>
+  <p>Génération du PDF...</p>
+  <p id="status" style="font-size:12px;color:#64748b">Chargement des ressources...</p>
+  <div id="err" class="err"></div>
+</div>
+<script src="/jspdf.umd.min.js"><\/script>
+<script src="/jspdf.plugin.autotable.min.js"><\/script>
+<script>
+const COMPANY_NAME = \`${escapedCompanyName}\`;
+const COMPANY_LOGO = \`${escapedCompanyLogo}\`;
+const ROWS = ${JSON.stringify(rows)};
+const DATE_FROM = ${JSON.stringify(pdfDateFrom)};
+const DATE_TO = ${JSON.stringify(pdfDateTo)};
+const STATS = {
+  total: ${pdfFiltered.length},
+  cloturees: ${cloturees},
+  taux: ${tauxRes},
+  cout: \`${coutT.toLocaleString('fr')} TND\`
+};
 
-            // Logo + Company
-            let logoW = 0;
-            if (companyLogo) {
-              try {
-                const ext = companyLogo.includes('image/png') ? 'PNG' : 'JPEG';
-                doc.addImage(companyLogo, ext, 10, y, 30, 14);
-                logoW = 34;
-              } catch(e) {}
-            }
-            doc.setFontSize(20);
-            doc.setTextColor(15, 118, 110);
-            doc.text(companyName, 10 + logoW, y + 9);
-            y += 20;
+function setStatus(msg) {
+  const el = document.getElementById('status');
+  if (el) el.textContent = msg;
+}
+function showErr(msg) {
+  const el = document.getElementById('err');
+  if (el) el.textContent = msg;
+}
 
-            // Separator
-            doc.setDrawColor(15, 118, 110);
-            doc.setLineWidth(0.8);
-            doc.line(10, y, pageW - 10, y);
-            y += 8;
+async function toBase64(url) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch(e) { return null; }
+}
 
-            // Title
-            doc.setFontSize(13);
-            doc.setTextColor(30, 30, 50);
-            doc.text('Rapport SAV \u2014 Interventions', 10, y);
-            y += 6;
-            doc.setFontSize(9); doc.setTextColor(120, 120, 140);
-            doc.text('P\u00e9riode : ' + dateFrom + ' au ' + dateTo, 10, y);
-            y += 10;
+async function generatePDF() {
+  try {
+    // Wait for jsPDF to load
+    let attempts = 0;
+    while (!window.jspdf && attempts < 30) {
+      await new Promise(r => setTimeout(r, 200));
+      attempts++;
+    }
+    if (!window.jspdf) throw new Error('jsPDF non disponible (vérifiez connexion)');
 
-            // KPIs
-            const kpis = [['Total', stats.total], ['Cl\u00f4tur\u00e9es', stats.cloturees], ['Taux r\u00e9sol.', stats.taux + '%'], ['Co\u00fbt total', stats.cout + ' TND']];
-            kpis.forEach((k, i) => {
-              const kx = 10 + i * 70;
-              doc.setFillColor(240, 252, 250);
-              doc.roundedRect(kx, y, 64, 14, 2, 2, 'F');
-              doc.setFontSize(13); doc.setTextColor(15, 118, 110);
-              doc.text(String(k[1]), kx + 32, y + 8, { align: 'center' });
-              doc.setFontSize(7); doc.setTextColor(100, 120, 120);
-              doc.text(k[0], kx + 32, y + 12, { align: 'center' });
-            });
-            y += 20;
+    setStatus('Chargement du logo SAVIA...');
+    const saviaLogoB64 = await toBase64('/logo-savia.png');
 
-            // Table
-            doc.autoTable({
-              startY: y,
-              head: [['Date', 'Machine', 'Client', 'Technicien(s)', 'Type', 'Statut', 'Dur\u00e9e', 'Co\u00fbt (TND)']],
-              body: rows,
-              headStyles: { fillColor: [15, 118, 110], textColor: 255, fontSize: 8, fontStyle: 'bold' },
-              bodyStyles: { fontSize: 7.5 },
-              alternateRowStyles: { fillColor: [245, 252, 252] },
-              columnStyles: { 0:{cellWidth:22}, 1:{cellWidth:38}, 2:{cellWidth:32}, 3:{cellWidth:42}, 4:{cellWidth:25}, 5:{cellWidth:22}, 6:{cellWidth:14}, 7:{cellWidth:28} },
-              margin: { left: 10, right: 10 },
-            });
+    setStatus('Création du document PDF...');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+    let y = 12;
 
-            // Footer
-            const pageCount = doc.internal.getNumberOfPages();
-            for (let p = 1; p <= pageCount; p++) {
-              doc.setPage(p);
-              doc.setFontSize(7); doc.setTextColor(160, 160, 180);
-              doc.text('G\u00e9n\u00e9r\u00e9 par ' + companyName + ' \u2014 ' + new Date().toLocaleString('fr-FR') + '   |   Page ' + p + '/' + pageCount, 10, doc.internal.pageSize.getHeight() - 5);
-            }
+    // ── HEADER ──────────────────────────────────────────────
+    // SAVIA logo (left)
+    let xAfterSavia = 10;
+    if (saviaLogoB64) {
+      try {
+        doc.addImage(saviaLogoB64, 'PNG', 10, y, 32, 16);
+        xAfterSavia = 46;
+      } catch(e) {}
+    }
 
-            doc.save('rapport_sav_' + dateFrom + '_' + dateTo + '.pdf');
-          } catch(e) {
-            document.body.innerHTML = '<div style="padding:40px;color:red">Erreur: ' + e.message + '</div>';
-          } finally {
-            setTimeout(() => window.close(), 1000);
-          }
-        }, 800);
-      });
-    <\/script>
-    </body></html>`);
+    // Vertical separator
+    if (COMPANY_LOGO && saviaLogoB64) {
+      doc.setDrawColor(200, 200, 200);
+      doc.setLineWidth(0.3);
+      doc.line(xAfterSavia, y, xAfterSavia, y + 18);
+      xAfterSavia += 6;
+    }
+
+    // Company logo + name (right of SAVIA logo)
+    if (COMPANY_LOGO) {
+      try {
+        const ext = COMPANY_LOGO.includes('image/png') ? 'PNG' : 'JPEG';
+        doc.addImage(COMPANY_LOGO, ext, xAfterSavia, y, 28, 14);
+        xAfterSavia += 32;
+      } catch(e) {}
+    }
+
+    // Company name
+    doc.setFontSize(15);
+    doc.setTextColor(15, 118, 110);
+    doc.setFont(undefined, 'bold');
+    doc.text(COMPANY_NAME, xAfterSavia, y + 9);
+    doc.setFont(undefined, 'normal');
+
+    y += 22;
+
+    // Separator line
+    doc.setDrawColor(15, 118, 110);
+    doc.setLineWidth(0.8);
+    doc.line(10, y, pageW - 10, y);
+    y += 8;
+
+    // Document title
+    doc.setFontSize(14);
+    doc.setTextColor(20, 20, 40);
+    doc.setFont(undefined, 'bold');
+    doc.text('Rapport SAV \u2014 Interventions', 10, y);
+    doc.setFont(undefined, 'normal');
+    y += 7;
+
+    doc.setFontSize(9);
+    doc.setTextColor(100, 120, 140);
+    doc.text('P\u00e9riode : ' + DATE_FROM + ' au ' + DATE_TO, 10, y);
+    y += 12;
+
+    // ── KPIs ────────────────────────────────────────────────
+    const kpiData = [
+      { label: 'Interventions', val: String(STATS.total), color: [15, 118, 110] },
+      { label: 'Cl\u00f4tur\u00e9es', val: String(STATS.cloturees), color: [22, 163, 74] },
+      { label: 'Taux r\u00e9solution', val: STATS.taux + '%', color: [234, 179, 8] },
+      { label: 'Co\u00fbt total', val: STATS.cout, color: [239, 68, 68] },
+    ];
+    kpiData.forEach((k, i) => {
+      const kx = 10 + i * 70;
+      doc.setFillColor(245, 252, 252);
+      doc.roundedRect(kx, y, 64, 16, 3, 3, 'F');
+      doc.setDrawColor(200, 230, 225);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(kx, y, 64, 16, 3, 3, 'S');
+      doc.setFontSize(14);
+      doc.setTextColor(...k.color);
+      doc.setFont(undefined, 'bold');
+      doc.text(k.val, kx + 32, y + 9, { align: 'center' });
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(100, 120, 130);
+      doc.text(k.label, kx + 32, y + 13.5, { align: 'center' });
+    });
+    y += 22;
+
+    // ── TABLE ────────────────────────────────────────────────
+    setStatus('Construction du tableau...');
+    doc.autoTable({
+      startY: y,
+      head: [['Date', 'Machine', 'Client', 'Technicien(s)', 'Type', 'Statut', 'Dur\u00e9e', 'Co\u00fbt (TND)']],
+      body: ROWS,
+      headStyles: {
+        fillColor: [15, 118, 110],
+        textColor: [255, 255, 255],
+        fontSize: 8,
+        fontStyle: 'bold',
+        cellPadding: 3,
+      },
+      bodyStyles: { fontSize: 7.5, textColor: [30, 30, 50], cellPadding: 2.5 },
+      alternateRowStyles: { fillColor: [245, 252, 252] },
+      columnStyles: {
+        0: { cellWidth: 22 },
+        1: { cellWidth: 38 },
+        2: { cellWidth: 30 },
+        3: { cellWidth: 44 },
+        4: { cellWidth: 25 },
+        5: { cellWidth: 22 },
+        6: { cellWidth: 14 },
+        7: { cellWidth: 30 },
+      },
+      margin: { left: 10, right: 10 },
+      didDrawPage: (data) => {
+        // Footer on each page
+        const pageH = doc.internal.pageSize.getHeight();
+        doc.setFontSize(7);
+        doc.setTextColor(170, 170, 190);
+        const pageNum = doc.internal.getNumberOfPages();
+        doc.text(
+          'G\u00e9n\u00e9r\u00e9 par ' + COMPANY_NAME + ' \u2014 ' + new Date().toLocaleString('fr-FR'),
+          10, pageH - 6
+        );
+        doc.text('Page ' + data.pageNumber, pageW - 20, pageH - 6);
+      },
+    });
+
+    setStatus('T\u00e9l\u00e9chargement...');
+    doc.save('rapport_sav_' + DATE_FROM + '_' + DATE_TO + '.pdf');
+
+    setStatus('PDF t\u00e9l\u00e9charg\u00e9 !');
+    setTimeout(() => window.close(), 1500);
+  } catch(e) {
+    showErr('Erreur: ' + e.message);
+    console.error(e);
+  }
+}
+
+generatePDF();
+<\/script>
+</body></html>`);
     w.document.close();
-    setTimeout(() => setIsPdfGenerating(false), 3000);
+    setTimeout(() => setIsPdfGenerating(false), 4000);
   };
 
 
