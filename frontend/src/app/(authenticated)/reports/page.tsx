@@ -73,29 +73,18 @@ export default function ReportsPage() {
     return d.filter((i: any) => machines.includes(i.machine));
   };
 
-  // --- PDF generation (browser print) ---
-  const generatePdf = (title: string, htmlContent: string) => {
+  // --- PDF generation with jsPDF ---
+  const generatePdf = (docTitle: string, pdfData: Record<string, any>) => {
     setIsPdfGenerating(true);
-    const win = window.open('', '_blank');
-    if (!win) { setIsPdfGenerating(false); return; }
-    win.document.write(`<!DOCTYPE html><html><head>
-      <meta charset="utf-8"><title>${title}</title>
-      <style>
-        body{font-family:Arial,sans-serif;padding:32px;color:#1e293b;background:#fff}
-        h1{color:#0891b2;font-size:24px;border-bottom:2px solid #0891b2;padding-bottom:8px}
-        h2{color:#334155;font-size:16px;margin-top:20px}
-        table{width:100%;border-collapse:collapse;margin-top:12px}
-        th{background:#f1f5f9;padding:8px;text-align:left;font-size:12px;border-bottom:2px solid #e2e8f0}
-        td{padding:7px 8px;font-size:12px;border-bottom:1px solid #f1f5f9}
-        .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}
-        .kpi{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center}
-        .kpi-val{font-size:28px;font-weight:900;color:#0891b2}
-        .kpi-label{font-size:11px;color:#64748b;margin-top:4px}
-        .footer{margin-top:40px;border-top:1px solid #e2e8f0;padding-top:12px;font-size:11px;color:#94a3b8}
-      </style>
-    </head><body>${htmlContent}<div class="footer">Généré par SAVIA — ${new Date().toLocaleString('fr-FR')} — SIC Radiologie</div></body></html>`);
-    win.document.close();
-    setTimeout(() => { win.print(); setIsPdfGenerating(false); setPdfSuccess('Rapport prêt à imprimer'); setTimeout(() => setPdfSuccess(''), 3000); }, 600);
+    const _cn = localStorage.getItem('savia_company') || 'SAVIA';
+    const _cl = localStorage.getItem('savia_logo') || '';
+    (window as any)._savia_pdf = { companyName: _cn, companyLogo: _cl, ...pdfData };
+    const w = window.open('', '_blank', 'width=480,height=260');
+    if (!w) { setIsPdfGenerating(false); alert('Popup bloqué — autorisez les popups'); return; }
+    const html = '<!DOCTYPE html><html lang=\\"fr\\"><head><meta charset=\\"utf-8\\"><title>PDF...</title><style>body{background:#0f172a;color:#e2e8f0;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}.card{text-align:center;padding:36px 56px;background:#1e293b;border-radius:14px;border:1px solid #334155;min-width:320px}.sp{width:44px;height:44px;border:4px solid #1e3a5f;border-top:4px solid #0d9488;border-radius:50%;animation:spin .9s linear infinite;margin:0 auto 18px}@keyframes spin{to{transform:rotate(360deg)}}#st{color:#64748b;font-size:13px;margin:6px 0 0}#er{color:#f87171;font-size:12px;margin-top:10px;display:none}</style></head><body><div class=\\"card\\"><div class=\\"sp\\"></div><p style=\\"font-size:15px;font-weight:600;margin:0\\">Génération PDF...</p><p id=\\"st\\">Chargement...</p><div id=\\"er\\"></div></div><script src=\\"/jspdf.umd.min.js\\"><\\/script><script src=\\"/jspdf.plugin.autotable.min.js\\"><\\/script><script src=\\"/savia-pdf.js\\"><\\/script><script>(async () => {const st = m => { const e=document.getElementById(\\"st\\"); if(e) e.textContent=m; };const er = m => { const e=document.getElementById(\\"er\\"); if(e){e.textContent=m;e.style.display=\\"block\\";} };try {st(\\"Chargement jsPDF...\\");await SAVIA_PDF.waitForJsPDF();const { jsPDF } = window.jspdf;const pd = (window.opener && window.opener._savia_pdf) ? window.opener._savia_pdf : {};const cN = pd.companyName || \\"SAVIA\\";const cL = pd.companyLogo || \\"\\";st(\\"Chargement logos...\\");const sL = await SAVIA_PDF.loadSaviaLogo();const isLand = !pd.isAiReport;const doc = new jsPDF({ orientation: isLand ? \\"landscape\\" : \\"portrait\\", unit: \\"mm\\", format: \\"a4\\" });const pageW = doc.internal.pageSize.getWidth();const pageH = doc.internal.pageSize.getHeight();let y = await SAVIA_PDF.drawHeader(doc, pageW, { companyName: cN, companyLogo: cL, saviaLogoB64: sL, title: pd.title || \\"Rapport\\", subtitle: pd.subtitle || \\"\\", });if (pd.kpis && pd.kpis.length) { y = SAVIA_PDF.drawKpis(doc, pd.kpis, y); }if (pd.typeData && pd.typeData.length) {doc.setFontSize(10); doc.setTextColor(50,70,90); doc.setFont(undefined,\\"bold\\");doc.text(\\"Répartition par type\\", 10, y); doc.setFont(undefined,\\"normal\\"); y += 4;doc.autoTable({ startY: y, head: [[\\"Type\\",\\"Nombre\\"]], body: pd.typeData,headStyles:{fillColor:[15,118,110],textColor:255,fontSize:8,fontStyle:\\"bold\\"},bodyStyles:{fontSize:8}, alternateRowStyles:{fillColor:[244,252,251]},tableWidth:110, margin:{left:10} });y = doc.lastAutoTable.finalY + 8; }if (pd.isAiReport) {const aiRaw = pd.aiContent || \\"{}\\";let ai; try { ai = JSON.parse(aiRaw); } catch(e) { ai = { summary: aiRaw }; }const MW = pageW - 20;const addS = (lbl, items, rgb) => {if (!items || !items.length) return;if (y > pageH-32) { doc.addPage(); y=18; }doc.setFontSize(9.5); doc.setTextColor(...rgb); doc.setFont(undefined,\\"bold\\");doc.text(lbl, 10, y); doc.setFont(undefined,\\"normal\\"); y+=5;items.forEach(itm => {const txt = typeof itm===\\"string\\" ? itm : (itm.action||itm.machine||JSON.stringify(itm));const lines = doc.splitTextToSize(\\"• \\"+txt, MW-10);doc.setFontSize(8.5); doc.setTextColor(35,45,65); doc.text(lines,14,y); y+=lines.length*4.2+1;if(y>pageH-18){doc.addPage();y=18;}}); y+=4; };if(ai.score_global!==undefined){const sc=Number(ai.score_global);const col=sc>=70?[22,163,74]:sc>=40?[234,179,8]:[220,50,50];doc.setFontSize(13);doc.setFont(undefined,\\"bold\\");doc.setTextColor(...col);doc.text(\\"Score global : \\"+sc+\\"/100\\",10,y);doc.setFont(undefined,\\"normal\\");y+=9;}if(ai.analyse||ai.summary){const txt=String(ai.analyse||ai.summary);doc.setFontSize(9);doc.setTextColor(30,40,60);const lns=doc.splitTextToSize(txt,MW);doc.text(lns,10,y);y+=lns.length*4.2+6;}addS(\\"Points Forts\\",ai.points_forts,[22,163,74]);addS(\\"Points Faibles\\",ai.points_faibles,[220,50,50]);const recs=(ai.recommandations||[]).map(r=>typeof r===\\"string\\"?r:(r.action||JSON.stringify(r)));addS(\\"Recommandations\\",recs,[15,118,110]);addS(\\"Alertes Critiques\\",ai.alertes_critiques,[234,88,12]);addS(\\"Tendances\\",ai.tendances,[99,102,241]);if(ai.conclusion){if(y>pageH-30){doc.addPage();y=18;}doc.setFontSize(9.5);doc.setFont(undefined,\\"bold\\");doc.setTextColor(30,40,60);doc.text(\\"Conclusion\\",10,y);doc.setFont(undefined,\\"normal\\");y+=5;const cls=doc.splitTextToSize(ai.conclusion,MW);doc.setFontSize(9);doc.text(cls,10,y);}} else {if (pd.head && pd.rows) {if(y>pageH-40){doc.addPage();y=18;}doc.setFontSize(10);doc.setTextColor(50,70,90);doc.setFont(undefined,\\"bold\\");doc.text(pd.tableTitle||\\"Détail\\",10,y);doc.setFont(undefined,\\"normal\\");y+=4;doc.autoTable({startY:y, head:[pd.head],body:pd.rows.map(r=>r.map((v,i)=>i>=pd.head.length-1?SAVIA_PDF.fmt(v):(v||\\"-\\"))),headStyles:{fillColor:[15,118,110],textColor:255,fontSize:8,fontStyle:\\"bold\\",cellPadding:3},bodyStyles:{fontSize:7.5,cellPadding:2.5},alternateRowStyles:{fillColor:[244,252,251]},margin:{left:10,right:10} }); } }SAVIA_PDF.addFooters(doc, cN);st(\\"Téléchargement...\\");doc.save((pd.filename||\\"rapport\\")+\\".pdf\\");setTimeout(()=>window.close(),1500);} catch(e) { er(\\"Erreur: \\"+e.message); console.error(e); }})();<\\/script></body></html>';
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { setIsPdfGenerating(false); setPdfSuccess('PDF téléchargé !'); setTimeout(() => setPdfSuccess(''), 3000); }, 4500);
   };
 
   const handlePdfMensuel = () => {
@@ -108,20 +97,25 @@ export default function ReportsPage() {
     const rows = monthData.slice(0, 30).map((i: any) =>
       `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
     ).join('');
-    generatePdf(`Rapport Mensuel ${MOIS_LABELS[selMois-1]} ${selAnnee}`, `
-      <h1>Rapport Mensuel — ${MOIS_LABELS[selMois-1]} ${selAnnee}</h1>
-      <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-val">${nbIntv}</div><div class="kpi-label">Interventions</div></div>
-        <div class="kpi"><div class="kpi-val">${nbClot}</div><div class="kpi-label">Clôturées</div></div>
-        <div class="kpi"><div class="kpi-val">${cout.toLocaleString('fr')}</div><div class="kpi-label">Coût total (TND)</div></div>
-      </div>
-      <h2>Répartition par type</h2>
-      <table><thead><tr><th>Type</th><th>Nombre</th></tr></thead><tbody>
-      ${Object.entries(types).map(([t,n]) => `<tr><td>${t}</td><td>${n}</td></tr>`).join('')}
-      </tbody></table>
-      <h2>Détail des interventions (30 premières)</h2>
-      <table><thead><tr><th>Date</th><th>Machine</th><th>Type</th><th>Technicien</th><th>Statut</th><th>Coût</th></tr></thead><tbody>${rows}</tbody></table>
-    `);
+    const label = `${MOIS_LABELS[selMois-1]} ${selAnnee}`;
+    generatePdf(`Rapport Mensuel ${label}`, {
+      title: `Rapport Mensuel — ${label}`,
+      subtitle: `Période : ${label}`,
+      filename: `rapport_mensuel_${selAnnee}_${String(selMois).padStart(2,'0')}`,
+      kpis: [
+        { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
+        { label: 'Clôturées',     val: String(nbClot), color: [22,163,74] },
+        { label: 'Taux rés.',     val: nbIntv>0?Math.round(nbClot/nbIntv*100)+'%':'0%', color:[234,179,8] },
+        { label: 'Coût (TND)',    val: Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f'), color:[239,68,68] },
+      ],
+      typeData: Object.entries(types).map(([t,n]) => [t, String(n)]),
+      head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
+      tableTitle: `Détail — ${label}`,
+      rows: monthData.map((i: any) => [
+        (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
+        i.technicien||'', i.statut||'', Math.round(i.cout||0),
+      ]),
+    });
   };
 
   const handlePdfClient = () => {
@@ -136,17 +130,40 @@ export default function ReportsPage() {
     const rows = clientData.map((i: any) =>
       `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
     ).join('');
-    generatePdf(`Rapport Client ${selClient} — ${MOIS_LABELS[selClientMois-1]} ${selClientAnnee}`, `
-      <h1>Rapport Client — ${selClient}</h1>
-      <p>Période : ${MOIS_LABELS[selClientMois-1]} ${selClientAnnee}</p>
-      <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-val">${nbIntv}</div><div class="kpi-label">Interventions</div></div>
-        <div class="kpi"><div class="kpi-val">${cout.toLocaleString('fr')}</div><div class="kpi-label">Coût main d'œuvre (TND)</div></div>
-        <div class="kpi"><div class="kpi-val">${coutPieces.toLocaleString('fr')}</div><div class="kpi-label">Coût pièces (TND)</div></div>
-      </div>
-      <h2>Détail des interventions</h2>
-      <table><thead><tr><th>Date</th><th>Machine</th><th>Type</th><th>Technicien</th><th>Statut</th><th>Coût</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Aucune intervention</td></tr>'}</tbody></table>
-    `);
+    const lbl2 = `${MOIS_LABELS[selClientMois-1]} ${selClientAnnee}`;
+    generatePdf(`Rapport Client ${selClient} — ${lbl2}`, {
+      title: `Rapport Client — ${selClient}`,
+      subtitle: `Période : ${lbl2}`,
+      filename: `rapport_client_${selClient.replace(/\s+/g,'_')}_${selClientAnnee}_${String(selClientMois).padStart(2,'0')}`,
+      kpis: [
+        { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
+        { label: 'Coût M.O.',     val: Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f')+' TND', color:[22,163,74] },
+        { label: 'Coût Pièces',   val: Math.round(coutPieces).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f')+' TND', color:[234,179,8] },
+      ],
+      head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
+      tableTitle: `Interventions — ${selClient} — ${lbl2}`,
+      rows: clientData.map((i: any) => [
+        (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
+        i.technicien||'', i.statut||'', Math.round(i.cout||0),
+      ]),
+    });
+  };
+
+  // --- AI PDF download ---
+  const handleAiPdf = () => {
+    if (!aiReport) return;
+    const _cn = localStorage.getItem('savia_company') || 'SAVIA';
+    const _cl = localStorage.getItem('savia_logo') || '';
+    const periodeLabel = iaPeriode === 'Mensuel'
+      ? `${MOIS_LABELS[iaMois - 1]} ${iaAnnee}`
+      : `Année ${iaAnnee}`;
+    generatePdf(`Rapport IA — ${periodeLabel}`, {
+      title: 'Rapport IA — Analyse Intelligente',
+      subtitle: `Période : ${periodeLabel}  |  Client : ${iaClient}`,
+      filename: `rapport_ia_${iaAnnee}`,
+      isAiReport: true,
+      aiContent: JSON.stringify(aiReport),
+    });
   };
 
   // --- AI Report using dedicated endpoint ---
@@ -396,6 +413,16 @@ export default function ReportsPage() {
                   {clients.map(c => <option key={c} value={c}>{c}</option>)}
                 </select></div>
             </div>
+            {aiReport && (
+              <div className="flex justify-end mt-3 mb-2">
+                <button
+                  onClick={handleAiPdf}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 font-semibold text-sm transition-all cursor-pointer border border-purple-600/30"
+                >
+                  <Download className="w-4 h-4" /> Télécharger PDF
+                </button>
+              </div>
+            )}
             <button onClick={handleAiReport} disabled={isGenerating} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 w-full mt-4 disabled:opacity-50">
               {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
               {isGenerating ? 'Gemini analyse vos données...' : 'Générer le Rapport IA'}
