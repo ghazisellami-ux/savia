@@ -2476,6 +2476,7 @@ class PdfRequest(BaseModel):
     kpis: list = []
     head: list = []
     rows: list = []
+    tables: list = []  # List of {title, head, rows} dicts
     type_data: list = []
     table_title: str = ""
     is_ai_report: bool = False
@@ -2787,7 +2788,55 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.set_x(13)
                 pdf.multi_cell(W - 3, 5, _sanitize(str(conclusion)[:2500]))
 
-        # Standard table
+        # ── Multi-table support (tables: [{title, head, rows}]) ──────
+        if data.tables:
+            def _render_table(tbl_head, tbl_rows, tbl_title=""):
+                if not tbl_head: return
+                if pdf.get_y() > pdf.h - 45: pdf.add_page()
+                if tbl_title:
+                    pdf.ln(3)
+                    pdf.set_font("Helvetica", "B", 10)
+                    pdf.set_text_color(1, 180, 188)
+                    pdf.cell(0, 7, _sanitize(str(tbl_title)), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                n_cols = len(tbl_head)
+                total_w = page_w - 20
+                last_w = 28
+                def_w = (total_w - last_w) / max(n_cols - 1, 1)
+                col_w = [def_w] * (n_cols - 1) + [last_w]
+                # Header row
+                pdf.set_font("Helvetica", "B", 7.5)
+                pdf.set_fill_color(1, 180, 188)
+                pdf.set_text_color(255, 255, 255)
+                for i, h in enumerate(tbl_head):
+                    pdf.cell(col_w[i], 8, _sanitize(str(h)[:20]), border=1, fill=True, align="C")
+                pdf.ln()
+                # Data rows
+                pdf.set_font("Helvetica", "", 7.5)
+                for row_idx, row in enumerate(tbl_rows):
+                    if pdf.get_y() > pdf.h - 15:
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 7.5)
+                        pdf.set_fill_color(1, 180, 188)
+                        pdf.set_text_color(255, 255, 255)
+                        for i, h in enumerate(tbl_head):
+                            pdf.cell(col_w[i], 8, _sanitize(str(h)[:20]), border=1, fill=True, align="C")
+                        pdf.ln()
+                        pdf.set_font("Helvetica", "", 7.5)
+                    fill = row_idx % 2 == 0
+                    pdf.set_fill_color(244, 252, 251) if fill else pdf.set_fill_color(255, 255, 255)
+                    pdf.set_text_color(25, 35, 55)
+                    for i, cell in enumerate(row[:n_cols]):
+                        val_s = _sanitize(str(cell)[:30]) if cell is not None else "-"
+                        align = "R" if i == n_cols - 1 else "L"
+                        pdf.cell(col_w[i], 6.5, val_s, border=1, fill=fill, align=align)
+                    pdf.ln()
+                pdf.ln(4)
+
+            for tbl in data.tables:
+                if isinstance(tbl, dict):
+                    _render_table(tbl.get("head",[]), tbl.get("rows",[]), tbl.get("title",""))
+
+        # Standard table (legacy: head + rows directly on request)
         elif data.head and data.rows:
             if pdf.get_y() > pdf.h - 45: pdf.add_page()
             if data.table_title:
