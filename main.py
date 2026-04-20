@@ -2405,7 +2405,7 @@ class SaviaPDF(FPDF):
             self.set_font('Helvetica', 'B', 9)
             self.set_text_color(1, 180, 188)
             self.cell(cw, 6, _sanitize(self._company_name[:55]), align='C')
-            if self._company_sub and not self._company_sub.lower().startswith("gen"):
+            if self._company_sub:
                 self.set_xy(cx, y_cn + 6)
                 self.set_font('Helvetica', '', 7)
                 self.set_text_color(130, 145, 160)
@@ -2477,7 +2477,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         pdf.set_header_data(
             SAVIA_LOGO, _client_logo_io,
             data.company_name if data.company_name != "SAVIA" else "",
-            (data.subtitle if (data.subtitle and not data.subtitle.lower().startswith("gen")) else "Systeme Intelligent de Gestion - SAVIA"),
+            "Systeme Intelligent de Controle et de Gestion",  # Always fixed - footer has date/name
             report_title=data.title if data.title and data.title != "Rapport SAVIA" else ""
         )
         pdf.set_auto_page_break(auto=True, margin=15)
@@ -2723,15 +2723,20 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.cell(col_w[i], 6.5, val, border=1, fill=fill, align=align)
                 pdf.ln()
 
-        # Remove last page if it only contains the header (empty)
+        # Remove last page if only header was drawn (auto-page-break with no content)
+        # HEADER_H=26, header sets y=34, so pages with y<=46 are empty
         try:
-            threshold = (pdf.t_margin if pdf.t_margin else 34) + 8
-            if pdf.get_y() <= threshold and len(pdf.pages) > 1:
-                last_pg_num = max(pdf.pages.keys())
-                del pdf.pages[last_pg_num]
-                pdf.page = last_pg_num - 1
-        except Exception:
-            pass
+            _EMPTY_THRESHOLD = 46  # mm: header height(26) + 20 slack
+            _last_y = pdf.get_y()
+            _n_pages = len(pdf.pages)
+            logger.info(f"PDF: {_n_pages} pages, last_y={_last_y:.1f}mm, threshold={_EMPTY_THRESHOLD}mm")
+            if _last_y <= _EMPTY_THRESHOLD and _n_pages > 1:
+                _last_pg = max(pdf.pages.keys())
+                del pdf.pages[_last_pg]
+                pdf.page = _last_pg - 1
+                logger.info(f"Removed empty last page #{_last_pg}")
+        except Exception as _ep:
+            logger.warning(f"Empty page removal error: {_ep}")
 
         # Footer on all pages
         total_pages = len(pdf.pages)
