@@ -15,6 +15,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -2351,54 +2353,66 @@ def _fmt_number(n):
         return str(n)
 
 
-def _draw_pdf_header(pdf, title, subtitle, company_name, company_logo_b64, savia_logo_path, page_width):
-    from io import BytesIO
-    import base64
-    y_start = 10
-    pdf.set_y(y_start)
-    x_next = 10
-    if savia_logo_path and os.path.exists(savia_logo_path):
-        try:
-            pdf.image(savia_logo_path, x=x_next, y=y_start, w=52)
-            x_next = 66
-        except Exception:
-            x_next = 10
-    if company_logo_b64:
-        try:
-            if "," in company_logo_b64:
-                b64_data = company_logo_b64.split(",", 1)[1]
-            else:
-                b64_data = company_logo_b64
-            logo_bytes = base64.b64decode(b64_data)
-            logo_io = BytesIO(logo_bytes)
-            pdf.set_draw_color(180, 210, 205)
-            pdf.set_line_width(0.4)
-            pdf.line(x_next + 2, y_start + 2, x_next + 2, y_start + 22)
-            x_next += 6
-            pdf.image(logo_io, x=x_next, y=y_start + 4, h=16)
-            x_next += 38
-        except Exception:
-            pass
-    if company_name and company_name != "SAVIA":
-        pdf.set_xy(x_next, y_start + 9)
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(page_width - x_next - 10, 8, _sanitize(company_name[:60]), align="L")
-        pdf.set_text_color(0, 0, 0)
-    sep_y = y_start + 30
-    pdf.set_draw_color(15, 118, 110)
-    pdf.set_line_width(1.0)
-    pdf.line(10, sep_y, page_width - 10, sep_y)
-    pdf.set_xy(10, sep_y + 5)
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.set_text_color(15, 30, 50)
-    pdf.cell(page_width - 20, 8, _sanitize(title[:100]), align="L")
-    if subtitle:
-        pdf.set_xy(10, sep_y + 14)
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
-        pdf.cell(page_width - 20, 5, _sanitize(subtitle[:120]), align="L")
-    return sep_y + 24
+class SaviaPDF(FPDF):
+    """FPDF subclass with auto-repeated compact header on every page."""
+    _savia_logo  = None    # path
+    _client_logo = None    # BytesIO (seekable)
+    _company_name = ''
+    _company_sub  = ''
+    HEADER_H = 24          # header height mm
+
+    def header(self):
+        from io import BytesIO
+        H = self.HEADER_H
+        y0 = 5
+        W  = self.w - 16   # 8mm each side
+        
+        # ── SAVIA logo (left) ──────────────────────────────────────
+        savia_w = 0
+        if self._savia_logo and os.path.exists(self._savia_logo):
+            try:
+                self.image(self._savia_logo, x=8, y=y0, h=H - 2)
+                savia_w = 26
+            except Exception:
+                savia_w = 0
+
+        # ── Client logo (right) ───────────────────────────────────
+        client_w = 0
+        if self._client_logo:
+            try:
+                self._client_logo.seek(0)
+                self.image(self._client_logo, x=self.w - 8 - 28, y=y0, h=H - 2)
+                client_w = 30
+            except Exception:
+                client_w = 0
+
+        # ── Company name + subtitle (centered) ────────────────────
+        cx = 8 + savia_w + 2
+        cw = W - savia_w - client_w - 4
+        if self._company_name:
+            self.set_xy(cx, y0 + 4)
+            self.set_font('Helvetica', 'B', 12)
+            self.set_text_color(15, 118, 110)
+            self.cell(cw, 7, _sanitize(self._company_name[:55]), align='C')
+            if self._company_sub:
+                self.set_xy(cx, y0 + 11)
+                self.set_font('Helvetica', '', 7)
+                self.set_text_color(100, 120, 140)
+                self.cell(cw, 5, _sanitize(self._company_sub[:90]), align='C')
+
+        # ── Separator line ─────────────────────────────────────────
+        sep = y0 + H
+        self.set_fill_color(15, 118, 110)
+        self.rect(8, sep, self.w - 16, 0.8, style='F')
+        self.set_y(sep + 3)
+        self.set_text_color(40, 50, 65)
+
+    def set_header_data(self, savia_logo, client_logo_bytes, company_name, company_sub):
+        self._savia_logo  = savia_logo
+        self._client_logo = client_logo_bytes
+        self._company_name = company_name
+        self._company_sub  = company_sub
+
 
 
 class PdfRequest(BaseModel):
@@ -2426,18 +2440,46 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
 
     SAVIA_LOGO = "/app/logo-savia.png"
     try:
+        from io import BytesIO as _BytesIO
+        import base64 as _b64
+        import urllib.request as _ur
+
         orientation = "P" if data.is_ai_report else "L"
-        pdf = FPDF(orientation=orientation, unit="mm", format="A4")
+        pdf = SaviaPDF(orientation=orientation, unit="mm", format="A4")
+
+        # ── Resolve client logo (URL or base64) ──────────────
+        _client_logo_io = None
+        if data.company_logo:
+            try:
+                clogo = data.company_logo.strip()
+                if clogo.startswith("data:"):
+                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
+                    _client_logo_io = _BytesIO(_b64.b64decode(_b64_part))
+                elif clogo.startswith("http"):
+                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
+                    with _ur.urlopen(req_, timeout=6) as _r:
+                        _client_logo_io = _BytesIO(_r.read())
+            except Exception as _e:
+                logger.warning(f"Client logo error: {_e}")
+
+        pdf.set_header_data(
+            SAVIA_LOGO, _client_logo_io,
+            data.company_name if data.company_name != "SAVIA" else "",
+            data.subtitle if data.subtitle else "Systeme Intelligent de Gestion - SAVIA"
+        )
         pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_top_margin(pdf.HEADER_H + 10)  # content starts below header
         pdf.add_page()
         page_w = pdf.w
 
-        y_now = _draw_pdf_header(
-            pdf, data.title, data.subtitle,
-            data.company_name, data.company_logo,
-            SAVIA_LOGO, page_w
-        )
-        pdf.set_y(y_now)
+        # First-page title block (below header)
+        if data.title and data.title != "Rapport SAVIA":
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.set_text_color(15, 30, 50)
+            pdf.cell(page_w - 20, 9, _sanitize(data.title[:100]), align="L",
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.ln(3)
+
 
         # KPIs
         if data.kpis:
@@ -2489,128 +2531,138 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.cell(30, 6, str(row[1]) if len(row) > 1 else "", border=1, fill=fill, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.ln(4)
 
-        # AI Report mode - SOFT PASTEL LAYOUT
+        # AI Report mode - V0 SOLID STYLE
         if data.is_ai_report and data.ai_content:
             try: ai = json.loads(data.ai_content)
             except Exception: ai = {"summary": data.ai_content}
 
             W = page_w - 20
 
-            def sec_header(lbl, acc, bg, txc):
-                if pdf.get_y() > pdf.h - 35: pdf.add_page()
-                y_h = pdf.get_y()
+            def sec_hdr(lbl, bg, fg=[255,255,255]):
+                """Solid colored section header, v0 style (uppercase + white text)"""
+                if pdf.get_y() > pdf.h - 40: pdf.add_page()
+                yh = pdf.get_y()
                 pdf.set_fill_color(bg[0], bg[1], bg[2])
-                pdf.rect(10, y_h, W, 8, style="F")
-                pdf.set_fill_color(acc[0], acc[1], acc[2])
-                pdf.rect(10, y_h, 3.5, 8, style="F")
-                pdf.set_draw_color(acc[0], acc[1], acc[2])
-                pdf.set_line_width(0.2)
-                pdf.line(13.5, y_h + 8, 10 + W, y_h + 8)
-                pdf.set_xy(16, y_h + 1.5)
-                pdf.set_font("Helvetica", "B", 8.5)
-                pdf.set_text_color(txc[0], txc[1], txc[2])
-                pdf.cell(W - 6, 5.5, _sanitize(lbl))
-                pdf.set_y(y_h + 10)
+                pdf.rect(10, yh, W, 8, style="F")
+                pdf.set_xy(13, yh + 1.5)
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(fg[0], fg[1], fg[2])
+                pdf.cell(W - 3, 5.5, _sanitize(lbl.upper()))
+                pdf.set_y(yh + 10)
                 pdf.set_text_color(40, 50, 65)
 
-            def sec_item(txt, ac):
+            def body_item(txt, bullet_color=None):
                 if not txt: return
                 if pdf.get_y() > pdf.h - 20: pdf.add_page()
-                y_i = pdf.get_y()
-                pdf.set_fill_color(ac[0], ac[1], ac[2])
-                pdf.rect(15, y_i + 2.5, 2, 2, style="F")
-                pdf.set_xy(19, y_i)
-                pdf.set_font("Helvetica", "", 8.5)
-                pdf.set_text_color(50, 60, 75)
-                pdf.multi_cell(W - 10, 4.8, _sanitize(str(txt)[:300]))
+                yi = pdf.get_y()
+                if bullet_color:
+                    pdf.set_fill_color(bullet_color[0], bullet_color[1], bullet_color[2])
+                    pdf.rect(13, yi + 3, 1.8, 1.8, style="F")
+                    pdf.set_xy(17, yi)
+                    pdf.multi_cell(W - 8, 4.8, _sanitize(str(txt)[:300]))
+                else:
+                    pdf.set_x(13)
+                    pdf.multi_cell(W - 3, 4.8, _sanitize(str(txt)[:300]))
                 pdf.ln(0.5)
 
-            def add_section(lbl, items, acc, bg, txc):
+            def add_sec(lbl, items, bg, fg=[255,255,255]):
                 if not items: return
-                sec_header(lbl, acc, bg, txc)
-                for item in items:
-                    txt = item if isinstance(item, str) else item.get("action", item.get("machine", str(item))) if isinstance(item, dict) else str(item)
-                    sec_item(txt, acc)
+                sec_hdr(lbl, bg, fg)
+                pdf.set_font("Helvetica", "", 8.5)
+                pdf.set_text_color(40, 50, 65)
+                for it in items:
+                    txt = it if isinstance(it, str) else it.get("action", it.get("machine", str(it))) if isinstance(it, dict) else str(it)
+                    body_item(txt, bg)
                 pdf.ln(3)
 
-            # Score global
+            # ── Score global ─────────────────────────────────────
             score = ai.get("score_global")
             if score is not None:
                 sc = int(score)
                 if sc >= 70:
-                    s_acc, s_bg, s_txc = [34,197,94], [240,253,244], [21,128,61]
+                    s_bg, s_txc = [22,163,74], [21,128,61]
                 elif sc >= 40:
-                    s_acc, s_bg, s_txc = [234,179,8], [255,251,235], [146,64,14]
+                    s_bg, s_txc = [234,179,8], [146,64,14]
                 else:
-                    s_acc, s_bg, s_txc = [239,68,68], [254,242,242], [185,28,28]
+                    s_bg, s_txc = [200,50,50], [140,20,20]
                 y_sc = pdf.get_y()
+                # Light pastel badge with colored border
+                s_pastel = [min(s_bg[0]+215,255), min(s_bg[1]+215,255), min(s_bg[2]+215,255)]
+                pdf.set_fill_color(*s_pastel)
+                pdf.set_draw_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.set_line_width(1)
+                pdf.rect(10, y_sc, W, 14, style="FD")
+                # Left accent bar
                 pdf.set_fill_color(s_bg[0], s_bg[1], s_bg[2])
-                pdf.set_draw_color(s_acc[0], s_acc[1], s_acc[2])
-                pdf.set_line_width(0.8)
-                pdf.rect(10, y_sc, 55, 22, style="FD")
-                pdf.set_xy(10, y_sc + 3)
-                pdf.set_font("Helvetica", "B", 18)
+                pdf.rect(10, y_sc, 4, 14, style="F")
+                pdf.set_xy(16, y_sc + 1.5)
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(40, 50, 65)
+                lbl_ = "Score : " + str(sc) + "/100"
+                pdf.cell(60, 5, lbl_)
+                pdf.set_xy(76, y_sc + 2)
+                slabel = "Excellent" if sc>=70 else "Satisfaisant" if sc>=40 else "A ameliorer"
+                pdf.set_font("Helvetica", "B", 8)
                 pdf.set_text_color(s_txc[0], s_txc[1], s_txc[2])
-                pdf.cell(55, 16, str(sc) + "/100", align="C")
-                label_ = "Excellent" if sc>=70 else "Satisfaisant" if sc>=40 else "A ameliorer"
-                pdf.set_xy(70, y_sc + 4)
-                pdf.set_font("Helvetica", "B", 10)
-                pdf.set_text_color(s_txc[0], s_txc[1], s_txc[2])
-                pdf.cell(W - 60, 7, label_)
-                pdf.set_xy(70, y_sc + 13)
-                pdf.set_font("Helvetica", "", 8)
-                pdf.set_text_color(100, 115, 130)
-                pdf.cell(W - 60, 5, "Score global de performance")
-                pdf.set_y(y_sc + 27)
+                pdf.cell(W - 70, 5, slabel)
+                pdf.set_xy(16, y_sc + 7)
+                pdf.set_font("Helvetica", "", 7.5)
+                pdf.set_text_color(80, 95, 110)
+                pdf.cell(W - 6, 5, "Score global de performance de la periode")
+                pdf.set_y(y_sc + 17)
 
+            # ── Résumé Exécutif ───────────────────────────────────
             analyse = ai.get("analyse") or ai.get("summary")
             if analyse:
-                sec_header("Resume Executif", [139,92,246], [245,243,255], [109,40,217])
+                sec_hdr("Resume Executif", [15,118,110])
                 pdf.set_font("Helvetica", "", 8.5)
-                pdf.set_text_color(60, 70, 90)
-                pdf.set_x(14)
-                pdf.multi_cell(W - 4, 5, _sanitize(str(analyse)[:2000]))
+                pdf.set_text_color(40, 50, 65)
+                pdf.set_x(13)
+                pdf.multi_cell(W - 3, 5, _sanitize(str(analyse)[:2500]))
                 pdf.ln(4)
 
-            add_section("Points Forts",   ai.get("points_forts",[]),  [34,197,94],[240,253,244],[21,128,61])
-            add_section("Points Faibles", ai.get("points_faibles",[]),[239,68,68],[254,242,242],[185,28,28])
+            add_sec("Points Forts",       ai.get("points_forts", []),     [22,163,74])
+            add_sec("Points Faibles",     ai.get("points_faibles", []),   [200,50,50])
 
             recs = ai.get("recommandations", [])
             recs_c = [r if isinstance(r, str) else r.get("action", str(r)) for r in recs]
-            add_section("Recommandations",[],          [20,184,166],[240,253,250],[17,94,89])
-            if recs_c: add_section("Recommandations", recs_c, [20,184,166],[240,253,250],[17,94,89])
-            add_section("Alertes Critiques",ai.get("alertes_critiques",[]),[249,115,22],[255,247,237],[154,52,18])
-            add_section("Tendances",        ai.get("tendances",[]),         [99,102,241],[238,242,255],[67,56,202])
+            add_sec("Recommandations",    recs_c,                         [15,118,110])
+            add_sec("Alertes Critiques",  ai.get("alertes_critiques", []),[210,90,10])
+            add_sec("Tendances",          ai.get("tendances", []),        [67,56,202])
 
             perf = ai.get("performance_equipe", [])
             if perf:
-                sec_header("Performance Equipe", [234,179,8],[255,251,235],[146,64,14])
+                sec_hdr("Performance Equipe", [155,110,5])
+                pdf.set_font("Helvetica", "", 8.5)
+                pdf.set_text_color(40, 50, 65)
                 for pe in perf:
                     if isinstance(pe, dict):
                         nm_ = pe.get("technicien", pe.get("nom", ""))
                         sc_ = pe.get("score", pe.get("note", ""))
                         dt_ = pe.get("detail", pe.get("commentaire", ""))
-                        txt = _sanitize(str(nm_))+" : "+str(sc_)+(" - "+str(dt_) if dt_ else "")
+                        txt = _sanitize(str(nm_))+" : "+str(sc_)+(" – "+str(dt_) if dt_ else "")
                     else: txt = str(pe)
-                    sec_item(txt, [234,179,8])
+                    body_item(txt, [155,110,5])
                 pdf.ln(3)
 
             couts = ai.get("analyse_couts")
             if couts and isinstance(couts, dict):
-                sec_header("Analyse des Couts", [20,184,166],[240,253,250],[17,94,89])
+                sec_hdr("Analyse Financiere", [210,90,10])
+                pdf.set_font("Helvetica", "", 8.5)
+                pdf.set_text_color(40, 50, 65)
                 for k_, v_ in couts.items():
-                    if v_: sec_item(str(k_)+" : "+str(v_), [20,184,166])
+                    if v_: body_item(str(k_)+" : "+str(v_), [210,90,10])
                 pdf.ln(3)
 
-            add_section("Priorites Immediates",ai.get("priorites_immediates",[]),[249,115,22],[255,247,237],[154,52,18])
+            add_sec("Priorites Immediates", ai.get("priorites_immediates",[]),[210,90,10])
 
             conclusion = ai.get("conclusion")
             if conclusion:
-                sec_header("Conclusion", [100,116,139],[248,250,252],[51,65,85])
+                sec_hdr("Conclusion", [70,85,100])
                 pdf.set_font("Helvetica", "", 9)
                 pdf.set_text_color(50, 62, 78)
-                pdf.set_x(14)
-                pdf.multi_cell(W - 4, 5, _sanitize(str(conclusion)[:2000]))
+                pdf.set_x(13)
+                pdf.multi_cell(W - 3, 5, _sanitize(str(conclusion)[:2500]))
         # Standard table
         elif data.head and data.rows:
             if pdf.get_y() > pdf.h - 45: pdf.add_page()
