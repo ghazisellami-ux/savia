@@ -64,6 +64,7 @@ export default function SavPage() {
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterEquip, setFilterEquip] = useState('Tous');
+  const [filterTech, setFilterTech] = useState('Tous');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -90,6 +91,7 @@ export default function SavPage() {
 
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
+  const dynamicTechs = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).values()].sort(), [data]);
   const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
   const availableYears = useMemo(() => {
     const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
@@ -349,10 +351,11 @@ export default function SavPage() {
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
       if (filterClient !== 'Tous' && i.client !== filterClient) return false;
       if (filterEquip !== 'Tous' && i.machine !== filterEquip) return false;
+      if (filterTech !== 'Tous' && (i.technicien || '').trim() !== filterTech.trim()) return false;
       if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
+  }, [search, filterStatut, filterType, filterClient, filterEquip, filterTech, periodMode, filterMonth, filterYear, data]);
 
   // Types hors maintenance (tracéabilité seule, exclus des KPIs)
   const TRACABILITE_TYPES = ['installation', 'formation'];
@@ -584,6 +587,9 @@ export default function SavPage() {
             </select>
             <select value={filterEquip} onChange={e => setFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicEquip.map(e => <option key={e} value={e}>{e === 'Tous' ? 'Tous les équipements' : e}</option>)}
+            </select>
+            <select value={filterTech} onChange={e => setFilterTech(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {dynamicTechs.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les techniciens' : t}</option>)}
             </select>
           </div>
 
