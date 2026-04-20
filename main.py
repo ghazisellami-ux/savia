@@ -2317,6 +2317,22 @@ def api_delete_machine_logs(machine_name: str, user=Depends(_verify_token)):
 # PDF REPORT GENERATION (server-side fpdf2)
 # ==========================================
 
+def _sanitize(text):
+    """Replace non-Latin-1 chars for fpdf2 standard fonts."""
+    if not text: return ""
+    text = str(text)
+    repl = {
+        "\u2014": " - ", "\u2013": " - ",
+        " ": " ",   "\u00a0": " ",
+        "\u2022": "-",   "\u2019": "'",
+        "\u2018": "'",  "\u201c": '"', "\u201d": '"',
+        "\u2026": "...", "\u20ac": "EUR",
+    }
+    for k, v in repl.items():
+        text = text.replace(k, v)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _fmt_number(n):
     try:
         val = int(round(float(n)))
@@ -2363,7 +2379,7 @@ def _draw_pdf_header(pdf, title, subtitle, company_name, company_logo_b64, savia
         pdf.set_xy(x_next, y_start + 9)
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(15, 118, 110)
-        pdf.cell(page_width - x_next - 10, 8, company_name[:60], align="L")
+        pdf.cell(page_width - x_next - 10, 8, _sanitize(company_name[:60]), align="L")
         pdf.set_text_color(0, 0, 0)
     sep_y = y_start + 30
     pdf.set_draw_color(15, 118, 110)
@@ -2372,12 +2388,12 @@ def _draw_pdf_header(pdf, title, subtitle, company_name, company_logo_b64, savia
     pdf.set_xy(10, sep_y + 5)
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_text_color(15, 30, 50)
-    pdf.cell(page_width - 20, 8, title[:100], align="L")
+    pdf.cell(page_width - 20, 8, _sanitize(title[:100]), align="L")
     if subtitle:
         pdf.set_xy(10, sep_y + 14)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(100, 120, 140)
-        pdf.cell(page_width - 20, 5, subtitle[:120], align="L")
+        pdf.cell(page_width - 20, 5, _sanitize(subtitle[:120]), align="L")
     return sep_y + 24
 
 
@@ -2429,10 +2445,10 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.set_fill_color(242, 252, 250)
                 pdf.set_draw_color(180, 220, 215)
                 pdf.set_line_width(0.3)
-                pdf.rounded_rect(kx, kpi_y, box_w, box_h, 3, "FD")
+                pdf.rect(kx, kpi_y, box_w, box_h, style="FD")
                 pdf.set_xy(kx, kpi_y + 2)
                 pdf.set_font("Helvetica", "B", 13)
-                pdf.set_text_color(*color)
+                r,g,b = int(color[0]),int(color[1]),int(color[2]); pdf.set_text_color(r,g,b)
                 pdf.cell(box_w, 8, str(kpi.get("val", "")), align="C")
                 pdf.set_xy(kx, kpi_y + 10)
                 pdf.set_font("Helvetica", "", 7)
@@ -2445,7 +2461,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         if data.type_data:
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(50, 70, 90)
-            pdf.cell(0, 6, "Répartition par type", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.cell(0, 6, "Repartition par type", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_font("Helvetica", "B", 8)
             pdf.set_fill_color(15, 118, 110)
             pdf.set_text_color(255, 255, 255)
@@ -2457,7 +2473,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 if fill: pdf.set_fill_color(244, 252, 251)
                 else: pdf.set_fill_color(255, 255, 255)
                 pdf.set_text_color(30, 40, 60)
-                pdf.cell(100, 6, str(row[0]) if row else "", border=1, fill=fill)
+                pdf.cell(100, 6, _sanitize(str(row[0])) if row else "", border=1, fill=fill)
                 pdf.cell(30, 6, str(row[1]) if len(row) > 1 else "", border=1, fill=fill, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.ln(4)
 
@@ -2470,14 +2486,14 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 if not items: return
                 if pdf.get_y() > pdf.h - 35: pdf.add_page()
                 pdf.set_font("Helvetica", "B", 10)
-                pdf.set_text_color(*rgb)
-                pdf.cell(0, 7, label, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                r,g,b = int(rgb[0]),int(rgb[1]),int(rgb[2]); pdf.set_text_color(r,g,b)
+                pdf.cell(0, 7, _sanitize(label), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 pdf.set_font("Helvetica", "", 8.5)
                 pdf.set_text_color(35, 45, 65)
                 for item in items:
                     txt = item if isinstance(item, str) else item.get("action", item.get("machine", str(item))) if isinstance(item, dict) else str(item)
                     pdf.set_x(14)
-                    pdf.multi_cell(pdf.w - 24, 5, "• " + txt[:300])
+                    pdf.multi_cell(pdf.w - 24, 5, _sanitize(str(txt)[:300]))
                     if pdf.get_y() > pdf.h - 25: pdf.add_page()
                 pdf.ln(2)
 
@@ -2486,14 +2502,14 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 sc = int(score)
                 col = [22,163,74] if sc>=70 else [234,179,8] if sc>=40 else [220,50,50]
                 pdf.set_font("Helvetica", "B", 13)
-                pdf.set_text_color(*col)
-                pdf.cell(0, 8, f"Score global : {sc}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                r,g,b = int(col[0]),int(col[1]),int(col[2]); pdf.set_text_color(r,g,b)
+                pdf.cell(0, 8, f"Score global : {sc}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)  # score is numeric, safe
                 pdf.set_text_color(0, 0, 0)
             analyse = ai.get("analyse") or ai.get("summary")
             if analyse:
                 pdf.set_font("Helvetica", "", 9)
                 pdf.set_text_color(30, 40, 60)
-                pdf.multi_cell(0, 5, str(analyse)[:2000])
+                pdf.multi_cell(0, 5, _sanitize(str(analyse)[:2000]))
                 pdf.ln(4)
             add_section("Points Forts", ai.get("points_forts", []), [22,163,74])
             add_section("Points Faibles", ai.get("points_faibles", []), [220,50,50])
@@ -2507,9 +2523,9 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 if pdf.get_y() > pdf.h - 35: pdf.add_page()
                 pdf.set_font("Helvetica", "B", 9.5)
                 pdf.set_text_color(30, 40, 60)
-                pdf.cell(0, 7, "Conclusion", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 7, "Conclusion", new_x=XPos.LMARGIN, new_y=YPos.NEXT)  # static safe
                 pdf.set_font("Helvetica", "", 9)
-                pdf.multi_cell(0, 5, conclusion[:2000])
+                pdf.multi_cell(0, 5, _sanitize(str(conclusion)[:2000]))
 
         # Standard table
         elif data.head and data.rows:
@@ -2517,7 +2533,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             if data.table_title:
                 pdf.set_font("Helvetica", "B", 10)
                 pdf.set_text_color(50, 70, 90)
-                pdf.cell(0, 7, data.table_title, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.cell(0, 7, _sanitize(data.table_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             n_cols = len(data.head)
             total_w = page_w - 20
             last_w = 28
@@ -2527,7 +2543,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             pdf.set_fill_color(15, 118, 110)
             pdf.set_text_color(255, 255, 255)
             for i, h in enumerate(data.head):
-                pdf.cell(col_w[i], 8, str(h)[:20], border=1, fill=True, align="C")
+                pdf.cell(col_w[i], 8, _sanitize(str(h)[:20]), border=1, fill=True, align="C")
             pdf.ln()
             pdf.set_font("Helvetica", "", 7.5)
             for row_idx, row in enumerate(data.rows):
@@ -2545,13 +2561,13 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 else: pdf.set_fill_color(255, 255, 255)
                 pdf.set_text_color(25, 35, 55)
                 for i, cell in enumerate(row[:n_cols]):
-                    val = _fmt_number(cell) if i == n_cols - 1 else str(cell)[:25] if cell else "-"
+                    val = _sanitize(_fmt_number(cell)) if i == n_cols - 1 else _sanitize(str(cell)[:25]) if cell else "-"
                     align = "R" if i == n_cols - 1 else "L"
                     pdf.cell(col_w[i], 6.5, val, border=1, fill=fill, align=align)
                 pdf.ln()
 
         # Footer on all pages
-        total_pages = pdf.pages
+        total_pages = len(pdf.pages)
         for pg in range(1, total_pages + 1):
             pdf.page = pg
             pdf.set_y(pdf.h - 10)
@@ -2561,7 +2577,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             pdf.set_line_width(0.3)
             pdf.line(10, pdf.h - 11, page_w - 10, pdf.h - 11)
             now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
-            pdf.cell(page_w - 40, 5, f"Généré par {data.company_name} — {now_str}", align="L")
+            pdf.cell(page_w - 40, 5, _sanitize(f"Genere par {data.company_name} - {now_str}"), align="L")
             pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
 
         pdf_bytes = bytes(pdf.output())
