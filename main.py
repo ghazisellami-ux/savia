@@ -2541,149 +2541,166 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.cell(30, 6, str(row[1]) if len(row) > 1 else "", border=1, fill=fill, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.ln(4)
 
-        # AI Report mode - DOPELY PALETTE + ROUND BULLETS
+        # AI Report mode - WEB UI STYLE (colored text headers + Unicode symbols)
         if data.is_ai_report and data.ai_content:
             try: ai = json.loads(data.ai_content)
-            except Exception: ai = {"summary": data.ai_content}
+            except Exception: ai = {'summary': data.ai_content}
 
             W = page_w - 20
 
-            def sec_hdr(lbl, bg, fg=None):
-                """Section header: solid color band + small white circle icon"""
-                if fg is None: fg = [255,255,255]
-                if pdf.get_y() > pdf.h - 40: pdf.add_page()
-                yh = pdf.get_y()
-                pdf.set_fill_color(bg[0], bg[1], bg[2])
-                pdf.rect(10, yh, W, 8.5, style="F")
-                # Label (no white dot)
-                pdf.set_xy(14, yh + 1.8)
-                pdf.set_font("Helvetica", "B", 9)
-                pdf.set_text_color(fg[0], fg[1], fg[2])
-                pdf.cell(W - 9, 5.5, _sanitize(lbl.upper()))
-                pdf.set_y(yh + 11)
+            # Load DejaVu for Unicode symbols
+            _DJVU = '/app/DejaVuSans.ttf'
+            _has_djvu = os.path.exists(_DJVU)
+            if _has_djvu:
+                try:
+                    pdf.add_font('DejaVu', fname=_DJVU)
+                except Exception:
+                    _has_djvu = False
+
+            def _sym(size=8):
+                if _has_djvu:
+                    try: pdf.set_font('DejaVu', size=size); return True
+                    except: pass
+                pdf.set_font('Helvetica', size=size); return False
+
+            def _hel(style='', size=8.5):
+                pdf.set_font('Helvetica', style, size)
+
+            def sec_hdr(lbl, bg):
+                # Web-style: white bg, colored bold title, thin underline
+                if pdf.get_y() > pdf.h - 45: pdf.add_page()
+                yh = pdf.get_y() + 2
+                R_, G_, B_ = bg
+                # Colored vertical bar (3x5.5mm icon block)
+                pdf.set_fill_color(R_, G_, B_)
+                pdf.rect(10, yh, 3, 5.5, style='F')
+                # Colored bold title
+                pdf.set_xy(15, yh)
+                _hel('B', 10)
+                pdf.set_text_color(R_, G_, B_)
+                pdf.cell(W - 5, 5.5, _sanitize(lbl))
+                # Thin underline
+                pdf.set_draw_color(R_, G_, B_)
+                pdf.set_line_width(0.4)
+                pdf.line(10, yh + 7, page_w - 10, yh + 7)
+                pdf.set_y(yh + 10)
                 pdf.set_text_color(40, 50, 65)
 
-            def body_item(txt, bullet_color=None):
-                """List item with round colored bullet"""
+            def body_item(txt, bg, sym='\u25cf'):
                 if not txt: return
                 if pdf.get_y() > pdf.h - 20: pdf.add_page()
                 yi = pdf.get_y()
-                if bullet_color:
-                    # ROUND bullet (ellipse)
-                    pdf.set_fill_color(bullet_color[0], bullet_color[1], bullet_color[2])
-                    pdf.ellipse(13.5, yi + 2.2, 2.5, 2.5, style="F")
-                    pdf.set_xy(18, yi)
+                R_, G_, B_ = bg
+                if _has_djvu:
+                    _sym(8)
+                    pdf.set_text_color(R_, G_, B_)
+                    pdf.set_xy(13, yi)
+                    pdf.cell(5, 4.8, sym)
                 else:
-                    pdf.set_x(13)
-                pdf.set_font("Helvetica", "", 8.5)
+                    pdf.set_fill_color(R_, G_, B_)
+                    pdf.ellipse(13.5, yi + 2.0, 2.5, 2.5, style='F')
+                _hel('', 8.5)
                 pdf.set_text_color(40, 50, 65)
-                ww = W - 9 if bullet_color else W - 3
-                pdf.multi_cell(ww, 4.8, _sanitize(str(txt)[:300]))
+                pdf.set_xy(19, yi)
+                pdf.multi_cell(W - 10, 4.8, _sanitize(str(txt)[:300]))
                 pdf.ln(0.5)
 
-            def add_sec(lbl, items, bg, fg=None):
+            def add_sec(lbl, items, bg, sym='\u25cf'):
                 if not items: return
-                sec_hdr(lbl, bg, fg)
-                pdf.set_font("Helvetica", "", 8.5)
+                sec_hdr(lbl, bg)
+                _hel('', 8.5)
                 for it in items:
-                    txt = it if isinstance(it, str) else it.get("action", it.get("machine", str(it))) if isinstance(it, dict) else str(it)
-                    body_item(txt, bg)
-                pdf.ln(3)
+                    txt = it if isinstance(it, str) else it.get('action', it.get('machine', str(it))) if isinstance(it, dict) else str(it)
+                    body_item(txt, bg, sym)
+                pdf.ln(4)
 
-            # ── Score global ─────────────────────────────────────
-            score = ai.get("score_global")
+            # Score global
+            score = ai.get('score_global')
             if score is not None:
                 sc = int(score)
-                if sc >= 70:
-                    s_bg = [95,165,90]     # GREEN  #5FA55A
-                elif sc >= 40:
-                    s_bg = [250,137,37]    # ORANGE #FA8925
-                else:
-                    s_bg = [250,84,87]     # CORAL  #FA5457
+                if sc >= 70:   s_bg = [95,165,90]
+                elif sc >= 40: s_bg = [250,137,37]
+                else:          s_bg = [250,84,87]
                 y_sc = pdf.get_y()
-                # White bg + colored border + colored left bar
                 pdf.set_fill_color(255, 255, 255)
                 pdf.set_draw_color(s_bg[0], s_bg[1], s_bg[2])
                 pdf.set_line_width(0.8)
-                pdf.rect(10, y_sc, W, 16, style="FD")
+                pdf.rect(10, y_sc, W, 16, style='FD')
                 pdf.set_fill_color(s_bg[0], s_bg[1], s_bg[2])
-                pdf.rect(10, y_sc, 5, 16, style="F")
-                pdf.set_xy(18, y_sc + 2)
-                pdf.set_font("Helvetica", "B", 9)
-                pdf.set_text_color(40, 50, 65)
-                pdf.cell(60, 5.5, "Score : " + str(sc) + "/100")
-                slabel = "Excellent" if sc>=70 else "Satisfaisant" if sc>=40 else "A ameliorer"
-                pdf.set_xy(80, y_sc + 2)
-                pdf.set_font("Helvetica", "B", 8)
+                pdf.rect(10, y_sc, 5, 16, style='F')
+                pdf.set_xy(18, y_sc + 1.5)
+                _hel('B', 15)
                 pdf.set_text_color(s_bg[0], s_bg[1], s_bg[2])
-                pdf.cell(W - 72, 5.5, slabel)
-                pdf.set_xy(18, y_sc + 9)
-                pdf.set_font("Helvetica", "", 7.5)
-                pdf.set_text_color(80, 95, 110)
-                pdf.cell(W - 8, 5, "Score global de performance de la periode")
+                pdf.cell(25, 9, str(sc))
+                pdf.set_xy(36, y_sc + 2)
+                _hel('B', 9)
+                slabel = 'Excellent' if sc>=70 else 'Satisfaisant' if sc>=40 else 'A ameliorer'
+                pdf.set_text_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.cell(50, 5.5, slabel)
+                pdf.set_xy(36, y_sc + 8.5)
+                _hel('', 7)
+                pdf.set_text_color(130, 145, 160)
+                pdf.cell(W - 28, 4, '/100 - Score global de performance')
                 pdf.set_y(y_sc + 19)
 
-            # ── Résumé Exécutif ── TEAL #01B4BC
-            analyse = ai.get("analyse") or ai.get("summary")
+            # Resume Executif - ORANGE #FA8925
+            analyse = ai.get('analyse') or ai.get('summary')
             if analyse:
-                sec_hdr("Resume Executif", [1,180,188])
-                pdf.set_font("Helvetica", "", 8.5)
+                sec_hdr('RESUME EXECUTIF', [250,137,37])
+                _hel('', 8.5)
                 pdf.set_text_color(40, 50, 65)
                 pdf.set_x(13)
                 pdf.multi_cell(W - 3, 5, _sanitize(str(analyse)[:2500]))
-                pdf.ln(4)
+                pdf.ln(5)
 
-            # ── Points Forts ── GREEN #5FA55A
-            add_sec("Points Forts",     ai.get("points_forts", []),     [95,165,90])
-            # ── Points Faibles ── CORAL #FA5457
-            add_sec("Points Faibles",   ai.get("points_faibles", []),   [250,84,87])
+            # Points Forts - GREEN + CHECK
+            add_sec('POINTS FORTS',     ai.get('points_forts', []),    [95,165,90],  '\u2713')
+            # Points Faibles - CORAL + TRIANGLE
+            add_sec('POINTS FAIBLES',   ai.get('points_faibles', []),  [250,84,87],  '\u25b3')
+            # Recommandations - TEAL + ARROW
+            recs = ai.get('recommandations', [])
+            recs_c = [r if isinstance(r, str) else r.get('action', str(r)) for r in recs]
+            add_sec('RECOMMANDATIONS',  recs_c,                        [1,180,188],  '\u2192')
+            # Alertes - CORAL + WARNING
+            add_sec('ALERTES CRITIQUES',ai.get('alertes_critiques',[]),[250,84,87],  '\u26a0')
+            # Tendances - TEAL + UP-ARROW
+            add_sec('TENDANCES',        ai.get('tendances', []),       [1,180,188],  '\u2197')
 
-            # ── Recommandations ── TEAL #01B4BC
-            recs = ai.get("recommandations", [])
-            recs_c = [r if isinstance(r, str) else r.get("action", str(r)) for r in recs]
-            add_sec("Recommandations",  recs_c,                         [1,180,188])
-            # ── Alertes Critiques ── CORAL #FA5457
-            add_sec("Alertes Critiques",ai.get("alertes_critiques", []),[250,84,87])
-            # ── Tendances ── TEAL #01B4BC
-            add_sec("Tendances",        ai.get("tendances", []),        [1,180,188])
-
-            # ── Performance Equipe ── YELLOW #F6D51F (dark text)
-            perf = ai.get("performance_equipe", [])
+            # Performance Equipe - AMBER
+            perf = ai.get('performance_equipe', [])
             if perf:
-                sec_hdr("Performance Equipe", [246,213,31], fg=[50,40,0])
-                pdf.set_font("Helvetica", "", 8.5)
-                pdf.set_text_color(40, 50, 65)
+                sec_hdr('EVALUATION DE L\'EQUIPE', [155,110,5])
+                _hel('', 8.5)
                 for pe in perf:
                     if isinstance(pe, dict):
-                        nm_ = pe.get("technicien", pe.get("nom", ""))
-                        sc_ = pe.get("score", pe.get("note", ""))
-                        dt_ = pe.get("detail", pe.get("commentaire", ""))
-                        txt = _sanitize(str(nm_))+" : "+str(sc_)+(" - "+str(dt_) if dt_ else "")
-                    else: txt = str(pe)
-                    body_item(txt, [246,213,31])
-                pdf.ln(3)
+                        nm_ = pe.get('technicien', pe.get('nom', ''))
+                        sc_ = pe.get('score', pe.get('note', ''))
+                        dt_ = pe.get('detail', pe.get('commentaire', ''))
+                        body_item(_sanitize(str(nm_))+' : '+str(sc_)+(' - '+str(dt_) if dt_ else ''), [155,110,5], '\u25cf')
+                    else: body_item(str(pe), [155,110,5], '\u25cf')
+                pdf.ln(4)
 
-            # ── Analyse Financière ── ORANGE #FA8925
-            couts = ai.get("analyse_couts")
+            # Analyse Financiere - ORANGE
+            couts = ai.get('analyse_couts')
             if couts and isinstance(couts, dict):
-                sec_hdr("Analyse Financiere", [250,137,37])
-                pdf.set_font("Helvetica", "", 8.5)
-                pdf.set_text_color(40, 50, 65)
+                sec_hdr('ANALYSE DES COUTS', [250,137,37])
+                _hel('', 8.5)
                 for k_, v_ in couts.items():
-                    if v_: body_item(str(k_)+" : "+str(v_), [250,137,37])
-                pdf.ln(3)
+                    if v_: body_item(str(k_)+' : '+str(v_), [250,137,37], '\u25cf')
+                pdf.ln(4)
 
-            # ── Priorités Immédiates ── ORANGE #FA8925
-            add_sec("Priorites Immediates", ai.get("priorites_immediates",[]),[250,137,37])
+            # Priorites - ORANGE + LIGHTNING
+            add_sec('PRIORITES IMMEDIATES', ai.get('priorites_immediates',[]),[250,137,37],'\u26a1')
 
-            # ── Conclusion ── TEAL #01B4BC
-            conclusion = ai.get("conclusion")
+            # Conclusion - TEAL
+            conclusion = ai.get('conclusion')
             if conclusion:
-                sec_hdr("Conclusion", [1,180,188])
-                pdf.set_font("Helvetica", "", 9)
+                sec_hdr('CONCLUSION', [1,180,188])
+                _hel('', 9)
                 pdf.set_text_color(50, 62, 78)
                 pdf.set_x(13)
                 pdf.multi_cell(W - 3, 5, _sanitize(str(conclusion)[:2500]))
+
         # Standard table
         elif data.head and data.rows:
             if pdf.get_y() > pdf.h - 45: pdf.add_page()
