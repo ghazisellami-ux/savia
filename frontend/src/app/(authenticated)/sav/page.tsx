@@ -64,7 +64,6 @@ export default function SavPage() {
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterEquip, setFilterEquip] = useState('Tous');
-  const [filterTech, setFilterTech] = useState('Tous');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
@@ -91,16 +90,6 @@ export default function SavPage() {
 
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicTechs = useMemo(() => {
-    const allTechs = new Set<string>();
-    data.forEach(d => {
-      (d.technicien || '').split(',').forEach((t: string) => {
-        const name = t.trim();
-        if (name && name !== 'Non assigné') allTechs.add(name);
-      });
-    });
-    return ['Tous', ...Array.from(allTechs).sort()];
-  }, [data]);
   const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
   const availableYears = useMemo(() => {
     const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
@@ -168,15 +157,10 @@ export default function SavPage() {
     if (!form.machine.trim()) return;
     setIsSaving(true);
     try {
-      const _techs = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
-      const _nbTechs = _techs.length || 1;
-      const TAUX_HORAIRE = 80; // TND/h par technicien
-      const _coutMainOeuvre = Math.round((Number(form.duree_minutes) / 60) * TAUX_HORAIRE * _nbTechs);
       await interventions.create({
         ...form,
         duree_minutes: Number(form.duree_minutes),
         cout_pieces: Number(form.cout_pieces),
-        cout: _coutMainOeuvre,
       });
       setForm(emptyForm);
       setShowAddModal(false);
@@ -243,15 +227,11 @@ export default function SavPage() {
       const nb_correctives = allInterv.filter(i => i.type.toLowerCase().includes('correct')).length;
       const nb_preventives = allInterv.filter(i => i.type.toLowerCase().includes('ventive')).length;
       const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
-      const nb_formations = allInterv.filter(i => i.type.toLowerCase().includes('format')).length;
-      // MTTR et coûts : Installation + Formation exclus
-      const maintenanceOnlyAll = allInterv.filter(i => !i.type.toLowerCase().includes('install') && !i.type.toLowerCase().includes('format'));
-      const totalCoutInterv = maintenanceOnlyAll.reduce((a, b) => a + (b.cout || 0), 0);
-      const totalCoutPieces = maintenanceOnlyAll.reduce((a, b) => a + (b.coutPieces || 0), 0);
-      const totalDureeMin = maintenanceOnlyAll.reduce((a, b) => a + b.duree_minutes, 0);
-      const tauxRes = maintenanceOnlyAll.length > 0 ? Math.round((maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length / maintenanceOnlyAll.length) * 100) : 0;
-      const nb_cloturees_maint = maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
-      const mttrH = nb_cloturees_maint > 0 ? Math.round(maintenanceOnlyAll.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees_maint / 60 * 10) / 10 : 0;
+      const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
+      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
+      const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
+      const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
       // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
@@ -296,7 +276,7 @@ export default function SavPage() {
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
         duree_totale_h: Math.round(totalDureeMin / 60),
-        nb_correctives, nb_preventives, nb_installations, nb_formations,
+        nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
         cout_interventions: totalCoutInterv, cout_pieces: totalCoutPieces,
         cout_total: totalCoutInterv + totalCoutPieces,
@@ -317,64 +297,71 @@ export default function SavPage() {
     }
   };
 
-  // PDF Generation - via backend (server-side, direct download)
-  const handleGeneratePdf = async () => {
+  // PDF Generation
+  const handleGeneratePdf = () => {
+    setIsPdfGenerating(true);
+    const pdfFiltered = data.filter(i => {
+      const d = new Date(i.date);
+      return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
+    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
+    const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+
+    const w = window.open('', '_blank');
+    if (!w) { setIsPdfGenerating(false); return; }
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport SAV — ${pdfDateFrom} au ${pdfDateTo}</title>
+    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{background:#f0f9ff;border:1px solid #d1d5db;padding:8px;text-align:left;font-weight:bold}
+    td{border:1px solid #d1d5db;padding:6px 8px}.kpi{display:inline-block;background:#f8fafc;border:1px solid #d1d5db;border-radius:8px;padding:12px 24px;margin:8px;text-align:center}
+    .kpi .val{font-size:28px;font-weight:bold;color:#0f766e}.kpi .lab{font-size:11px;color:#666;margin-top:4px}
+    @media print{body{margin:20px}}</style></head><body>
+    <h1>Rapport SAV — Interventions</h1>
+    <p>Période : <strong>${pdfDateFrom}</strong> au <strong>${pdfDateTo}</strong></p>
+    <div style="margin:20px 0">
+      <div class="kpi"><div class="val">${pdfFiltered.length}</div><div class="lab">Interventions</div></div>
+      <div class="kpi"><div class="val">${cloturees}</div><div class="lab">Clôturées</div></div>
+      <div class="kpi"><div class="val">${pdfFiltered.length > 0 ? Math.round((cloturees/pdfFiltered.length)*100) : 0}%</div><div class="lab">Taux résolution</div></div>
+      <div class="kpi"><div class="val">${coutT.toLocaleString('fr')} TND</div><div class="lab">Coût total</div></div>
+    </div>
+    <table><thead><tr>${['Date','Machine','Client','Technicien','Type','Statut','Durée','Coût (TND)'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${pdfFiltered.map(i => `<tr><td>${i.date.substring(0,10)}</td><td>${i.machine}</td><td>${i.client||'-'}</td><td>${i.technicien}</td><td>${i.type}</td><td>${i.statut}</td><td>${i.duree}h</td><td>${(i.cout||i.coutPieces).toLocaleString('fr')}</td></tr>`).join('')}</tbody></table>
+    <p style="margin-top:24px;font-size:11px;color:#999">Généré par SAVIA — ${new Date().toLocaleString('fr-FR')}</p>
+    </body></html>`);
+    w.document.close();
+    setTimeout(() => { w.print(); setIsPdfGenerating(false); }, 500);
+  };
+
+  // ---- AI PDF download (SAV analysis) ----
+  const handleSavAiPdf = async () => {
+    if (!aiResult) return;
     setIsPdfGenerating(true);
     try {
       const token = localStorage.getItem('savia_token') || '';
       const cn = localStorage.getItem('savia_company') || 'SAVIA';
       const cl = localStorage.getItem('savia_logo') || '';
-
-      const pdfFiltered = data.filter(i => {
-        const d = new Date(i.date);
-        return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
-      }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
-      const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces || 0), 0);
-      const tauxRes = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
-
       const res = await fetch('/api/reports/generate-pdf', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({
-          title: 'Rapport SAV — Interventions',
-          subtitle: `Période : ${pdfDateFrom} au ${pdfDateTo}`,
-          filename: `rapport_sav_${pdfDateFrom}_${pdfDateTo}`,
-          company_name: cn,
-          company_logo: cl,
-          kpis: [
-            { label: 'Interventions',    val: String(pdfFiltered.length), color: [15,118,110] },
-            { label: 'Clôturées',        val: String(cloturees),          color: [22,163,74] },
-            { label: 'Taux résolution',  val: tauxRes + '%',              color: [234,179,8] },
-            { label: 'Coût total (TND)', val: Math.round(coutT),          color: [239,68,68] },
-          ],
-          head: ['Date','Machine','Client','Technicien(s)','Type','Statut','Durée','Coût (TND)'],
-          table_title: 'Détail des interventions SAV',
-          rows: pdfFiltered.map(i => [
-            i.date.substring(0, 10),
-            i.machine || '-',
-            i.client || '-',
-            i.technicien || '-',
-            i.type || '-',
-            i.statut || '-',
-            (i.duree || 0) + 'h',
-            Math.round(i.cout || i.coutPieces || 0),
-          ]),
+          title: 'Analyse IA - Interventions SAV',
+          subtitle: 'Rapport d\'analyse IA complet',
+          filename: 'analyse_ia_sav',
+          company_name: cn, company_logo: cl,
+          is_ai_report: true,
+          ai_content: JSON.stringify(aiResult),
         }),
       });
-      if (!res.ok) throw new Error(`Erreur serveur: ${res.status}`);
+      if (!res.ok) throw new Error('Erreur ' + res.status);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `rapport_sav_${pdfDateFrom}_${pdfDateTo}.pdf`;
+      a.href = url; a.download = 'analyse_ia_sav.pdf';
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch (err: any) {
-      console.error(err); alert('Erreur PDF: ' + (err.message || err));
-    } finally { setIsPdfGenerating(false); }
+    } catch(err: any) { alert('Erreur PDF: ' + err.message); }
+    finally { setIsPdfGenerating(false); }
   };
-
 
   // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
   const filtered = useMemo(() => {
@@ -389,47 +376,33 @@ export default function SavPage() {
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
       if (filterClient !== 'Tous' && i.client !== filterClient) return false;
       if (filterEquip !== 'Tous' && i.machine !== filterEquip) return false;
-      if (filterTech !== 'Tous') {
-        const techs = (i.technicien || '').split(',').map((s: string) => s.trim());
-        if (!techs.some(t => t === filterTech)) return false;
-      }
       if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [search, filterStatut, filterType, filterClient, filterEquip, filterTech, periodMode, filterMonth, filterYear, data]);
+  }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
-  // Types hors maintenance (tracéabilité seule, exclus des KPIs)
-  const TRACABILITE_TYPES = ['installation', 'formation'];
-  const maintenanceFiltered = useMemo(
-    () => filtered.filter(i => !TRACABILITE_TYPES.some(t => i.type.toLowerCase().includes(t))),
-    [filtered]
-  );
-
-  // ===== KPI CALCULATIONS — based on maintenanceFiltered (Installation + Formation exclus) =====
-  const totalInterv = filtered.length; // comptage total toutes catégories
-  const terminees = maintenanceFiltered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
+  // ===== KPI CALCULATIONS (based on filtered data) =====
+  const totalInterv = filtered.length;
+  const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCout = maintenanceFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
-  const totalDureeH = Math.round(maintenanceFiltered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
-  const tauxResolution = maintenanceFiltered.length > 0 ? Math.round((terminees / maintenanceFiltered.length) * 100) : 0;
-  const mttr = terminees > 0 ? Math.round(maintenanceFiltered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
-  const correctifs = maintenanceFiltered.filter(i => i.type.toLowerCase().includes('correct')).length;
-  const preventifs = maintenanceFiltered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
+  const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+  const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
+  const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
+  const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
+  const correctifs = filtered.filter(i => i.type.toLowerCase().includes('correct')).length;
+  const preventifs = filtered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
 
   // Tech performance
   const techStats = useMemo(() => {
     const map = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
-    maintenanceFiltered.forEach(i => {
-      const tNames = (i.technicien || 'Inconnu').split(',').map((s: string) => s.trim()).filter(Boolean);
-      const tCount = tNames.length || 1;
-      tNames.forEach(t => {
+    filtered.forEach(i => {
+      const t = i.technicien || 'Inconnu';
       const prev = map.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
       prev.nb++;
       if (i.statut.toLowerCase().includes('tur')) prev.clot++;
       prev.duree += i.duree_minutes;
-      prev.cout += (i.cout || i.coutPieces) / tCount;
+      prev.cout += (i.cout || i.coutPieces);
       map.set(t, prev);
-      }); // end tNames.forEach
     });
     return Array.from(map.entries()).map(([nom, s]) => ({
       nom, nb: s.nb, clot: s.clot,
@@ -437,11 +410,11 @@ export default function SavPage() {
       mttr: s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0,
       cout: s.cout,
     })).sort((a, b) => b.taux - a.taux);
-  }, [maintenanceFiltered]);
+  }, [filtered]);
 
   // Financial summary
-  const coutPieces = maintenanceFiltered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const coutInterventions = maintenanceFiltered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
+  const coutInterventions = filtered.reduce((a, b) => a + (b.cout || 0), 0);
 
   const tabs = [
     { icon: <Wrench className="w-4 h-4" />, label: 'Interventions' },
@@ -624,16 +597,12 @@ export default function SavPage() {
               <option value="Corrective">Corrective</option>
               <option value="Préventive">Préventive</option>
               <option value="Installation">Installation</option>
-              <option value="Formation">Formation</option>
             </select>
             <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
             </select>
             <select value={filterEquip} onChange={e => setFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicEquip.map(e => <option key={e} value={e}>{e === 'Tous' ? 'Tous les équipements' : e}</option>)}
-            </select>
-            <select value={filterTech} onChange={e => setFilterTech(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {dynamicTechs.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les techniciens' : t}</option>)}
             </select>
           </div>
 
@@ -850,29 +819,16 @@ export default function SavPage() {
               <BarChart3 className="w-4 h-4 text-savia-accent" /> Répartition par Type
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {['Corrective', 'Préventive'].map(type => {
-                const typeData = maintenanceFiltered.filter(i => i.type.toLowerCase().includes(type.toLowerCase().substring(0, 5)));
+              {['Corrective', 'Préventive', 'Installation'].map(type => {
+                const typeData = filtered.filter(i => i.type.toLowerCase().includes(type.toLowerCase().substring(0, 5)));
                 const typeCout = typeData.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
-                const color = type === 'Corrective' ? 'red' : 'green';
-                const Icon = type === 'Corrective' ? XCircle : Shield;
+                const color = type === 'Corrective' ? 'red' : type === 'Préventive' ? 'green' : 'blue';
+                const Icon = type === 'Corrective' ? XCircle : type === 'Préventive' ? Shield : Wrench;
                 return (
                   <div key={type} className={`glass rounded-xl p-4 border border-${color}-500/20`}>
                     <div className={`text-sm font-bold text-${color}-400 mb-2 flex items-center gap-2`}><Icon className="w-4 h-4" /> {type}</div>
                     <div className="text-2xl font-black text-savia-text">{typeData.length} <span className="text-sm text-savia-text-muted">interventions</span></div>
                     <div className="text-sm text-savia-text-muted mt-1">Coût: {typeCout.toLocaleString('fr')} TND</div>
-                  </div>
-                );
-              })}
-              {/* Tracéabilité (hors KPI) */}
-              {(['Installation', 'Formation'] as const).map(type => {
-                const typeData = filtered.filter(i => i.type.toLowerCase().includes(type.toLowerCase()));
-                return (
-                  <div key={type} className="glass rounded-xl p-4 border border-slate-500/20">
-                    <div className="text-sm font-bold text-slate-400 mb-2 flex items-center gap-2">
-                      <Briefcase className="w-4 h-4" /> {type}
-                    </div>
-                    <div className="text-2xl font-black text-savia-text">{typeData.length} <span className="text-sm text-savia-text-muted">enregistrements</span></div>
-                    <div className="text-xs text-slate-500 mt-1 italic">Tracéabilité — hors KPI maintenance</div>
                   </div>
                 );
               })}
@@ -1101,7 +1057,18 @@ export default function SavPage() {
                   </div>
                 )}
               </div>
+            {/* ---- Télécharger PDF ---- */}
+            <div className="flex justify-end pt-4 mb-1">
+              <button
+                onClick={handleSavAiPdf}
+                disabled={isPdfGenerating}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 disabled:opacity-50 text-sm"
+              >
+                <Download className="w-4 h-4" />
+                {isPdfGenerating ? "G\u00e9n\u00e9ration..." : "T\u00e9l\u00e9charger PDF"}
+              </button>
             </div>
+          </div>
           )}
         </div>
       )}
@@ -1111,50 +1078,15 @@ export default function SavPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div className="md:col-span-2">
-            <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
-              <Users className="w-3.5 h-3.5" /> Techniciens
-              <span className="text-xs text-savia-text-dim ml-1">(plusieurs possibles — coût × nb techs)</span>
-            </label>
-            {/* Pills for selected techs */}
-            <div className="flex flex-wrap gap-1.5 mb-2 min-h-[2rem] p-2 bg-savia-surface-hover/40 rounded-lg border border-savia-border/50">
-              {(form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean).map(name => (
-                <span key={name} className="flex items-center gap-1 px-2 py-0.5 bg-savia-accent/20 text-savia-accent border border-savia-accent/30 rounded-full text-xs font-medium">
-                  {name}
-                  <button type="button" onClick={() => {
-                    const techs = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(t => t && t !== name);
-                    setForm({...form, technicien: techs.join(', ')});
-                  }} className="hover:text-red-400 transition-colors ml-0.5">×</button>
-                </span>
-              ))}
-              {!(form.technicien || '').trim() && <span className="text-xs text-savia-text-dim py-0.5 px-1">Aucun technicien sélectionné</span>}
-            </div>
-            {/* Dropdown to add a tech */}
-            <select
-              className={INPUT_CLS}
-              value=""
-              onChange={e => {
-                if (!e.target.value) return;
-                const current = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
-                if (!current.includes(e.target.value)) {
-                  setForm({...form, technicien: [...current, e.target.value].join(', ')});
-                }
-              }}
-            >
-              <option value="">-- Ajouter un technicien --</option>
-              {techniciens
-                .filter(t => {
-                  const name = `${t.prenom} ${t.nom}`;
-                  const current = (form.technicien || '').split(',').map((s: string) => s.trim()).filter(Boolean);
-                  return !current.includes(name);
-                })
-                .map(t => <option key={t.nom} value={`${t.prenom} ${t.nom}`}>{t.prenom} {t.nom}</option>)
-              }
+          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Technicien</label>
+            <select className={INPUT_CLS} value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})}>
+              <option value="">-- Sélectionnez --</option>
+              {techniciens.map(t => <option key={t.nom}>{t.prenom} {t.nom}</option>)}
             </select>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Type</label>
             <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>
-              <option>Corrective</option><option>Préventive</option><option>Installation</option><option>Formation</option>
+              <option>Corrective</option><option>Préventive</option><option>Installation</option>
             </select></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Zap className="w-3.5 h-3.5" /> Code erreur</label><input className={INPUT_CLS} placeholder="Ex: E147" value={form.code_erreur} onChange={e => setForm({...form, code_erreur: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Type erreur</label>

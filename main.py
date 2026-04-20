@@ -2446,18 +2446,26 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             for i, kpi in enumerate(data.kpis[:4]):
                 kx = 10 + i * (box_w + margin_)
                 color = kpi.get("color", [15, 118, 110])
-                pdf.set_fill_color(242, 252, 250)
-                pdf.set_draw_color(180, 220, 215)
-                pdf.set_line_width(0.3)
+                r1,g1,b1 = int(color[0]),int(color[1]),int(color[2])
+                # KPI box background
+                lc = [min(r1+215,255), min(g1+215,255), min(b1+215,255)]
+                pdf.set_fill_color(*lc)
+                pdf.set_draw_color(r1,g1,b1)
+                pdf.set_line_width(0.4)
                 pdf.rect(kx, kpi_y, box_w, box_h, style="FD")
-                pdf.set_xy(kx, kpi_y + 2)
-                pdf.set_font("Helvetica", "B", 13)
-                r,g,b = int(color[0]),int(color[1]),int(color[2]); pdf.set_text_color(r,g,b)
-                pdf.cell(box_w, 8, _sanitize(str(kpi.get("val", ""))), align="C")
-                pdf.set_xy(kx, kpi_y + 10)
-                pdf.set_font("Helvetica", "", 7)
-                pdf.set_text_color(100, 120, 130)
-                pdf.cell(box_w, 4, _sanitize(str(kpi.get("label", ""))), align="C")
+                # Left accent bar
+                pdf.set_fill_color(r1,g1,b1)
+                pdf.rect(kx, kpi_y, 4, box_h, style="F")
+                # Value (big, colored)
+                pdf.set_xy(kx + 4, kpi_y + 1)
+                pdf.set_font("Helvetica", "B", 14)
+                pdf.set_text_color(r1,g1,b1)
+                pdf.cell(box_w - 4, 9, _sanitize(str(kpi.get("val", ""))), align="C")
+                # Label
+                pdf.set_xy(kx + 4, kpi_y + 10)
+                pdf.set_font("Helvetica", "", 6.5)
+                pdf.set_text_color(80, 90, 100)
+                pdf.cell(box_w - 4, 4, _sanitize(str(kpi.get("label", ""))), align="C")
             pdf.set_y(kpi_y + box_h + 6)
             pdf.set_text_color(0, 0, 0)
 
@@ -2481,56 +2489,120 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 pdf.cell(30, 6, str(row[1]) if len(row) > 1 else "", border=1, fill=fill, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.ln(4)
 
-        # AI Report mode
+        # AI Report mode - IMPROVED LAYOUT
         if data.is_ai_report and data.ai_content:
             try: ai = json.loads(data.ai_content)
             except Exception: ai = {"summary": data.ai_content}
 
-            def add_section(label, items, rgb):
-                if not items: return
+            W = page_w - 20
+
+            def sec_header(lbl, rgb):
                 if pdf.get_y() > pdf.h - 35: pdf.add_page()
-                pdf.set_font("Helvetica", "B", 10)
-                r,g,b = int(rgb[0]),int(rgb[1]),int(rgb[2]); pdf.set_text_color(r,g,b)
-                pdf.cell(0, 7, _sanitize(label), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                y_h = pdf.get_y()
+                r1,g1,b1 = int(rgb[0]),int(rgb[1]),int(rgb[2])
+                lc = [min(r1+215,255), min(g1+215,255), min(b1+215,255)]
+                pdf.set_fill_color(*lc)
+                pdf.rect(10, y_h, W, 8, style="F")
+                pdf.set_fill_color(r1,g1,b1)
+                pdf.rect(10, y_h, 4, 8, style="F")
+                pdf.set_xy(16, y_h + 1.5)
+                pdf.set_font("Helvetica", "B", 9)
+                pdf.set_text_color(r1, g1, b1)
+                pdf.cell(W - 6, 6, _sanitize(lbl))
+                pdf.set_y(y_h + 10)
+                pdf.set_text_color(30, 40, 60)
+
+            def sec_item(txt, rgb):
+                if not txt: return
+                if pdf.get_y() > pdf.h - 20: pdf.add_page()
+                y_i = pdf.get_y()
+                r1,g1,b1 = int(rgb[0]),int(rgb[1]),int(rgb[2])
+                pdf.set_fill_color(r1, g1, b1)
+                pdf.rect(14, y_i + 2, 2.5, 2.5, style="F")
+                pdf.set_xy(19, y_i)
                 pdf.set_font("Helvetica", "", 8.5)
-                pdf.set_text_color(35, 45, 65)
+                pdf.set_text_color(30, 40, 60)
+                pdf.multi_cell(W - 10, 4.8, _sanitize(str(txt)[:300]))
+                pdf.ln(0.5)
+
+            def add_section(lbl, items, rgb):
+                if not items: return
+                sec_header(lbl, rgb)
                 for item in items:
                     txt = item if isinstance(item, str) else item.get("action", item.get("machine", str(item))) if isinstance(item, dict) else str(item)
-                    pdf.set_x(14)
-                    pdf.multi_cell(pdf.w - 24, 5, _sanitize(str(txt)[:300]))
-                    if pdf.get_y() > pdf.h - 25: pdf.add_page()
-                pdf.ln(2)
+                    sec_item(txt, rgb)
+                pdf.ln(3)
 
+            # Score global
             score = ai.get("score_global")
             if score is not None:
                 sc = int(score)
                 col = [22,163,74] if sc>=70 else [234,179,8] if sc>=40 else [220,50,50]
-                pdf.set_font("Helvetica", "B", 13)
-                r,g,b = int(col[0]),int(col[1]),int(col[2]); pdf.set_text_color(r,g,b)
-                pdf.cell(0, 8, f"Score global : {sc}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)  # score is numeric, safe
-                pdf.set_text_color(0, 0, 0)
+                y_sc = pdf.get_y()
+                r1,g1,b1 = int(col[0]),int(col[1]),int(col[2])
+                pdf.set_fill_color(r1,g1,b1)
+                pdf.rect(10, y_sc, 55, 20, style="F")
+                pdf.set_xy(10, y_sc + 3)
+                pdf.set_font("Helvetica", "B", 17)
+                pdf.set_text_color(255, 255, 255)
+                pdf.cell(55, 14, str(sc) + "/100", align="C")
+                pdf.set_xy(68, y_sc + 5)
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_text_color(r1,g1,b1)
+                score_label = "Score Excellent" if sc>=70 else "Score Satisfaisant" if sc>=40 else "Score Insuffisant"
+                pdf.cell(W - 58, 7, score_label)
+                pdf.set_y(y_sc + 24)
+                pdf.set_text_color(30, 40, 60)
+
+            # Resume Executif
             analyse = ai.get("analyse") or ai.get("summary")
             if analyse:
-                pdf.set_font("Helvetica", "", 9)
+                sec_header("Resume Executif", [15, 118, 110])
+                pdf.set_font("Helvetica", "", 8.5)
                 pdf.set_text_color(30, 40, 60)
-                pdf.multi_cell(0, 5, _sanitize(str(analyse)[:2000]))
+                pdf.set_x(14)
+                pdf.multi_cell(W - 4, 5, _sanitize(str(analyse)[:2000]))
                 pdf.ln(4)
-            add_section("Points Forts", ai.get("points_forts", []), [22,163,74])
-            add_section("Points Faibles", ai.get("points_faibles", []), [220,50,50])
+
+            add_section("Points Forts", ai.get("points_forts", []), [22, 163, 74])
+            add_section("Points Faibles", ai.get("points_faibles", []), [220, 50, 50])
+
             recs = ai.get("recommandations", [])
             recs_c = [r if isinstance(r, str) else r.get("action", str(r)) for r in recs]
-            add_section("Recommandations", recs_c, [15,118,110])
-            add_section("Alertes Critiques", ai.get("alertes_critiques", []), [234,88,12])
-            add_section("Tendances", ai.get("tendances", []), [99,102,241])
+            add_section("Recommandations", recs_c, [15, 118, 110])
+            add_section("Alertes Critiques", ai.get("alertes_critiques", []), [234, 88, 12])
+            add_section("Tendances", ai.get("tendances", []), [99, 102, 241])
+
+            perf = ai.get("performance_equipe", [])
+            if perf:
+                sec_header("Performance Equipe", [234, 179, 8])
+                for pe in perf:
+                    if isinstance(pe, dict):
+                        name_ = pe.get("technicien", pe.get("nom", ""))
+                        score_pe = pe.get("score", pe.get("note", ""))
+                        detail_ = pe.get("detail", pe.get("commentaire", ""))
+                        txt = _sanitize(str(name_)) + " : " + str(score_pe) + (" - " + str(detail_) if detail_ else "")
+                    else:
+                        txt = str(pe)
+                    sec_item(txt, [234, 179, 8])
+                pdf.ln(3)
+
+            couts = ai.get("analyse_couts")
+            if couts and isinstance(couts, dict):
+                sec_header("Analyse des Couts", [15, 118, 110])
+                for k_, v_ in couts.items():
+                    if v_: sec_item(str(k_) + " : " + str(v_), [15, 118, 110])
+                pdf.ln(3)
+
+            add_section("Priorites Immediates", ai.get("priorites_immediates", []), [234, 88, 12])
+
             conclusion = ai.get("conclusion")
             if conclusion:
-                if pdf.get_y() > pdf.h - 35: pdf.add_page()
-                pdf.set_font("Helvetica", "B", 9.5)
-                pdf.set_text_color(30, 40, 60)
-                pdf.cell(0, 7, "Conclusion", new_x=XPos.LMARGIN, new_y=YPos.NEXT)  # static safe
+                sec_header("Conclusion", [30, 40, 80])
                 pdf.set_font("Helvetica", "", 9)
-                pdf.multi_cell(0, 5, _sanitize(str(conclusion)[:2000]))
-
+                pdf.set_text_color(30, 40, 60)
+                pdf.set_x(14)
+                pdf.multi_cell(W - 4, 5, _sanitize(str(conclusion)[:2000]))
         # Standard table
         elif data.head and data.rows:
             if pdf.get_y() > pdf.h - 45: pdf.add_page()
