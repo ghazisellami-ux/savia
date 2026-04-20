@@ -322,6 +322,7 @@ export default function SavPage() {
     setIsPdfGenerating(true);
     const _companyName = localStorage.getItem('savia_company') || 'SAVIA';
     const _companyLogo = localStorage.getItem('savia_logo') || '';
+
     const pdfFiltered = data.filter(i => {
       const d = new Date(i.date);
       return d >= new Date(pdfDateFrom) && d <= new Date(pdfDateTo + 'T23:59:59');
@@ -329,41 +330,123 @@ export default function SavPage() {
 
     const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
     const coutT = pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+    const tauxRes = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
+
+    const rows = pdfFiltered.map(i => [
+      i.date.substring(0, 10),
+      i.machine,
+      i.client || '-',
+      i.technicien,
+      i.type,
+      i.statut,
+      i.duree + 'h',
+      (i.cout || i.coutPieces).toLocaleString('fr'),
+    ]);
 
     const w = window.open('', '_blank');
-    if (!w) { setIsPdfGenerating(false); return; }
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport SAV — ${pdfDateFrom} au ${pdfDateTo}</title>
-    <style>body{font-family:Arial,sans-serif;margin:40px;color:#1a1a2e}
-    .pdf-header{display:flex;align-items:center;gap:20px;padding-bottom:16px;border-bottom:3px solid #0f766e;margin-bottom:20px}
-    .pdf-header img{max-height:70px;max-width:180px;object-fit:contain}
-    .pdf-header-text h1{color:#0f766e;margin:0 0 4px 0;font-size:22px}
-    .pdf-header-text p{margin:0;color:#666;font-size:12px}
-    h1{color:#0f766e;border-bottom:3px solid #0f766e;padding-bottom:8px}
-    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{background:#f0f9ff;border:1px solid #d1d5db;padding:8px;text-align:left;font-weight:bold}
-    td{border:1px solid #d1d5db;padding:6px 8px}.kpi{display:inline-block;background:#f8fafc;border:1px solid #d1d5db;border-radius:8px;padding:12px 24px;margin:8px;text-align:center}
-    .kpi .val{font-size:28px;font-weight:bold;color:#0f766e}.kpi .lab{font-size:11px;color:#666;margin-top:4px}
-    @media print{body{margin:20px}}</style></head><body>
-    <div class="pdf-header">
-      ${_companyLogo ? `<img src="${_companyLogo}" alt="Logo" />` : ''}
-      <div class="pdf-header-text">
-        <h1>${_companyName}</h1>
-        <p>Rapport SAV — Interventions</p>
-      </div>
-    </div>
-    <p>Période : <strong>${pdfDateFrom}</strong> au <strong>${pdfDateTo}</strong></p>
-    <div style="margin:20px 0">
-      <div class="kpi"><div class="val">${pdfFiltered.length}</div><div class="lab">Interventions</div></div>
-      <div class="kpi"><div class="val">${cloturees}</div><div class="lab">Clôturées</div></div>
-      <div class="kpi"><div class="val">${pdfFiltered.length > 0 ? Math.round((cloturees/pdfFiltered.length)*100) : 0}%</div><div class="lab">Taux résolution</div></div>
-      <div class="kpi"><div class="val">${coutT.toLocaleString('fr')} TND</div><div class="lab">Coût total</div></div>
-    </div>
-    <table><thead><tr>${['Date','Machine','Client','Technicien','Type','Statut','Durée','Coût (TND)'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
-    <tbody>${pdfFiltered.map(i => `<tr><td>${i.date.substring(0,10)}</td><td>${i.machine}</td><td>${i.client||'-'}</td><td>${i.technicien}</td><td>${i.type}</td><td>${i.statut}</td><td>${i.duree}h</td><td>${(i.cout||i.coutPieces).toLocaleString('fr')}</td></tr>`).join('')}</tbody></table>
-    <p style="margin-top:24px;font-size:11px;color:#999">Généré par ${_companyName} — ${new Date().toLocaleString('fr-FR')}</p>
+    if (!w) { setIsPdfGenerating(false); alert("Popup bloqué — autorisez les popups pour ce site."); return; }
+
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Génération PDF...</title>
+    <style>body{background:#0f172a;color:#e2e8f0;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .box{text-align:center;padding:40px;background:#1e293b;border-radius:16px;border:1px solid #334155}
+    .spin{display:inline-block;width:40px;height:40px;border:4px solid #334155;border-top:4px solid #0d9488;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:20px}
+    @keyframes spin{to{transform:rotate(360deg)}}</style>
+    </head><body>
+    <div class="box"><div class="spin"></div><p>Génération du PDF en cours...</p></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"><\/script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"><\/script>
+    <script>
+      const companyName = ${JSON.stringify(_companyName)};
+      const companyLogo = ${JSON.stringify(_companyLogo)};
+      const rows = ${JSON.stringify(rows)};
+      const dateFrom = ${JSON.stringify(pdfDateFrom)};
+      const dateTo = ${JSON.stringify(pdfDateTo)};
+      const stats = { total: ${pdfFiltered.length}, cloturees: ${cloturees}, taux: ${tauxRes}, cout: ${JSON.stringify(coutT.toLocaleString('fr'))} };
+
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const pageW = doc.internal.pageSize.getWidth();
+            let y = 12;
+
+            // Logo + Company
+            let logoW = 0;
+            if (companyLogo) {
+              try {
+                const ext = companyLogo.includes('image/png') ? 'PNG' : 'JPEG';
+                doc.addImage(companyLogo, ext, 10, y, 30, 14);
+                logoW = 34;
+              } catch(e) {}
+            }
+            doc.setFontSize(20);
+            doc.setTextColor(15, 118, 110);
+            doc.text(companyName, 10 + logoW, y + 9);
+            y += 20;
+
+            // Separator
+            doc.setDrawColor(15, 118, 110);
+            doc.setLineWidth(0.8);
+            doc.line(10, y, pageW - 10, y);
+            y += 8;
+
+            // Title
+            doc.setFontSize(13);
+            doc.setTextColor(30, 30, 50);
+            doc.text('Rapport SAV \u2014 Interventions', 10, y);
+            y += 6;
+            doc.setFontSize(9); doc.setTextColor(120, 120, 140);
+            doc.text('P\u00e9riode : ' + dateFrom + ' au ' + dateTo, 10, y);
+            y += 10;
+
+            // KPIs
+            const kpis = [['Total', stats.total], ['Cl\u00f4tur\u00e9es', stats.cloturees], ['Taux r\u00e9sol.', stats.taux + '%'], ['Co\u00fbt total', stats.cout + ' TND']];
+            kpis.forEach((k, i) => {
+              const kx = 10 + i * 70;
+              doc.setFillColor(240, 252, 250);
+              doc.roundedRect(kx, y, 64, 14, 2, 2, 'F');
+              doc.setFontSize(13); doc.setTextColor(15, 118, 110);
+              doc.text(String(k[1]), kx + 32, y + 8, { align: 'center' });
+              doc.setFontSize(7); doc.setTextColor(100, 120, 120);
+              doc.text(k[0], kx + 32, y + 12, { align: 'center' });
+            });
+            y += 20;
+
+            // Table
+            doc.autoTable({
+              startY: y,
+              head: [['Date', 'Machine', 'Client', 'Technicien(s)', 'Type', 'Statut', 'Dur\u00e9e', 'Co\u00fbt (TND)']],
+              body: rows,
+              headStyles: { fillColor: [15, 118, 110], textColor: 255, fontSize: 8, fontStyle: 'bold' },
+              bodyStyles: { fontSize: 7.5 },
+              alternateRowStyles: { fillColor: [245, 252, 252] },
+              columnStyles: { 0:{cellWidth:22}, 1:{cellWidth:38}, 2:{cellWidth:32}, 3:{cellWidth:42}, 4:{cellWidth:25}, 5:{cellWidth:22}, 6:{cellWidth:14}, 7:{cellWidth:28} },
+              margin: { left: 10, right: 10 },
+            });
+
+            // Footer
+            const pageCount = doc.internal.getNumberOfPages();
+            for (let p = 1; p <= pageCount; p++) {
+              doc.setPage(p);
+              doc.setFontSize(7); doc.setTextColor(160, 160, 180);
+              doc.text('G\u00e9n\u00e9r\u00e9 par ' + companyName + ' \u2014 ' + new Date().toLocaleString('fr-FR') + '   |   Page ' + p + '/' + pageCount, 10, doc.internal.pageSize.getHeight() - 5);
+            }
+
+            doc.save('rapport_sav_' + dateFrom + '_' + dateTo + '.pdf');
+          } catch(e) {
+            document.body.innerHTML = '<div style="padding:40px;color:red">Erreur: ' + e.message + '</div>';
+          } finally {
+            setTimeout(() => window.close(), 1000);
+          }
+        }, 800);
+      });
+    <\/script>
     </body></html>`);
     w.document.close();
-    setTimeout(() => { w.print(); setIsPdfGenerating(false); }, 500);
+    setTimeout(() => setIsPdfGenerating(false), 3000);
   };
+
 
   // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
   const filtered = useMemo(() => {
