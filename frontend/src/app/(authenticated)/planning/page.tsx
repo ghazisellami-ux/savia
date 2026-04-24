@@ -5,12 +5,28 @@ import { Modal } from '@/components/ui/modal';
 import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
-  Wrench, CheckCircle, Trash2, X
+  Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
+
+// ─── Domaines médicaux ────────────────────────────────────────────────
+const DOMAINES_MEDICAUX = ['Radiologie', 'POC / Soins Intensifs', 'Laboratoire', 'Anesthésie / Bloc Op.'] as const;
+const DOMAINE_ICONS_MAP: Record<string, React.ReactNode> = {
+  'Radiologie':            <Scan       className="w-4 h-4" />,
+  'POC / Soins Intensifs': <Activity   className="w-4 h-4" />,
+  'Laboratoire':           <Microscope className="w-4 h-4" />,
+  'Anesthésie / Bloc Op.': <Wind       className="w-4 h-4" />,
+};
+const DOMAINE_ACTIVE_CLS: Record<string, string> = {
+  'Radiologie':            'bg-blue-600/40   border-blue-400/70   text-white',
+  'POC / Soins Intensifs': 'bg-orange-600/40 border-orange-400/70 text-white',
+  'Laboratoire':           'bg-purple-600/40 border-purple-400/70 text-white',
+  'Anesthésie / Bloc Op.': 'bg-teal-600/40   border-teal-400/70   text-white',
+};
+// ────────────────────────────────────────────────────────────────────
 const MONTHS = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const DAYS_SHORT = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const STATUT_COLORS: Record<string, { cell: string; badge: string; dot: string }> = {
@@ -41,6 +57,7 @@ interface PlanItem {
 }
 
 const emptyForm = {
+  domaine: 'Radiologie' as string,
   client: '',
   machine: '',
   type_maintenance: 'Préventive',
@@ -61,7 +78,7 @@ export default function PlanningPage() {
   const [currentYear, setCurrentYear] = useState(now.getFullYear());
   const [data, setData] = useState<PlanItem[]>([]);
   const [clientsList, setClientsList] = useState<string[]>([]);
-  const [equipsAll, setEquipsAll] = useState<{nom: string; client: string}[]>([]);
+  const [equipsAll, setEquipsAll] = useState<{nom: string; client: string; domaine: string}[]>([]);
   const [techsList, setTechsList] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -79,11 +96,21 @@ export default function PlanningPage() {
   const [filterTech,    setFilterTech]    = useState('Tous');
   const [filterStatut,  setFilterStatut]  = useState('Tous');
 
-  // Equipements filtered by selected client
+  // Filtrage en cascade : domaine → client → équipement
+  const equipsForDomaine = useMemo(() => {
+    if (!form.domaine) return equipsAll;
+    return equipsAll.filter(e => !e.domaine || e.domaine === form.domaine);
+  }, [equipsAll, form.domaine]);
+
+  const clientsForDomaine = useMemo(() => {
+    const names = equipsForDomaine.map(e => e.client).filter(Boolean);
+    return [...new Set(names)].sort();
+  }, [equipsForDomaine]);
+
   const filteredEquips = useMemo(() => {
-    if (!form.client) return equipsAll.map(e => e.nom);
-    return equipsAll.filter(e => e.client === form.client).map(e => e.nom);
-  }, [equipsAll, form.client]);
+    if (!form.client) return equipsForDomaine.map(e => e.nom);
+    return equipsForDomaine.filter(e => e.client === form.client).map(e => e.nom);
+  }, [equipsForDomaine, form.client]);
 
   const loadData = useCallback(async () => {
     try {
@@ -112,6 +139,7 @@ export default function PlanningPage() {
       const equipsFlat = (eqRes as any[]).map((e: any) => ({
         nom: e.Nom || e.nom || '',
         client: e.Client || e.client || '',
+        domaine: e.domaine || e.Domaine || 'Radiologie',
       })).filter(e => e.nom);
       setEquipsAll(equipsFlat);
 
@@ -461,17 +489,47 @@ export default function PlanningPage() {
             </div>
           )}
 
+          {/* ── Domaine médical ── */}
+          <div>
+            <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+              <Scan className="w-3.5 h-3.5 text-savia-accent" /> Domaine médical *
+            </label>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {DOMAINES_MEDICAUX.map(d => (
+                <button key={d} type="button"
+                  onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
+                  className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
+                    form.domaine === d
+                      ? DOMAINE_ACTIVE_CLS[d]
+                      : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+                  }`}
+                >
+                  <div className="scale-110">{DOMAINE_ICONS_MAP[d]}</div>
+                  <span className="text-center leading-tight">
+                    {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Client + Type */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Building2 className="w-3.5 h-3.5 text-savia-accent" /> Client *
+                {clientsForDomaine.length > 0 && (
+                  <span className="text-savia-text-dim font-normal normal-case text-[11px]">({clientsForDomaine.length} client{clientsForDomaine.length > 1 ? 's' : ''})</span>
+                )}
               </label>
               <select className={INPUT_CLS} value={form.client}
                 onChange={e => setForm({...form, client: e.target.value, machine: ''})}>
                 <option value="">— Sélectionner un client —</option>
-                {clientsList.map(c => <option key={c} value={c}>{c}</option>)}
+                {clientsForDomaine.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {form.domaine && clientsForDomaine.length === 0 && (
+                <p className="text-xs text-amber-400/70 mt-1">Aucun client avec des équipements dans ce domaine.</p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -484,18 +542,18 @@ export default function PlanningPage() {
             </div>
           </div>
 
-          {/* Équipement (filtré par client) */}
+          {/* Équipement (filtré par domaine puis client) */}
           <div>
             <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
               <Server className="w-3.5 h-3.5 text-savia-accent" /> Équipement *
-              {form.client && <span className="text-savia-text-dim font-normal normal-case text-[11px]">({filteredEquips.length} disponible{filteredEquips.length > 1 ? 's' : ''})</span>}
+              {filteredEquips.length > 0 && <span className="text-savia-text-dim font-normal normal-case text-[11px]">({filteredEquips.length} disponible{filteredEquips.length > 1 ? 's' : ''})</span>}
             </label>
             <select className={INPUT_CLS} value={form.machine}
               onChange={e => setForm({...form, machine: e.target.value})}>
               <option value="">— Sélectionner un équipement —</option>
               {filteredEquips.map(e => <option key={e} value={e}>{e}</option>)}
               {filteredEquips.length === 0 && form.client && (
-                <option disabled>Aucun équipement pour ce client</option>
+                <option disabled>Aucun équipement pour ce client dans ce domaine</option>
               )}
             </select>
             {!form.client && (
