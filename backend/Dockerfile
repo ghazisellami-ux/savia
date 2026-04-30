@@ -1,3 +1,7 @@
+# ==========================================
+# 🐍 Dockerfile — SAVIA FastAPI Backend
+# ==========================================
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -6,13 +10,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files (only what's needed)
+# Copy application files
 COPY main.py db_engine.py ai_engine.py auth.py config.py ./
-COPY log_preprocessor.py ./
-COPY s3_storage.py ./
+COPY log_preprocessor.py s3_storage.py ./
 COPY knowledge_base.xlsx ./
 
-# Create data directory
+# Create data directory for persistent volumes
 RUN mkdir -p /app/data
 
 # Environment variables

@@ -1,27 +1,39 @@
 # ==========================================
-# 🐳 Dockerfile — SAVIA Next.js Frontend
+# 🎨 Dockerfile — SAVIA Next.js Frontend
 # ==========================================
-FROM node:20-alpine AS builder
+# Multi-stage: dev & production séparés
+#
+# Usage:
+#   Production : docker build --target runner -t savia-frontend .
+#   Dev        : docker build --target dev -t savia-frontend-dev .
 
+# ── Stage 1: Dependencies ─────────────────
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-# Copy package files and install dependencies
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Copy all files
+# ── Stage 2: Development ──────────────────
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+FROM deps AS dev
+WORKDIR /app
 COPY . .
+ENV NODE_ENV=development
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
 
-# NEXT_PUBLIC_* vars are baked at build time — set empty so frontend uses relative URLs
-# (Nginx proxies /api/* to the backend, no hardcoded host needed)
+# ── Stage 3: Build (production) ───────────
+FROM deps AS builder
+WORKDIR /app
+COPY . .
+# NEXT_PUBLIC_* vars are baked at build time
+# Empty = frontend uses relative URLs (Nginx proxies /api/* to backend)
 ENV NEXT_PUBLIC_API_URL=
-
 RUN npm run build
 
-# Production image
+# ── Stage 4: Production Runner ────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
-
 ENV NODE_ENV=production
 
 # Copy built assets from builder

@@ -1,5 +1,20 @@
+# ==========================================
+# 🐳 Docker Compose — SAVIA Platform
+# ==========================================
+# Usage:
+#   1. cp .env.example .env && nano .env
+#   2. docker compose up -d --build
+#   3. docker compose logs -f
+#
+# Services:
+#   - postgres  : Base de données PostgreSQL
+#   - minio     : Stockage objet S3-compatible
+#   - backend   : API FastAPI (Python)
+#   - frontend  : Interface admin Next.js
+#   - pwa-site  : PWA Techniciens terrain
+
 services:
-  # --- PostgreSQL Database ---
+  # ── PostgreSQL Database ─────────────────
   postgres:
     image: postgres:16-alpine
     ports:
@@ -7,17 +22,17 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: savia
-      POSTGRES_USER: savia
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-savia_secure_2026}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U savia -d savia"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # --- MinIO (S3-compatible Object Storage) ---
+  # ── MinIO (S3-compatible Object Storage) ─
   minio:
     image: minio/minio:latest
     ports:
@@ -26,30 +41,33 @@ services:
     volumes:
       - minio_data:/data
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-savia_admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-savia_minio_secret_2026}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
     restart: unless-stopped
 
-  # --- FastAPI Backend ---
+  # ── FastAPI Backend ─────────────────────
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-    env_file:
-      - .env
     environment:
-      - PORT=8000
-      - JWT_SECRET=${JWT_SECRET:-savia-super-secret-key-2026}
-      - DATABASE_URL=postgresql://savia:${POSTGRES_PASSWORD:-savia_secure_2026}@postgres:5432/savia
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=${MINIO_ROOT_USER:-savia_admin}
-      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD:-savia_minio_secret_2026}
-      - S3_BUCKET=savia-logs
+      PORT: ${PORT:-8000}
+      JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-savia-logs}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_API_KEYS: ${GOOGLE_API_KEYS}
+      MASTER_KEY: ${MASTER_KEY}
+      ACCESS_CODE: ${ACCESS_CODE}
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,21 +75,22 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # --- Next.js Admin Frontend ---
+  # ── Next.js Admin Frontend ──────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: runner
     ports:
       - "3000:3000"
     environment:
-      - BACKEND_URL=http://backend:8000
-      - NODE_ENV=production
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      NODE_ENV: production
     depends_on:
       - backend
     restart: unless-stopped
 
-  # --- SAVIA Site — PWA Techniciens ---
+  # ── SAVIA Site — PWA Techniciens ────────
   pwa-site:
     build:
       context: ./pwa-site
@@ -79,9 +98,9 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - BACKEND_URL=http://backend:8000
-      - PORT=3001
-      - HOSTNAME=0.0.0.0
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
     depends_on:
       - backend
     restart: unless-stopped

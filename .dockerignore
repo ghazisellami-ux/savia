@@ -1,5 +1,5 @@
 # ============================================
-# Savia — .dockerignore
+# Savia — .dockerignore (root)
 # ============================================
 
 .git
@@ -11,6 +11,7 @@
 .vscode/
 .idea/
 .devcontainer/
+.github/
 
 # Python
 __pycache__/
@@ -41,11 +42,4 @@ SIC_Radiologie_Pitch.pptx
 *.zip
 
 # Documentation
-README.md
 LICENSE
-*.md
-
-# Docker
-Dockerfile
-docker-compose*.yml
-.dockerignore
