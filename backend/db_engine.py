@@ -597,6 +597,10 @@ def init_db():
         _safe_add_column("contrats", "equipement")
         _safe_add_column("contrats", "fichier_contrat")
         _safe_add_column("equipements", "document_technique")
+        # Geographic coordinates for map feature
+        _safe_add_column("equipements", "latitude", "REAL", "NULL")
+        _safe_add_column("equipements", "longitude", "REAL", "NULL")
+        _safe_add_column("equipements", "adresse")
 
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:

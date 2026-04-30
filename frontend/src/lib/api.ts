@@ -260,5 +260,32 @@ export const logs = {
     request<{ ok: boolean; deleted: number; message: string }>(`/api/logs/machine/${encodeURIComponent(machineName)}`, { method: 'DELETE' }),
 };
 
+// --- Finances ---
+export const finances = {
+  dashboard: (client?: string) => {
+    const qs = client ? `?client=${encodeURIComponent(client)}` : '';
+    return request<{ kpis: Record<string, number>; clients: Array<Record<string, unknown>> }>(`/api/finances/dashboard${qs}`);
+  },
+  tco: (client?: string) => {
+    const qs = client ? `?client=${encodeURIComponent(client)}` : '';
+    return request<Array<Record<string, unknown>>>(`/api/finances/tco${qs}`);
+  },
+};
+
+// --- Map ---
+export const mapApi = {
+  sites: () => request<Array<Record<string, unknown>>>('/api/map/sites'),
+  updateCoordinates: (clientName: string, data: { latitude: number; longitude: number; adresse?: string }) =>
+    request<{ ok: boolean }>(`/api/map/sites/${encodeURIComponent(clientName)}/coordinates`, { method: 'PUT', body: data }),
+};
+
+// --- SLA ---
+export const sla = {
+  status: (client?: string) => {
+    const qs = client ? `?client=${encodeURIComponent(client)}` : '';
+    return request<{ kpis: Record<string, number>; items: Array<Record<string, unknown>> }>(`/api/sla/status${qs}`);
+  },
+};
+
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla };

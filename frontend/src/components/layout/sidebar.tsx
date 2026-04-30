@@ -11,7 +11,7 @@ import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
   ClipboardCheck, Settings, LogOut, SlidersHorizontal,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, DollarSign, MapPin, ShieldCheck,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -27,7 +27,10 @@ const NAV_ITEMS = [
   { key: 'planning',           label: 'Planning',               href: '/planning',    icon: CalendarDays   },
   { key: 'pieces',             label: 'Pièces de Rechange',     href: '/pieces',      icon: Cog            },
   { key: 'reports',            label: 'Rapports & Exports',     href: '/reports',     icon: FileText       },
-  { key: 'contrats',           label: 'Contrats & SLA',         href: '/contrats',    icon: ClipboardCheck },
+  { key: 'contrats',           label: 'Contrats',               href: '/contrats',    icon: ClipboardCheck },
+  { key: 'finances',           label: 'Finances',               href: '/finances',    icon: DollarSign     },
+  { key: 'carte',              label: 'Carte Géographique',     href: '/carte',       icon: MapPin         },
+  { key: 'sla',                label: 'Suivi SLA',              href: '/sla',         icon: ShieldCheck    },
   { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings       },
   { key: 'settings',           label: 'Paramètres',             href: '/settings',    icon: SlidersHorizontal },
 ];
