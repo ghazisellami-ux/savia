@@ -3136,6 +3136,7 @@ def map_sites(user: dict = Depends(_verify_token)):
                     "latitude": eq.get("latitude", None),
                     "longitude": eq.get("longitude", None),
                     "adresse": eq.get("adresse", ""),
+                    "ville": eq.get("Ville", eq.get("ville", "")),
                 }
             nom = eq.get("Nom", "")
             statut = eq.get("Statut", eq.get("statut", "Actif"))

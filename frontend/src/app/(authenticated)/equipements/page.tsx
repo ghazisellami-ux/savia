@@ -8,9 +8,19 @@ import {
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
+  MapPin,
 } from 'lucide-react';
 import { equipements, documentsTechniques } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+
+// Tunisian cities for dropdown
+const TUNISIAN_CITIES = [
+  'Tunis', 'Ariana', 'Ben Arous', 'Manouba', 'Nabeul', 'Zaghouan',
+  'Bizerte', 'Béja', 'Jendouba', 'Kef', 'Siliana', 'Sousse',
+  'Monastir', 'Mahdia', 'Sfax', 'Kairouan', 'Kasserine', 'Sidi Bouzid',
+  'Gabès', 'Médenine', 'Tataouine', 'Gafsa', 'Tozeur', 'Kébili',
+  'Hammamet', 'Tabarka', 'Djerba', 'Grombalia', 'La Marsa', 'Carthage',
+];
 
 interface Equipment {
   id: string;
@@ -24,6 +34,7 @@ interface Equipment {
   client: string;
   matriculeFiscale: string;
   localisation: string;
+  ville: string;
   dateInstallation: string;
   derniereMaintenance: string;
   prochaineMaintenance: string;
@@ -164,6 +175,7 @@ export default function EquipementsPage() {
     Nom: '', Type: 'Scanner CT', Domaine: 'Radiologie' as string, EstAnnexe: false,
     Fabricant: '', Modele: '', NumSerie: '',
     Client: '', MatriculeFiscale: '', Notes: '', Statut: 'Opérationnel',
+    Ville: '',
     GarantieDebut: '', GarantieDuree: 0,
     DateInstallation: new Date().toISOString().split('T')[0],
     DernieresMaintenance: new Date().toISOString().split('T')[0],
@@ -225,6 +237,7 @@ export default function EquipementsPage() {
         client: item.Client || 'Centre Principal',
         matriculeFiscale: item.MatriculeFiscale || '',
         localisation: item.Notes || '',
+        ville: item.Ville || item.ville || '',
         dateInstallation: item.DateInstallation || 'N/A',
         derniereMaintenance: item.DernieresMaintenance || 'N/A',
         prochaineMaintenance: 'N/A',
@@ -271,6 +284,7 @@ export default function EquipementsPage() {
       Client: eq.client,
       MatriculeFiscale: eq.matriculeFiscale || '',
       Notes: eq.localisation,
+      Ville: eq.ville || '',
       Statut: eq.statut || 'Opérationnel',
       DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : new Date().toISOString().split('T')[0],
       DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],
@@ -485,6 +499,24 @@ export default function EquipementsPage() {
                             setForm(mat ? { ...form, Client: val, MatriculeFiscale: mat } : { ...form, Client: val });
                           }}
                         />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── 1b. Localisation ── */}
+                  <div className="mt-4">
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-savia-accent" /> Localisation
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5" /> Ville *
+                        </label>
+                        <select className={INPUT_CLS} value={form.Ville} onChange={e => setForm({ ...form, Ville: e.target.value })}>
+                          <option value="">— Sélectionner une ville —</option>
+                          {TUNISIAN_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
                       </div>
                     </div>
                   </div>

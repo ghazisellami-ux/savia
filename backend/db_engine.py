@@ -601,6 +601,7 @@ def init_db():
         _safe_add_column("equipements", "latitude", "REAL", "NULL")
         _safe_add_column("equipements", "longitude", "REAL", "NULL")
         _safe_add_column("equipements", "adresse")
+        _safe_add_column("equipements", "ville")
 
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
@@ -900,7 +901,7 @@ def lire_equipements():
                 "date_installation": "DateInstallation",
                 "derniere_maintenance": "DernieresMaintenance",
                 "statut": "Statut", "notes": "Notes",
-                "client": "Client",
+                "client": "Client", "ville": "Ville",
             }
             df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
             if "Client" in df.columns:
@@ -933,8 +934,8 @@ def ajouter_equipement(equipement_dict):
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
-                                     domaine, est_annexe, garantie_debut, garantie_duree)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     domaine, est_annexe, garantie_debut, garantie_duree, ville)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
@@ -942,7 +943,8 @@ def ajouter_equipement(equipement_dict):
                 notes=excluded.notes, matricule_fiscale=excluded.matricule_fiscale,
                 document_technique=excluded.document_technique,
                 domaine=excluded.domaine, est_annexe=excluded.est_annexe,
-                garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree
+                garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree,
+                ville=excluded.ville
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -960,6 +962,7 @@ def ajouter_equipement(equipement_dict):
             bool(equipement_dict.get("EstAnnexe", False)),
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
+            equipement_dict.get("Ville", ""),
         ))
     _trigger_backup()
     return True
@@ -981,7 +984,8 @@ def modifier_equipement(equip_id, equipement_dict):
                 nom = ?, type = ?, fabricant = ?, modele = ?, num_serie = ?,
                 date_installation = ?, derniere_maintenance = ?, statut = ?,
                 notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
-                domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?
+                domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?,
+                ville = ?
             WHERE id = ?
         """, (
             equipement_dict.get("Nom", ""),
@@ -1000,6 +1004,7 @@ def modifier_equipement(equip_id, equipement_dict):
             bool(equipement_dict.get("EstAnnexe", False)),
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
+            equipement_dict.get("Ville", ""),
             equip_id,
         ))
     _trigger_backup()

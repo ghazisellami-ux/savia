@@ -24,16 +24,20 @@ const TUNISIAN_CITIES: Record<string, [number, number]> = {
   'grombalia': [36.6017, 10.5042], 'la marsa': [36.8783, 10.3252], 'carthage': [36.8528, 10.3233],
 };
 
-function guessCoordinates(clientName: string): [number, number] | null {
-  const lower = clientName.toLowerCase();
+function guessCoordinates(site: { client: string; ville?: string }): [number, number] | null {
+  // Priority: use the ville field if set
+  if (site.ville) {
+    const lower = site.ville.toLowerCase();
+    for (const [city, coords] of Object.entries(TUNISIAN_CITIES)) {
+      if (lower.includes(city) || city.includes(lower)) return coords;
+    }
+  }
+  // Fallback: try client name
+  const lower = site.client.toLowerCase();
   for (const [city, coords] of Object.entries(TUNISIAN_CITIES)) {
     if (lower.includes(city)) return coords;
   }
-  // Default: random position in Tunisia for demo
-  return [
-    34.5 + Math.random() * 3.5,
-    8.5 + Math.random() * 2.5,
-  ];
+  return null;
 }
 
 interface Site {
@@ -42,6 +46,7 @@ interface Site {
   latitude: number | null;
   longitude: number | null;
   adresse: string;
+  ville: string;
   score_sante: number;
   nb_interventions: number;
   prochaine_maintenance: string | null;
@@ -68,7 +73,7 @@ export default function CartePage() {
       // Auto-assign coordinates to sites without them
       const enriched = data.map(s => {
         if (s.latitude && s.longitude) return s;
-        const guess = guessCoordinates(s.client);
+        const guess = guessCoordinates(s);
         return { ...s, latitude: guess ? guess[0] : null, longitude: guess ? guess[1] : null };
       });
       setSites(enriched);
@@ -163,7 +168,7 @@ export default function CartePage() {
             </span>
           </div>
           <div style="font-size: 11px; color: #64748b;">
-            📍 ${site.adresse || 'Adresse non renseignée'}<br/>
+            📍 ${site.ville || site.adresse || 'Adresse non renseignée'}<br/>
             🔧 ${site.nb_interventions} interventions<br/>
             ${site.prochaine_maintenance ? `📅 Prochaine: ${site.prochaine_maintenance}` : ''}
           </div>
@@ -294,7 +299,7 @@ export default function CartePage() {
                       {site.prochaine_maintenance && (
                         <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> Prochaine: {site.prochaine_maintenance}</span>
                       )}
-                      <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {site.adresse || `${site.latitude?.toFixed(3)}, ${site.longitude?.toFixed(3)}`}</span>
+                      <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {site.ville || site.adresse || `${site.latitude?.toFixed(3)}, ${site.longitude?.toFixed(3)}`}</span>
                     </div>
                     {/* Equipment list */}
                     <div className="flex flex-wrap gap-1 mt-2">
