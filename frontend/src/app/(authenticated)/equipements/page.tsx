@@ -544,7 +544,6 @@ export default function EquipementsPage() {
                       </div>
                     )}
                   </div>
-                  </div>
 
                   {/* ── 2. Domaine & Type ── */}
                   <div>
