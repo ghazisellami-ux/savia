@@ -242,7 +242,7 @@ export default function CartePage() {
           { label: 'Sites Clients', value: sites.length, color: 'text-savia-accent', icon: <Building2 className="w-5 h-5" /> },
           { label: 'Équipements', value: totalEquip, color: 'text-blue-400', icon: <Cpu className="w-5 h-5" /> },
           { label: 'Score Moyen', value: `${avgScore}%`, color: avgScore >= 70 ? 'text-green-400' : 'text-yellow-400', icon: <Heart className="w-5 h-5" /> },
-          { label: 'Sites en alerte', value: sitesAlerte, color: sitesAlerte > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
+          { label: 'Sites en alerte', value: sitesAlerte, color: 'text-red-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(k => (
           <div key={k.label} className="glass rounded-xl p-4 text-center">
             <div className={`${k.color} mx-auto mb-1 flex justify-center`}>{k.icon}</div>
@@ -281,7 +281,11 @@ export default function CartePage() {
             const score = site.score_sante;
             const isEditing = editingSite === site.client;
             return (
-              <div key={site.client} className="glass rounded-xl p-4 hover:border-savia-accent/30 transition-all">
+              <div key={site.client} className={`glass rounded-xl p-4 transition-all ${
+                score < 50 ? 'border-red-500/50 bg-red-500/5 hover:border-red-500/70' :
+                score < 80 ? 'border-yellow-500/30 hover:border-yellow-500/50' :
+                'hover:border-savia-accent/30'
+              }`}>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
