@@ -37,20 +37,28 @@ export default function FinancesPage() {
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [fin, tco, cls] = await Promise.all([
+      // Load finances data independently so one failure doesn't block others
+      const [fin, tco] = await Promise.all([
         finances.dashboard(selectedClient || undefined),
         finances.tco(selectedClient || undefined),
-        clientsApi.list(),
       ]);
       setData(fin);
       setTcoData(tco as any[]);
-      const names = (cls as any[]).map((c: any) => c.nom).filter(Boolean);
-      setClientList(names);
     } catch (err) {
       console.error('Failed to load finances', err);
-    } finally {
-      setIsLoading(false);
     }
+    // Client list for filter dropdown - separate call
+    try {
+      const cls = await clientsApi.list();
+      const names = (cls as any[]).map((c: any) => c.nom || c.client || '').filter(Boolean);
+      setClientList(names);
+    } catch {
+      // Fallback: extract client names from finance data
+      if (data?.clients) {
+        setClientList((data.clients as any[]).map((c: any) => c.client).filter(Boolean));
+      }
+    }
+    setIsLoading(false);
   }, [selectedClient]);
 
   useEffect(() => { load(); }, [load]);
