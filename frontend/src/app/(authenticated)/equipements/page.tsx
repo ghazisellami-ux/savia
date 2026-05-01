@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin,
 } from 'lucide-react';
-import { equipements, documentsTechniques } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 // Tunisian cities for dropdown
@@ -149,7 +149,7 @@ function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; 
 export default function EquipementsPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  const [activeTab, setActiveTab] = useState<'equipements' | 'documents'>('equipements');
+  const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>('equipements');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
@@ -213,6 +213,18 @@ export default function EquipementsPage() {
   const allMatricules = useMemo(() => Array.from(matriculeClientMap.keys()), [matriculeClientMap]);
   const allClientNames = useMemo(() => Array.from(clientMatriculeMap.keys()), [clientMatriculeMap]);
 
+  // ── Clients from dedicated table ──
+  interface ClientRecord { id: number; nom: string; matricule_fiscale: string; ville: string; contact: string; telephone: string; adresse: string; nb_equipements: number; nb_interventions: number; score_sante: number; }
+  const [clientsList, setClientsList] = useState<ClientRecord[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [showClientForm, setShowClientForm] = useState(false);
+  const [editingClient, setEditingClient] = useState<ClientRecord | null>(null);
+  const [confirmDeleteClient, setConfirmDeleteClient] = useState<ClientRecord | null>(null);
+  const emptyClientForm = { nom: '', matricule_fiscale: '', ville: '', contact: '', telephone: '', adresse: '' };
+  const [clientForm, setClientForm] = useState(emptyClientForm);
+  const [clientSearch, setClientSearch] = useState('');
+  const [savingClient, setSavingClient] = useState(false);
+
   // Computed warranty end date from form state
   const formGarantieFin = useMemo(
     () => computeGarantieFin(form.GarantieDebut, Number(form.GarantieDuree)),
@@ -270,6 +282,51 @@ export default function EquipementsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
+
+  // Load clients
+  const loadClients = useCallback(async () => {
+    setClientsLoading(true);
+    try {
+      const res = await clientsApi.list();
+      setClientsList(res.map((c: any) => ({
+        id: c.id, nom: c.nom || '', matricule_fiscale: c.matricule_fiscale || '',
+        ville: c.ville || '', contact: c.contact || '', telephone: c.telephone || '',
+        adresse: c.adresse || '', nb_equipements: c.nb_equipements || 0,
+        nb_interventions: c.nb_interventions || 0, score_sante: c.score_sante || 100,
+      })));
+    } catch (err) { console.error('Failed to fetch clients', err); }
+    finally { setClientsLoading(false); }
+  }, []);
+
+  useEffect(() => { loadClients(); }, [loadClients]);
+  useEffect(() => { if (activeTab === 'clients') loadClients(); }, [activeTab, loadClients]);
+
+  const handleSaveClient = async () => {
+    if (!clientForm.nom.trim()) return;
+    setSavingClient(true);
+    try {
+      if (editingClient) {
+        await clientsApi.update(editingClient.id, clientForm);
+      } else {
+        await clientsApi.create(clientForm);
+      }
+      setClientForm(emptyClientForm); setShowClientForm(false); setEditingClient(null);
+      await loadClients();
+    } catch (err) { console.error('Save client failed', err); }
+    finally { setSavingClient(false); }
+  };
+
+  const startEditClient = (c: ClientRecord) => {
+    setEditingClient(c);
+    setClientForm({ nom: c.nom, matricule_fiscale: c.matricule_fiscale, ville: c.ville, contact: c.contact, telephone: c.telephone, adresse: c.adresse });
+    setShowClientForm(true);
+  };
+
+  const executeDeleteClient = async (c: ClientRecord) => {
+    setConfirmDeleteClient(null);
+    try { await clientsApi.delete(c.id); await loadClients(); }
+    catch (err) { console.error('Delete client failed', err); }
+  };
 
   const startEdit = (eq: Equipment) => {
     setEditingEquip(eq);
@@ -416,6 +473,10 @@ export default function EquipementsPage() {
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'equipements' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
           <Server className="w-4 h-4" /> Équipements
         </button>
+        <button onClick={() => setActiveTab('clients')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'clients' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
+          <Building2 className="w-4 h-4" /> Clients
+        </button>
         {!isLecteur && (
           <button onClick={() => setActiveTab('documents')}
             className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'documents' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
@@ -444,81 +505,45 @@ export default function EquipementsPage() {
               {showAddForm && (
                 <div className="p-5 pt-0 border-t border-savia-border/50 space-y-6">
 
-                  {/* ── 1. Client ── */}
+                  {/* ── 1. Client (select from existing) ── */}
                   <div className="mt-4">
                     <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <BadgeCheck className="w-4 h-4 text-savia-accent" /> Identification du Client
+                      <BadgeCheck className="w-4 h-4 text-savia-accent" /> Sélection du Client
                     </h3>
-                    {/* Datalists for auto-complete */}
-                    <datalist id="matricule-suggestions">
-                      {allMatricules.map(m => <option key={m} value={m} />)}
-                    </datalist>
-                    <datalist id="client-suggestions">
-                      {allClientNames.map(c => <option key={c} value={c} />)}
-                    </datalist>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Hash className="w-3.5 h-3.5" /> Matricule Fiscale *
-                        </label>
-                        <div className="relative">
-                          <input
-                            list="matricule-suggestions"
-                            className={INPUT_CLS}
-                            placeholder="Ex: 1234567/A/P/M/000"
-                            value={form.MatriculeFiscale}
-                            onChange={e => {
-                              const val = e.target.value;
-                              const matched = matriculeClientMap.get(val.trim().toLowerCase());
-                              setForm(matched ? { ...form, MatriculeFiscale: val, Client: matched } : { ...form, MatriculeFiscale: val });
-                            }}
-                          />
-                          {form.MatriculeFiscale && matriculeClientMap.has(form.MatriculeFiscale.trim().toLowerCase()) && (
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-green-400 pointer-events-none">
-                              <CheckCircle2 className="w-4 h-4" /><span className="text-xs font-semibold">Client trouvé</span>
-                            </div>
-                          )}
+                    {clientsList.length === 0 ? (
+                      <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/5 text-amber-300 text-sm flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4" /> Aucun client enregistré. <button onClick={() => setActiveTab('clients')} className="underline font-semibold cursor-pointer hover:text-amber-200">Créez d&apos;abord un client</button> dans l&apos;onglet Clients.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <Building2 className="w-3.5 h-3.5" /> Client *
+                          </label>
+                          <select className={INPUT_CLS} value={form.Client} onChange={e => {
+                            const selected = clientsList.find(c => c.nom === e.target.value);
+                            setForm({
+                              ...form,
+                              Client: e.target.value,
+                              MatriculeFiscale: selected?.matricule_fiscale || form.MatriculeFiscale,
+                              Ville: selected?.ville || form.Ville,
+                            });
+                          }}>
+                            <option value="">— Sélectionner un client —</option>
+                            {clientsList.map(c => <option key={c.id} value={c.nom}>{c.nom}{c.ville ? ` (${c.ville})` : ''}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                            <Hash className="w-3.5 h-3.5" /> Matricule Fiscale
+                            {form.Client && <span className="text-green-400 text-[10px] font-normal">(auto-rempli)</span>}
+                          </label>
+                          <input className={`${INPUT_CLS} bg-savia-bg/30`} value={form.MatriculeFiscale} readOnly
+                            placeholder="Renseigné via le client" />
                         </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Building2 className="w-3.5 h-3.5" /> Client / Site *
-                          {form.MatriculeFiscale && matriculeClientMap.has(form.MatriculeFiscale.trim().toLowerCase()) && (
-                            <span className="text-green-400 text-[10px] font-normal">(auto-rempli)</span>
-                          )}
-                        </label>
-                        <input
-                          list="client-suggestions"
-                          className={INPUT_CLS}
-                          placeholder="Ex: Clinique du Parc"
-                          value={form.Client}
-                          onChange={e => {
-                            const val = e.target.value;
-                            const mat = clientMatriculeMap.get(val);
-                            setForm(mat ? { ...form, Client: val, MatriculeFiscale: mat } : { ...form, Client: val });
-                          }}
-                        />
-                      </div>
-                    </div>
+                    )}
                   </div>
-
-                  {/* ── 1b. Localisation ── */}
-                  <div className="mt-4">
-                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-savia-accent" /> Localisation
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <MapPin className="w-3.5 h-3.5" /> Ville *
-                        </label>
-                        <select className={INPUT_CLS} value={form.Ville} onChange={e => setForm({ ...form, Ville: e.target.value })}>
-                          <option value="">— Sélectionner une ville —</option>
-                          {TUNISIAN_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      </div>
-                    </div>
                   </div>
 
                   {/* ── 2. Domaine & Type ── */}
@@ -836,6 +861,180 @@ export default function EquipementsPage() {
         </>
       )}
 
+      {/* ========== TAB: CLIENTS ========== */}
+      {activeTab === 'clients' && (
+        <>
+          {/* Add/Edit Client Form */}
+          {!isLecteur && (
+            <div className="glass rounded-xl overflow-hidden">
+              <button
+                onClick={() => { if (showClientForm) { setShowClientForm(false); setEditingClient(null); setClientForm(emptyClientForm); } else { setEditingClient(null); setClientForm(emptyClientForm); setShowClientForm(true); } }}
+                className="w-full flex items-center justify-between p-4 hover:bg-savia-surface-hover/30 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  {editingClient ? <Edit2 className="w-5 h-5 text-blue-400" /> : <Plus className="w-5 h-5 text-savia-accent" />}
+                  <span className="font-semibold">{editingClient ? `Modifier — ${editingClient.nom}` : 'Ajouter un nouveau client'}</span>
+                </div>
+                {showClientForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              </button>
+
+              {showClientForm && (
+                <div className="p-5 pt-0 border-t border-savia-border/50 space-y-6">
+                  {/* Identification */}
+                  <div className="mt-4">
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <BadgeCheck className="w-4 h-4 text-savia-accent" /> Identification du Client
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Hash className="w-3.5 h-3.5" /> Matricule Fiscale *
+                        </label>
+                        <input className={INPUT_CLS} placeholder="Ex: 1234567/A/P/M/000"
+                          value={clientForm.matricule_fiscale} onChange={e => setClientForm({ ...clientForm, matricule_fiscale: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Building2 className="w-3.5 h-3.5" /> Client / Site *
+                        </label>
+                        <input className={INPUT_CLS} placeholder="Ex: Clinique du Parc"
+                          value={clientForm.nom} onChange={e => setClientForm({ ...clientForm, nom: e.target.value })} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Localisation */}
+                  <div>
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-savia-accent" /> Localisation
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5" /> Ville *
+                        </label>
+                        <select className={INPUT_CLS} value={clientForm.ville} onChange={e => setClientForm({ ...clientForm, ville: e.target.value })}>
+                          <option value="">— Sélectionner une ville —</option>
+                          {TUNISIAN_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <StickyNote className="w-3.5 h-3.5" /> Adresse
+                        </label>
+                        <input className={INPUT_CLS} placeholder="Adresse complète..."
+                          value={clientForm.adresse} onChange={e => setClientForm({ ...clientForm, adresse: e.target.value })} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contact */}
+                  <div>
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <ClipboardList className="w-4 h-4 text-savia-accent" /> Contact
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Nom du contact</label>
+                        <input className={INPUT_CLS} placeholder="Ex: Dr. Ben Ali"
+                          value={clientForm.contact} onChange={e => setClientForm({ ...clientForm, contact: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Téléphone</label>
+                        <input className={INPUT_CLS} placeholder="Ex: +216 71 000 000"
+                          value={clientForm.telephone} onChange={e => setClientForm({ ...clientForm, telephone: e.target.value })} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Save/Cancel */}
+                  <div className="flex justify-end gap-3 pt-4 border-t border-savia-border/50">
+                    <button onClick={() => { setShowClientForm(false); setEditingClient(null); setClientForm(emptyClientForm); }}
+                      className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">
+                      Annuler
+                    </button>
+                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                      {savingClient ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      {editingClient ? 'Mettre à jour' : 'Sauvegarder'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Client Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+            <input type="text" placeholder="Rechercher un client..." value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+              className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
+          </div>
+
+          {/* Client Cards */}
+          {clientsLoading ? (
+            <div className="flex justify-center items-center h-32"><Loader2 className="w-6 h-6 animate-spin text-savia-accent" /></div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {clientsList.filter(c => !clientSearch || c.nom.toLowerCase().includes(clientSearch.toLowerCase())).map(c => (
+                <div key={c.id} className="glass rounded-xl p-5 hover:border-savia-accent/30 transition-all group">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-savia-accent/10 flex items-center justify-center flex-shrink-0">
+                        <Building2 className="w-5 h-5 text-savia-accent" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-lg">{c.nom}</h3>
+                        <div className="flex items-center gap-3 text-xs text-savia-text-muted mt-0.5">
+                          {c.ville && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {c.ville}</span>}
+                          {c.matricule_fiscale && <span className="flex items-center gap-1"><Hash className="w-3 h-3" /> {c.matricule_fiscale}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {!isLecteur && (
+                        <>
+                          <button onClick={() => startEditClient(c)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setConfirmDeleteClient(c)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 text-sm mb-3">
+                    <div className="text-center">
+                      <div className="text-xl font-black text-blue-400">{c.nb_equipements}</div>
+                      <div className="text-[10px] text-savia-text-dim">Équipements</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-black text-green-400">{c.nb_interventions}</div>
+                      <div className="text-[10px] text-savia-text-dim">Interventions</div>
+                    </div>
+                    <div className="text-center">
+                      <div className={`text-xl font-black ${c.score_sante >= 85 ? 'text-green-400' : c.score_sante >= 65 ? 'text-yellow-400' : 'text-red-400'}`}>{c.score_sante}%</div>
+                      <div className="text-[10px] text-savia-text-dim">Santé</div>
+                    </div>
+                  </div>
+                  {(c.contact || c.telephone) && (
+                    <div className="flex items-center gap-3 text-xs text-savia-text-muted border-t border-savia-border/30 pt-2 mt-1">
+                      {c.contact && <span>👤 {c.contact}</span>}
+                      {c.telephone && <span>📞 {c.telephone}</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {clientsList.length === 0 && !clientsLoading && (
+            <div className="glass rounded-xl p-8 text-center">
+              <Building2 className="w-10 h-10 mx-auto mb-3 text-savia-text-dim" />
+              <p className="text-savia-text-muted">Aucun client enregistré.</p>
+              <p className="text-xs text-savia-text-dim mt-1">Utilisez le bouton ci-dessus pour créer votre premier client.</p>
+            </div>
+          )}
+        </>
+      )}
+
       {/* ========== TAB: DOCUMENTS TECHNIQUES ========== */}
       {activeTab === 'documents' && (
         <>
@@ -931,6 +1130,26 @@ export default function EquipementsPage() {
               <button onClick={() => setConfirmDelete(null)}
                 className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">Annuler</button>
               <button onClick={() => executeDelete(confirmDelete)}
+                className="px-4 py-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold cursor-pointer transition-colors">Supprimer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Client Confirmation Modal */}
+      {confirmDeleteClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-savia-surface border border-savia-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-400" /> Supprimer le client
+            </h3>
+            <p className="text-savia-text-muted text-sm mb-4">
+              Voulez-vous supprimer <strong className="text-savia-text">{confirmDeleteClient.nom}</strong> ? Les équipements associés ne seront pas supprimés.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirmDeleteClient(null)}
+                className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">Annuler</button>
+              <button onClick={() => executeDeleteClient(confirmDeleteClient)}
                 className="px-4 py-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold cursor-pointer transition-colors">Supprimer</button>
             </div>
           </div>

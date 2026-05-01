@@ -37,6 +37,8 @@ from db_engine import (
     lire_audit, log_audit,
     get_config, set_config,
     lire_demandes_intervention,
+    lire_clients as db_lire_clients, ajouter_client, modifier_client, supprimer_client,
+    migrer_clients_depuis_equipements,
 )
 
 logger = logging.getLogger("savia-api")
@@ -117,6 +119,11 @@ def startup():
     except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
     _start_garantie_daemon()
+    # Auto-migrate existing clients from equipements table
+    try:
+        migrer_clients_depuis_equipements()
+    except Exception as e:
+        logger.warning(f"Client migration skipped: {e}")
     logger.info("✅ SAVIA FastAPI started — DB initialized")
 
 
@@ -2254,40 +2261,65 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
 
 @app.get("/api/clients")
 def get_clients(user: dict = Depends(_verify_token)):
-    """Derive client list from equipements + contrats + interventions."""
+    """List clients from the dedicated clients table, enriched with equipment stats."""
+    df_clients = db_lire_clients()
     df_eq = lire_equipements()
     df_int = lire_interventions()
-    df_contrats = lire_contrats()
 
-    clients = {}
-    if not df_eq.empty and "Client" in df_eq.columns:
-        for client_name in df_eq["Client"].unique():
-            if not client_name:
-                continue
-            eq_client = df_eq[df_eq["Client"] == client_name]
-            nb_eq = len(eq_client)
-            # Health score
-            nb_hs = len(eq_client[eq_client["Statut"].isin(["Hors Service", "Critique"])]) if "Statut" in eq_client.columns else 0
-            score = max(0, round(((nb_eq - nb_hs) / nb_eq) * 100)) if nb_eq > 0 else 100
-            # Interventions count
-            nb_int = 0
-            if not df_int.empty and "machine" in df_int.columns:
-                machines = eq_client["Nom"].tolist() if "Nom" in eq_client.columns else []
-                nb_int = len(df_int[df_int["machine"].isin(machines)])
-            # Active contracts
-            nb_contrats = 0
-            if not df_contrats.empty and "client" in df_contrats.columns:
-                nb_contrats = len(df_contrats[df_contrats["client"] == client_name])
-
-            clients[client_name] = {
+    result = []
+    if not df_clients.empty:
+        for _, row in df_clients.iterrows():
+            client_name = row.get("nom", "")
+            client_data = {
+                "id": row.get("id"),
                 "nom": client_name,
-                "nb_equipements": nb_eq,
-                "nb_interventions": nb_int,
-                "nb_contrats": nb_contrats,
-                "score_sante": score,
+                "matricule_fiscale": row.get("matricule_fiscale", ""),
+                "ville": row.get("ville", ""),
+                "contact": row.get("contact", ""),
+                "telephone": row.get("telephone", ""),
+                "adresse": row.get("adresse", ""),
             }
+            # Enrich with equipment stats
+            nb_eq = 0
+            score = 100
+            nb_int = 0
+            if not df_eq.empty and "Client" in df_eq.columns:
+                eq_client = df_eq[df_eq["Client"] == client_name]
+                nb_eq = len(eq_client)
+                if nb_eq > 0:
+                    nb_hs = len(eq_client[eq_client["Statut"].isin(["Hors Service", "Critique"])]) if "Statut" in eq_client.columns else 0
+                    score = max(0, round(((nb_eq - nb_hs) / nb_eq) * 100))
+                    if not df_int.empty and "machine" in df_int.columns:
+                        machines = eq_client["Nom"].tolist() if "Nom" in eq_client.columns else []
+                        nb_int = len(df_int[df_int["machine"].isin(machines)])
 
-    return list(clients.values())
+            client_data["nb_equipements"] = nb_eq
+            client_data["nb_interventions"] = nb_int
+            client_data["score_sante"] = score
+            result.append(client_data)
+
+    return result
+
+
+@app.post("/api/clients")
+def create_client(body: dict, user: dict = Depends(_verify_token)):
+    """Create a new client."""
+    ajouter_client(body)
+    return {"ok": True}
+
+
+@app.put("/api/clients/{client_id}")
+def update_client_api(client_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Update an existing client."""
+    modifier_client(client_id, body)
+    return {"ok": True}
+
+
+@app.delete("/api/clients/{client_id}")
+def delete_client_api(client_id: int, user: dict = Depends(_verify_token)):
+    """Delete a client."""
+    supprimer_client(client_id)
+    return {"ok": True}
 
 
 # ==========================================

@@ -224,6 +224,9 @@ export const knowledge = {
 
 export const clients = {
   list: () => request<Array<Record<string, unknown>>>('/api/clients'),
+  create: (data: Record<string, unknown>) => request<{ ok: boolean }>('/api/clients', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: Record<string, unknown>) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
 };
 
 export const admin = {

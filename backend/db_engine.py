@@ -324,6 +324,18 @@ def init_db():
 
         -- Historique des événements (table supprimée, redondant avec 'interventions')
 
+        -- Clients (table dédiée)
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL UNIQUE,
+            matricule_fiscale TEXT DEFAULT '',
+            ville TEXT DEFAULT '',
+            contact TEXT DEFAULT '',
+            telephone TEXT DEFAULT '',
+            adresse TEXT DEFAULT '',
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- Parc d'équipements
         CREATE TABLE IF NOT EXISTS equipements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -874,6 +886,102 @@ def ajouter_codes_batch(rows_hex, rows_txt):
 
 
 # Historique supprimé au profit de la table interventions.
+
+
+# ==========================================
+# FONCTIONS CRUD — CLIENTS
+# ==========================================
+
+def lire_clients():
+    """Récupère la liste des clients."""
+    try:
+        with get_db() as conn:
+            df = read_sql("SELECT * FROM clients ORDER BY nom", conn)
+        if not df.empty:
+            df = _fix_df_text(df)
+        return df
+    except Exception as e:
+        logger.error(f"Erreur lire_clients: {e}")
+        return pd.DataFrame()
+
+
+def ajouter_client(client_dict):
+    """Ajoute un nouveau client."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(nom) DO UPDATE SET
+                matricule_fiscale=excluded.matricule_fiscale,
+                ville=excluded.ville,
+                contact=excluded.contact,
+                telephone=excluded.telephone,
+                adresse=excluded.adresse
+        """, (
+            client_dict.get("nom", ""),
+            client_dict.get("matricule_fiscale", ""),
+            client_dict.get("ville", ""),
+            client_dict.get("contact", ""),
+            client_dict.get("telephone", ""),
+            client_dict.get("adresse", ""),
+        ))
+    _trigger_backup()
+    return True
+
+
+def modifier_client(client_id, client_dict):
+    """Modifie un client existant."""
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE clients SET
+                nom = ?, matricule_fiscale = ?, ville = ?,
+                contact = ?, telephone = ?, adresse = ?
+            WHERE id = ?
+        """, (
+            client_dict.get("nom", ""),
+            client_dict.get("matricule_fiscale", ""),
+            client_dict.get("ville", ""),
+            client_dict.get("contact", ""),
+            client_dict.get("telephone", ""),
+            client_dict.get("adresse", ""),
+            client_id,
+        ))
+    _trigger_backup()
+    return True
+
+
+def supprimer_client(client_id):
+    """Supprime un client par son ID."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    _trigger_backup()
+    return True
+
+
+def migrer_clients_depuis_equipements():
+    """Auto-import existing clients from equipements table into the clients table."""
+    try:
+        with get_db() as conn:
+            existing = conn.execute("SELECT COUNT(*) as cnt FROM clients").fetchone()
+            if existing and dict(existing).get("cnt", 0) > 0:
+                return  # Already migrated
+            rows = conn.execute("""
+                SELECT DISTINCT client, matricule_fiscale, ville
+                FROM equipements
+                WHERE client IS NOT NULL AND client != ''
+            """).fetchall()
+            for row in rows:
+                r = dict(row)
+                nom = r.get("client", "")
+                if not nom:
+                    continue
+                conn.execute("""
+                    INSERT OR IGNORE INTO clients (nom, matricule_fiscale, ville)
+                    VALUES (?, ?, ?)
+                """, (nom, r.get("matricule_fiscale", ""), r.get("ville", "")))
+            logger.info(f"Migré {len(rows)} clients depuis equipements")
+    except Exception as e:
+        logger.error(f"Migration clients: {e}")
 
 
 # ==========================================
