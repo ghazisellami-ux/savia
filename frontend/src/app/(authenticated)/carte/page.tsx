@@ -64,7 +64,7 @@ export default function CartePage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await mapApi.sites() as Site[];
+      const data = (await mapApi.sites()) as unknown as Site[];
       // Auto-assign coordinates to sites without them
       const enriched = data.map(s => {
         if (s.latitude && s.longitude) return s;
