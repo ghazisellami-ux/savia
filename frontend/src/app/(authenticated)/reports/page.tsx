@@ -6,7 +6,8 @@ import {
   AlertTriangle, Calendar, Wrench, TrendingUp, DollarSign, CheckCircle2,
   ClipboardList, Target, Activity, ShieldCheck, Bot, ChevronRight
 } from 'lucide-react';
-import { interventions, equipements, ai } from '@/lib/api';
+import { interventions, equipements, ai, finances, contrats } from '@/lib/api';
+import { TrendingDown, PieChart as PieChartIcon } from 'lucide-react';
 
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
 const TAB_ACTIVE = "border-cyan-400 text-cyan-400 bg-cyan-400/5";
@@ -36,6 +37,15 @@ export default function ReportsPage() {
   const [iaMois, setIaMois] = useState(now.getMonth() + 1);
   const [iaAnnee, setIaAnnee] = useState(now.getFullYear());
   const [compareMode, setCompareMode] = useState('Client');
+
+  // --- Rapport Financier state ---
+  const [finClient, setFinClient] = useState('');
+  const [finMois, setFinMois] = useState(now.getMonth() + 1);
+  const [finAnnee, setFinAnnee] = useState(now.getFullYear());
+  const [finAnnuel, setFinAnnuel] = useState(false);
+  const [finData, setFinData] = useState<any>(null);
+  const [finTco, setFinTco] = useState<any[]>([]);
+  const [finLoading, setFinLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -233,12 +243,67 @@ export default function ReportsPage() {
     } finally { setIsGenerating(false); }
   };
 
+  // --- Load finance data for preview ---
+  const loadFinancePreview = useCallback(async () => {
+    setFinLoading(true);
+    try {
+      const cl = finClient || undefined;
+      const [dash, tco] = await Promise.all([finances.dashboard(cl), finances.tco(cl)]);
+      setFinData(dash);
+      setFinTco(tco as any[]);
+    } catch (err) { console.error('Finance preview error:', err); }
+    finally { setFinLoading(false); }
+  }, [finClient]);
+
+  useEffect(() => { if (activeTab === 5) loadFinancePreview(); }, [activeTab, finClient, loadFinancePreview]);
+
+  const FMT = (n: number) => n.toLocaleString('fr-FR');
+  const FMTK = (n: number) => {
+    if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1).replace('.0', '') + 'M';
+    if (Math.abs(n) >= 10_000) return Math.round(n / 1_000).toLocaleString('fr-FR') + 'K';
+    return n.toLocaleString('fr-FR');
+  };
+
+  const handlePdfFinancier = async () => {
+    if (!finData) { alert('Chargement des données en cours...'); return; }
+    const kpis = finData.kpis || {};
+    const clientsList = (finData.clients || []) as any[];
+    const periodeLabel = finAnnuel ? `Année ${finAnnee}` : `${MOIS_LABELS[finMois - 1]} ${finAnnee}`;
+    const clientLabel = finClient || 'Tous les clients';
+    const padM = String(finMois).padStart(2, '0');
+    const fname = `rapport_financier_${finAnnuel ? finAnnee : finAnnee + '_' + padM}${finClient ? '_' + finClient.replace(/\s+/g, '_') : ''}`;
+
+    await generatePdf('Rapport Financier — ' + periodeLabel, {
+      title: 'Rapport Financier',
+      subtitle: `Période : ${periodeLabel}  |  Client : ${clientLabel}`,
+      filename: fname,
+      kpis: [
+        { label: 'Revenu Contrats', val: FMTK(kpis.revenu_total || 0) + ' TND', color: [22, 163, 74] },
+        { label: 'Coûts Totaux', val: FMTK(kpis.cout_total || 0) + ' TND', color: [239, 68, 68] },
+        { label: 'Marge Globale', val: FMTK(kpis.marge_globale || 0) + ' TND', color: (kpis.marge_globale || 0) >= 0 ? [22, 163, 74] : [239, 68, 68] },
+        { label: 'Taux de Marge', val: (kpis.marge_pct || 0) + '%', color: [59, 130, 246] },
+      ],
+      head: ['Client', 'Équip.', 'Revenu (TND)', 'Coûts (TND)', 'Marge (TND)', 'Marge %', 'Interventions'],
+      table_title: 'Rentabilité par Client — ' + periodeLabel,
+      rows: clientsList.map((c: any) => [
+        c.client || '',
+        c.nb_equipements || 0,
+        FMT(c.revenu_contrats || 0),
+        FMT(c.cout_total || 0),
+        FMT(c.marge || 0),
+        (c.marge_pct || 0) + '%',
+        c.nb_interventions || 0,
+      ]),
+    });
+  };
+
   const tabs = [
     { icon: <FileText className="w-4 h-4" />, label: 'Rapport Mensuel' },
     { icon: <Building2 className="w-4 h-4" />, label: 'Rapport Client' },
     { icon: <Bot className="w-4 h-4" />, label: 'Rapport IA' },
     { icon: <BarChart3 className="w-4 h-4" />, label: 'Comparaison' },
     { icon: <Star className="w-4 h-4" />, label: 'Fiabilité' },
+    { icon: <DollarSign className="w-4 h-4" />, label: 'Rapport Financier' },
   ];
 
   if (isLoading) {
@@ -857,6 +922,135 @@ export default function ReportsPage() {
                   </div>
                 </SectionCard>
               </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* TAB 5: RAPPORT FINANCIER */}
+      {activeTab === 5 && (
+        <div className="space-y-6">
+          <SectionCard title={<span className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-green-400" /> Rapport Financier</span>}>
+            <p className="text-sm text-savia-text-muted mb-4">Générez un rapport PDF financier basé sur les revenus des contrats, coûts d'interventions et rentabilité par client.</p>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+              <div><label className="block text-sm text-savia-text-muted mb-1">Client</label>
+                <select className={INPUT_CLS} value={finClient} onChange={e => setFinClient(e.target.value)}>
+                  <option value="">Tous les clients</option>
+                  {clients.map(c => <option key={c} value={c}>{c}</option>)}
+                </select></div>
+              <div><label className="block text-sm text-savia-text-muted mb-1">Période</label>
+                <select className={INPUT_CLS} value={finAnnuel ? 'annuel' : 'mensuel'} onChange={e => setFinAnnuel(e.target.value === 'annuel')}>
+                  <option value="mensuel">Mensuel</option>
+                  <option value="annuel">Annuel</option>
+                </select></div>
+              {!finAnnuel && <div><label className="block text-sm text-savia-text-muted mb-1">Mois</label>
+                <select className={INPUT_CLS} value={finMois} onChange={e => setFinMois(Number(e.target.value))}>
+                  {MOIS_LABELS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                </select></div>}
+              <div><label className="block text-sm text-savia-text-muted mb-1">Année</label>
+                <input type="number" className={INPUT_CLS} value={finAnnee} min={2020} max={2030} onChange={e => setFinAnnee(Number(e.target.value))} /></div>
+              <button onClick={handlePdfFinancier} disabled={isPdfGenerating || finLoading || !finData}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-green-600 to-emerald-500 hover:opacity-90 transition-all cursor-pointer disabled:opacity-50">
+                {isPdfGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Générer Rapport PDF
+              </button>
+            </div>
+          </SectionCard>
+
+          {finLoading && (
+            <div className="flex justify-center items-center h-32"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>
+          )}
+
+          {finData && !finLoading && (() => {
+            const kpis = finData.kpis || {};
+            const clientsList = (finData.clients || []) as any[];
+            const rentables = clientsList.filter((c: any) => c.rentable);
+            const deficitaires = clientsList.filter((c: any) => !c.rentable && (c.revenu_contrats > 0 || c.cout_total > 0));
+            return (
+              <div className="space-y-4">
+                {/* KPI cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                  {[
+                    { icon: <TrendingUp className="w-5 h-5 text-green-400" />, val: FMTK(kpis.revenu_total || 0) + ' TND', label: 'Revenu Contrats', cls: 'border-green-500/20 bg-green-500/5' },
+                    { icon: <TrendingDown className="w-5 h-5 text-red-400" />, val: FMTK(kpis.cout_total || 0) + ' TND', label: 'Coûts Totaux', cls: 'border-red-500/20 bg-red-500/5' },
+                    { icon: <DollarSign className="w-5 h-5" style={{ color: (kpis.marge_globale || 0) >= 0 ? '#22c55e' : '#ef4444' }} />, val: FMTK(kpis.marge_globale || 0) + ' TND', label: 'Marge Globale', cls: (kpis.marge_globale || 0) >= 0 ? 'border-green-500/20 bg-green-500/5' : 'border-red-500/20 bg-red-500/5' },
+                    { icon: <PieChartIcon className="w-5 h-5 text-blue-400" />, val: (kpis.marge_pct || 0) + '%', label: 'Taux de Marge', cls: 'border-blue-500/20 bg-blue-500/5' },
+                    { icon: <Building2 className="w-5 h-5 text-cyan-400" />, val: String(kpis.nb_clients || 0), label: 'Clients', cls: 'border-cyan-500/20 bg-cyan-500/5' },
+                    { icon: <CheckCircle2 className="w-5 h-5 text-green-400" />, val: String(kpis.nb_rentables || 0), label: 'Rentables', cls: 'border-green-500/20 bg-green-500/5' },
+                    { icon: <AlertTriangle className="w-5 h-5 text-red-400" />, val: String(kpis.nb_deficitaires || 0), label: 'Déficitaires', cls: 'border-red-500/20 bg-red-500/5' },
+                  ].map((kpi, i) => (
+                    <div key={i} className={`rounded-xl border p-4 text-center ${kpi.cls}`}>
+                      <div className="flex justify-center mb-2">{kpi.icon}</div>
+                      <div className="text-lg font-black text-savia-text">{kpi.val}</div>
+                      <div className="text-xs text-savia-text-muted mt-1">{kpi.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Rentabilité par client */}
+                {clientsList.length > 0 && (
+                  <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-4 h-4 text-savia-accent" /> Rentabilité par Client</span>}>
+                    <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-savia-surface z-10">
+                          <tr className="border-b border-savia-border">
+                            {['Client', 'Équip.', 'Revenu (TND)', 'Coûts (TND)', 'Marge (TND)', 'Marge %', 'Interventions', 'Statut'].map(h => (
+                              <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientsList.filter((c: any) => c.revenu_contrats > 0 || c.cout_total > 0).map((c: any, idx: number) => (
+                            <tr key={idx} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50">
+                              <td className="py-2 px-3 font-bold text-sm">{c.client}</td>
+                              <td className="py-2 px-3 font-mono text-center">{c.nb_equipements}</td>
+                              <td className="py-2 px-3 font-mono text-green-400">{FMT(c.revenu_contrats || 0)}</td>
+                              <td className="py-2 px-3 font-mono text-red-400">{FMT(c.cout_total || 0)}</td>
+                              <td className={`py-2 px-3 font-mono font-bold ${(c.marge || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{FMT(c.marge || 0)}</td>
+                              <td className="py-2 px-3 font-mono">{c.marge_pct || 0}%</td>
+                              <td className="py-2 px-3 font-mono text-center">{c.nb_interventions}</td>
+                              <td className="py-2 px-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${c.rentable ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                  {c.rentable ? '✓ Rentable' : '✗ Déficitaire'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </SectionCard>
+                )}
+
+                {/* TCO summary */}
+                {finTco.length > 0 && (
+                  <SectionCard title={<span className="flex items-center gap-2"><Wrench className="w-4 h-4 text-yellow-400" /> Top 10 TCO Équipements</span>}>
+                    <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0 bg-savia-surface z-10">
+                          <tr className="border-b border-savia-border">
+                            {['Équipement', 'Client', 'Interventions', 'Coût Interv.', 'Coût Pièces', 'Coût M.O.', 'TCO Total'].map(h => (
+                              <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(finTco as any[]).slice(0, 10).map((t: any, idx: number) => (
+                            <tr key={idx} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50">
+                              <td className="py-2 px-3 font-bold text-sm">{t.equipement}</td>
+                              <td className="py-2 px-3 text-savia-text-muted text-xs">{t.client}</td>
+                              <td className="py-2 px-3 font-mono text-center">{t.nb_interventions}</td>
+                              <td className="py-2 px-3 font-mono text-red-400">{FMT(t.cout_interventions || 0)}</td>
+                              <td className="py-2 px-3 font-mono text-yellow-400">{FMT(t.cout_pieces || 0)}</td>
+                              <td className="py-2 px-3 font-mono text-blue-400">{FMT(t.cout_main_oeuvre || 0)}</td>
+                              <td className="py-2 px-3 font-mono font-bold">{FMT(t.tco_total || 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </SectionCard>
+                )}
+              </div>
             );
           })()}
         </div>
