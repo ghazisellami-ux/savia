@@ -17,6 +17,11 @@ import { finances, clients as clientsApi } from '@/lib/api';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
 
 const FMT = (n: number) => n.toLocaleString('fr-FR');
+const FMTK = (n: number) => {
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1).replace('.0', '') + 'M';
+  if (Math.abs(n) >= 10_000) return Math.round(n / 1_000).toLocaleString('fr-FR') + 'K';
+  return n.toLocaleString('fr-FR');
+};
 const COLORS = {
   green: '#22c55e', red: '#ef4444', blue: '#3b82f6',
   teal: '#2dd4bf', yellow: '#f59e0b', purple: '#8b5cf6', orange: '#f97316',
@@ -155,11 +160,11 @@ export default function FinancesPage() {
 
       {/* Global KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <KpiCard icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={`${FMT(kpis.revenu_total || 0)} TND`} label="Revenu Contrats" variant="success" />
-        <KpiCard icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={`${FMT(kpis.cout_total || 0)} TND`} label="Coûts Totaux" variant="danger" />
+        <KpiCard icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={`${FMTK(kpis.revenu_total || 0)} TND`} label="Revenu Contrats" variant="success" />
+        <KpiCard icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={`${FMTK(kpis.cout_total || 0)} TND`} label="Coûts Totaux" variant="danger" />
         <KpiCard
           icon={<DollarSign className="w-6 h-6" style={{ color: (kpis.marge_globale || 0) >= 0 ? COLORS.green : COLORS.red }} />}
-          value={`${FMT(kpis.marge_globale || 0)} TND`}
+          value={`${FMTK(kpis.marge_globale || 0)} TND`}
           label="Marge Globale"
           variant={(kpis.marge_globale || 0) >= 0 ? 'success' : 'danger'}
         />
@@ -180,7 +185,7 @@ export default function FinancesPage() {
               <YAxis stroke="#64748b" fontSize={11} />
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
-                formatter={(value: any) => [`${Number(value).toLocaleString('fr')} TND`]}
+                formatter={(value: any) => [`${FMT(Number(value))} TND`]}
               />
               <Bar dataKey="revenu" name="Revenu" fill={COLORS.green} radius={[4, 4, 0, 0]} />
               <Bar dataKey="cout" name="Coûts" fill={COLORS.red} radius={[4, 4, 0, 0]} />
@@ -197,7 +202,7 @@ export default function FinancesPage() {
               </Pie>
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
-                formatter={(value: any) => [`${Number(value).toLocaleString('fr')} TND`]}
+                formatter={(value: any) => [`${FMT(Number(value))} TND`]}
               />
               <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
             </PieChart>
