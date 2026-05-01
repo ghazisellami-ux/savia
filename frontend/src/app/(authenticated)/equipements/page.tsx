@@ -149,7 +149,7 @@ function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; 
 export default function EquipementsPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>('equipements');
+  const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>('clients');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
@@ -469,13 +469,13 @@ export default function EquipementsPage() {
 
       {/* Tab Navigation */}
       <div className="flex gap-1 glass rounded-xl p-1">
-        <button onClick={() => setActiveTab('equipements')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'equipements' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
-          <Server className="w-4 h-4" /> Équipements
-        </button>
         <button onClick={() => setActiveTab('clients')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'clients' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
           <Building2 className="w-4 h-4" /> Clients
+        </button>
+        <button onClick={() => setActiveTab('equipements')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'equipements' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
+          <Server className="w-4 h-4" /> Équipements
         </button>
         {!isLecteur && (
           <button onClick={() => setActiveTab('documents')}
@@ -538,8 +538,9 @@ export default function EquipementsPage() {
                             <Hash className="w-3.5 h-3.5" /> Matricule Fiscale
                             {form.Client && <span className="text-green-400 text-[10px] font-normal">(auto-rempli)</span>}
                           </label>
-                          <input className={`${INPUT_CLS} bg-savia-bg/30`} value={form.MatriculeFiscale} readOnly
-                            placeholder="Renseigné via le client" />
+                          <input className={INPUT_CLS} value={form.MatriculeFiscale}
+                            onChange={e => setForm({ ...form, MatriculeFiscale: e.target.value })}
+                            placeholder="Ex: 1234567/A/P/M/000" />
                         </div>
                       </div>
                     )}
