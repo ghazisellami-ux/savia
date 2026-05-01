@@ -3014,27 +3014,27 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 taux = float(get_config("taux_horaire_technicien", "25"))
             except Exception:
                 taux = 25.0
-            cout_mo = (duree_totale / 60.0) * taux
+            cout_mo = float((duree_totale / 60.0) * taux)
 
             cout_total = float(cout_interv) + float(cout_pieces) + cout_mo
             marge = float(revenu) - cout_total
-            marge_pct = round((marge / revenu * 100), 1) if revenu > 0 else 0
+            marge_pct = round((marge / float(revenu) * 100), 1) if float(revenu) > 0 else 0.0
 
-            nb_equip = len(df_equip[df_equip["Client"] == cl]) if not df_equip.empty else 0
+            nb_equip = int(len(df_equip[df_equip["Client"] == cl])) if not df_equip.empty else 0
 
             clients_profit.append({
                 "client": cl,
-                "nb_equipements": nb_equip,
+                "nb_equipements": int(nb_equip),
                 "revenu_contrats": round(float(revenu), 0),
                 "cout_interventions": round(float(cout_interv), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
-                "cout_main_oeuvre": round(cout_mo, 0),
-                "cout_total": round(cout_total, 0),
-                "marge": round(marge, 0),
-                "marge_pct": marge_pct,
-                "nb_interventions": nb_interv,
-                "duree_totale_h": round(duree_totale / 60.0, 1),
-                "rentable": marge >= 0,
+                "cout_main_oeuvre": round(float(cout_mo), 0),
+                "cout_total": round(float(cout_total), 0),
+                "marge": round(float(marge), 0),
+                "marge_pct": float(marge_pct),
+                "nb_interventions": int(nb_interv),
+                "duree_totale_h": round(float(duree_totale) / 60.0, 1),
+                "rentable": bool(marge >= 0),
             })
 
         # --- Global KPIs ---
@@ -3049,13 +3049,13 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
 
         return {
             "kpis": {
-                "revenu_total": round(total_revenu, 0),
-                "cout_total": round(total_cout, 0),
-                "marge_globale": round(total_marge, 0),
-                "marge_pct": round((total_marge / total_revenu * 100), 1) if total_revenu > 0 else 0,
-                "nb_clients": len(clients_profit),
-                "nb_rentables": nb_rentables,
-                "nb_deficitaires": nb_deficitaires,
+                "revenu_total": round(float(total_revenu), 0),
+                "cout_total": round(float(total_cout), 0),
+                "marge_globale": round(float(total_marge), 0),
+                "marge_pct": round(float(total_marge / total_revenu * 100), 1) if total_revenu > 0 else 0.0,
+                "nb_clients": int(len(clients_profit)),
+                "nb_rentables": int(nb_rentables),
+                "nb_deficitaires": int(nb_deficitaires),
             },
             "clients": clients_profit,
         }
@@ -3118,20 +3118,20 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
             tco_mensuel = round(tco_total / max(age_jours / 30.0, 1), 0) if age_jours > 0 else 0
 
             tco_list.append({
-                "equipement": nom,
-                "client": cl,
-                "type": eq.get("Type", eq.get("type", "")),
-                "statut": eq.get("Statut", eq.get("statut", "")),
-                "age_jours": age_jours,
-                "nb_interventions": nb_interv,
-                "nb_correctives": nb_correctives,
-                "nb_preventives": nb_preventives,
+                "equipement": str(nom),
+                "client": str(cl),
+                "type": str(eq.get("Type", eq.get("type", ""))),
+                "statut": str(eq.get("Statut", eq.get("statut", ""))),
+                "age_jours": int(age_jours),
+                "nb_interventions": int(nb_interv),
+                "nb_correctives": int(nb_correctives),
+                "nb_preventives": int(nb_preventives),
                 "cout_interventions": round(float(cout_interv), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
-                "cout_main_oeuvre": round(cout_mo, 0),
-                "tco_total": round(tco_total, 0),
-                "tco_mensuel": tco_mensuel,
-                "duree_totale_h": round(duree / 60.0, 1),
+                "cout_main_oeuvre": round(float(cout_mo), 0),
+                "tco_total": round(float(tco_total), 0),
+                "tco_mensuel": round(float(tco_mensuel), 0),
+                "duree_totale_h": round(float(duree) / 60.0, 1),
             })
 
         tco_list.sort(key=lambda x: x["tco_total"], reverse=True)
