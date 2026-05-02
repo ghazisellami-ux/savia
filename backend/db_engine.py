@@ -1871,7 +1871,7 @@ def lire_techniciens():
             return read_sql("""
                 SELECT 
                     id, username, nom, prenom, specialite, 
-                    qualification, dispo, notes,
+                    qualification, niveau_competence, dispo, notes,
                     email, telephone, telegram_id
                 FROM techniciens
                 ORDER BY nom
@@ -1887,13 +1887,14 @@ def ajouter_technicien(tech_dict):
     try:
         with get_db() as conn:
             res = conn.execute("""
-                INSERT INTO techniciens (nom, prenom, specialite, qualification, dispo, notes, email, telephone, telegram_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes, email, telephone, telegram_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", "Généraliste"),
                 tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
                 tech_dict.get("notes", ""),
                 tech_dict.get("email", ""),
@@ -1917,7 +1918,7 @@ def update_technicien(tech_id, tech_dict):
         with get_db() as conn:
             conn.execute("""
                 UPDATE techniciens
-                SET nom=?, prenom=?, specialite=?, qualification=?, dispo=?, notes=?,
+                SET nom=?, prenom=?, specialite=?, qualification=?, niveau_competence=?, dispo=?, notes=?,
                     email=?, telephone=?, telegram_id=?
                 WHERE id=?
             """, (
@@ -1925,6 +1926,7 @@ def update_technicien(tech_id, tech_dict):
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", ""),
                 tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
                 tech_dict.get("notes", ""),
                 tech_dict.get("email", ""),
