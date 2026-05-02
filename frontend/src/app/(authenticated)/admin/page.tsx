@@ -10,6 +10,7 @@ import {
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
 } from 'lucide-react';
 import { admin, techniciens, clients } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
@@ -136,6 +137,7 @@ const emptyTech = () => ({
 });
 
 export default function AdminPage() {
+  const { user: currentUser } = useAuth();
   const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
@@ -467,9 +469,11 @@ export default function AdminPage() {
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all" title="Modifier">
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
+                        {(u.username !== 'admin' || currentUser?.username === 'admin') && (
+                          <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all" title="Modifier">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {u.username !== 'admin' && (
                           <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-all" title="Supprimer">
                             <Trash2 className="w-3.5 h-3.5" />
@@ -738,7 +742,7 @@ export default function AdminPage() {
                       setSelectedTechId(id || '');
                       if (id) {
                         const t = techs.find(x => x.id === id);
-                        if (t) setUserForm(f => ({ ...f, nom_complet: `${t.nom} ${t.prenom}`.trim(), email: t.email }));
+                        if (t) setUserForm(f => ({ ...f, nom_complet: `${t.nom} ${t.prenom}`.trim(), email: t.email || '' }));
                       }
                     }}>
                     <option value="">— Sélectionner un technicien —</option>
@@ -793,9 +797,8 @@ export default function AdminPage() {
                 </div>
                 <div>
                   <label className={LABEL}>Adresse email</label>
-                  <input type="email" className={INPUT} placeholder="ex: j.dupont@savia.tn" value={userForm.email}
-                    onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))}
-                    readOnly={userForm.profileId === 'technicien' && !!selectedTechId} />
+                  <input type="email" className={INPUT} placeholder="ex: j.dupont@savia.tn" value={userForm.email || ''}
+                    onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))} />
                 </div>
                 <div className="flex items-end pb-1 col-span-2">
                   <label className="flex items-center gap-2 cursor-pointer">
