@@ -7,7 +7,7 @@ import {
   X, Eye, EyeOff, Edit2, Crown, UserCog, Phone, Mail, Send,
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
-  Star, Radio, Upload, Building2, Globe, Check,
+  Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
 } from 'lucide-react';
 import { admin, techniciens, clients } from '@/lib/api';
 
@@ -27,6 +27,9 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'pieces',             label: 'Pièces de Rechange',     icon: Cog            },
   { key: 'reports',            label: 'Rapports & Exports',     icon: FileText       },
   { key: 'contrats',           label: 'Contrats & SLA',         icon: ClipboardCheck },
+  { key: 'finances',           label: 'Finances',               icon: DollarSign     },
+  { key: 'carte',              label: 'Carte Géographique',     icon: MapPin         },
+  { key: 'sla',                label: 'Suivi SLA',              icon: ShieldCheck    },
   { key: 'admin',              label: 'Administration',         icon: Settings       },
 ];
 
