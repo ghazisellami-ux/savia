@@ -380,7 +380,8 @@ def login(body: LoginRequest):
         "sub": user_data["username"],
         "role": user_data["role"],
         "nom": user_data.get("nom_complet", ""),
-        "client": user_data.get("client", "") or "",  # ← ajouté
+        "client": user_data.get("client", "") or "",
+        "pages_autorisees": user_data.get("pages_autorisees", "") or "",
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
@@ -391,7 +392,8 @@ def login(body: LoginRequest):
             "username": user_data["username"],
             "nom": user_data.get("nom_complet", ""),
             "role": user_data["role"],
-            "client": user_data.get("client", "") or "",  # ← ajouté
+            "client": user_data.get("client", "") or "",
+            "pages_autorisees": user_data.get("pages_autorisees", "") or "",
         }
     }
 
