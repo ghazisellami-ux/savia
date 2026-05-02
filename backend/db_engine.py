@@ -1861,7 +1861,7 @@ def verifier_et_migrer_schema():
 
 def lire_techniciens():
     """
-    Lit la liste des techniciens avec leurs PII jointes.
+    Lit la liste des techniciens.
     
     Returns:
         pd.DataFrame: Liste des techniciens.
@@ -1870,15 +1870,11 @@ def lire_techniciens():
         with get_db() as conn:
             return read_sql("""
                 SELECT 
-                    t.id, t.username, t.nom, t.prenom, t.specialite, 
-                    t.qualification, t.niveau_competence, t.dispo, t.notes,
-                    p.nom_complet, 
-                    COALESCE(p.email, t.email) as email, 
-                    COALESCE(p.telephone, t.telephone) as telephone, 
-                    COALESCE(p.telegram_id, t.telegram_id) as telegram_id
-                FROM techniciens t
-                LEFT JOIN technicien_pii p ON t.id = p.tech_id
-                ORDER BY t.nom
+                    id, username, nom, prenom, specialite, 
+                    qualification, dispo, notes,
+                    email, telephone, telegram_id
+                FROM techniciens
+                ORDER BY nom
             """, conn)
     except Exception as e:
         logger.error(f"Erreur lire_techniciens: {e}")
@@ -1886,33 +1882,27 @@ def lire_techniciens():
 
 def ajouter_technicien(tech_dict):
     """
-    Ajoute un technicien avec isolation PII.
+    Ajoute un technicien.
     """
     try:
         with get_db() as conn:
-            # 1. Info fonctionnelle
             res = conn.execute("""
-                INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO techniciens (nom, prenom, specialite, qualification, dispo, notes, email, telephone, telegram_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", "Généraliste"),
                 tech_dict.get("qualification", ""),
-                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
-                tech_dict.get("notes", "")
+                tech_dict.get("notes", ""),
+                tech_dict.get("email", ""),
+                tech_dict.get("telephone", ""),
+                tech_dict.get("telegram_id", ""),
             ))
             tech_id = res.lastrowid
-            
-            # 2. Info PII (Pillier 2)
-            nom_comp = f"{tech_dict.get('nom', '')} {tech_dict.get('prenom', '')}".strip()
-            conn.execute("""
-                INSERT INTO technicien_pii (tech_id, nom_complet, email, telephone, telegram_id)
-                VALUES (?, ?, ?, ?, ?)
-            """, (tech_id, nom_comp, tech_dict.get("email", ""), 
-                  tech_dict.get("telephone", ""), tech_dict.get("telegram_id", "")))
         
+        nom_comp = f"{tech_dict.get('nom', '')} {tech_dict.get('prenom', '')}".strip()
         logger.info(f"Audit Trail: Nouveau technicien {nom_comp} ajouté (ID: {tech_id})")
         return True
     except Exception as e:
@@ -1921,42 +1911,27 @@ def ajouter_technicien(tech_dict):
 
 def update_technicien(tech_id, tech_dict):
     """
-    Met à jour un technicien et ses PII.
+    Met à jour un technicien.
     """
     try:
         with get_db() as conn:
-            # Update functional data
             conn.execute("""
                 UPDATE techniciens
-                SET nom=?, prenom=?, specialite=?, qualification=?, niveau_competence=?, dispo=?, notes=?
+                SET nom=?, prenom=?, specialite=?, qualification=?, dispo=?, notes=?,
+                    email=?, telephone=?, telegram_id=?
                 WHERE id=?
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
                 tech_dict.get("specialite", ""),
                 tech_dict.get("qualification", ""),
-                tech_dict.get("niveau_competence", "Junior"),
                 tech_dict.get("dispo", 1),
                 tech_dict.get("notes", ""),
+                tech_dict.get("email", ""),
+                tech_dict.get("telephone", ""),
+                tech_dict.get("telegram_id", ""),
                 tech_id
             ))
-            
-            # Update PII (Pillier 2)
-            nom_comp = f"{tech_dict.get('nom', '')} {tech_dict.get('prenom', '')}".strip()
-            exist = conn.execute("SELECT 1 FROM technicien_pii WHERE tech_id=?", (tech_id,)).fetchone()
-            if not exist:
-                conn.execute("""
-                    INSERT INTO technicien_pii (tech_id, nom_complet, email, telephone, telegram_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (tech_id, nom_comp, tech_dict.get("email", ""), 
-                      tech_dict.get("telephone", ""), tech_dict.get("telegram_id", "")))
-            else:
-                conn.execute("""
-                    UPDATE technicien_pii 
-                    SET nom_complet=?, email=?, telephone=?, telegram_id=?
-                    WHERE tech_id=?
-                """, (nom_comp, tech_dict.get("email", ""), 
-                      tech_dict.get("telephone", ""), tech_dict.get("telegram_id", ""), tech_id))
         
         logger.info(f"Audit Trail: Technicien ID {tech_id} mis à jour.")
         return True
