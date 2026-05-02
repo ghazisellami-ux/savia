@@ -89,7 +89,7 @@ export default function PredictionsPage() {
           tendance: s.tendance || 'stable',
         };
       });
-      setPredictions(mapped.sort((a, b) => b.risque - a.risque));
+      setPredictions(mapped.sort((a, b) => a.joursAvantPanne - b.joursAvantPanne));
     } catch (err) {
       console.error('Failed to load predictions', err);
     } finally {
