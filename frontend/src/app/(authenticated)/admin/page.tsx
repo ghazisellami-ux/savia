@@ -208,7 +208,9 @@ export default function AdminPage() {
         client: item.client || '',
         actif: item.actif ?? 1,
         email: item.email || '',
-        profileId: Object.entries(PROFILE_ROLE_MAP).find(([, r]) => r === item.role)?.[0] || 'lecteur',
+        profileId: item.profil
+          ? (profiles.find(p => p.nom === item.profil)?.id || Object.entries(PROFILE_ROLE_MAP).find(([, r]) => r === item.role)?.[0] || 'lecteur')
+          : (Object.entries(PROFILE_ROLE_MAP).find(([, r]) => r === item.role)?.[0] || 'lecteur'),
       })));
       setTechs((techsRes as any[]).map((item: any) => ({
         id: item.id || 0,

@@ -2106,7 +2106,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 def get_users(user: dict = Depends(_verify_token)):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, username, nom_complet, role, client, actif, created_at, last_login FROM utilisateurs ORDER BY id"
+            "SELECT id, username, nom_complet, role, client, email, actif, profil, pages_autorisees, created_at, last_login FROM utilisateurs ORDER BY id"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -2116,8 +2116,8 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
     hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, actif) VALUES (?, ?, ?, ?, ?, 1)",
-            (body["username"], hashed, body.get("nom_complet", ""), body.get("role", "Lecteur"), body.get("client", ""))
+            "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (body["username"], hashed, body.get("nom_complet", ""), body.get("role", "Lecteur"), body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
         )
     return {"ok": True}
 
@@ -2126,7 +2126,7 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
 def update_user(user_id: int, body: dict, user: dict = Depends(_verify_token)):
     fields = []
     params = []
-    for f in ["nom_complet", "role", "client", "actif"]:
+    for f in ["nom_complet", "role", "client", "actif", "email", "profil", "pages_autorisees"]:
         if f in body:
             fields.append(f"{f} = ?")
             params.append(body[f])
