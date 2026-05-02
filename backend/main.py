@@ -3150,6 +3150,45 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
 @app.get("/api/map/sites")
 def map_sites(user: dict = Depends(_verify_token)):
     """Retourne les sites clients avec coordonnées GPS et score de santé."""
+    import random, hashlib
+
+    # Tunisian cities with GPS coordinates
+    TUNISIAN_CITIES = {
+        'tunis': (36.8065, 10.1815), 'ariana': (36.8601, 10.1956), 'ben arous': (36.7533, 10.2281),
+        'manouba': (36.8100, 10.0987), 'nabeul': (36.4561, 10.7376), 'zaghouan': (36.4028, 10.1428),
+        'bizerte': (37.2744, 9.8739), 'beja': (36.7256, 9.1817), 'jendouba': (36.5011, 8.7803),
+        'kef': (36.1676, 8.7049), 'siliana': (36.0847, 9.3711), 'sousse': (35.8254, 10.6369),
+        'monastir': (35.7643, 10.8113), 'mahdia': (35.5047, 11.0622), 'sfax': (34.7404, 10.7602),
+        'kairouan': (35.6804, 10.0963), 'kasserine': (35.1672, 8.8365), 'sidi bouzid': (35.0380, 9.4849),
+        'gabes': (33.8819, 10.0982), 'gabès': (33.8819, 10.0982), 'medenine': (33.3540, 10.5050),
+        'tataouine': (32.9297, 10.4518), 'gafsa': (34.4250, 8.7842), 'tozeur': (33.9197, 8.1339),
+        'kebili': (33.7041, 8.9711), 'kébili': (33.7041, 8.9711),
+        'hammamet': (36.4000, 10.6167), 'tabarka': (36.9541, 8.7580), 'djerba': (33.8076, 10.8451),
+        'grombalia': (36.6017, 10.5042), 'la marsa': (36.8783, 10.3252), 'carthage': (36.8528, 10.3233),
+        'omrane': (36.8300, 10.1600), 'el omrane': (36.8300, 10.1600),
+    }
+    CITY_LIST = list(TUNISIAN_CITIES.values())
+
+    def _guess_city_coords(client_name: str, ville: str):
+        """Try to guess coordinates from client name or ville field."""
+        for text in [ville, client_name]:
+            if not text:
+                continue
+            lower = text.lower()
+            for city, coords in TUNISIAN_CITIES.items():
+                if city in lower:
+                    return coords
+        return None
+
+    def _deterministic_random_coords(client_name: str):
+        """Assign a deterministic 'random' city based on client name hash, with slight jitter."""
+        h = int(hashlib.md5(client_name.encode()).hexdigest(), 16)
+        city_coords = CITY_LIST[h % len(CITY_LIST)]
+        # Add slight jitter (±0.01 degrees ≈ ±1km) so markers don't overlap
+        jitter_lat = ((h >> 8) % 200 - 100) / 10000.0
+        jitter_lng = ((h >> 16) % 200 - 100) / 10000.0
+        return (city_coords[0] + jitter_lat, city_coords[1] + jitter_lng)
+
     try:
         df_equip = lire_equipements()
         df_interv = lire_interventions()
@@ -3177,12 +3216,34 @@ def map_sites(user: dict = Depends(_verify_token)):
             sites[cl]["equipements"].append({"nom": nom, "type": eq.get("Type", ""), "statut": statut})
             sites[cl]["nb_equipements"] += 1
 
-        # Compute health scores per site
+        # Compute health scores per site + auto-assign coordinates
         result = []
         for cl, site in sites.items():
             nb = site["nb_equipements"]
             nb_hs = sum(1 for e in site["equipements"] if e["statut"] in ("Hors Service", "Critique", "En panne"))
             score = max(0, round(((nb - nb_hs) / nb) * 100)) if nb > 0 else 100
+
+            # Auto-assign coordinates if missing
+            lat, lng = site["latitude"], site["longitude"]
+            assigned_ville = site.get("ville", "") or ""
+            if not lat or not lng:
+                guessed = _guess_city_coords(cl, assigned_ville)
+                if guessed:
+                    lat, lng = guessed
+                    # Extract the matched city name for the ville field
+                    if not assigned_ville:
+                        lower = cl.lower()
+                        for city_name in TUNISIAN_CITIES:
+                            if city_name in lower:
+                                assigned_ville = city_name.capitalize()
+                                break
+                else:
+                    lat, lng = _deterministic_random_coords(cl)
+                    if not assigned_ville:
+                        # Find the closest city name for display
+                        h = int(hashlib.md5(cl.encode()).hexdigest(), 16)
+                        city_names = list(TUNISIAN_CITIES.keys())
+                        assigned_ville = city_names[h % len(city_names)].capitalize()
 
             # Count interventions
             machines = [e["nom"] for e in site["equipements"]]
@@ -3210,6 +3271,9 @@ def map_sites(user: dict = Depends(_verify_token)):
 
             result.append({
                 **site,
+                "latitude": lat,
+                "longitude": lng,
+                "ville": assigned_ville,
                 "equipements": site["equipements"][:20],  # Limit for performance
                 "score_sante": score,
                 "nb_interventions": nb_interv,
