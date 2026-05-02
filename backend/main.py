@@ -922,10 +922,17 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Upload la photo de la fiche signée pour une intervention clôturée."""
     contents = await file.read()
+    logger.info(f"Fiche upload: intervention #{intervention_id}, file={file.filename}, size={len(contents)} bytes")
+    # psycopg2 requires Binary wrapper for bytea columns
+    try:
+        import psycopg2
+        binary_data = psycopg2.Binary(contents)
+    except ImportError:
+        binary_data = contents
     with get_db() as conn:
         conn.execute(
             "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
-            (file.filename, contents, intervention_id)
+            (file.filename, binary_data, intervention_id)
         )
     logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
     return {"ok": True, "filename": file.filename}
@@ -942,10 +949,17 @@ async def upload_photo_alias(intervention_id: int,
     if not upload:
         raise HTTPException(status_code=400, detail="Aucun fichier fourni")
     contents = await upload.read()
+    logger.info(f"Photo upload (alias): intervention #{intervention_id}, file={upload.filename}, size={len(contents)} bytes")
+    # psycopg2 requires Binary wrapper for bytea columns
+    try:
+        import psycopg2
+        binary_data = psycopg2.Binary(contents)
+    except ImportError:
+        binary_data = contents
     with get_db() as conn:
         conn.execute(
             "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
-            (upload.filename, contents, intervention_id)
+            (upload.filename, binary_data, intervention_id)
         )
     logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
     return {"ok": True, "message": "Photo enregistrée", "filename": upload.filename}
