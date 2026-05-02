@@ -184,8 +184,67 @@ def check_garantie_expiry():
         return []
 
 
+def check_planning_reminder():
+    """
+    Vérifie les maintenances préventives planifiées dans les 7 prochains jours
+    et envoie un rappel Telegram pour chacune.
+    """
+    from datetime import date, timedelta
+    try:
+        df = lire_planning()
+        if df is None or df.empty:
+            return []
+        today = date.today()
+        alert_limit = today + timedelta(days=7)
+        reminders = []
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip()
+            if statut not in ('Planifiée', 'En cours'):
+                continue
+            date_str = str(row.get('date_prevue', '') or '').strip()
+            if not date_str:
+                continue
+            try:
+                date_prevue = date.fromisoformat(date_str[:10])
+                if today <= date_prevue <= alert_limit:
+                    jours = (date_prevue - today).days
+                    reminders.append({
+                        'id': row.get('id', '?'),
+                        'machine': row.get('machine', '?'),
+                        'client': row.get('client', ''),
+                        'type': row.get('type_maintenance', 'Préventive'),
+                        'description': row.get('description', ''),
+                        'date': date_prevue.strftime('%d/%m/%Y'),
+                        'technicien': row.get('technicien_assigne', ''),
+                        'jours': jours,
+                    })
+            except Exception:
+                continue
+        if reminders:
+            lines = '\n'.join(
+                f"  • <b>{r['machine']}</b>"
+                + (f" — {r['client']}" if r['client'] else "")
+                + f"\n    📅 {r['date']} ({r['jours']}j)"
+                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else "")
+                + (f"\n    📝 {r['description'][:60]}" if r['description'] else "")
+                for r in sorted(reminders, key=lambda x: x['jours'])
+            )
+            msg = (
+                f"🔧 <b>Rappel Maintenance Préventive</b>\n"
+                f"<i>{len(reminders)} maintenance(s) dans les 7 prochains jours :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram(msg)
+            logger.info(f"Planning reminder: {len(reminders)} rappel(s) envoyé(s)")
+        return reminders
+    except Exception as e:
+        logger.error(f"Planning reminder check error: {e}")
+        return []
+
+
 def _start_garantie_daemon():
-    """Lance un thread démon qui vérifie garanties + contrats toutes les 24h."""
+    """Lance un thread démon qui vérifie garanties + contrats + rappels planning toutes les 24h."""
     import threading, time
     def _run():
         time.sleep(30)
@@ -198,9 +257,13 @@ def _start_garantie_daemon():
                 check_contrat_expiry()
             except Exception as e:
                 logger.error(f"Contrat daemon error: {e}")
+            try:
+                check_planning_reminder()
+            except Exception as e:
+                logger.error(f"Planning reminder daemon error: {e}")
             time.sleep(86400)
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats, 24h)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + rappels planning, 24h)")
 
 
 def check_contrat_expiry():
