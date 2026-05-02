@@ -3181,7 +3181,7 @@ def map_sites(user: dict = Depends(_verify_token)):
         result = []
         for cl, site in sites.items():
             nb = site["nb_equipements"]
-            nb_hs = sum(1 for e in site["equipements"] if e["statut"] in ("Hors Service", "Critique"))
+            nb_hs = sum(1 for e in site["equipements"] if e["statut"] in ("Hors Service", "Critique", "En panne"))
             score = max(0, round(((nb - nb_hs) / nb) * 100)) if nb > 0 else 100
 
             # Count interventions
