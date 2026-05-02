@@ -94,7 +94,7 @@ export default function DashboardPage() {
   const isLecteur = user?.role === 'Lecteur';
   const canSeeCosts = useCanSeeCosts();
   const [selectedClient, setSelectedClient] = useState(user?.role === 'Lecteur' ? (user?.client || '') : '');
-  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('mensuel');
+  const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [clientList, setClientList] = useState<string[]>([]);
