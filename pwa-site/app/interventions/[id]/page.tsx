@@ -32,11 +32,23 @@ const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
 
 type PiecesQty = Record<number, number>;
 
-// Vérifie si deux chaînes se correspondent (partiel, insensible à la casse)
-function similarEnough(a: string, b: string): boolean {
-  const na = a.toLowerCase().replace(/[-_\s]/g, '');
-  const nb = b.toLowerCase().replace(/[-_\s]/g, '');
-  return na.includes(nb) || nb.includes(na);
+// Extrait les mots significatifs d'une chaîne (ignore parenthèses, tirets, etc.)
+function coreWords(s: string): string[] {
+  return s.toLowerCase().replace(/[()\-_/]/g, ' ').split(/\s+/).filter(w => w.length > 1);
+}
+
+// Vérifie si le type de pièce correspond à la machine de l'intervention
+// Machine format: "Type Fabricant" (ex: "IRM GE", "Arceau Chirurgical Hologic")
+// Piece equipement_type: "Type (détail)" (ex: "IRM", "Arceau Chirurgical (C-Arm)")
+function matchesMachine(machineName: string, pieceType: string): boolean {
+  if (!machineName || !pieceType) return false;
+  const machineWords = coreWords(machineName);
+  const pieceWords = coreWords(pieceType);
+  // All core words of the piece type (ignoring parenthesized details) must be in the machine name
+  const pieceCore = pieceWords.filter(w => !['carm', 'cbct', 'dr'].includes(w));
+  if (pieceCore.length === 0) return false;
+  const matchCount = pieceCore.filter(pw => machineWords.some(mw => mw.includes(pw) || pw.includes(mw))).length;
+  return matchCount >= pieceCore.length;
 }
 
 export default function InterventionDetailPage() {
@@ -100,15 +112,10 @@ export default function InterventionDetailPage() {
   };
 
   // Filtrer les pièces : l'equipement_type de la pièce doit correspondre
-  // au nom de la machine de l'intervention (correspondance partielle bidirectionnelle)
+  // au nom de la machine de l'intervention (matching intelligent multi-mots)
   const filteredPieces = useMemo(() => {
     if (!intervention?.machine || allPieces.length === 0) return [];
-    const machineName = intervention.machine.toLowerCase().replace(/[-_\s]/g, '');
-    return allPieces.filter(p => {
-      const pt = (p.equipement_type || '').toLowerCase().replace(/[-_\s]/g, '');
-      if (!pt) return false;
-      return machineName.includes(pt) || pt.includes(machineName);
-    });
+    return allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''));
   }, [allPieces, intervention]);
 
   const handleQty = (pieceId: number, qty: number) => {
@@ -164,12 +171,18 @@ export default function InterventionDetailPage() {
     );
   };
 
-  const searchedPieces = allPieces.filter(p => {
-    if (!searchRupture) return true;
+  // Pour la section "en attente de pièce", filtrer d'abord par type d'équipement puis par recherche
+  const searchedPieces = useMemo(() => {
+    const base = intervention?.machine
+      ? allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''))
+      : allPieces;
+    if (!searchRupture) return base;
     const q = searchRupture.toLowerCase();
-    return (p.designation || p.nom || '').toLowerCase().includes(q)
-        || (p.reference || '').toLowerCase().includes(q);
-  });
+    return base.filter(p =>
+      (p.designation || p.nom || '').toLowerCase().includes(q)
+      || (p.reference || '').toLowerCase().includes(q)
+    );
+  }, [allPieces, intervention, searchRupture]);
 
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
