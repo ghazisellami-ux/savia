@@ -211,7 +211,7 @@ export default function CartePage() {
 
   const filteredSites = sites.filter(s =>
     !search || s.client.toLowerCase().includes(search.toLowerCase())
-  );
+  ).sort((a, b) => a.score_sante - b.score_sante);
 
   // Summary KPIs
   const totalEquip = sites.reduce((a, s) => a + s.nb_equipements, 0);
