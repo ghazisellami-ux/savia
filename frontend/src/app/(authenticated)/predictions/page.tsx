@@ -67,12 +67,24 @@ export default function PredictionsPage() {
         const jours = risque >= 70 ? Math.floor(Math.random() * 15) + 3 :
                       risque >= 40 ? Math.floor(Math.random() * 30) + 15 :
                       Math.floor(Math.random() * 60) + 30;
+
+        // Compute realistic AI confidence based on multiple factors:
+        // - More breakdowns (pannes) = more training data = higher confidence
+        // - Extreme scores (very low or very high) = easier to predict = higher confidence
+        // - Use a deterministic seed per machine name for consistency across refreshes
+        const seed = s.machine.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
+        const pannesBonus = Math.min(20, (s.pannes || 0) * 5); // 0-20% bonus from historical data
+        const extremeBonus = Math.abs(s.score - 50) * 0.3; // 0-15% bonus for extreme scores
+        const baseConfidence = 65 + pannesBonus + extremeBonus;
+        const jitter = ((seed % 17) - 8); // deterministic -8 to +8 variation
+        const confiance = Math.min(97, Math.max(55, Math.round(baseConfidence + jitter)));
+
         return {
           machine: s.machine,
           risque,
           joursAvantPanne: jours,
           composant: COMPOSANTS[i % COMPOSANTS.length],
-          confiance: Math.min(95, Math.max(60, s.score - Math.floor(Math.random() * 15))),
+          confiance,
           score: s.score,
           tendance: s.tendance || 'stable',
         };
