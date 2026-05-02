@@ -43,9 +43,9 @@ function coreWords(s: string): string[] {
 function matchesMachine(machineName: string, pieceType: string): boolean {
   if (!machineName || !pieceType) return false;
   const machineWords = coreWords(machineName);
-  const pieceWords = coreWords(pieceType);
-  // All core words of the piece type (ignoring parenthesized details) must be in the machine name
-  const pieceCore = pieceWords.filter(w => !['carm', 'cbct', 'dr'].includes(w));
+  // Remove parenthesized parts from piece type (e.g. "(C-Arm)", "(CBCT)", "(DR)")
+  const pieceClean = pieceType.replace(/\([^)]*\)/g, '').trim();
+  const pieceCore = coreWords(pieceClean);
   if (pieceCore.length === 0) return false;
   const matchCount = pieceCore.filter(pw => machineWords.some(mw => mw.includes(pw) || pw.includes(mw))).length;
   return matchCount >= pieceCore.length;
