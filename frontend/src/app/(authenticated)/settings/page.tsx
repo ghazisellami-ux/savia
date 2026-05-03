@@ -143,31 +143,40 @@ export default function SettingsPage() {
       setTestResult({ key: botKey, ok: false, msg: 'Remplissez le Token avant de tester.' });
       return;
     }
-    if (!bot?.chatId) {
-      setTestResult({ key: botKey, ok: false, msg: 'Remplissez le Chat ID pour tester l\'envoi.' });
-      return;
-    }
     setTestingBot(botKey); setTestResult(null);
     await handleSave();
     try {
       const label = BOTS.find(b => b.key === botKey)?.label || 'Bot';
-      const res = await fetch(
-        `https://api.telegram.org/bot${bot.token}/sendMessage`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: bot.chatId,
-            text: `✅ *Test SAVIA — ${label}*\nBot Telegram correctement configuré !`,
-            parse_mode: 'Markdown',
-          }),
+
+      if (bot.chatId) {
+        // Chat ID fourni → envoyer un message de test
+        const res = await fetch(
+          `https://api.telegram.org/bot${bot.token}/sendMessage`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: bot.chatId,
+              text: `✅ *Test SAVIA — ${label}*\nBot Telegram correctement configuré !`,
+              parse_mode: 'Markdown',
+            }),
+          }
+        );
+        const data = await res.json();
+        if (data.ok) {
+          setTestResult({ key: botKey, ok: true, msg: '✅ Message de test envoyé !' });
+        } else {
+          setTestResult({ key: botKey, ok: false, msg: `❌ ${data.description || 'Vérifiez token et Chat ID'}` });
         }
-      );
-      const data = await res.json();
-      if (data.ok) {
-        setTestResult({ key: botKey, ok: true, msg: '✅ Message de test envoyé !' });
       } else {
-        setTestResult({ key: botKey, ok: false, msg: `❌ ${data.description || 'Vérifiez token et Chat ID'}` });
+        // Pas de Chat ID → vérifier juste la validité du token via getMe
+        const res = await fetch(`https://api.telegram.org/bot${bot.token}/getMe`);
+        const data = await res.json();
+        if (data.ok) {
+          setTestResult({ key: botKey, ok: true, msg: `✅ Token valide ! Bot: @${data.result.username}` });
+        } else {
+          setTestResult({ key: botKey, ok: false, msg: `❌ Token invalide : ${data.description || 'Vérifiez le token'}` });
+        }
       }
     } catch (e: any) {
       setTestResult({ key: botKey, ok: false, msg: `❌ Impossible de joindre Telegram : ${e.message}` });
