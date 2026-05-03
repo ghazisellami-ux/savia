@@ -49,7 +49,7 @@ export const api = {
       const token = localStorage.getItem('savia_site_token') || '';
       const fd = new FormData();
       fd.append('file', file);
-      const res = await fetch(`/api/interventions/${id}/photo`, {
+      const res = await fetch(`${API_BASE}/api/interventions/${id}/photo`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: fd,

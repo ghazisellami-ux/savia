@@ -150,7 +150,7 @@ export default function InterventionDetailPage() {
         designation: p.designation || p.nom || '',
       }));
       await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture });
-      if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(() => {});
+      if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
       setSuccess('✅ Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
     } catch (err: any) {
