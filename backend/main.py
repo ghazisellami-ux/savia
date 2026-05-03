@@ -2296,6 +2296,9 @@ def get_settings(user: dict = Depends(_verify_token)):
     keys = [
         "nom_organisation", "logo_path", "langue", "theme",
         "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
+        "telegram_sav_token", "telegram_sav_chat_id",
+        "telegram_manager_token", "telegram_manager_chat_id",
+        "telegram_stock_token", "telegram_stock_chat_id",
         "gemini_api_key", "role_permissions",
     ]
     try:
