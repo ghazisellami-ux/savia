@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py db_engine.py ai_engine.py auth.py config.py ./
 COPY log_preprocessor.py s3_storage.py ./
 COPY knowledge_base.xlsx ./
+COPY logo-savia.png ./
 
 # Create data directory for persistent volumes
 RUN mkdir -p /app/data
