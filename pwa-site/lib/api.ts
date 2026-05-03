@@ -49,12 +49,18 @@ export const api = {
       const token = localStorage.getItem('savia_site_token') || '';
       const fd = new FormData();
       fd.append('file', file);
-      const res = await fetch(`${API_BASE}/api/interventions/${id}/photo`, {
+      // Upload directly to backend — Next.js rewrites don't reliably proxy
+      // multipart/form-data in standalone mode. Use relative /api/ path which
+      // Nginx reverse-proxies directly to the backend container.
+      const res = await fetch(`/api/interventions/${id}/photo`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
       });
-      if (!res.ok) throw new Error('Upload photo failed');
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`Upload photo failed: ${res.status} ${detail}`);
+      }
       return res.json();
     },
   },
