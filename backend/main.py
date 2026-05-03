@@ -118,6 +118,15 @@ def startup():
         logger.info("✅ Migration fiche_photo: colonnes OK")
     except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
+    # Migration: planning_id + facture_envoyee on interventions
+    try:
+        with get_db() as conn:
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS planning_id INTEGER")
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS facture_envoyee BOOLEAN DEFAULT FALSE")
+            conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS rappel_facture_envoye INTEGER DEFAULT 0")
+        logger.info("✅ Migration planning_id + facture: colonnes OK")
+    except Exception as e:
+        logger.info(f"Migration planning_id/facture (déjà faite ou erreur): {e}")
     _start_garantie_daemon()
     # Auto-migrate existing clients from equipements table
     try:
@@ -243,8 +252,270 @@ def check_planning_reminder():
         return []
 
 
+def sync_planning_to_interventions():
+    """
+    Auto-crée des interventions pour les maintenances planifiées dont la date_prevue est aujourd'hui.
+    Envoie une notification au Bot Technicien pour chaque intervention créée.
+    """
+    from datetime import date
+    try:
+        today = date.today()
+        today_str = today.isoformat()
+        with get_db() as conn:
+            # Trouver les maintenances planifiées pour aujourd'hui sans intervention déjà créée
+            planned = conn.execute(
+                """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
+                          pm.type_maintenance
+                   FROM planning_maintenance pm
+                   WHERE pm.date_prevue = %s
+                     AND pm.statut = 'Planifiée'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM interventions i
+                         WHERE i.planning_id = pm.id
+                     )""",
+                (today_str,)
+            ).fetchall()
+
+        created = []
+        for row in planned:
+            pm = dict(row)
+            pm_id = pm['id']
+            machine = pm.get('machine', '')
+            client = pm.get('client', '')
+            technicien = pm.get('technicien_assigne', '')
+            description = pm.get('description', '') or f"Maintenance préventive — {machine}"
+            notes = f"[{client}] Maintenance préventive planifiée #{pm_id}" if client else f"Maintenance préventive planifiée #{pm_id}"
+
+            with get_db() as conn:
+                conn.execute(
+                    """INSERT INTO interventions
+                       (date, machine, technicien, type_intervention, description,
+                        statut, priorite, notes, planning_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (today_str, machine, technicien, 'Préventive', description,
+                     'En cours', 'Moyenne', notes, pm_id)
+                )
+                # Récupérer l'ID de l'intervention créée
+                new_id_row = conn.execute(
+                    "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                    (pm_id,)
+                ).fetchone()
+                new_id = new_id_row['id'] if new_id_row else '?'
+
+                # Mettre à jour le statut du planning
+                conn.execute(
+                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
+                    (pm_id,)
+                )
+
+            created.append({
+                'intervention_id': new_id,
+                'planning_id': pm_id,
+                'machine': machine,
+                'technicien': technicien,
+                'client': client,
+            })
+
+        # Envoyer notification groupée au bot Technicien
+        if created:
+            lines = '\n'.join(
+                f"  • <b>#{c['intervention_id']}</b> — {c['machine']}"
+                + (f" ({c['client']})" if c['client'] else "")
+                + (f"\n    👨‍🔧 {c['technicien']}" if c['technicien'] else "")
+                for c in created
+            )
+            msg = (
+                f"🔧 <b>Maintenance Préventive — Jour J</b>\n"
+                f"<i>{len(created)} intervention(s) créée(s) automatiquement :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram", msg)
+            logger.info(f"Planning sync: {len(created)} intervention(s) créées pour {today_str}")
+
+        return created
+    except Exception as e:
+        logger.error(f"sync_planning_to_interventions error: {e}")
+        return []
+
+
+def check_stock_alerts():
+    """
+    Vérifie les pièces en rupture de stock (stock_actuel <= stock_minimum)
+    et les interventions en attente de pièce.
+    Envoie une notification au Bot Stock.
+    """
+    try:
+        alerts = []
+        with get_db() as conn:
+            # 1. Pièces en rupture de stock
+            ruptures = conn.execute(
+                """SELECT reference, designation, stock_actuel, stock_minimum, fournisseur
+                   FROM pieces_rechange
+                   WHERE stock_actuel <= stock_minimum AND stock_minimum > 0
+                   ORDER BY (stock_minimum - stock_actuel) DESC"""
+            ).fetchall()
+            for r in ruptures:
+                d = dict(r)
+                alerts.append(
+                    f"  🔴 <b>{d.get('designation', d.get('reference', '?'))}</b>"
+                    f" — Réf: {d.get('reference', '?')}"
+                    f"\n    Stock: <b>{d.get('stock_actuel', 0)}</b> / Min: {d.get('stock_minimum', 0)}"
+                    + (f" | Fournisseur: {d['fournisseur']}" if d.get('fournisseur') else "")
+                )
+
+            # 2. Interventions en attente de pièce
+            attente = conn.execute(
+                """SELECT id, machine, technicien FROM interventions
+                   WHERE statut = 'En attente de piece'
+                   ORDER BY id DESC"""
+            ).fetchall()
+            for a in attente:
+                d = dict(a)
+                alerts.append(
+                    f"  ⏳ Intervention <b>#{d['id']}</b> — {d.get('machine', '?')}"
+                    f" ({d.get('technicien', '?')}) en attente de pièce"
+                )
+
+        if alerts:
+            from datetime import date
+            msg = (
+                f"📦 <b>Alerte Stock & Pièces</b>\n"
+                f"<i>{len(alerts)} alerte(s) :</i>\n\n"
+                + '\n'.join(alerts) + "\n\n"
+                f"📅 Vérification SAVIA — {date.today().strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_stock", msg)
+            logger.info(f"Stock alerts: {len(alerts)} alerte(s) envoyée(s)")
+        return alerts
+    except Exception as e:
+        logger.error(f"check_stock_alerts error: {e}")
+        return []
+
+
+def check_facturation_reminders():
+    """
+    Vérifie les interventions clôturées pour envoyer des rappels de facturation :
+    - Bot SAV : rappel quand une intervention est clôturée depuis ~8 jours (J-2 avant deadline)
+    - Bot SAV : rappel quand clôturée depuis ~1 jour (première alerte)
+    - Bot Manager : alerte quand la facturation n'a pas eu lieu après 10 jours
+    """
+    from datetime import date, timedelta
+    try:
+        today = date.today()
+        sav_alerts = []
+        manager_alerts = []
+
+        with get_db() as conn:
+            # Interventions clôturées avec date_cloture, non encore facturées
+            rows = conn.execute(
+                """SELECT id, machine, technicien, date_cloture, notes,
+                          COALESCE(facture_envoyee, FALSE) as facture_envoyee,
+                          COALESCE(rappel_facture_envoye, 0) as rappel_facture_envoye
+                   FROM interventions
+                   WHERE statut = 'Cloturee'
+                     AND date_cloture IS NOT NULL
+                     AND COALESCE(facture_envoyee, FALSE) = FALSE
+                   ORDER BY date_cloture ASC"""
+            ).fetchall()
+
+        for row in rows:
+            d = dict(row)
+            try:
+                dc = d['date_cloture']
+                if isinstance(dc, str):
+                    cloture_date = date.fromisoformat(str(dc)[:10])
+                else:
+                    cloture_date = dc if hasattr(dc, 'year') else date.fromisoformat(str(dc)[:10])
+            except Exception:
+                continue
+
+            jours_depuis = (today - cloture_date).days
+            rappel_level = d.get('rappel_facture_envoye', 0) or 0
+            deadline = cloture_date + timedelta(days=10)
+            jours_restants = (deadline - today).days
+
+            # Extraire client depuis notes
+            notes = str(d.get('notes', '') or '')
+            client = notes[1:notes.index(']')] if notes.startswith('[') and ']' in notes else ''
+            machine = d.get('machine', '?')
+            int_id = d['id']
+
+            # Rappel SAV : J+1 après clôture (première notification)
+            if jours_depuis >= 1 and rappel_level < 1:
+                sav_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_restants': jours_restants,
+                    'type': 'premier',
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = %s", (int_id,))
+
+            # Rappel SAV : J+8 (2 jours avant deadline)
+            elif jours_depuis >= 8 and rappel_level < 2:
+                sav_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_restants': jours_restants,
+                    'type': 'urgent',
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = %s", (int_id,))
+
+            # Bot Manager : > 10 jours sans facturation
+            if jours_depuis > 10 and rappel_level < 3:
+                manager_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_retard': jours_depuis - 10,
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = %s", (int_id,))
+
+        # Envoyer notifications SAV
+        if sav_alerts:
+            lines = '\n'.join(
+                f"  {'🔴' if a['type']=='urgent' else '🟡'} <b>#{a['id']}</b> — {a['machine']}"
+                + (f" ({a['client']})" if a['client'] else "")
+                + f"\n    ⏳ {a['jours_restants']}j restants pour facturer"
+                for a in sav_alerts
+            )
+            msg = (
+                f"💰 <b>Rappel Facturation SAV</b>\n"
+                f"<i>{len(sav_alerts)} intervention(s) à facturer :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            logger.info(f"Facturation SAV: {len(sav_alerts)} rappel(s) envoyé(s)")
+
+        # Envoyer alertes Manager
+        if manager_alerts:
+            lines = '\n'.join(
+                f"  🚨 <b>#{a['id']}</b> — {a['machine']}"
+                + (f" ({a['client']})" if a['client'] else "")
+                + f"\n    ⚠️ {a['jours_retard']}j de retard de facturation"
+                for a in manager_alerts
+            )
+            msg = (
+                f"🚨 <b>ALERTE — Facturation en retard</b>\n"
+                f"<i>{len(manager_alerts)} intervention(s) non facturées après 10 jours :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Facturation Manager: {len(manager_alerts)} alerte(s) envoyée(s)")
+
+        return {'sav': len(sav_alerts), 'manager': len(manager_alerts)}
+    except Exception as e:
+        logger.error(f"check_facturation_reminders error: {e}")
+        return {'sav': 0, 'manager': 0}
+
+
+
 def _start_garantie_daemon():
-    """Lance un thread démon qui vérifie garanties + contrats + rappels planning toutes les 24h."""
+    """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
     import threading, time
     def _run():
         time.sleep(30)
@@ -261,9 +532,21 @@ def _start_garantie_daemon():
                 check_planning_reminder()
             except Exception as e:
                 logger.error(f"Planning reminder daemon error: {e}")
+            try:
+                sync_planning_to_interventions()
+            except Exception as e:
+                logger.error(f"Planning sync daemon error: {e}")
+            try:
+                check_stock_alerts()
+            except Exception as e:
+                logger.error(f"Stock alerts daemon error: {e}")
+            try:
+                check_facturation_reminders()
+            except Exception as e:
+                logger.error(f"Facturation reminders daemon error: {e}")
             time.sleep(86400)
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + rappels planning, 24h)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation, 24h)")
 
 
 def check_contrat_expiry():
@@ -332,23 +615,28 @@ def _df_to_records(df) -> list:
     return records
 
 
-def _send_telegram(message: str) -> bool:
+def _send_telegram_bot(bot_key: str, message: str) -> bool:
     """
-    Envoie un message Telegram en lisant token + chat_id depuis la DB config.
-    Utilise urllib (pas de dépendance externe).
+    Envoie un message Telegram via un bot spécifique.
+    bot_key: 'telegram' (technicien), 'telegram_sav', 'telegram_manager', 'telegram_stock'
     """
     import urllib.request, urllib.parse, json as _json
+    token_key = f"{bot_key}_token"
+    chat_key = f"{bot_key}_chat_id"
     try:
         with get_db() as conn:
             rows = conn.execute(
                 "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
-                (["telegram_token", "telegram_chat_id"],)
+                ([token_key, chat_key],)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}
-        token   = config.get("telegram_token", "").strip()
-        chat_id = config.get("telegram_chat_id", "").strip()
-        if not token or not chat_id:
-            logger.warning("Telegram non configuré — notification ignorée")
+        token   = config.get(token_key, "").strip()
+        chat_id = config.get(chat_key, "").strip()
+        if not token:
+            logger.warning(f"Telegram bot '{bot_key}' non configuré (pas de token) — notification ignorée")
+            return False
+        if not chat_id:
+            logger.warning(f"Telegram bot '{bot_key}' pas de chat_id — notification ignorée")
             return False
 
         url  = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -361,13 +649,18 @@ def _send_telegram(message: str) -> bool:
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = _json.loads(resp.read().decode())
         if result.get("ok"):
-            logger.info("Message Telegram envoyé")
+            logger.info(f"Message Telegram envoyé via {bot_key}")
             return True
-        logger.error(f"Telegram API error: {result}")
+        logger.error(f"Telegram API error ({bot_key}): {result}")
         return False
     except Exception as e:
-        logger.error(f"Erreur Telegram: {e}")
+        logger.error(f"Erreur Telegram ({bot_key}): {e}")
         return False
+
+
+def _send_telegram(message: str) -> bool:
+    """Rétrocompatibilité — envoie via le bot technicien."""
+    return _send_telegram_bot("telegram", message)
 
 
 def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
@@ -839,6 +1132,17 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
                     _send_telegram(msg_tg)
+                    # Notification SAV : intervention clôturée → à facturer
+                    msg_sav = (
+                        f"📋 <b>Intervention Clôturée — À facturer</b>\n\n"
+                        f"🔧 Intervention <b>#{intervention_id}</b>\n"
+                        f"🏥 Machine : <b>{d.get('machine', '')}</b>\n"
+                        f"👷 Technicien : {d.get('technicien', '')}\n"
+                        f"⏱️ Durée : {duree_h}h\n\n"
+                        f"💰 <i>Délai de facturation : 10 jours</i>\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram_bot("telegram_sav", msg_sav)
             except Exception as te:
                 logger.error(f"Telegram clôture erreur: {te}")
 
@@ -1499,8 +1803,31 @@ def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
 
 
 # ==========================================
+# PLANNING SYNC + FACTURATION
+# ==========================================
+
+@app.post("/api/planning/sync")
+def force_planning_sync(user: dict = Depends(_verify_token)):
+    """Force la synchronisation planning -> interventions pour aujourd'hui."""
+    created = sync_planning_to_interventions()
+    return {"ok": True, "created": len(created), "interventions": created}
+
+
+@app.post("/api/interventions/{intervention_id}/factured")
+def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Marque une intervention comme facturee (arrete les rappels)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = %s",
+            (intervention_id,)
+        )
+    return {"ok": True}
+
+
+# ==========================================
 # KNOWLEDGE BASE
 # ==========================================
+
 
 @app.get("/api/knowledge")
 def get_knowledge(user: dict = Depends(_verify_token)):
