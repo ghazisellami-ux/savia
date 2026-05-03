@@ -1118,21 +1118,40 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes FROM interventions WHERE id = %s",
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = %s",
                         (intervention_id,)
                     ).fetchone()
                 if row:
                     d = dict(row)
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
-                    notes_line = f"\n📌 Notes : {d['notes']}" if d.get('notes') else ""
+                    notes_raw = str(d.get('notes', '') or '')
+                    # Extraire client depuis notes [Client]
+                    client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
+                    # Si pas de client dans notes, chercher via equipement
+                    if not client_name:
+                        try:
+                            eq_row = conn.execute(
+                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = %s LIMIT 1",
+                                (d.get('machine', ''),)
+                            ).fetchone()
+                            if eq_row:
+                                client_name = eq_row['Client'] or ''
+                        except Exception:
+                            pass
+                    pieces = str(d.get('pieces_utilisees', '') or '').strip()
+                    notes_line = f"\n📌 Notes : {notes_raw}" if notes_raw and not notes_raw.startswith('[') else ""
+                    client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
+                    pieces_line = f"\n🔩 Pièces : {pieces}" if pieces else ""
                     msg_tg = (
                         f"✅ <b>INTERVENTION CLÔTURÉE — #{intervention_id}</b>\n\n"
-                        f"🏥 Machine : <b>{d.get('machine', '')}</b>\n"
+                        f"🏥 Machine : <b>{d.get('machine', '')}</b>"
+                        f"{client_line}\n"
                         f"👷 Technicien : <b>{d.get('technicien', '')}</b>\n"
                         f"🔴 Problème : {str(d.get('probleme', ''))[:200]}\n"
                         f"🔍 Cause : {str(d.get('cause', ''))[:200]}\n"
                         f"🟢 Solution : {str(d.get('solution', ''))[:200]}\n"
                         f"⏱️ Durée : <b>{duree_h}h</b>"
+                        f"{pieces_line}"
                         f"{notes_line}\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
@@ -1141,9 +1160,11 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     msg_sav = (
                         f"📋 <b>Intervention Clôturée — À facturer</b>\n\n"
                         f"🔧 Intervention <b>#{intervention_id}</b>\n"
-                        f"🏥 Machine : <b>{d.get('machine', '')}</b>\n"
+                        f"🏥 Machine : <b>{d.get('machine', '')}</b>"
+                        f"{client_line}\n"
                         f"👷 Technicien : {d.get('technicien', '')}\n"
-                        f"⏱️ Durée : {duree_h}h\n\n"
+                        f"⏱️ Durée : {duree_h}h"
+                        f"{pieces_line}\n\n"
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
