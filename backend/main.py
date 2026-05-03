@@ -1095,6 +1095,7 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
 @app.get("/api/interventions/facturation")
 def get_facturation_tracking(user: dict = Depends(_verify_token)):
     """Retourne les interventions cloturees avec le suivi de facturation."""
+    from datetime import date, timedelta
     try:
         with get_db() as conn:
             rows = conn.execute("""
