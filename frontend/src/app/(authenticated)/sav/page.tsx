@@ -8,7 +8,8 @@ import {
   ChevronUp, Edit, Calendar, BarChart3, Timer, Wallet, Activity, Target,
   ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
-  Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload
+  Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
+  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
@@ -78,6 +79,8 @@ export default function SavPage() {
   const [aiResult, setAiResult] = useState<any>(null);
   const [aiError, setAiError] = useState('');
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
+  const [facturationData, setFacturationData] = useState<any[]>([]);
+  const [factFilter, setFactFilter] = useState<'all' | 'pending' | 'done' | 'overdue'>('all');
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return d.toISOString().substring(0, 10);
@@ -146,6 +149,7 @@ export default function SavPage() {
 
   useEffect(() => {
     interventions.listFiches().then(setFiches).catch(() => {});
+    interventions.listFacturation().then(setFacturationData).catch(() => {});
     // Charger toutes les pièces pour le sélecteur rupture
     import('@/lib/api').then(({ pieces: piecesApi }) => {
       piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
@@ -453,7 +457,25 @@ export default function SavPage() {
     { icon: <FileText className="w-4 h-4" />, label: 'Rapport PDF' },
     { icon: <Sparkles className="w-4 h-4" />, label: 'Analyse IA' },
     { icon: <Camera className="w-4 h-4" />, label: 'Fiches Signées' },
+    { icon: <Receipt className="w-4 h-4" />, label: 'Suivi Facturation' },
   ];
+
+  // Facturation helpers
+  const handleMarkFactured = async (id: number) => {
+    try {
+      await interventions.markFactured(id);
+      const updated = await interventions.listFacturation();
+      setFacturationData(updated);
+    } catch (e) { console.error('Mark factured failed', e); }
+  };
+  const filteredFacturation = useMemo(() => {
+    return facturationData.filter((f: any) => {
+      if (factFilter === 'done') return f.facture_envoyee;
+      if (factFilter === 'pending') return !f.facture_envoyee && !f.en_retard;
+      if (factFilter === 'overdue') return f.en_retard;
+      return true;
+    });
+  }, [facturationData, factFilter]);
 
   if (isLoading) {
     return (<div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>);
@@ -1271,6 +1293,133 @@ export default function SavPage() {
       {/* === ONGLET 5 : FICHES SIGNÉES === */}
       {activeTab === 5 && (
         <FichesSigneesTab fiches={fiches} setFiches={setFiches} />
+      )}
+
+      {/* === ONGLET 6 : SUIVI FACTURATION === */}
+      {activeTab === 6 && (
+        <div className="space-y-4">
+          {/* KPIs facturation */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Total clôturées', value: facturationData.length, icon: <ClipboardList className="w-5 h-5" />, color: 'text-savia-accent', filter: 'all' as const },
+              { label: 'Non facturées', value: facturationData.filter((f: any) => !f.facture_envoyee && !f.en_retard).length, icon: <CircleDot className="w-5 h-5" />, color: 'text-yellow-400', filter: 'pending' as const },
+              { label: 'En retard', value: facturationData.filter((f: any) => f.en_retard).length, icon: <AlertOctagon className="w-5 h-5" />, color: 'text-red-400', filter: 'overdue' as const },
+              { label: 'Facturées', value: facturationData.filter((f: any) => f.facture_envoyee).length, icon: <CheckCircle2 className="w-5 h-5" />, color: 'text-green-400', filter: 'done' as const },
+            ].map(k => (
+              <button key={k.label} onClick={() => setFactFilter(k.filter)}
+                className={`glass rounded-xl p-4 text-center cursor-pointer transition-all hover:scale-[1.02] ${
+                  factFilter === k.filter ? 'ring-2 ring-savia-accent shadow-lg' : ''
+                }`}>
+                <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
+                <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
+                <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Table facturation */}
+          <div className="glass rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-savia-accent" />
+                <span className="font-semibold text-sm">{filteredFacturation.length} intervention{filteredFacturation.length > 1 ? 's' : ''}</span>
+              </div>
+              {factFilter !== 'all' && (
+                <button onClick={() => setFactFilter('all')} className="text-xs text-savia-accent hover:underline cursor-pointer">Voir tout</button>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-[450px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-savia-surface-hover/80 backdrop-blur-sm">
+                  <tr className="border-b border-savia-border">
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">ID</th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Machine</th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Client</th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Technicien</th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Date clôture</th>
+                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Compteur</th>
+                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Deadline</th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Pièces</th>
+                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Statut</th>
+                    <th className="py-2.5 px-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredFacturation.map((f: any) => {
+                    const progress = Math.min(100, Math.max(0, ((10 - f.jours_restants) / 10) * 100));
+                    return (
+                      <tr key={f.id} className={`border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors ${
+                        f.en_retard ? 'bg-red-500/5' : f.facture_envoyee ? 'bg-green-500/5' : ''
+                      }`}>
+                        <td className="py-2.5 px-3 font-mono text-xs text-savia-accent">#{f.id}</td>
+                        <td className="py-2.5 px-3 font-semibold text-sm">{f.machine}</td>
+                        <td className="py-2.5 px-3 text-sm text-savia-text-muted">{f.client || '—'}</td>
+                        <td className="py-2.5 px-3 text-sm">{f.technicien}</td>
+                        <td className="py-2.5 px-3 text-xs">{f.date_cloture}</td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex flex-col items-center gap-1">
+                            <span className={`text-xs font-bold ${
+                              f.facture_envoyee ? 'text-green-400' :
+                              f.jours_restants <= 0 ? 'text-red-400' :
+                              f.jours_restants <= 2 ? 'text-orange-400' : 'text-savia-text'
+                            }`}>
+                              {f.facture_envoyee ? '✓' : `J+${f.jours_depuis_cloture}`}
+                            </span>
+                            {!f.facture_envoyee && (
+                              <div className="w-16 bg-savia-surface-hover rounded-full h-1.5 overflow-hidden">
+                                <div className={`h-full rounded-full transition-all ${
+                                  f.jours_restants <= 0 ? 'bg-red-400' :
+                                  f.jours_restants <= 2 ? 'bg-orange-400' :
+                                  f.jours_restants <= 5 ? 'bg-yellow-400' : 'bg-green-400'
+                                }`} style={{ width: `${progress}%` }} />
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className={`text-xs font-semibold ${
+                            f.facture_envoyee ? 'text-green-400' :
+                            f.jours_restants <= 0 ? 'text-red-400 animate-pulse' :
+                            f.jours_restants <= 2 ? 'text-orange-400' : 'text-savia-text-muted'
+                          }`}>
+                            {f.facture_envoyee ? 'Facturée' :
+                             f.jours_restants <= 0 ? `${Math.abs(f.jours_restants)}j de retard` :
+                             `${f.jours_restants}j restants`}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-xs text-savia-text-muted max-w-[150px] truncate">{f.pieces_utilisees || '—'}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          {f.facture_envoyee ? (
+                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-green-500/15 text-green-400">✓ Facturée</span>
+                          ) : f.en_retard ? (
+                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-red-500/15 text-red-400 animate-pulse">⚠ Retard</span>
+                          ) : (
+                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-yellow-500/15 text-yellow-400">En attente</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {!f.facture_envoyee && (
+                            <button onClick={() => handleMarkFactured(f.id)}
+                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors whitespace-nowrap"
+                            >
+                              ✓ Facturer
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredFacturation.length === 0 && (
+                    <tr><td colSpan={10} className="text-center py-8 text-savia-text-dim">
+                      <Receipt className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                      Aucune intervention dans cette catégorie.
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
 

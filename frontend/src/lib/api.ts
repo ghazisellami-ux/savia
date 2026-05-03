@@ -123,6 +123,10 @@ export const interventions = {
       method: 'PATCH',
       body: { validation },
     }),
+  listFacturation: () =>
+    request<Array<Record<string, unknown>>>('/api/interventions/facturation'),
+  markFactured: (id: number) =>
+    request<{ ok: boolean }>(`/api/interventions/${id}/factured`, { method: 'POST' }),
 };
 
 // --- Équipements ---

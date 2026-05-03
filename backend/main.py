@@ -1850,6 +1850,60 @@ def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verif
     return {"ok": True}
 
 
+@app.get("/api/interventions/facturation")
+def get_facturation_tracking(user: dict = Depends(_verify_token)):
+    """Retourne les interventions cloturees avec le suivi de facturation."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute("""
+                SELECT i.id, i.machine, i.technicien, i.type_intervention,
+                       i.date_cloture, i.facture_envoyee, i.notes,
+                       i.pieces_utilisees, i.cout, i.duree_minutes
+                FROM interventions i
+                WHERE i.statut IN ('Cloturee', 'Terminee')
+                  AND i.date_cloture IS NOT NULL
+                ORDER BY i.date_cloture DESC
+            """).fetchall()
+        today = date.today()
+        result = []
+        for row in rows:
+            d = dict(row)
+            dc = d['date_cloture']
+            if isinstance(dc, str):
+                cloture_date = date.fromisoformat(str(dc)[:10])
+            elif hasattr(dc, 'date'):
+                cloture_date = dc.date()
+            elif hasattr(dc, 'year'):
+                cloture_date = dc
+            else:
+                cloture_date = date.fromisoformat(str(dc)[:10])
+            jours_depuis = (today - cloture_date).days
+            deadline = cloture_date + timedelta(days=10)
+            jours_restants = (deadline - today).days
+            notes = str(d.get('notes', '') or '')
+            client = notes[1:notes.index(']')] if notes.startswith('[') and ']' in notes else ''
+            result.append({
+                "id": d['id'],
+                "machine": d.get('machine', ''),
+                "technicien": d.get('technicien', ''),
+                "type_intervention": d.get('type_intervention', ''),
+                "client": client,
+                "date_cloture": str(cloture_date),
+                "facture_envoyee": bool(d.get('facture_envoyee', False)),
+                "jours_depuis_cloture": jours_depuis,
+                "jours_restants": jours_restants,
+                "deadline": str(deadline),
+                "pieces_utilisees": d.get('pieces_utilisees', ''),
+                "cout": d.get('cout', 0) or 0,
+                "duree_minutes": d.get('duree_minutes', 0) or 0,
+                "en_retard": jours_restants < 0 and not d.get('facture_envoyee', False),
+            })
+        return result
+    except Exception as e:
+        logger.error(f"Facturation tracking error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==========================================
 # KNOWLEDGE BASE
 # ==========================================
