@@ -149,7 +149,7 @@ function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; 
 export default function EquipementsPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>('clients');
+  const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>(isLecteur ? 'equipements' : 'clients');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
@@ -419,12 +419,14 @@ export default function EquipementsPage() {
   };
 
   const filtered = useMemo(() => data.filter(eq => {
+    // Lecteur: show only their own client's equipment
+    if (isLecteur && user?.client && eq.client !== user.client) return false;
     if (filterType !== 'Tous' && eq.type !== filterType) return false;
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
     if (search && !eq.nom.toLowerCase().includes(search.toLowerCase()) &&
         !eq.numSerie.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [search, filterType, filterClient, data]);
+  }), [search, filterType, filterClient, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
     if (docFilterEquip !== 'Tous' && doc.equipement_nom !== docFilterEquip) return false;
@@ -469,10 +471,12 @@ export default function EquipementsPage() {
 
       {/* Tab Navigation */}
       <div className="flex gap-1 glass rounded-xl p-1">
-        <button onClick={() => setActiveTab('clients')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'clients' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
-          <Building2 className="w-4 h-4" /> Clients
-        </button>
+        {!isLecteur && (
+          <button onClick={() => setActiveTab('clients')}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'clients' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
+            <Building2 className="w-4 h-4" /> Clients
+          </button>
+        )}
         <button onClick={() => setActiveTab('equipements')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${activeTab === 'equipements' ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md' : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'}`}>
           <Server className="w-4 h-4" /> Équipements
@@ -787,9 +791,11 @@ export default function EquipementsPage() {
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
             </select>
-            <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
-            </select>
+            {!isLecteur && (
+              <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+                {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
+              </select>
+            )}
           </div>
 
           {/* Equipment Cards */}
