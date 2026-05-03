@@ -425,8 +425,13 @@ def check_facturation_reminders():
                 dc = d['date_cloture']
                 if isinstance(dc, str):
                     cloture_date = date.fromisoformat(str(dc)[:10])
+                elif hasattr(dc, 'date'):
+                    # datetime object → convert to date
+                    cloture_date = dc.date()
+                elif hasattr(dc, 'year'):
+                    cloture_date = dc
                 else:
-                    cloture_date = dc if hasattr(dc, 'year') else date.fromisoformat(str(dc)[:10])
+                    cloture_date = date.fromisoformat(str(dc)[:10])
             except Exception:
                 continue
 
