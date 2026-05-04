@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff, Bot, Headphones, BarChart3, Package } from 'lucide-react';
+import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff, Bot, Headphones, BarChart3, Package, Settings, MessageCircle, ClipboardList, Building2, Wrench, DollarSign, Brain, KeyRound } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
 const INPUT = "w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 focus:outline-none";
@@ -164,22 +164,22 @@ export default function SettingsPage() {
         );
         const data = await res.json();
         if (data.ok) {
-          setTestResult({ key: botKey, ok: true, msg: '✅ Message de test envoyé !' });
+          setTestResult({ key: botKey, ok: true, msg: 'Message de test envoyé !' });
         } else {
-          setTestResult({ key: botKey, ok: false, msg: `❌ ${data.description || 'Vérifiez token et Chat ID'}` });
+          setTestResult({ key: botKey, ok: false, msg: `${data.description || 'Vérifiez token et Chat ID'}` });
         }
       } else {
         // Pas de Chat ID → vérifier juste la validité du token via getMe
         const res = await fetch(`https://api.telegram.org/bot${bot.token}/getMe`);
         const data = await res.json();
         if (data.ok) {
-          setTestResult({ key: botKey, ok: true, msg: `✅ Token valide ! Bot: @${data.result.username}` });
+          setTestResult({ key: botKey, ok: true, msg: `Token valide ! Bot: @${data.result.username}` });
         } else {
-          setTestResult({ key: botKey, ok: false, msg: `❌ Token invalide : ${data.description || 'Vérifiez le token'}` });
+          setTestResult({ key: botKey, ok: false, msg: `Token invalide : ${data.description || 'Vérifiez le token'}` });
         }
       }
     } catch (e: any) {
-      setTestResult({ key: botKey, ok: false, msg: `❌ Impossible de joindre Telegram : ${e.message}` });
+      setTestResult({ key: botKey, ok: false, msg: `Impossible de joindre Telegram : ${e.message}` });
     } finally {
       setTestingBot(null);
     }
@@ -188,14 +188,14 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6 animate-fade-in max-w-3xl mx-auto pb-10">
       <div>
-        <h1 className="text-2xl font-black gradient-text">⚙️ Paramètres</h1>
+        <h1 className="text-2xl font-black gradient-text flex items-center gap-3"><Settings className="w-7 h-7" /> Paramètres</h1>
         <p className="text-savia-text-muted text-sm mt-1">Configuration de l&apos;application SAVIA</p>
       </div>
 
       {/* ━━━━ TELEGRAM BOTS ━━━━ */}
       <div className={CARD}>
         <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
-          <span className="text-2xl">✈️</span>
+          <Send className="w-6 h-6 text-blue-400" />
           <div>
             <h2 className="font-bold text-base text-savia-text">Bots Telegram</h2>
             <p className="text-xs text-savia-text-muted">Configurez les bots pour chaque profil de notification</p>
@@ -235,7 +235,7 @@ export default function SettingsPage() {
 
                 {/* Token */}
                 <div>
-                  <label className={LABEL}>🤖 Bot Token</label>
+                  <label className={LABEL}><span className="inline-flex items-center gap-1.5"><Bot className="w-3.5 h-3.5" /> Bot Token</span></label>
                   <div className="relative">
                     <input
                       type={show ? 'text' : 'password'}
@@ -253,7 +253,7 @@ export default function SettingsPage() {
 
                 {/* Chat ID (optional) */}
                 <div>
-                  <label className={LABEL}>💬 Chat ID <span className="text-savia-text-dim font-normal normal-case">(optionnel — direct ou groupe)</span></label>
+                  <label className={LABEL}><span className="inline-flex items-center gap-1.5"><MessageCircle className="w-3.5 h-3.5" /> Chat ID</span> <span className="text-savia-text-dim font-normal normal-case">(optionnel — direct ou groupe)</span></label>
                   <input
                     type="text"
                     className={INPUT + ' text-sm'}
@@ -284,7 +284,7 @@ export default function SettingsPage() {
 
         {/* Guide */}
         <div className="bg-savia-bg/60 border border-savia-border rounded-lg p-4 text-xs space-y-1 text-savia-text-muted">
-          <p className="font-bold text-savia-text mb-2">📋 Guide en 3 étapes :</p>
+          <p className="font-bold text-savia-text mb-2 flex items-center gap-1.5"><ClipboardList className="w-3.5 h-3.5 text-savia-accent" /> Guide en 3 étapes :</p>
           <p><span className="text-savia-accent font-bold">1.</span> Telegram → cherchez <strong>@BotFather</strong> → <code>/newbot</code> → copiez le token</p>
           <p><span className="text-savia-accent font-bold">2.</span> Envoyez <code>/start</code> à votre bot pour activer le chat</p>
           <p><span className="text-savia-accent font-bold">3.</span> Entrez le Token ci-dessus. Le Chat ID est optionnel si vous utilisez le bot en direct</p>
@@ -294,7 +294,7 @@ export default function SettingsPage() {
       {/* ━━━━ ORGANISATION ━━━━ */}
       <div className={CARD}>
         <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
-          <span className="text-2xl">🏢</span>
+          <Building2 className="w-6 h-6 text-savia-accent" />
           <h2 className="font-bold text-base text-savia-text">Organisation</h2>
         </div>
         <div>
@@ -307,11 +307,11 @@ export default function SettingsPage() {
       {/* ━━━━ SAV ━━━━ */}
       <div className={CARD}>
         <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
-          <span className="text-2xl">🔧</span>
+          <Wrench className="w-6 h-6 text-orange-400" />
           <h2 className="font-bold text-base text-savia-text">SAV &amp; Financier</h2>
         </div>
         <div>
-          <label className={LABEL}>💰 Taux horaire technicien (TND/h)</label>
+          <label className={LABEL}><span className="inline-flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5" /> Taux horaire technicien (TND/h)</span></label>
           <input type="number" className={INPUT} placeholder="65" min={0}
             value={tauxHoraire} onChange={e => setTauxHoraire(e.target.value)} />
         </div>
@@ -320,11 +320,11 @@ export default function SettingsPage() {
       {/* ━━━━ IA ━━━━ */}
       <div className={CARD}>
         <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
-          <span className="text-2xl">🤖</span>
+          <Brain className="w-6 h-6 text-purple-400" />
           <h2 className="font-bold text-base text-savia-text">Intelligence Artificielle</h2>
         </div>
         <div>
-          <label className={LABEL}>🔑 Clé API Gemini</label>
+          <label className={LABEL}><span className="inline-flex items-center gap-1.5"><KeyRound className="w-3.5 h-3.5" /> Clé API Gemini</span></label>
           <div className="relative">
             <input
               type={showGemini ? 'text' : 'password'}
