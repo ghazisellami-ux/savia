@@ -9,7 +9,7 @@ import {
   ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
-  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban
+  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
@@ -81,6 +81,7 @@ export default function SavPage() {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
   const [facturationData, setFacturationData] = useState<any[]>([]);
   const [factFilter, setFactFilter] = useState<'all' | 'pending' | 'done' | 'overdue'>('all');
+  const [savTechDropdownOpen, setSavTechDropdownOpen] = useState(false);
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return d.toISOString().substring(0, 10);
@@ -1130,11 +1131,56 @@ export default function SavPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Technicien</label>
-            <select className={INPUT_CLS} value={form.technicien} onChange={e => setForm({...form, technicien: e.target.value})}>
-              <option value="">-- Sélectionnez --</option>
-              {techniciens.map(t => <option key={t.nom}>{t.prenom} {t.nom}</option>)}
-            </select>
+          <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Techniciens</label>
+            {/* Chips */}
+            {form.technicien && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {form.technicien.split(', ').filter(Boolean).map(t => (
+                  <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-savia-accent/15 text-savia-accent border border-savia-accent/30">
+                    {t}
+                    <button type="button" onClick={() => {
+                      const updated = form.technicien.split(', ').filter(x => x !== t).join(', ');
+                      setForm({...form, technicien: updated});
+                    }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Dropdown */}
+            <div className="relative">
+              <button type="button" onClick={() => setSavTechDropdownOpen(!savTechDropdownOpen)}
+                className={INPUT_CLS + ' flex items-center justify-between cursor-pointer text-left'}>
+                <span className={form.technicien ? 'text-savia-text' : 'text-savia-text-dim'}>
+                  {form.technicien ? `${form.technicien.split(', ').length} technicien(s)` : '-- Sélectionnez --'}
+                </span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${savTechDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {savTechDropdownOpen && (
+                <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                  {techniciens.map(t => {
+                    const fullName = `${t.prenom} ${t.nom}`;
+                    const selected = form.technicien.split(', ').filter(Boolean).includes(fullName);
+                    return (
+                      <button key={t.nom} type="button" onClick={() => {
+                        const current = form.technicien.split(', ').filter(Boolean);
+                        const updated = selected ? current.filter(x => x !== fullName) : [...current, fullName];
+                        setForm({...form, technicien: updated.join(', ')});
+                      }}
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                          selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
+                        }`}>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                          selected ? 'bg-savia-accent border-savia-accent' : 'border-savia-border'
+                        }`}>
+                          {selected && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        {fullName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Type</label>
             <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>

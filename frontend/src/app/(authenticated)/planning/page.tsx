@@ -5,7 +5,8 @@ import { Modal } from '@/components/ui/modal';
 import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
-  Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind
+  Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
+  ChevronDown, Check
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -89,6 +90,7 @@ export default function PlanningPage() {
   // Day-detail popup
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
   const [dayDetailEvents, setDayDetailEvents] = useState<PlanItem[]>([]);
+  const [techDropdownOpen, setTechDropdownOpen] = useState(false);
 
   // Table filters — Toutes les Maintenances
   const [filterClient,  setFilterClient]  = useState('Tous');
@@ -581,16 +583,59 @@ export default function PlanningPage() {
             </div>
           </div>
 
-          {/* Technicien */}
+          {/* Techniciens assignés */}
           <div>
             <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-              <User className="w-3.5 h-3.5 text-savia-accent" /> Technicien assigné
+              <User className="w-3.5 h-3.5 text-savia-accent" /> Techniciens assignés
             </label>
-            <select className={INPUT_CLS} value={form.technicien_assigne}
-              onChange={e => setForm({...form, technicien_assigne: e.target.value})}>
-              <option value="">— Non assigné —</option>
-              {techsList.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
+            {/* Chips for selected techs */}
+            {form.technicien_assigne && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {form.technicien_assigne.split(', ').filter(Boolean).map(t => (
+                  <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-savia-accent/15 text-savia-accent border border-savia-accent/30">
+                    {t}
+                    <button type="button" onClick={() => {
+                      const updated = form.technicien_assigne.split(', ').filter(x => x !== t).join(', ');
+                      setForm({...form, technicien_assigne: updated});
+                    }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Dropdown */}
+            <div className="relative">
+              <button type="button" onClick={() => setTechDropdownOpen(!techDropdownOpen)}
+                className={INPUT_CLS + ' flex items-center justify-between cursor-pointer text-left'}>
+                <span className={form.technicien_assigne ? 'text-savia-text' : 'text-savia-text-dim'}>
+                  {form.technicien_assigne ? `${form.technicien_assigne.split(', ').length} technicien(s)` : '— Sélectionner —'}
+                </span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${techDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {techDropdownOpen && (
+                <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                  {techsList.map(t => {
+                    const selected = form.technicien_assigne.split(', ').filter(Boolean).includes(t);
+                    return (
+                      <button key={t} type="button" onClick={() => {
+                        const current = form.technicien_assigne.split(', ').filter(Boolean);
+                        const updated = selected ? current.filter(x => x !== t) : [...current, t];
+                        setForm({...form, technicien_assigne: updated.join(', ')});
+                      }}
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                          selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
+                        }`}>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                          selected ? 'bg-savia-accent border-savia-accent' : 'border-savia-border'
+                        }`}>
+                          {selected && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Description */}
