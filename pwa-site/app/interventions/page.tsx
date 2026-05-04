@@ -6,6 +6,7 @@ import { getUser, isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import InterventionCard from '@/components/InterventionCard';
+import { ClipboardList, Loader2, Inbox } from 'lucide-react';
 
 const STATUTS = ['', 'En cours', 'En attente de piece', 'Cloturee'];
 
@@ -65,7 +66,7 @@ export default function InterventionsPage() {
       <main style={{ paddingTop: 'calc(var(--header-h) + 16px)', paddingBottom: 'calc(var(--nav-h) + 24px)', padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
         {/* Page title */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <h1 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--navy)' }}>📋 Mes Interventions</h1>
+          <h1 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--navy)', display: 'flex', alignItems: 'center', gap: '8px' }}><ClipboardList style={{ width: 22, height: 22 }} /> Mes Interventions</h1>
           <button onClick={() => router.push('/nouvelle')}
             style={{ background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
             + Nouvelle
@@ -83,13 +84,13 @@ export default function InterventionsPage() {
         {/* Content */}
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '48px' }}>
-            <div className="animate-pulse-dot" style={{ fontSize: '2rem' }}>⏳</div>
+            <Loader2 style={{ width: 32, height: 32, color: 'var(--teal)', animation: 'spin 1s linear infinite' }} />
           </div>
         )}
         {error && <p style={{ color: 'var(--danger)', textAlign: 'center', padding: '32px' }}>{error}</p>}
         {!loading && !error && filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-dim)' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '12px' }}>📭</div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}><Inbox style={{ width: 48, height: 48, color: 'var(--text-dim)' }} /></div>
             <p>Aucune intervention trouvée</p>
           </div>
         )}

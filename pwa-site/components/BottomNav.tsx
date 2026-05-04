@@ -1,10 +1,11 @@
 'use client';
 import { useRouter, usePathname } from 'next/navigation';
+import { ClipboardList, Bell, PlusCircle } from 'lucide-react';
 
 const NAV_ITEMS = [
-  { href: '/interventions', icon: '📋', label: 'Interventions' },
-  { href: '/notifications', icon: '🔔', label: 'Alertes' },
-  { href: '/nouvelle',      icon: '➕', label: 'Nouvelle' },
+  { href: '/interventions', icon: ClipboardList, label: 'Interventions' },
+  { href: '/notifications', icon: Bell,          label: 'Alertes' },
+  { href: '/nouvelle',      icon: PlusCircle,    label: 'Nouvelle' },
 ];
 
 interface BottomNavProps {
@@ -26,6 +27,7 @@ export default function BottomNav({ notifCount = 0 }: BottomNavProps) {
     }}>
       {NAV_ITEMS.map(item => {
         const active = pathname?.startsWith(item.href);
+        const IconComp = item.icon;
         return (
           <button
             key={item.href}
@@ -37,8 +39,8 @@ export default function BottomNav({ notifCount = 0 }: BottomNavProps) {
               position: 'relative', transition: 'color 0.2s',
             }}
           >
-            <span style={{ fontSize: '1.3rem', position: 'relative' }}>
-              {item.icon}
+            <span style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <IconComp style={{ width: 22, height: 22 }} />
               {item.href === '/notifications' && notifCount > 0 && (
                 <span style={{
                   position: 'absolute', top: '-4px', right: '-8px',

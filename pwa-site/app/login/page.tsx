@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { saveSession, isLoggedIn } from '@/lib/auth';
+import { Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -88,7 +89,7 @@ export default function LoginPage() {
 
         {/* Submit */}
         <button type="submit" disabled={loading} style={{ width: '100%', padding: '14px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: '1rem', fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'opacity 0.2s' }}>
-          {loading && <span className="animate-pulse-dot">⏳</span>}
+          {loading && <Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} />}
           {loading ? 'Connexion...' : 'Se connecter'}
         </button>
       </form>

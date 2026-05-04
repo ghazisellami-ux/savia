@@ -3,6 +3,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Image from 'next/image';
 import { getUser, clearSession } from '@/lib/auth';
 import { useState, useEffect } from 'react';
+import { LogOut } from 'lucide-react';
 
 interface HeaderProps {
   syncCount?: number;
@@ -36,8 +37,8 @@ export default function Header({ syncCount = 0, notifCount = 0 }: HeaderProps) {
           </span>
         )}
         <span style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>{user?.nom}</span>
-        <button onClick={handleLogout} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}>
-          ⏻
+        <button onClick={handleLogout} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+          <LogOut style={{ width: 16, height: 16 }} />
         </button>
       </div>
     </header>

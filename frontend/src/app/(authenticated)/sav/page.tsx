@@ -24,6 +24,7 @@ interface Intervention {
   technicien: string;
   duree: number;
   duree_minutes: number;
+  deplacement: number;
   statut: string;
   description: string;
   probleme: string;
@@ -127,6 +128,7 @@ export default function SavPage() {
         technicien: item.technicien || 'Non assign\u00e9',
         duree: Math.round((item.duree_minutes || 0) / 60),
         duree_minutes: item.duree_minutes || 0,
+        deplacement: item.deplacement || 0,
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         probleme: item.probleme || '',
@@ -1501,7 +1503,8 @@ export default function SavPage() {
                     { icon: <Briefcase className="w-3.5 h-3.5" />, label: 'Type', value: factDetailItem.type_intervention || '—' },
                     { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date intervention', value: factDetailItem.date_intervention || '—' },
                     { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date clôture', value: factDetailItem.date_cloture },
-                    { icon: <Timer className="w-3.5 h-3.5" />, label: 'Durée', value: factDetailItem.duree_minutes ? `${factDetailItem.duree_minutes} min` : '—' },
+                    { icon: <Timer className="w-3.5 h-3.5" />, label: 'Durée (h)', value: factDetailItem.duree_minutes ? `${+(factDetailItem.duree_minutes / 60).toFixed(2)}h` : '—' },
+                    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Déplacement (h)', value: factDetailItem.deplacement ? `${factDetailItem.deplacement}h` : '—' },
                     { icon: <Gauge className="w-3.5 h-3.5" />, label: 'Priorité', value: factDetailItem.priorite || '—' },
                   ].map((item, i) => (
                     <div key={i} className="bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50">
@@ -1552,20 +1555,7 @@ export default function SavPage() {
                   </div>
                 )}
 
-                <div className="flex items-center gap-3 pt-2 border-t border-savia-border">
-                  <div className="flex-1 bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50 text-center">
-                    <div className="text-xs text-savia-text-muted">Coût M.O.</div>
-                    <div className="text-base font-bold text-savia-text">{factDetailItem.cout} TND</div>
-                  </div>
-                  <div className="flex-1 bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50 text-center">
-                    <div className="text-xs text-savia-text-muted">Coût pièces</div>
-                    <div className="text-base font-bold text-savia-text">{factDetailItem.cout_pieces || 0} TND</div>
-                  </div>
-                  <div className="flex-1 bg-savia-accent/10 rounded-lg p-2.5 border border-savia-accent/30 text-center">
-                    <div className="text-xs text-savia-accent">Total</div>
-                    <div className="text-base font-black text-savia-accent">{(factDetailItem.cout || 0) + (factDetailItem.cout_pieces || 0)} TND</div>
-                  </div>
-                </div>
+
 
                 {factDetailItem.code_erreur && (
                   <div className="bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50">

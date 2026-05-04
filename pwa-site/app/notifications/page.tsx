@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import { Bell, BellOff, Loader2, Check } from 'lucide-react';
 
 export default function NotificationsPage() {
   const router = useRouter();
@@ -27,13 +28,13 @@ export default function NotificationsPage() {
     <div style={{ minHeight: '100dvh', background: 'var(--beige)' }}>
       <Header notifCount={unread} />
       <main style={{ padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
-        <h1 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--navy)', marginBottom: '16px' }}>🔔 Notifications</h1>
+        <h1 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--navy)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}><Bell style={{ width: 22, height: 22 }} /> Notifications</h1>
 
-        {loading && <div style={{ textAlign: 'center', paddingTop: '48px', fontSize: '2rem' }} className="animate-pulse-dot">⏳</div>}
+        {loading && <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '48px' }}><Loader2 style={{ width: 32, height: 32, color: 'var(--teal)', animation: 'spin 1s linear infinite' }} /></div>}
 
         {!loading && notifs.length === 0 && (
           <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-dim)' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '12px' }}>🔕</div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}><BellOff style={{ width: 48, height: 48, color: 'var(--text-dim)' }} /></div>
             <p>Aucune notification</p>
           </div>
         )}
@@ -58,8 +59,8 @@ export default function NotificationsPage() {
                 </div>
                 {!n.lue && (
                   <button onClick={() => markRead(n.id)}
-                    style={{ marginLeft: '12px', background: 'rgba(86,124,141,0.12)', color: 'var(--teal)', border: 'none', padding: '4px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                    ✓ Lu
+                    style={{ marginLeft: '12px', background: 'rgba(86,124,141,0.12)', color: 'var(--teal)', border: 'none', padding: '4px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Check style={{ width: 12, height: 12 }} /> Lu
                   </button>
                 )}
               </div>

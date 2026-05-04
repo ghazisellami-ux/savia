@@ -5,6 +5,13 @@ import { api } from '@/lib/api';
 import { getUser, isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import {
+  ChevronLeft, CheckCircle, Building2, Settings, FileText, Search,
+  Timer, Car, Wrench, ClipboardList, Camera, Trash2, Loader2, Save,
+  Clock
+} from 'lucide-react';
+
+const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
 
 const INPUT = {
   width: '100%', background: '#fff', border: '1px solid var(--border)',
@@ -101,20 +108,20 @@ export default function NouvelleInterventionPage() {
       <Header />
       <main style={{ paddingTop: 'calc(var(--header-h) + 16px)', paddingBottom: 'calc(var(--nav-h) + 24px)', padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-          <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px 8px' }}>← Retour</button>
+          <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px 8px', display: 'flex', alignItems: 'center' }}><ChevronLeft style={{ width: 20, height: 20 }} /> Retour</button>
           <h1 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--navy)' }}>Nouvelle Intervention</h1>
         </div>
 
         {success && (
-          <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: '10px', padding: '14px', textAlign: 'center', color: '#15803D', fontWeight: 700, marginBottom: '16px' }}>
-            ✅ Intervention enregistrée !
+          <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid var(--success)', borderRadius: '10px', padding: '14px', textAlign: 'center', color: '#15803D', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+            <CheckCircle style={{ width: 18, height: 18 }} /> Intervention enregistrée !
           </div>
         )}
 
         <form onSubmit={handleSubmit}>
           {/* Client & Machine */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🏢 Identification</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Building2 style={{ width: 16, height: 16 }} /> Identification</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Client *</label>
@@ -142,7 +149,7 @@ export default function NouvelleInterventionPage() {
 
           {/* Type & Statut */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚙️ Classification</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings style={{ width: 16, height: 16 }} /> Classification</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Type</label>
@@ -173,7 +180,7 @@ export default function NouvelleInterventionPage() {
 
           {/* Description */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📝 Description</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><FileText style={{ width: 16, height: 16 }} /> Description</h3>
             <textarea style={{ ...INPUT, resize: 'vertical', minHeight: '80px' }} rows={3}
               placeholder="Décrivez le problème..." value={form.description}
               onChange={e => set('description', e.target.value)} />
@@ -182,7 +189,7 @@ export default function NouvelleInterventionPage() {
           {/* Diagnostic (Corrective only) */}
           {form.type_intervention === 'Corrective' && (
             <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔍 Diagnostic</h3>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Diagnostic</h3>
               {[
                 { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
                 { key: 'cause',    label: 'Cause racine',      ph: 'Analyse de la cause...' },
@@ -212,14 +219,14 @@ export default function NouvelleInterventionPage() {
 
           {/* Durées */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⏱ Temps</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Timer style={{ width: 16, height: 16 }} /> Temps</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Durée (heures)</label>
                 <input type="number" style={INPUT} min={0} step={0.5} value={form.duree} onChange={e => set('duree', parseFloat(e.target.value) || 0)} />
               </div>
               <div>
-                <label style={LABEL}>🚗 Déplacement (h)</label>
+                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (h)</label>
                 <input type="number" style={INPUT} min={0} step={0.5} value={form.deplacement} onChange={e => set('deplacement', parseFloat(e.target.value) || 0)} />
               </div>
             </div>
@@ -227,7 +234,7 @@ export default function NouvelleInterventionPage() {
 
           {/* Pièces */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔩 Pièces utilisées</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Wrench style={{ width: 16, height: 16 }} /> Pièces utilisées</h3>
             <select style={{ ...INPUT, height: '100px' }} multiple
               value={form.pieces_utilisees.map(String)}
               onChange={e => set('pieces_utilisees', Array.from(e.target.selectedOptions).map(o => Number(o.value)))}>
@@ -238,7 +245,7 @@ export default function NouvelleInterventionPage() {
 
           {/* Notes */}
           <div style={SECTION}>
-            <label style={LABEL}>📋 Notes</label>
+            <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes</label>
             <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder="Observations complémentaires..."
               value={form.notes} onChange={e => set('notes', e.target.value)} />
           </div>
@@ -246,32 +253,32 @@ export default function NouvelleInterventionPage() {
           {/* Photo (clôture) */}
           {isClotured && (
             <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche Signée</h3>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera style={{ width: 16, height: 16 }} /> Fiche Signée</h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>Photographiez la fiche d&apos;intervention avec la signature du client.</p>
               <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handlePhoto} />
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
-                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer' }}>
-                  📷 Prendre photo
+                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Camera style={{ width: 16, height: 16 }} /> Prendre photo
                 </button>
                 {photoFile && (
                   <button type="button" onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
-                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '12px 16px', borderRadius: '10px', cursor: 'pointer' }}>🗑</button>
+                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '12px 16px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}><Trash2 style={{ width: 18, height: 18 }} /></button>
                 )}
               </div>
               {photoPreview && (
                 <div style={{ marginTop: '10px' }}>
                   <img src={photoPreview} alt="Aperçu" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain' }} />
-                  <p style={{ color: 'var(--success)', fontSize: '0.8rem', marginTop: '4px' }}>✅ Photo jointe</p>
+                  <p style={{ color: 'var(--success)', fontSize: '0.8rem', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle style={{ width: 14, height: 14 }} /> Photo jointe</p>
                 </div>
               )}
 
               {/* Validation client */}
               <div style={{ marginTop: '16px' }}>
-                <label style={LABEL}>✅ Validation Client</label>
+                <label style={LABEL}><CheckCircle style={ICON_INLINE} /> Validation Client</label>
                 <select style={INPUT} value={form.validation_client} onChange={e => set('validation_client', e.target.value)}>
-                  <option value="En attente">⏳ En attente</option>
-                  <option value="Validée">✅ Validée</option>
+                  <option value="En attente">En attente</option>
+                  <option value="Validée">Validée</option>
                 </select>
               </div>
             </div>
@@ -283,7 +290,7 @@ export default function NouvelleInterventionPage() {
           {/* Submit */}
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {saving ? '⏳ Enregistrement...' : '💾 Enregistrer l\'intervention'}
+            {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer l&apos;intervention</>}
           </button>
         </form>
       </main>

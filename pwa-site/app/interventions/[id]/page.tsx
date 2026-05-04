@@ -5,6 +5,13 @@ import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import {
+  Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
+  XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
+  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft
+} from 'lucide-react';
+
+const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
 
 const INPUT = {
   width: '100%', background: '#fff', border: '1px solid var(--border)',
@@ -71,7 +78,7 @@ export default function InterventionDetailPage() {
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
-    duree_minutes: 0, fiche_validation: 'En attente',
+    duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
   });
 
   useEffect(() => {
@@ -102,6 +109,7 @@ export default function InterventionDetailPage() {
         type_erreur:      found.type_erreur || '',
         priorite:         found.priorite || '',
         duree_minutes:    found.duree_minutes || 0,
+        deplacement:      found.deplacement || 0,
         fiche_validation: found.fiche_validation || 'En attente',
       });
     } catch {
@@ -133,7 +141,7 @@ export default function InterventionDetailPage() {
 
     // Validation frontend : solution obligatoire pour clôturer
     if (form.statut === 'Cloturee' && !form.solution.trim()) {
-      setError('⚠️ La "Solution appliquée" est obligatoire pour clôturer l\'intervention.');
+      setError('La "Solution appliquée" est obligatoire pour clôturer l\'intervention.');
       document.getElementById('field-solution')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -151,7 +159,7 @@ export default function InterventionDetailPage() {
       }));
       await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture });
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
-      setSuccess('✅ Intervention mise à jour !');
+      setSuccess('Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la mise à jour.');
@@ -187,7 +195,7 @@ export default function InterventionDetailPage() {
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center' }}>
-        <div className="animate-pulse-dot" style={{ fontSize: '3rem' }}>⏳</div>
+        <div className="animate-pulse-dot" style={{ display: 'flex', justifyContent: 'center' }}><Loader2 style={{ width: 48, height: 48, color: 'var(--teal)', animation: 'spin 1s linear infinite' }} /></div>
         <p style={{ color: 'var(--text-muted)', marginTop: '12px' }}>Chargement...</p>
       </div>
     </div>
@@ -196,9 +204,9 @@ export default function InterventionDetailPage() {
   if (error && !intervention) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <div style={{ fontSize: '3rem', marginBottom: '12px' }}>❌</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}><XCircle style={{ width: 48, height: 48, color: 'var(--danger)' }} /></div>
         <p style={{ color: 'var(--danger)' }}>{error}</p>
-        <button onClick={() => router.back()} style={{ marginTop: '16px', background: 'var(--teal)', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700 }}>← Retour</button>
+        <button onClick={() => router.back()} style={{ marginTop: '16px', background: 'var(--teal)', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}><ChevronLeft style={{ width: 16, height: 16 }} /> Retour</button>
       </div>
     </div>
   );
@@ -210,7 +218,7 @@ export default function InterventionDetailPage() {
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px' }}>←</button>
+          <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}><ChevronLeft style={{ width: 20, height: 20 }} /></button>
           <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--navy)', margin: 0 }}>
               {intervention?.machine} — {intervention?.client}
@@ -234,7 +242,7 @@ export default function InterventionDetailPage() {
 
           {/* ① Diagnostic */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔍 Diagnostic</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Diagnostic</h3>
             {[
               { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
               { key: 'cause',    label: 'Cause racine',      ph: 'Analyse de la cause...' },
@@ -268,11 +276,19 @@ export default function InterventionDetailPage() {
                 </select>
               </div>
               <div>
-                <label style={LABEL}>⏱ Durée (heures)</label>
+                <label style={LABEL}><Timer style={ICON_INLINE} /> Durée (heures)</label>
                 <input
                   type="number" style={INPUT} min={0} step={0.5}
                   value={form.duree_minutes > 0 ? +(form.duree_minutes / 60).toFixed(2) : 0}
                   onChange={e => set('duree_minutes', Math.round((parseFloat(e.target.value) || 0) * 60))}
+                />
+              </div>
+              <div>
+                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (heures)</label>
+                <input
+                  type="number" style={INPUT} min={0} step={0.5}
+                  value={form.deplacement}
+                  onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
                 />
               </div>
             </div>
@@ -283,7 +299,7 @@ export default function InterventionDetailPage() {
             <div style={SECTION}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
-                  🔩 Pièces de rechange
+                  <Wrench style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Pièces de rechange
                 </h3>
                 {selectedCount > 0 && (
                   <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
@@ -293,7 +309,7 @@ export default function InterventionDetailPage() {
               </div>
 
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
-                🏷 {intervention?.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
+                <Tag style={{ width: 12, height: 12, display: 'inline-block', verticalAlign: '-1px', marginRight: '4px' }} /> {intervention?.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
               </p>
 
               {/* 3 pièces visibles, défilement pour le reste */}
@@ -315,13 +331,13 @@ export default function InterventionDetailPage() {
                           {p.designation || p.nom}
                         </p>
                         <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {p.reference}</span>
                           <span style={{
                             fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
                             background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
                             color: rupture ? 'var(--danger)' : '#15803D',
                           }}>
-                            {rupture ? '⚠ Rupture' : `✅ ${enStock} en stock`}
+                            {rupture ? <><AlertTriangle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {enStock} en stock</>}
                           </span>
                         </div>
                       </div>
@@ -348,12 +364,12 @@ export default function InterventionDetailPage() {
           {/* ③ Description & Notes */}
           <div style={SECTION}>
             <div style={{ marginBottom: '12px' }}>
-              <label style={LABEL}>📝 Description</label>
+              <label style={LABEL}><FileText style={ICON_INLINE} /> Description</label>
               <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2}
                 value={form.description} onChange={e => set('description', e.target.value)} />
             </div>
             <div>
-              <label style={LABEL}>📋 Notes</label>
+              <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes</label>
               <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2}
                 value={form.notes} onChange={e => set('notes', e.target.value)} />
             </div>
@@ -361,7 +377,7 @@ export default function InterventionDetailPage() {
 
           {/* ④ Priorité */}
           <div style={SECTION}>
-            <label style={LABEL}>🚨 Priorité</label>
+            <label style={LABEL}><AlertOctagon style={ICON_INLINE} /> Priorité</label>
             <select style={INPUT} value={form.priorite} onChange={e => set('priorite', e.target.value)}>
               <option value="">— Aucune —</option>
               <option>Haute</option>
@@ -372,7 +388,7 @@ export default function InterventionDetailPage() {
 
           {/* ⑤ Statut — EN BAS */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>⚙️ Statut de l&apos;intervention</h3>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings style={{ width: 16, height: 16 }} /> Statut de l&apos;intervention</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
               {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
                 const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
@@ -397,7 +413,7 @@ export default function InterventionDetailPage() {
             <div style={{ ...SECTION, border: '2px dashed #B45309', background: 'rgba(245,158,11,0.03)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
-                  ⚠️ Pièces requises (rupture)
+                  <AlertTriangle style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Pièces requises (rupture)
                 </h3>
                 {piecesRupture.length > 0 && (
                   <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', animation: 'pulse 2s infinite' }}>
@@ -412,7 +428,7 @@ export default function InterventionDetailPage() {
               {/* Recherche */}
               <input
                 type="search"
-                placeholder="🔍 Rechercher une pièce..."
+                placeholder="Rechercher une pièce..."
                 value={searchRupture}
                 onChange={e => setSearchRupture(e.target.value)}
                 style={{ ...INPUT, marginBottom: '10px' }}
@@ -436,19 +452,19 @@ export default function InterventionDetailPage() {
                         outline: selected ? `2px solid ${rupture ? '#ef4444' : 'var(--teal)'}` : '2px solid transparent',
                         cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
                       }}>
-                      <span style={{ fontSize: '1.1rem' }}>{selected ? '✅' : (rupture ? '⚠️' : '○')}</span>
+                      <span style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center' }}>{selected ? <CheckCircle style={{ width: 18, height: 18, color: '#15803D' }} /> : (rupture ? <AlertTriangle style={{ width: 18, height: 18, color: '#B45309' }} /> : <CircleDot style={{ width: 18, height: 18, color: 'var(--text-dim)' }} />)}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {p.designation || p.nom}
                         </p>
                         <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
-                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>🏷 {p.reference}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {p.reference}</span>
                           <span style={{
                             fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
                             background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
                             color: rupture ? '#ef4444' : '#15803D',
                           }}>
-                            {rupture ? '🔴 Rupture' : `✅ ${enStock} en stock`}
+                            {rupture ? <><XCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {enStock} en stock</>}
                           </span>
                         </div>
                       </div>
@@ -460,7 +476,7 @@ export default function InterventionDetailPage() {
               {/* Résumé sélection */}
               {piecesRupture.length > 0 && (
                 <div style={{ marginTop: '10px', padding: '8px 12px', background: 'rgba(239,68,68,0.06)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.2)' }}>
-                  <p style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ef4444', marginBottom: '4px' }}>📣 Pièces qui seront notifiées :</p>
+                  <p style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ef4444', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}><Bell style={{ width: 12, height: 12 }} /> Pièces qui seront notifiées :</p>
                   {piecesRupture.map(p => (
                     <p key={p.id} style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: '1px 0' }}>
                       • {p.designation || p.nom} ({p.reference})
@@ -473,7 +489,7 @@ export default function InterventionDetailPage() {
 
           {isClotured && (
             <div style={{ ...SECTION, border: '2px dashed var(--teal)' }}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📸 Fiche d&apos;intervention signée</h3>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera style={{ width: 16, height: 16 }} /> Fiche d&apos;intervention signée</h3>
 
               {/* Prise de photo */}
               <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => {
@@ -485,11 +501,11 @@ export default function InterventionDetailPage() {
               <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                 <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
                   style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}>
-                  📷 {photoFile ? 'Changer la photo' : 'Prendre / Importer photo'}
+                  <Camera style={{ width: 16, height: 16, display: 'inline-block', verticalAlign: '-3px', marginRight: '6px' }} /> {photoFile ? 'Changer la photo' : 'Prendre / Importer photo'}
                 </button>
                 {photoFile && (
                   <button type="button" onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
-                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '14px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700 }}>🗑</button>
+                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '14px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center' }}><Trash2 style={{ width: 18, height: 18 }} /></button>
                 )}
               </div>
               {photoPreview && (
@@ -506,8 +522,8 @@ export default function InterventionDetailPage() {
                 <label style={LABEL}>Statut de la fiche signée</label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
                   {[
-                    { val: 'En attente', icon: '⏳', bg: 'rgba(245,158,11,0.1)', color: '#B45309' },
-                    { val: 'Validée',    icon: '✅', bg: 'rgba(34,197,94,0.1)',  color: '#15803D' },
+                    { val: 'En attente', icon: <Clock style={{ width: 14, height: 14 }} />, bg: 'rgba(245,158,11,0.1)', color: '#B45309' },
+                    { val: 'Validée',    icon: <CheckCircle style={{ width: 14, height: 14 }} />, bg: 'rgba(34,197,94,0.1)',  color: '#15803D' },
                   ].map(({ val, icon, bg, color }) => (
                     <button key={val} type="button"
                       onClick={() => set('fiche_validation', val)}
@@ -536,7 +552,7 @@ export default function InterventionDetailPage() {
           {/* ⑦ Bouton mise à jour */}
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {saving ? '⏳ Enregistrement...' : `💾 Mettre à jour${selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}`}
+            {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Mettre à jour{selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}</>}
           </button>
         </form>
       </main>

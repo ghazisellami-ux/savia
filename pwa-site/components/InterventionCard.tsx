@@ -1,5 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
+import { Building2, User, Wrench, AlertOctagon, Calendar, ChevronRight } from 'lucide-react';
 
 const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En cours':           { bg: 'rgba(86,124,141,0.12)',  color: 'var(--teal)'    },
@@ -51,20 +52,20 @@ export default function InterventionCard({ id, machine, client, statut, type, da
 
       {/* Infos */}
       <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-        <span>🏢 {client}</span>
-        {technicien && <span>👤 {technicien}</span>}
-        <span>🔧 {type}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Building2 style={{ width: 13, height: 13 }} /> {client}</span>
+        {technicien && <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><User style={{ width: 13, height: 13 }} /> {technicien}</span>}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Wrench style={{ width: 13, height: 13 }} /> {type}</span>
         {priorite && priorite !== '' && (
-          <span style={{ color: priorite === 'Haute' ? 'var(--danger)' : 'var(--warning)', fontWeight: 600 }}>
-            🚨 Priorité {priorite}
+          <span style={{ color: priorite === 'Haute' ? 'var(--danger)' : 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <AlertOctagon style={{ width: 13, height: 13 }} /> Priorité {priorite}
           </span>
         )}
       </div>
 
       {/* Footer */}
-      <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--border)', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-        📅 {date ? new Date(date).toLocaleDateString('fr-FR') : '—'}
-        <span style={{ float: 'right', color: 'var(--teal)', fontWeight: 600 }}>Voir →</span>
+      <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--border)', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar style={{ width: 12, height: 12 }} /> {date ? new Date(date).toLocaleDateString('fr-FR') : '—'}</span>
+        <span style={{ color: 'var(--teal)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '2px' }}>Voir <ChevronRight style={{ width: 14, height: 14 }} /></span>
       </div>
     </div>
   );
