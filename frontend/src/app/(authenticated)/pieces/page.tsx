@@ -355,11 +355,11 @@ export default function PiecesPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
-          <input type="text" placeholder="🔍 Rechercher par référence, désignation ou fournisseur..." value={search} onChange={e => setSearch(e.target.value)}
+          <input type="text" placeholder="Rechercher par référence, désignation ou fournisseur..." value={search} onChange={e => setSearch(e.target.value)}
             className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
         </div>
         <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-          {types.map(t => <option key={t} value={t}>{t === 'Tous' ? '🔧 Tous les types' : t}</option>)}
+          {types.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
         </select>
       </div>
 
@@ -757,7 +757,7 @@ export default function PiecesPage() {
       {/* TAB 4: NOTIFICATIONS */}
       {activeTab === 4 && (
         <div className="space-y-4">
-          <SectionCard title="🔔 Notifications Pièces">
+          <SectionCard title="Notifications Pièces">
             {notifData.length === 0 ? (
               <div className="text-center py-12 text-savia-text-muted">
                 <Bell className="w-10 h-10 mx-auto mb-3 opacity-30" />
@@ -791,7 +791,7 @@ export default function PiecesPage() {
                             isRupture ? 'bg-orange-500/20 text-orange-400'
                             : 'bg-green-500/20 text-green-400'
                           }`}>
-                            {isRupture ? '⚠️ Rupture' : '✅ Disponible'}
+                            {isRupture ? 'Rupture' : 'Disponible'}
                           </span>
                           {isUnread && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold">NOUVEAU</span>
