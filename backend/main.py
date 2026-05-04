@@ -1139,9 +1139,12 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
             rows = conn.execute("""
                 SELECT i.id, i.machine, i.technicien, i.type_intervention,
                        i.date_cloture, i.facture_envoyee, i.notes,
-                       i.pieces_utilisees, i.cout, i.duree_minutes
+                       i.pieces_utilisees, i.cout, i.duree_minutes,
+                       i.description, i.probleme, i.cause, i.solution,
+                       i.priorite, i.type_erreur, i.code_erreur,
+                       i.date_debut_intervention, i.date, i.cout_pieces
                 FROM interventions i
-                WHERE i.statut IN ('Cloturee', 'Terminee')
+                WHERE i.statut IN ('Cloturee', 'Terminee', 'Terminée')
                   AND i.date_cloture IS NOT NULL
                 ORDER BY i.date_cloture DESC
             """).fetchall()
@@ -1163,6 +1166,7 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
             jours_restants = (deadline - today).days
             notes = str(d.get('notes', '') or '')
             client = notes[1:notes.index(']')] if notes.startswith('[') and ']' in notes else ''
+            # Extract ville from client name if format "Name Ville"
             result.append({
                 "id": d['id'],
                 "machine": d.get('machine', ''),
@@ -1176,8 +1180,18 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
                 "deadline": str(deadline),
                 "pieces_utilisees": d.get('pieces_utilisees', ''),
                 "cout": d.get('cout', 0) or 0,
+                "cout_pieces": d.get('cout_pieces', 0) or 0,
                 "duree_minutes": d.get('duree_minutes', 0) or 0,
                 "en_retard": jours_restants < 0 and not d.get('facture_envoyee', False),
+                "description": d.get('description', ''),
+                "probleme": d.get('probleme', ''),
+                "cause": d.get('cause', ''),
+                "solution": d.get('solution', ''),
+                "priorite": d.get('priorite', ''),
+                "type_erreur": d.get('type_erreur', ''),
+                "code_erreur": d.get('code_erreur', ''),
+                "date_intervention": str(d.get('date', '') or '')[:10] if d.get('date') else '',
+                "date_debut_intervention": str(d.get('date_debut_intervention', '') or '')[:10] if d.get('date_debut_intervention') else '',
             })
         return result
     except Exception as e:
