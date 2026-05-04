@@ -1242,6 +1242,26 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             except Exception as de:
                 logger.error(f"Erreur mise à jour demande liée: {de}")
 
+            # --- Mettre à jour le planning lié (si planning_id) → statut "Réalisée" ---
+            try:
+                with get_db() as conn:
+                    prow = conn.execute(
+                        "SELECT planning_id FROM interventions WHERE id = %s",
+                        (intervention_id,)
+                    ).fetchone()
+                    if prow and prow['planning_id']:
+                        pm_id = prow['planning_id']
+                        conn.execute(
+                            """UPDATE planning_maintenance
+                               SET statut = 'Réalisée',
+                                   date_realisee = %s
+                             WHERE id = %s AND statut != 'Réalisée'""",
+                            (datetime.now().strftime("%Y-%m-%d"), pm_id)
+                        )
+                        logger.info(f"Planning #{pm_id} marqué Réalisée (intervention #{intervention_id} clôturée)")
+            except Exception as pe:
+                logger.error(f"Erreur mise à jour planning lié: {pe}")
+
             return {"ok": True, "message": msg}
         except HTTPException:
             raise
