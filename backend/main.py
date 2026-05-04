@@ -522,9 +522,48 @@ def check_facturation_reminders():
 def _start_garantie_daemon():
     """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
     import threading, time
+    LOCK_KEY = "notif_daemon_last_run"
+
+    def _already_ran_today() -> bool:
+        """Vérifie si les notifications ont déjà été envoyées aujourd'hui (évite les doublons lors des redéploiements)."""
+        from datetime import date
+        try:
+            with get_db() as conn:
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (LOCK_KEY,)).fetchone()
+                if row:
+                    return dict(row)['valeur'] == str(date.today())
+            return False
+        except Exception:
+            return False
+
+    def _mark_ran_today():
+        """Marque la date d'aujourd'hui comme traitée."""
+        from datetime import date
+        try:
+            with get_db() as conn:
+                conn.execute(
+                    """INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
+                       ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
+                    (LOCK_KEY, str(date.today()))
+                )
+        except Exception as e:
+            logger.error(f"Failed to mark notification run: {e}")
+
     def _run():
         time.sleep(30)
         while True:
+            # sync_planning_to_interventions est idempotent → toujours exécuter
+            try:
+                sync_planning_to_interventions()
+            except Exception as e:
+                logger.error(f"Planning sync daemon error: {e}")
+
+            # Les notifications Telegram ne doivent partir qu'une fois par jour
+            if _already_ran_today():
+                logger.info("Notifications daemon: déjà exécuté aujourd'hui, skip (prochain cycle dans 1h)")
+                time.sleep(3600)  # Re-vérifier dans 1h (au cas où minuit passe)
+                continue
+
             try:
                 check_garantie_expiry()
             except Exception as e:
@@ -538,10 +577,6 @@ def _start_garantie_daemon():
             except Exception as e:
                 logger.error(f"Planning reminder daemon error: {e}")
             try:
-                sync_planning_to_interventions()
-            except Exception as e:
-                logger.error(f"Planning sync daemon error: {e}")
-            try:
                 check_stock_alerts()
             except Exception as e:
                 logger.error(f"Stock alerts daemon error: {e}")
@@ -549,9 +584,12 @@ def _start_garantie_daemon():
                 check_facturation_reminders()
             except Exception as e:
                 logger.error(f"Facturation reminders daemon error: {e}")
-            time.sleep(86400)
+
+            _mark_ran_today()
+            logger.info("Notifications daemon: cycle terminé, prochain dans 1h")
+            time.sleep(3600)  # Vérifier toutes les heures (mais skip si déjà fait aujourd'hui)
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation, 24h)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation, 1x/jour)")
 
 
 def check_contrat_expiry():
