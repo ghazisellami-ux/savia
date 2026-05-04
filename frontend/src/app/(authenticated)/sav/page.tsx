@@ -11,7 +11,7 @@ import {
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
 
@@ -59,6 +59,8 @@ export default function SavPage() {
   const [fiches, setFiches] = useState<any[]>([]);
   const [allPieces, setAllPieces] = useState<any[]>([]);
   const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
+  const [equipementsData, setEquipementsData] = useState<any[]>([]);
+  const [contratsData, setContratsData] = useState<any[]>([]);
   const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   // Technicien: voir par défaut seulement ses interventions "En cours"
@@ -158,6 +160,9 @@ export default function SavPage() {
     import('@/lib/api').then(({ pieces: piecesApi }) => {
       piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
     });
+    // Charger équipements + contrats pour la fiche PDF
+    equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
+    contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
   }, []);
 
 
@@ -399,6 +404,254 @@ export default function SavPage() {
       document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch(err: any) { alert('Erreur PDF: ' + err.message); }
     finally { setIsPdfGenerating(false); }
+  };
+
+  // ===== PDF Fiche d'intervention =====
+  const handleDownloadFicheIntervention = (interv: any) => {
+    const cn = localStorage.getItem('savia_company') || 'SAVIA';
+    const cl = localStorage.getItem('savia_logo') || '';
+
+    // Determine sous_garantie from equipment data
+    const matchedEquip = equipementsData.find((eq: any) => {
+      const eqName = (eq.Nom || '').toLowerCase();
+      const machName = (interv.machine || '').toLowerCase();
+      return eqName === machName || eqName.includes(machName) || machName.includes(eqName);
+    });
+    let sousGarantie = false;
+    if (matchedEquip) {
+      const gDebut = matchedEquip.garantie_debut || '';
+      const gDuree = Number(matchedEquip.garantie_duree) || 0;
+      if (gDebut && gDuree) {
+        try {
+          const fin = new Date(gDebut);
+          fin.setFullYear(fin.getFullYear() + gDuree);
+          sousGarantie = fin > new Date();
+        } catch {}
+      }
+    }
+    // Determine sous_contrat from contrats data
+    const sousContrat = contratsData.some((c: any) => {
+      const cClient = (c.client || c.Client || '').toLowerCase();
+      const iClient = (interv.client || '').toLowerCase();
+      if (!cClient || !iClient || cClient !== iClient) return false;
+      const fin = c.date_fin || c.DateFin || '';
+      if (!fin) return true;
+      return new Date(fin) > new Date();
+    });
+
+    const numSerie = matchedEquip?.NumSerie || matchedEquip?.numSerie || matchedEquip?.num_serie || '\u2014';
+    const equipType = matchedEquip?.Type || matchedEquip?.type || interv.type || '\u2014';
+
+    const intData = {
+      id: interv.id,
+      date: (interv.date || '').substring(0, 10),
+      client: interv.client || '\u2014',
+      machine: interv.machine || '\u2014',
+      technicien: interv.technicien || '\u2014',
+      type: interv.type || '\u2014',
+      statut: interv.statut || '\u2014',
+      dureeH: interv.duree_minutes ? +(interv.duree_minutes / 60).toFixed(2) : (interv.duree || 0),
+      deplacement: interv.deplacement || 0,
+      priorite: interv.priorite || '\u2014',
+      description: interv.description || '',
+      probleme: interv.probleme || '',
+      cause: interv.cause || '',
+      solution: interv.solution || '',
+      code_erreur: interv.code_erreur || '',
+      type_erreur: interv.type_erreur || '',
+      pieces_utilisees: interv.pieces_utilisees || '',
+      numSerie,
+      equipType,
+      sousGarantie,
+      sousContrat,
+    };
+    const intDataStr = JSON.stringify(intData).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+
+    const w = window.open('', '_blank', 'width=500,height=300');
+    if (!w) { alert('Popup bloqu\u00e9 \u2014 autorisez les popups pour ce site.'); return; }
+    w.document.write(`<!DOCTYPE html><html lang="fr"><head>
+<meta charset="utf-8"><title>Fiche Intervention #${interv.id}</title>
+<style>
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',Arial,sans-serif;
+     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.card{text-align:center;padding:36px 56px;background:#1e293b;border-radius:14px;
+      border:1px solid #334155;min-width:320px}
+.spinner{width:44px;height:44px;border:4px solid #1e3a5f;border-top:4px solid #0d9488;
+         border-radius:50%;animation:spin .9s linear infinite;margin:0 auto 18px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#status{color:#64748b;font-size:13px;margin:6px 0 0}
+#err{color:#f87171;font-size:12px;margin-top:10px;display:none}
+</style>
+</head><body>
+<div class="card">
+  <div class="spinner"></div>
+  <p style="font-size:15px;font-weight:600;margin:0">G\u00e9n\u00e9ration de la fiche d'intervention...</p>
+  <p id="status">Chargement...</p>
+  <div id="err"></div>
+</div>
+<script src="/jspdf.umd.min.js"><\/script>
+<script src="/jspdf.plugin.autotable.min.js"><\/script>
+<script src="/savia-pdf.js"><\/script>
+<script>
+(async function() {
+  var setStatus = function(m) { var el=document.getElementById('status'); if(el) el.textContent=m; };
+  var showErr = function(m) { var el=document.getElementById('err'); if(el){el.textContent=m;el.style.display='block';} };
+  try {
+    setStatus('Chargement de jsPDF...');
+    await SAVIA_PDF.waitForJsPDF();
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    var pageW = doc.internal.pageSize.getWidth();
+    var pageH = doc.internal.pageSize.getHeight();
+
+    setStatus('Chargement des logos...');
+    var saviaLogo = await SAVIA_PDF.loadSaviaLogo();
+    var companyName = ${JSON.stringify(cn)};
+    var companyLogo = ${JSON.stringify(cl)};
+    var d = ${intDataStr};
+
+    // HEADER
+    var y = 12;
+    if (saviaLogo) {
+      try { doc.addImage(saviaLogo, 'PNG', 10, y, 48, 24); } catch(e) {}
+    }
+    if (companyLogo) {
+      try {
+        var ext = companyLogo.indexOf('data:image/png') >= 0 ? 'PNG' : 'JPEG';
+        doc.addImage(companyLogo, ext, pageW - 42, y + 2, 32, 18);
+      } catch(e) {}
+    } else if (companyName && companyName !== 'SAVIA') {
+      doc.setFontSize(11); doc.setTextColor(15,118,110); doc.setFont(undefined,'bold');
+      doc.text(companyName, pageW - 10, y + 14, { align: 'right' });
+      doc.setFont(undefined,'normal');
+    }
+
+    y = 40;
+    doc.setDrawColor(15, 118, 110); doc.setLineWidth(0.8);
+    doc.line(10, y, pageW - 10, y);
+
+    y += 8;
+    doc.setFontSize(16); doc.setTextColor(15, 30, 50); doc.setFont(undefined, 'bold');
+    doc.text("FICHE D'INTERVENTION N\\u00b0 " + d.id, pageW / 2, y, { align: 'center' });
+    doc.setFont(undefined, 'normal');
+    y += 6;
+    doc.setFontSize(9); doc.setTextColor(100, 120, 140);
+    doc.text('Date : ' + d.date, pageW / 2, y, { align: 'center' });
+
+    // CLIENT & EQUIPEMENT
+    y += 10;
+    doc.setFillColor(242, 252, 250); doc.roundedRect(10, y, pageW - 20, 42, 2, 2, 'F');
+    doc.setDrawColor(180, 220, 215); doc.setLineWidth(0.3); doc.roundedRect(10, y, pageW - 20, 42, 2, 2, 'S');
+    doc.setFontSize(10); doc.setTextColor(15, 118, 110); doc.setFont(undefined, 'bold');
+    doc.text('INFORMATIONS CLIENT & \\u00c9QUIPEMENT', 14, y + 6);
+    doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60); doc.setFontSize(9);
+    var leftCol = 14; var rightCol = pageW / 2 + 5;
+    doc.text('Client :', leftCol, y + 14); doc.setFont(undefined, 'bold'); doc.text(d.client, leftCol + 25, y + 14); doc.setFont(undefined, 'normal');
+    doc.text('\\u00c9quipement :', leftCol, y + 21); doc.setFont(undefined, 'bold'); doc.text(d.machine, leftCol + 25, y + 21); doc.setFont(undefined, 'normal');
+    doc.text('N\\u00b0 de s\\u00e9rie :', leftCol, y + 28); doc.text(d.numSerie, leftCol + 25, y + 28);
+    doc.text('Type \\u00e9quipement :', leftCol, y + 35); doc.text(d.equipType, leftCol + 32, y + 35);
+    doc.text('Sous garantie :', rightCol, y + 14); doc.setFont(undefined, 'bold');
+    doc.setTextColor(d.sousGarantie ? 22 : 200, d.sousGarantie ? 163 : 50, d.sousGarantie ? 74 : 50);
+    doc.text(d.sousGarantie ? '\\u2713 Oui' : '\\u2717 Non', rightCol + 28, y + 14); doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60);
+    doc.text('Sous contrat :', rightCol, y + 21); doc.setFont(undefined, 'bold');
+    doc.setTextColor(d.sousContrat ? 22 : 200, d.sousContrat ? 163 : 50, d.sousContrat ? 74 : 50);
+    doc.text(d.sousContrat ? '\\u2713 Oui' : '\\u2717 Non', rightCol + 28, y + 21); doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60);
+    doc.text('Technicien :', rightCol, y + 28); doc.setFont(undefined, 'bold'); doc.text(d.technicien, rightCol + 28, y + 28); doc.setFont(undefined, 'normal');
+
+    // INTERVENTION
+    y += 48;
+    doc.setFillColor(240, 245, 255); doc.roundedRect(10, y, pageW - 20, 28, 2, 2, 'F');
+    doc.setDrawColor(180, 200, 230); doc.setLineWidth(0.3); doc.roundedRect(10, y, pageW - 20, 28, 2, 2, 'S');
+    doc.setFontSize(10); doc.setTextColor(30, 80, 170); doc.setFont(undefined, 'bold');
+    doc.text('D\\u00c9TAILS INTERVENTION', 14, y + 6);
+    doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60); doc.setFontSize(9);
+    doc.text('Type :', leftCol, y + 14); doc.text(d.type, leftCol + 25, y + 14);
+    doc.text('Statut :', leftCol, y + 21); doc.text(d.statut, leftCol + 25, y + 21);
+    doc.text('Dur\\u00e9e (h) :', rightCol, y + 14); doc.setFont(undefined, 'bold'); doc.text(String(d.dureeH) + 'h', rightCol + 28, y + 14); doc.setFont(undefined, 'normal');
+    doc.text('D\\u00e9placement (h) :', rightCol, y + 21); doc.text(String(d.deplacement) + 'h', rightCol + 33, y + 21);
+    doc.text('Priorit\\u00e9 :', pageW / 2 - 15, y + 14); doc.text(d.priorite, pageW / 2 + 6, y + 14);
+
+    // DIAGNOSTIC
+    y += 34;
+    doc.setFontSize(10); doc.setTextColor(180, 100, 0); doc.setFont(undefined, 'bold');
+    doc.text('DIAGNOSTIC', 14, y);
+    doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60); doc.setFontSize(9);
+    y += 6;
+    var diagFields = [
+      { label: 'Description', value: d.description },
+      { label: 'Probl\\u00e8me', value: d.probleme },
+      { label: 'Cause', value: d.cause },
+      { label: 'Solution', value: d.solution }
+    ];
+    for (var fi = 0; fi < diagFields.length; fi++) {
+      var f = diagFields[fi];
+      if (f.value) {
+        doc.setFont(undefined, 'bold'); doc.text(f.label + ' :', 14, y);
+        doc.setFont(undefined, 'normal');
+        var lines = doc.splitTextToSize(f.value, pageW - 60);
+        doc.text(lines, 45, y);
+        y += Math.max(6, lines.length * 4.5);
+      }
+    }
+    if (d.code_erreur) {
+      doc.text('Code erreur :', 14, y); doc.setFont(undefined, 'bold'); doc.text(d.code_erreur + (d.type_erreur ? ' (' + d.type_erreur + ')' : ''), 45, y);
+      doc.setFont(undefined, 'normal'); y += 6;
+    }
+
+    // PIECES
+    y += 4;
+    doc.setFontSize(10); doc.setTextColor(30, 100, 180); doc.setFont(undefined, 'bold');
+    doc.text('PI\\u00c8CES UTILIS\\u00c9ES', 14, y);
+    doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60); doc.setFontSize(9);
+    y += 5;
+    if (d.pieces_utilisees) {
+      var pLines = doc.splitTextToSize(d.pieces_utilisees, pageW - 28);
+      doc.text(pLines, 14, y);
+      y += pLines.length * 4.5 + 2;
+    } else {
+      doc.setTextColor(150, 160, 170); doc.text('Aucune pi\\u00e8ce utilis\\u00e9e', 14, y); doc.setTextColor(30, 40, 60);
+      y += 6;
+    }
+
+    // SIGNATURES
+    var sigY = Math.max(y + 10, pageH - 60);
+    if (sigY > pageH - 20) {
+      doc.addPage();
+      y = 20;
+    } else {
+      y = sigY;
+    }
+    doc.setDrawColor(15, 118, 110); doc.setLineWidth(0.5);
+    doc.line(10, y - 4, pageW - 10, y - 4);
+    doc.setFontSize(10); doc.setTextColor(15, 118, 110); doc.setFont(undefined, 'bold');
+    doc.text('SIGNATURES', 14, y);
+    doc.setFont(undefined, 'normal'); doc.setTextColor(30, 40, 60); doc.setFontSize(8);
+    y += 6;
+
+    var col1 = 14; var col2 = pageW / 3 + 5; var col3 = (pageW / 3) * 2 + 2;
+    doc.text('Technicien', col1, y);
+    doc.text('Responsable Technique', col2, y);
+    doc.text('Cachet & Signature Client', col3, y);
+    y += 4;
+    doc.setDrawColor(200, 210, 220); doc.setLineWidth(0.3);
+    doc.roundedRect(col1, y, 52, 28, 1, 1, 'S');
+    doc.roundedRect(col2, y, 52, 28, 1, 1, 'S');
+    doc.roundedRect(col3, y, 52, 28, 1, 1, 'S');
+
+    SAVIA_PDF.addFooters(doc, companyName);
+
+    setStatus('T\\u00e9l\\u00e9chargement...');
+    doc.save('fiche_intervention_' + d.id + '.pdf');
+    setStatus('PDF t\\u00e9l\\u00e9charg\\u00e9 !');
+    setTimeout(function() { window.close(); }, 1500);
+  } catch(e) {
+    showErr('Erreur: ' + e.message);
+    console.error(e);
+  }
+})();
+<\/script>
+</body></html>`);
+    w.document.close();
   };
 
   // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
@@ -721,13 +974,22 @@ export default function SavPage() {
                       </td>
                       <td className="py-2.5 px-3 font-mono text-xs">{i.duree}h</td>
                       <td className="py-2.5 px-3">
-                        <button onClick={() => {
-                          setSelectedIntervention(i);
-                          setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_minutes: String(i.duree_minutes) });
-                          setShowStatusModal(true);
-                        }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => {
+                            setSelectedIntervention(i);
+                            setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_minutes: String(i.duree_minutes) });
+                            setShowStatusModal(true);
+                          }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          {(i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')) && (
+                            <button onClick={() => handleDownloadFicheIntervention(i)}
+                              title="Télécharger fiche PDF"
+                              className="p-1.5 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors">
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1566,6 +1828,11 @@ export default function SavPage() {
                 )}
 
                 <div className="flex justify-end gap-2 pt-2">
+                  <button onClick={() => handleDownloadFicheIntervention(factDetailItem)}
+                    className="px-4 py-2 rounded-lg text-sm font-bold bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 cursor-pointer transition-colors"
+                  >
+                    <Download className="w-4 h-4 inline mr-1" /> Télécharger PDF
+                  </button>
                   {!factDetailItem.facture_envoyee && (
                     <button onClick={() => { handleMarkFactured(factDetailItem.id); setFactDetailItem(null); }}
                       className="px-4 py-2 rounded-lg text-sm font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors"
