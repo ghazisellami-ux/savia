@@ -1478,7 +1478,7 @@ export default function SavPage() {
 
           {/* Modal détail intervention */}
           {factDetailItem && (
-            <Modal onClose={() => setFactDetailItem(null)}>
+            <Modal isOpen={!!factDetailItem} onClose={() => setFactDetailItem(null)} title={`Intervention #${factDetailItem?.id}`} size="lg">
               <div className="space-y-4 max-h-[75vh] overflow-y-auto">
                 <div className="flex items-center justify-between border-b border-savia-border pb-3">
                   <h2 className="text-lg font-black gradient-text flex items-center gap-2">
