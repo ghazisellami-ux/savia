@@ -3811,9 +3811,9 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         sig_y += 6
         pdf.set_draw_color(200, 210, 220)
         pdf.set_line_width(0.3)
-        pdf.rect(col1, sig_y, box_w, box_h, style="S")
-        pdf.rect(col2, sig_y, box_w, box_h, style="S")
-        pdf.rect(col3, sig_y, box_w, box_h, style="S")
+        pdf.rect(col1, sig_y, box_w, box_h, style="D")
+        pdf.rect(col2, sig_y, box_w, box_h, style="D")
+        pdf.rect(col3, sig_y, box_w, box_h, style="D")
 
         # Footer
         pdf.set_auto_page_break(auto=False)
