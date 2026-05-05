@@ -632,6 +632,14 @@ def init_db():
         )
         """)
 
+        # Custom annexe types table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS types_annexes_custom (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT UNIQUE NOT NULL
+        )
+        """)
+
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
             try:
@@ -1163,6 +1171,20 @@ def ajouter_fabricant(nom):
     """Ajoute un fabricant. Ignore si déjà existant."""
     with get_db() as conn:
         conn.execute("INSERT OR IGNORE INTO fabricants (nom) VALUES (?)", (nom.strip(),))
+    return True
+
+
+def lire_types_annexes_custom():
+    """Retourne la liste des types annexes personnalisés."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, nom FROM types_annexes_custom ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_type_annexe_custom(nom):
+    """Ajoute un type annexe personnalisé. Ignore si déjà existant."""
+    with get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO types_annexes_custom (nom) VALUES (?)", (nom.strip(),))
     return True
 
 

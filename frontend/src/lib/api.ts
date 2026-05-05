@@ -250,6 +250,11 @@ export const fabricants = {
   create: (nom: string) => request<{ ok: boolean }>('/api/fabricants', { method: 'POST', body: JSON.stringify({ nom }) }),
 };
 
+export const typesAnnexes = {
+  list: () => request<Array<{ id: number; nom: string }>>('/api/types-annexes'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/types-annexes', { method: 'POST', body: JSON.stringify({ nom }) }),
+};
+
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
   createUser: (data: Record<string, unknown>) =>

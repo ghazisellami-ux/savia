@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesAnnexes as typesAnnexesApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 // Tunisian cities for dropdown
@@ -132,10 +132,10 @@ const TYPES_PAR_DOMAINE: Record<string, string[]> = {
 /** Équipements annexes — uniquement pour le domaine Radiologie */
 const TYPES_ANNEXES_RADIOLOGIE = [
   'Générateur haute tension (HT)', 'Capteur plan (FPD)',
-  'Onduleur / Alimentation', 'Table télécommandée',
+  'Onduleur / Alimentation', 'Écran moniteur',
   'Bucky mural', 'Collimateur', 'Console opérateur',
   'Imprimante DICOM', 'Injecteur produit de contraste',
-  'Tube radiogène', 'Détecteur CR (cassette numérique)',
+  'Détecteur CR (cassette numérique)',
 ];
 // =========================================================================
 
@@ -201,14 +201,19 @@ export default function EquipementsPage() {
   const [form, setForm] = useState(emptyForm);
   const [fabricantsList, setFabricantsList] = useState<string[]>([]);
   const [customFabricant, setCustomFabricant] = useState(false);
+  const [customAnnexeTypes, setCustomAnnexeTypes] = useState<string[]>([]);
+  const [customTypeMode, setCustomTypeMode] = useState(false);
+  const [customTypeValue, setCustomTypeValue] = useState('');
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
   // Types list based on domain + annexe state
   const availableTypes = useMemo(() => {
-    if (form.Domaine === 'Radiologie' && form.EstAnnexe) return TYPES_ANNEXES_RADIOLOGIE;
+    if (form.Domaine === 'Radiologie' && form.EstAnnexe) {
+      return [...TYPES_ANNEXES_RADIOLOGIE, ...customAnnexeTypes.filter(t => !TYPES_ANNEXES_RADIOLOGIE.includes(t))];
+    }
     return TYPES_PAR_DOMAINE[form.Domaine] || TYPES_PAR_DOMAINE['Radiologie'];
-  }, [form.Domaine, form.EstAnnexe]);
+  }, [form.Domaine, form.EstAnnexe, customAnnexeTypes]);
 
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
   const dynamicTypes = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))], [data]);
@@ -302,6 +307,13 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadCustomAnnexeTypes = useCallback(async () => {
+    try {
+      const res = await typesAnnexesApi.list();
+      setCustomAnnexeTypes(res.map(t => t.nom));
+    } catch { /* ignore */ }
+  }, []);
+
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
     try {
@@ -314,7 +326,7 @@ export default function EquipementsPage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); loadFabricants(); }, [loadData, loadFabricants]);
+  useEffect(() => { loadData(); loadFabricants(); loadCustomAnnexeTypes(); }, [loadData, loadFabricants, loadCustomAnnexeTypes]);
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
 
   // Load clients
@@ -675,10 +687,31 @@ export default function EquipementsPage() {
                         <Microscope className="w-3.5 h-3.5" />
                         {form.EstAnnexe ? 'Type d\'équipement annexe *' : 'Type d\'équipement *'}
                       </label>
-                      <select className={INPUT_CLS} value={form.Type} onChange={e => setForm({ ...form, Type: e.target.value })}>
-                        {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                      {form.EstAnnexe && (
+                      {customTypeMode ? (
+                        <div className="flex gap-2">
+                          <input className={INPUT_CLS} placeholder="Saisir le type..." value={customTypeValue}
+                            onChange={e => setCustomTypeValue(e.target.value)} />
+                          <button type="button" onClick={async () => {
+                            if (customTypeValue.trim()) {
+                              await typesAnnexesApi.create(customTypeValue.trim());
+                              await loadCustomAnnexeTypes();
+                              setForm({ ...form, Type: customTypeValue.trim() });
+                            }
+                            setCustomTypeMode(false); setCustomTypeValue('');
+                          }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
+                            <Save className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <select className={INPUT_CLS} value={form.Type} onChange={e => {
+                          if (e.target.value === '__autre_type__') { setCustomTypeMode(true); }
+                          else setForm({ ...form, Type: e.target.value });
+                        }}>
+                          {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                          {form.EstAnnexe && <option value="__autre_type__">+ Autre (saisie manuelle)</option>}
+                        </select>
+                      )}
+                      {form.EstAnnexe && !customTypeMode && (
                         <p className="text-xs text-amber-400/70 mt-1.5 pl-1">
                           ⚠️ Pensez à indiquer l&apos;équipement principal dans les Notes ci-dessous.
                         </p>
