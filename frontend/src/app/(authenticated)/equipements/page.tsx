@@ -8,9 +8,9 @@ import {
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
-  MapPin, Globe, Phone, User, Landmark,
+  MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 // Tunisian cities for dropdown
@@ -50,6 +50,7 @@ interface Equipment {
   garantieDebut: string;
   garantieDuree: number;
   garantieFin: string;
+  service: string;
 }
 
 interface DocTechnique {
@@ -68,28 +69,34 @@ const INPUT_CLS = "w-full bg-savia-bg/50 border border-savia-border rounded-lg p
 
 // ======================= CATALOGUE DOMAINES & TYPES =======================
 
-const DOMAINES = ['Radiologie', 'POC / Soins Intensifs', 'Laboratoire', 'Anesthésie / Bloc Op.'] as const;
+const DOMAINES = ['Radiologie', 'Ultrason', 'POC / Soins Intensifs', 'Laboratoire', 'Anesthésie / Bloc Op.', 'Autre'] as const;
 type Domaine = typeof DOMAINES[number];
 
 const DOMAINE_ICONS: Record<string, React.ReactNode> = {
   'Radiologie':             <Scan       className="w-4 h-4" />,
+  'Ultrason':               <Stethoscope className="w-4 h-4" />,
   'POC / Soins Intensifs':  <Activity   className="w-4 h-4" />,
   'Laboratoire':            <Microscope className="w-4 h-4" />,
   'Anesthésie / Bloc Op.':  <Wind       className="w-4 h-4" />,
+  'Autre':                  <MoreHorizontal className="w-4 h-4" />,
 };
 
 const DOMAINE_COLORS: Record<string, string> = {
   'Radiologie':             'text-blue-400   bg-blue-500/10   border-blue-500/20',
+  'Ultrason':               'text-cyan-400   bg-cyan-500/10   border-cyan-500/20',
   'POC / Soins Intensifs':  'text-orange-400 bg-orange-500/10 border-orange-500/20',
   'Laboratoire':            'text-purple-400 bg-purple-500/10 border-purple-500/20',
   'Anesthésie / Bloc Op.':  'text-teal-400   bg-teal-500/10   border-teal-500/20',
+  'Autre':                  'text-gray-400   bg-gray-500/10   border-gray-500/20',
 };
 
 const DOMAINE_ACTIVE: Record<string, string> = {
   'Radiologie':             'bg-blue-600/40   border-blue-400/70   text-white',
+  'Ultrason':               'bg-cyan-600/40   border-cyan-400/70   text-white',
   'POC / Soins Intensifs':  'bg-orange-600/40 border-orange-400/70 text-white',
   'Laboratoire':            'bg-purple-600/40 border-purple-400/70 text-white',
   'Anesthésie / Bloc Op.':  'bg-teal-600/40   border-teal-400/70   text-white',
+  'Autre':                  'bg-gray-600/40   border-gray-400/70   text-white',
 };
 
 const TYPES_PAR_DOMAINE: Record<string, string[]> = {
@@ -97,6 +104,10 @@ const TYPES_PAR_DOMAINE: Record<string, string[]> = {
     'Scanner CT', 'IRM', 'Radiographie numérique', 'Mammographie',
     'Fluoroscopie', 'Angiographie', 'Radiographie conventionnelle',
     'CBCT (Cone Beam CT)', 'Ostéodensitométrie (DXA)', 'Amplificateur de brillance',
+  ],
+  'Ultrason': [
+    'Échographe', 'Échographe portable', 'Échographe Doppler',
+    'Sonde échographique', 'Échographe cardiaque', 'Échographe obstétrique',
   ],
   'POC / Soins Intensifs': [
     'Moniteur patient', 'Défibrillateur', 'Ventilateur',
@@ -115,6 +126,7 @@ const TYPES_PAR_DOMAINE: Record<string, string[]> = {
     'Pousse-seringue électrique', 'Aspirateur chirurgical',
     'Réchauffeur de perfusion', 'Scope anesthésie (capnographe)',
   ],
+  'Autre': ['Autre'],
 };
 
 /** Équipements annexes — uniquement pour le domaine Radiologie */
@@ -181,12 +193,16 @@ export default function EquipementsPage() {
     Nom: '', Type: 'Scanner CT', Domaine: 'Radiologie' as string, EstAnnexe: false,
     Fabricant: '', Modele: '', NumSerie: '',
     Client: '', MatriculeFiscale: '', Notes: '', Statut: 'Opérationnel',
-    Ville: '',
+    Ville: '', Service: '',
     GarantieDebut: '', GarantieDuree: 0,
     DateInstallation: new Date().toISOString().split('T')[0],
     DernieresMaintenance: new Date().toISOString().split('T')[0],
   };
   const [form, setForm] = useState(emptyForm);
+  const [fabricantsList, setFabricantsList] = useState<string[]>([]);
+  const [customFabricant, setCustomFabricant] = useState(false);
+
+  const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
   // Types list based on domain + annexe state
   const availableTypes = useMemo(() => {
@@ -269,6 +285,7 @@ export default function EquipementsPage() {
         garantieDebut: item.garantie_debut || '',
         garantieDuree: Number(item.garantie_duree) || 0,
         garantieFin: computeGarantieFin(item.garantie_debut || '', Number(item.garantie_duree) || 0),
+        service: item.Service || item.service || '',
       }));
       setData(mapped);
     } catch (err) {
@@ -276,6 +293,13 @@ export default function EquipementsPage() {
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  const loadFabricants = useCallback(async () => {
+    try {
+      const res = await fabricantsApi.list();
+      setFabricantsList(res.map(f => f.nom));
+    } catch { /* ignore */ }
   }, []);
 
   const loadDocs = useCallback(async () => {
@@ -290,7 +314,7 @@ export default function EquipementsPage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); loadFabricants(); }, [loadData, loadFabricants]);
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
 
   // Load clients
@@ -372,7 +396,14 @@ export default function EquipementsPage() {
       DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],
       GarantieDebut: eq.garantieDebut || '',
       GarantieDuree: eq.garantieDuree || 0,
+      Service: eq.service || '',
     });
+    // If fabricant not in list, enable custom mode
+    if (eq.marque && !fabricantsList.includes(eq.marque)) {
+      setCustomFabricant(true);
+    } else {
+      setCustomFabricant(false);
+    }
     setShowAddForm(true);
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
@@ -412,6 +443,11 @@ export default function EquipementsPage() {
       }
 
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
+      setCustomFabricant(false);
+      // Auto-save fabricant if new
+      if (form.Fabricant.trim() && !fabricantsList.includes(form.Fabricant.trim())) {
+        try { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); } catch {}
+      }
       await loadData();
     } catch (err) {
       console.error("Save failed", err);
@@ -668,8 +704,27 @@ export default function EquipementsPage() {
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Factory className="w-3.5 h-3.5" /> Fabricant
                         </label>
-                        <input className={INPUT_CLS} placeholder="Ex: Siemens, GE, Philips..." value={form.Fabricant}
-                          onChange={e => setForm({ ...form, Fabricant: e.target.value })} />
+                        {customFabricant ? (
+                          <div className="flex gap-2">
+                            <input className={INPUT_CLS} placeholder="Nom du fabricant..." value={form.Fabricant}
+                              onChange={e => setForm({ ...form, Fabricant: e.target.value })} />
+                            <button type="button" onClick={async () => {
+                              if (form.Fabricant.trim()) { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); }
+                              setCustomFabricant(false);
+                            }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <select className={INPUT_CLS} value={form.Fabricant} onChange={e => {
+                            if (e.target.value === '__autre__') { setCustomFabricant(true); setForm({ ...form, Fabricant: '' }); }
+                            else setForm({ ...form, Fabricant: e.target.value });
+                          }}>
+                            <option value="">— Sélectionner —</option>
+                            {fabricantsList.map(f => <option key={f} value={f}>{f}</option>)}
+                            <option value="__autre__">+ Autre (saisie manuelle)</option>
+                          </select>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -704,7 +759,16 @@ export default function EquipementsPage() {
                           <Activity className="w-3.5 h-3.5" /> Statut
                         </label>
                         <select className={INPUT_CLS} value={form.Statut} onChange={e => setForm({ ...form, Statut: e.target.value })}>
-                          {['Opérationnel', 'En maintenance', 'Hors Service', 'En atelier', 'En stock'].map(s => <option key={s} value={s}>{s}</option>)}
+                          {['Opérationnel', 'Hors Service', 'En atelier'].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                          <Stethoscope className="w-3.5 h-3.5" /> Service
+                        </label>
+                        <select className={INPUT_CLS} value={form.Service} onChange={e => setForm({ ...form, Service: e.target.value })}>
+                          <option value="">— Sélectionner —</option>
+                          {SERVICES.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </div>
                       <div className="md:col-span-2">

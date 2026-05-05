@@ -39,6 +39,7 @@ from db_engine import (
     lire_demandes_intervention,
     lire_clients as db_lire_clients, ajouter_client, modifier_client, supprimer_client,
     migrer_clients_depuis_equipements,
+    lire_fabricants, ajouter_fabricant,
 )
 
 logger = logging.getLogger("savia-api")
@@ -1030,6 +1031,20 @@ def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_to
 @app.delete("/api/equipements/{equip_id}")
 def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
     supprimer_equipement(equip_id)
+    return {"ok": True}
+
+
+@app.get("/api/fabricants")
+def get_fabricants(user: dict = Depends(_verify_token)):
+    return lire_fabricants()
+
+
+@app.post("/api/fabricants")
+def post_fabricant(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    nom = payload.get("nom", "").strip()
+    if not nom:
+        raise HTTPException(400, "Nom requis")
+    ajouter_fabricant(nom)
     return {"ok": True}
 
 

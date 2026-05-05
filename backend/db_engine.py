@@ -621,6 +621,17 @@ def init_db():
         _safe_add_column("clients", "type_client")
         _safe_add_column("clients", "international", "BOOLEAN", "false")
 
+        # Service column on equipements
+        _safe_add_column("equipements", "service")
+
+        # Fabricants table
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS fabricants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT UNIQUE NOT NULL
+        )
+        """)
+
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
             try:
@@ -1062,8 +1073,8 @@ def ajouter_equipement(equipement_dict):
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
-                                     domaine, est_annexe, garantie_debut, garantie_duree, ville)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     domaine, est_annexe, garantie_debut, garantie_duree, ville, service)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
@@ -1072,7 +1083,7 @@ def ajouter_equipement(equipement_dict):
                 document_technique=excluded.document_technique,
                 domaine=excluded.domaine, est_annexe=excluded.est_annexe,
                 garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree,
-                ville=excluded.ville
+                ville=excluded.ville, service=excluded.service
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -1091,6 +1102,7 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
             equipement_dict.get("Ville", ""),
+            equipement_dict.get("Service", ""),
         ))
     _trigger_backup()
     return True
@@ -1113,7 +1125,7 @@ def modifier_equipement(equip_id, equipement_dict):
                 date_installation = ?, derniere_maintenance = ?, statut = ?,
                 notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
                 domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?,
-                ville = ?
+                ville = ?, service = ?
             WHERE id = ?
         """, (
             equipement_dict.get("Nom", ""),
@@ -1133,9 +1145,24 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
             equipement_dict.get("Ville", ""),
+            equipement_dict.get("Service", ""),
             equip_id,
         ))
     _trigger_backup()
+    return True
+
+
+def lire_fabricants():
+    """Retourne la liste des fabricants enregistrés."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, nom FROM fabricants ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_fabricant(nom):
+    """Ajoute un fabricant. Ignore si déjà existant."""
+    with get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO fabricants (nom) VALUES (?)", (nom.strip(),))
     return True
 
 
