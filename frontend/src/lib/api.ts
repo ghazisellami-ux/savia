@@ -231,6 +231,18 @@ export const clients = {
   create: (data: Record<string, unknown>) => request<{ ok: boolean }>('/api/clients', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Record<string, unknown>) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
+  importExcel: async (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
+    const res = await fetch('/api/clients/import-excel', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: fd,
+    });
+    if (!res.ok) throw new Error('Erreur import: ' + res.status);
+    return res.json();
+  },
 };
 
 export const admin = {

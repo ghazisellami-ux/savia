@@ -615,6 +615,12 @@ def init_db():
         _safe_add_column("equipements", "adresse")
         _safe_add_column("equipements", "ville")
 
+        # Client enrichment columns
+        _safe_add_column("clients", "code_client")
+        _safe_add_column("clients", "region")
+        _safe_add_column("clients", "type_client")
+        _safe_add_column("clients", "international", "BOOLEAN", "false")
+
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
             try:
@@ -909,14 +915,19 @@ def ajouter_client(client_dict):
     """Ajoute un nouveau client."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse,
+                                code_client, region, type_client, international)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom) DO UPDATE SET
                 matricule_fiscale=excluded.matricule_fiscale,
                 ville=excluded.ville,
                 contact=excluded.contact,
                 telephone=excluded.telephone,
-                adresse=excluded.adresse
+                adresse=excluded.adresse,
+                code_client=excluded.code_client,
+                region=excluded.region,
+                type_client=excluded.type_client,
+                international=excluded.international
         """, (
             client_dict.get("nom", ""),
             client_dict.get("matricule_fiscale", ""),
@@ -924,6 +935,10 @@ def ajouter_client(client_dict):
             client_dict.get("contact", ""),
             client_dict.get("telephone", ""),
             client_dict.get("adresse", ""),
+            client_dict.get("code_client", ""),
+            client_dict.get("region", ""),
+            client_dict.get("type_client", ""),
+            bool(client_dict.get("international", False)),
         ))
     _trigger_backup()
     return True
@@ -935,7 +950,8 @@ def modifier_client(client_id, client_dict):
         conn.execute("""
             UPDATE clients SET
                 nom = ?, matricule_fiscale = ?, ville = ?,
-                contact = ?, telephone = ?, adresse = ?
+                contact = ?, telephone = ?, adresse = ?,
+                code_client = ?, region = ?, type_client = ?, international = ?
             WHERE id = ?
         """, (
             client_dict.get("nom", ""),
@@ -944,6 +960,10 @@ def modifier_client(client_id, client_dict):
             client_dict.get("contact", ""),
             client_dict.get("telephone", ""),
             client_dict.get("adresse", ""),
+            client_dict.get("code_client", ""),
+            client_dict.get("region", ""),
+            client_dict.get("type_client", ""),
+            bool(client_dict.get("international", False)),
             client_id,
         ))
     _trigger_backup()

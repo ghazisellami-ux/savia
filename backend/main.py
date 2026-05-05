@@ -2836,11 +2836,15 @@ def get_clients(user: dict = Depends(_verify_token)):
             client_data = {
                 "id": row.get("id"),
                 "nom": client_name,
+                "code_client": row.get("code_client", ""),
                 "matricule_fiscale": row.get("matricule_fiscale", ""),
                 "ville": row.get("ville", ""),
+                "region": row.get("region", ""),
                 "contact": row.get("contact", ""),
                 "telephone": row.get("telephone", ""),
                 "adresse": row.get("adresse", ""),
+                "type_client": row.get("type_client", ""),
+                "international": bool(row.get("international", False)),
             }
             # Enrich with equipment stats
             nb_eq = 0
@@ -2869,6 +2873,93 @@ def create_client(body: dict, user: dict = Depends(_verify_token)):
     """Create a new client."""
     ajouter_client(body)
     return {"ok": True}
+
+
+@app.post("/api/clients/import-excel")
+async def import_clients_excel(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+    """Import clients from an Excel file with auto-detection of columns."""
+    import io
+    try:
+        content = await file.read()
+        # Read Excel with pandas + openpyxl
+        try:
+            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+        except Exception:
+            df = pd.read_excel(io.BytesIO(content))
+
+        if df.empty:
+            return {"ok": False, "error": "Le fichier est vide", "imported": 0, "skipped": 0}
+
+        # Column name mapping (lowercase, stripped)
+        COLUMN_MAP = {
+            "nom": ["nom", "name", "client", "raison_sociale", "raison sociale", "société", "societe", "company"],
+            "code_client": ["code_client", "code client", "code", "ref", "reference", "référence", "ref_client"],
+            "matricule_fiscale": ["matricule_fiscale", "matricule fiscale", "matricule", "mf", "tax_id", "identifiant fiscal"],
+            "ville": ["ville", "city", "localité", "localite"],
+            "region": ["region", "région", "zone", "gouvernorat"],
+            "contact": ["contact", "contact_name", "responsable", "interlocuteur", "nom_contact", "nom contact"],
+            "telephone": ["telephone", "tel", "phone", "téléphone", "tel_contact", "numéro"],
+            "adresse": ["adresse", "address", "adr", "siege", "siège"],
+            "type_client": ["type_client", "type client", "type", "secteur", "nature", "privé/public"],
+            "international": ["international", "intl", "étranger", "etranger", "pays_etranger"],
+        }
+
+        # Auto-detect column mapping
+        detected = {}
+        excel_cols = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+        original_cols = list(df.columns)
+
+        for field, variants in COLUMN_MAP.items():
+            for i, col_lower in enumerate(excel_cols):
+                # Also check without underscores/spaces
+                col_clean = col_lower.replace("_", "").replace(" ", "")
+                for variant in variants:
+                    variant_clean = variant.replace("_", "").replace(" ", "")
+                    if col_lower == variant or col_clean == variant_clean:
+                        detected[field] = original_cols[i]
+                        break
+                if field in detected:
+                    break
+
+        columns_detected = list(detected.keys())
+        imported = 0
+        skipped = 0
+
+        for _, row in df.iterrows():
+            client_dict = {}
+            for field, excel_col in detected.items():
+                val = row.get(excel_col, "")
+                if pd.isna(val):
+                    val = ""
+                if field == "international":
+                    val = str(val).strip().lower() in ("true", "1", "oui", "yes", "vrai", "o")
+                else:
+                    val = str(val).strip()
+                client_dict[field] = val
+
+            # Skip if no name
+            nom = client_dict.get("nom", "").strip()
+            if not nom:
+                skipped += 1
+                continue
+
+            try:
+                ajouter_client(client_dict)
+                imported += 1
+            except Exception as e:
+                logger.warning(f"Import client skip '{nom}': {e}")
+                skipped += 1
+
+        return {
+            "ok": True,
+            "imported": imported,
+            "skipped": skipped,
+            "columns_detected": columns_detected,
+            "total_rows": len(df),
+        }
+    except Exception as e:
+        logger.error(f"Excel import error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.put("/api/clients/{client_id}")
