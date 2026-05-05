@@ -3532,7 +3532,323 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
 # ==========================================
-# 💰 FINANCES — Rentabilité & TCO
+# PDF FICHE INTERVENTION (server-side fpdf2)
+# ==========================================
+
+@app.post("/api/interventions/{interv_id}/fiche-pdf")
+def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
+    """Generate a professional intervention fiche PDF with all details, logos, and signature areas."""
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    from io import BytesIO
+    from fastapi.responses import Response
+    import base64 as _b64
+    import urllib.request as _ur
+
+    SAVIA_LOGO = "/app/logo-savia.png"
+
+    try:
+        # Fetch intervention data
+        df_interv = lire_interventions()
+        interv = None
+        if not df_interv.empty:
+            match = df_interv[df_interv["id"] == interv_id]
+            if not match.empty:
+                interv = match.iloc[0].to_dict()
+        if not interv:
+            raise HTTPException(status_code=404, detail="Intervention non trouvee")
+
+        # Fetch equipment to determine warranty and serial number
+        df_equip = lire_equipements()
+        matched_equip = None
+        if not df_equip.empty and "Nom" in df_equip.columns:
+            machine_name = str(interv.get("machine", "")).strip()
+            if machine_name:
+                exact = df_equip[df_equip["Nom"].str.strip() == machine_name]
+                if not exact.empty:
+                    matched_equip = exact.iloc[0].to_dict()
+                else:
+                    partial = df_equip[df_equip["Nom"].str.contains(machine_name, case=False, na=False)]
+                    if not partial.empty:
+                        matched_equip = partial.iloc[0].to_dict()
+
+        # Warranty check
+        sous_garantie = False
+        if matched_equip:
+            g_debut = matched_equip.get("garantie_debut", "")
+            g_duree = int(matched_equip.get("garantie_duree", 0) or 0)
+            if g_debut and g_duree:
+                try:
+                    fin = datetime.strptime(str(g_debut)[:10], "%Y-%m-%d")
+                    fin = fin.replace(year=fin.year + g_duree)
+                    sous_garantie = fin > datetime.now()
+                except Exception:
+                    pass
+
+        # Contract check
+        sous_contrat = False
+        client_name = str(interv.get("client", "")).strip()
+        if client_name:
+            df_contrats = lire_contrats()
+            if not df_contrats.empty:
+                client_col = "client" if "client" in df_contrats.columns else "Client"
+                if client_col in df_contrats.columns:
+                    client_contracts = df_contrats[df_contrats[client_col].str.strip().str.lower() == client_name.lower()]
+                    if not client_contracts.empty:
+                        for _, c in client_contracts.iterrows():
+                            fin_str = c.get("date_fin", c.get("DateFin", ""))
+                            if not fin_str:
+                                sous_contrat = True
+                                break
+                            try:
+                                if datetime.strptime(str(fin_str)[:10], "%Y-%m-%d") > datetime.now():
+                                    sous_contrat = True
+                                    break
+                            except Exception:
+                                sous_contrat = True
+                                break
+
+        # Extract fields
+        num_serie = (matched_equip or {}).get("NumSerie", "") or (matched_equip or {}).get("num_serie", "") or "-"
+        equip_type = (matched_equip or {}).get("Type", "") or (matched_equip or {}).get("type", "") or str(interv.get("type_intervention", "-"))
+        duree_min = int(interv.get("duree_minutes", 0) or 0)
+        duree_h = round(duree_min / 60, 2) if duree_min else 0
+        deplacement = interv.get("deplacement", 0) or 0
+
+        # Client logo
+        company_name = body.get("company_name", "SAVIA")
+        company_logo = body.get("company_logo", "")
+        _client_logo_io = None
+        if company_logo:
+            try:
+                clogo = company_logo.strip()
+                if clogo.startswith("data:"):
+                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
+                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
+                elif clogo.startswith("http"):
+                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
+                    with _ur.urlopen(req_, timeout=6) as _r:
+                        _client_logo_io = BytesIO(_r.read())
+            except Exception as _e:
+                logger.warning(f"Client logo error: {_e}")
+
+        # Build PDF
+        pdf = SaviaPDF(orientation="P", unit="mm", format="A4")
+        pdf.set_header_data(
+            SAVIA_LOGO, _client_logo_io,
+            company_name if company_name != "SAVIA" else "",
+            "",
+            report_title=f"FICHE D'INTERVENTION N. {interv_id}"
+        )
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_top_margin(pdf.HEADER_H + 10)
+        pdf.add_page()
+        W = pdf.w - 20
+
+        # Date line
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(100, 120, 140)
+        date_str = str(interv.get("date", ""))[:10]
+        pdf.cell(W, 5, _sanitize(f"Date : {date_str}"), align="C")
+        pdf.ln(8)
+
+        # ── SECTION: CLIENT & EQUIPEMENT ──
+        y0 = pdf.get_y()
+        pdf.set_fill_color(242, 252, 250)
+        pdf.set_draw_color(180, 220, 215)
+        pdf.set_line_width(0.3)
+        pdf.rect(10, y0, W, 44, style="FD")
+        pdf.set_xy(14, y0 + 2)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(15, 118, 110)
+        pdf.cell(W - 8, 6, "INFORMATIONS CLIENT & EQUIPEMENT")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(30, 40, 60)
+
+        left_x = 14
+        right_x = pdf.w / 2 + 5
+        row_h = 7
+
+        # Left column
+        for i, (label, value) in enumerate([
+            ("Client", _sanitize(client_name or "-")),
+            ("Equipement", _sanitize(str(interv.get("machine", "-")))),
+            ("N. de serie", _sanitize(str(num_serie))),
+            ("Type equipement", _sanitize(str(equip_type))),
+        ]):
+            pdf.set_xy(left_x, y0 + 9 + i * row_h)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(25, row_h, _sanitize(label + " :"))
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.cell(60, row_h, value[:40])
+
+        # Right column
+        for i, (label, value, color) in enumerate([
+            ("Sous garantie", "Oui" if sous_garantie else "Non", (22, 163, 74) if sous_garantie else (200, 50, 50)),
+            ("Sous contrat", "Oui" if sous_contrat else "Non", (22, 163, 74) if sous_contrat else (200, 50, 50)),
+            ("Technicien", _sanitize(str(interv.get("technicien", "-"))), (30, 40, 60)),
+        ]):
+            pdf.set_xy(right_x, y0 + 9 + i * row_h)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(30, 40, 60)
+            pdf.cell(28, row_h, _sanitize(label + " :"))
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.set_text_color(*color)
+            pdf.cell(40, row_h, value[:35])
+        pdf.set_text_color(30, 40, 60)
+
+        # ── SECTION: DETAILS INTERVENTION ──
+        pdf.set_y(y0 + 48)
+        y1 = pdf.get_y()
+        pdf.set_fill_color(240, 245, 255)
+        pdf.set_draw_color(180, 200, 230)
+        pdf.rect(10, y1, W, 30, style="FD")
+        pdf.set_xy(14, y1 + 2)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(30, 80, 170)
+        pdf.cell(W - 8, 6, "DETAILS INTERVENTION")
+        pdf.set_text_color(30, 40, 60)
+
+        details = [
+            ("Type", _sanitize(str(interv.get("type_intervention", "-")))),
+            ("Statut", _sanitize(str(interv.get("statut", "-")))),
+            ("Priorite", _sanitize(str(interv.get("priorite", "-")))),
+        ]
+        details_r = [
+            ("Duree (h)", f"{duree_h}h"),
+            ("Deplacement (h)", f"{deplacement}h"),
+        ]
+        for i, (label, value) in enumerate(details):
+            pdf.set_xy(left_x, y1 + 10 + i * 6)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(22, 6, label + " :")
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.cell(50, 6, value[:35])
+        for i, (label, value) in enumerate(details_r):
+            pdf.set_xy(right_x, y1 + 10 + i * 6)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(30, 6, label + " :")
+            pdf.set_font("Helvetica", "B", 8.5)
+            pdf.cell(30, 6, value)
+
+        # ── SECTION: DIAGNOSTIC ──
+        pdf.set_y(y1 + 34)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(180, 100, 0)
+        pdf.cell(W, 6, "DIAGNOSTIC")
+        pdf.ln(7)
+        pdf.set_text_color(30, 40, 60)
+
+        for label, key in [("Description", "description"), ("Probleme", "probleme"), ("Cause", "cause"), ("Solution", "solution")]:
+            val = str(interv.get(key, "") or "").strip()
+            if val:
+                pdf.set_font("Helvetica", "B", 8)
+                pdf.cell(25, 5, _sanitize(label + " :"))
+                pdf.set_font("Helvetica", "", 8.5)
+                pdf.multi_cell(W - 35, 5, _sanitize(val[:500]))
+                pdf.ln(1)
+
+        code_err = str(interv.get("code_erreur", "") or "").strip()
+        type_err = str(interv.get("type_erreur", "") or "").strip()
+        if code_err:
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.cell(25, 5, "Code erreur :")
+            pdf.set_font("Helvetica", "", 8.5)
+            txt = code_err + (f" ({type_err})" if type_err else "")
+            pdf.cell(80, 5, _sanitize(txt))
+            pdf.ln(6)
+
+        # ── SECTION: PIECES UTILISEES ──
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(30, 100, 180)
+        pdf.cell(W, 6, "PIECES UTILISEES")
+        pdf.ln(6)
+        pdf.set_text_color(30, 40, 60)
+
+        pieces = str(interv.get("pieces_utilisees", "") or "").strip()
+        if pieces:
+            pdf.set_font("Helvetica", "", 8.5)
+            pdf.multi_cell(W, 5, _sanitize(pieces[:600]))
+        else:
+            pdf.set_font("Helvetica", "I", 8.5)
+            pdf.set_text_color(150, 160, 170)
+            pdf.cell(W, 5, "Aucune piece utilisee")
+            pdf.set_text_color(30, 40, 60)
+
+        # ── SECTION: SIGNATURES ──
+        sig_y = max(pdf.get_y() + 12, pdf.h - 55)
+        if sig_y > pdf.h - 20:
+            pdf.add_page()
+            sig_y = pdf.get_y() + 10
+
+        pdf.set_xy(10, sig_y - 4)
+        pdf.set_draw_color(15, 118, 110)
+        pdf.set_line_width(0.5)
+        pdf.line(10, sig_y - 4, pdf.w - 10, sig_y - 4)
+
+        pdf.set_xy(14, sig_y)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(15, 118, 110)
+        pdf.cell(W, 5, "SIGNATURES")
+        pdf.set_text_color(30, 40, 60)
+        sig_y += 8
+
+        col1 = 14
+        col2 = pdf.w / 3 + 5
+        col3 = (pdf.w / 3) * 2 + 2
+        box_w = 52
+        box_h = 28
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_xy(col1, sig_y)
+        pdf.cell(box_w, 5, "Technicien")
+        pdf.set_xy(col2, sig_y)
+        pdf.cell(box_w, 5, "Responsable Technique")
+        pdf.set_xy(col3, sig_y)
+        pdf.cell(box_w, 5, "Cachet & Signature Client")
+
+        sig_y += 6
+        pdf.set_draw_color(200, 210, 220)
+        pdf.set_line_width(0.3)
+        pdf.rect(col1, sig_y, box_w, box_h, style="S")
+        pdf.rect(col2, sig_y, box_w, box_h, style="S")
+        pdf.rect(col3, sig_y, box_w, box_h, style="S")
+
+        # Footer
+        pdf.set_auto_page_break(auto=False)
+        total_pages = len(pdf.pages)
+        now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+        for pg in range(1, total_pages + 1):
+            pdf.page = pg
+            pdf.set_xy(10, pdf.h - 11)
+            pdf.set_draw_color(200, 205, 220)
+            pdf.set_line_width(0.3)
+            pdf.line(10, pdf.h - 11, pdf.w - 10, pdf.h - 11)
+            pdf.set_xy(10, pdf.h - 9)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(160, 170, 190)
+            pdf.cell(pdf.w - 40, 5, _sanitize(f"Genere par {company_name} - {now_str}"), align="L")
+            pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
+
+        pdf_bytes = bytes(pdf.output())
+        _fn = f"fiche_intervention_{interv_id}"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={_fn}.pdf",
+                "Content-Length": str(len(pdf_bytes)),
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Fiche PDF generation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+# ==========================================
+# FINANCES — Rentabilite & TCO
 # ==========================================
 
 @app.get("/api/finances/dashboard")
