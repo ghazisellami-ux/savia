@@ -838,6 +838,7 @@ export default function EquipementsPage() {
                           <option value={1}>1 an</option>
                           <option value={2}>2 ans</option>
                           <option value={3}>3 ans</option>
+                          <option value={4}>4 ans</option>
                           <option value={5}>5 ans</option>
                         </select>
                       </div>
