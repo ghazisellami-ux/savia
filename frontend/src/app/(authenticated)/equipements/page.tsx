@@ -8,7 +8,7 @@ import {
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
-  MapPin,
+  MapPin, Globe,
 } from 'lucide-react';
 import { equipements, documentsTechniques, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -21,6 +21,12 @@ const TUNISIAN_CITIES = [
   'Gabès', 'Médenine', 'Tataouine', 'Gafsa', 'Tozeur', 'Kébili',
   'Hammamet', 'Tabarka', 'Djerba', 'Grombalia', 'La Marsa', 'Carthage',
 ];
+
+const REGIONS: Record<string, string[]> = {
+  'Nord': ['Tunis','Ariana','Ben Arous','Manouba','Bizerte','Béja','Jendouba','Kef','Siliana','Nabeul','Zaghouan'],
+  'Centre': ['Sousse','Monastir','Mahdia','Sfax','Kairouan','Kasserine','Sidi Bouzid'],
+  'Sud': ['Gabès','Médenine','Tataouine','Tozeur','Gafsa','Kébili'],
+};
 
 interface Equipment {
   id: string;
@@ -214,16 +220,20 @@ export default function EquipementsPage() {
   const allClientNames = useMemo(() => Array.from(clientMatriculeMap.keys()), [clientMatriculeMap]);
 
   // ── Clients from dedicated table ──
-  interface ClientRecord { id: number; nom: string; matricule_fiscale: string; ville: string; contact: string; telephone: string; adresse: string; nb_equipements: number; nb_interventions: number; score_sante: number; }
+  interface ClientRecord { id: number; nom: string; code_client: string; matricule_fiscale: string; ville: string; region: string; contact: string; telephone: string; adresse: string; type_client: string; international: boolean; nb_equipements: number; nb_interventions: number; score_sante: number; }
   const [clientsList, setClientsList] = useState<ClientRecord[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientRecord | null>(null);
   const [confirmDeleteClient, setConfirmDeleteClient] = useState<ClientRecord | null>(null);
-  const emptyClientForm = { nom: '', matricule_fiscale: '', ville: '', contact: '', telephone: '', adresse: '' };
+  const emptyClientForm = { nom: '', code_client: '', matricule_fiscale: '', ville: '', region: '', contact: '', telephone: '', adresse: '', type_client: 'Privé', international: false as boolean };
   const [clientForm, setClientForm] = useState(emptyClientForm);
   const [clientSearch, setClientSearch] = useState('');
   const [savingClient, setSavingClient] = useState(false);
+  const [importingExcel, setImportingExcel] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
+  const excelFileRef = useRef<HTMLInputElement>(null);
+  const clientVilles = clientForm.international ? [] : (clientForm.region ? (REGIONS[clientForm.region] || []) : Object.values(REGIONS).flat());
 
   // Computed warranty end date from form state
   const formGarantieFin = useMemo(
@@ -289,9 +299,13 @@ export default function EquipementsPage() {
     try {
       const res = await clientsApi.list();
       setClientsList(res.map((c: any) => ({
-        id: c.id, nom: c.nom || '', matricule_fiscale: c.matricule_fiscale || '',
-        ville: c.ville || '', contact: c.contact || '', telephone: c.telephone || '',
-        adresse: c.adresse || '', nb_equipements: c.nb_equipements || 0,
+        id: c.id, nom: c.nom || '', code_client: c.code_client || '',
+        matricule_fiscale: c.matricule_fiscale || '',
+        ville: c.ville || '', region: c.region || '',
+        contact: c.contact || '', telephone: c.telephone || '',
+        adresse: c.adresse || '', type_client: c.type_client || '',
+        international: !!c.international,
+        nb_equipements: c.nb_equipements || 0,
         nb_interventions: c.nb_interventions || 0, score_sante: c.score_sante || 100,
       })));
     } catch (err) { console.error('Failed to fetch clients', err); }
@@ -318,8 +332,19 @@ export default function EquipementsPage() {
 
   const startEditClient = (c: ClientRecord) => {
     setEditingClient(c);
-    setClientForm({ nom: c.nom, matricule_fiscale: c.matricule_fiscale, ville: c.ville, contact: c.contact, telephone: c.telephone, adresse: c.adresse });
+    setClientForm({ nom: c.nom, code_client: c.code_client, matricule_fiscale: c.matricule_fiscale, ville: c.ville, region: c.region, contact: c.contact, telephone: c.telephone, adresse: c.adresse, type_client: c.type_client || 'Privé', international: c.international });
     setShowClientForm(true);
+  };
+
+  const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportingExcel(true); setImportResult(null);
+    try {
+      const res = await clientsApi.importExcel(file);
+      setImportResult(res); await loadClients();
+    } catch (err: any) { setImportResult({ ok: false, error: err.message }); }
+    finally { setImportingExcel(false); if (excelFileRef.current) excelFileRef.current.value = ''; }
   };
 
   const executeDeleteClient = async (c: ClientRecord) => {
@@ -870,6 +895,26 @@ export default function EquipementsPage() {
       {/* ========== TAB: CLIENTS ========== */}
       {activeTab === 'clients' && (
         <>
+          {/* Excel Import */}
+          {!isLecteur && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <input type="file" ref={excelFileRef} accept=".xlsx,.xls" className="hidden" onChange={handleExcelImport} />
+              <button onClick={() => excelFileRef.current?.click()} disabled={importingExcel}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all text-sm font-medium cursor-pointer">
+                {importingExcel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Importer Excel
+              </button>
+            </div>
+          )}
+          {importResult && (
+            <div className={`glass rounded-xl p-4 flex items-center gap-3 border ${importResult.ok ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
+              {importResult.ok
+                ? <p className="text-sm flex-1"><span className="font-bold text-emerald-400">{importResult.imported}</span> clients importés, <span className="text-savia-text-muted">{importResult.skipped} ignorés</span> — Colonnes: <span className="text-savia-accent">{importResult.columns_detected?.join(', ')}</span></p>
+                : <p className="text-sm text-red-400 flex-1">{importResult.error}</p>}
+              <button onClick={() => setImportResult(null)} className="text-savia-text-dim hover:text-white"><X className="w-4 h-4" /></button>
+            </div>
+          )}
+
           {/* Add/Edit Client Form */}
           {!isLecteur && (
             <div className="glass rounded-xl overflow-hidden">
@@ -891,7 +936,12 @@ export default function EquipementsPage() {
                     <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
                       <BadgeCheck className="w-4 h-4 text-savia-accent" /> Identification du Client
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Code Client</label>
+                        <input className={INPUT_CLS} placeholder="CL-001"
+                          value={clientForm.code_client} onChange={e => setClientForm({ ...clientForm, code_client: e.target.value })} />
+                      </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Hash className="w-3.5 h-3.5" /> Matricule Fiscale *
@@ -909,29 +959,61 @@ export default function EquipementsPage() {
                     </div>
                   </div>
 
+                  {/* Type + International */}
+                  <div>
+                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <Settings className="w-4 h-4 text-savia-accent" /> Type & Statut
+                    </h3>
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <div className="flex-1 min-w-[160px]">
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Type client</label>
+                        <select className={INPUT_CLS} value={clientForm.type_client} onChange={e => setClientForm({ ...clientForm, type_client: e.target.value })}>
+                          <option value="Privé">🏢 Privé</option>
+                          <option value="Public">🏛️ Public</option>
+                        </select>
+                      </div>
+                      <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
+                        <input type="checkbox" checked={clientForm.international}
+                          onChange={e => setClientForm({ ...clientForm, international: e.target.checked, ...(e.target.checked ? { region: '', ville: '' } : {}) })}
+                          className="w-4 h-4 rounded border-savia-border bg-savia-bg text-savia-accent" />
+                        <Globe className="w-4 h-4 text-blue-400" />
+                        <span className="text-sm">Client international</span>
+                      </label>
+                    </div>
+                  </div>
+
                   {/* Localisation */}
                   <div>
                     <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-savia-accent" /> Localisation
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <MapPin className="w-3.5 h-3.5" /> Ville *
-                        </label>
-                        <select className={INPUT_CLS} value={clientForm.ville} onChange={e => setClientForm({ ...clientForm, ville: e.target.value })}>
-                          <option value="">— Sélectionner une ville —</option>
-                          {TUNISIAN_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
+                    {clientForm.international ? (
+                      <p className="text-sm text-blue-400 italic">🌍 Client international — pas de filtre géographique</p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région</label>
+                          <select className={INPUT_CLS} value={clientForm.region} onChange={e => setClientForm({ ...clientForm, region: e.target.value, ville: '' })}>
+                            <option value="">— Sélectionner —</option>
+                            <option value="Nord">🔵 Nord</option>
+                            <option value="Centre">🟢 Centre</option>
+                            <option value="Sud">🟠 Sud</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Ville</label>
+                          <select className={INPUT_CLS} value={clientForm.ville} onChange={e => setClientForm({ ...clientForm, ville: e.target.value })}>
+                            <option value="">— Sélectionner —</option>
+                            {clientVilles.map(v => <option key={v} value={v}>{v}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Adresse</label>
+                          <input className={INPUT_CLS} placeholder="Adresse complète..."
+                            value={clientForm.adresse} onChange={e => setClientForm({ ...clientForm, adresse: e.target.value })} />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <StickyNote className="w-3.5 h-3.5" /> Adresse
-                        </label>
-                        <input className={INPUT_CLS} placeholder="Adresse complète..."
-                          value={clientForm.adresse} onChange={e => setClientForm({ ...clientForm, adresse: e.target.value })} />
-                      </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Contact */}
@@ -987,12 +1069,19 @@ export default function EquipementsPage() {
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-lg bg-savia-accent/10 flex items-center justify-center flex-shrink-0">
-                        <Building2 className="w-5 h-5 text-savia-accent" />
+                        {c.international ? <Globe className="w-5 h-5 text-blue-400" /> : <Building2 className="w-5 h-5 text-savia-accent" />}
                       </div>
                       <div>
-                        <h3 className="font-bold text-lg">{c.nom}</h3>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-bold text-lg">{c.nom}</h3>
+                          {c.code_client && <span className="text-xs bg-savia-accent/10 text-savia-accent px-2 py-0.5 rounded-full font-mono">{c.code_client}</span>}
+                          {c.type_client && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${c.type_client === 'Public' ? 'bg-blue-500/15 text-blue-400' : 'bg-purple-500/15 text-purple-400'}`}>{c.type_client}</span>}
+                        </div>
                         <div className="flex items-center gap-3 text-xs text-savia-text-muted mt-0.5">
-                          {c.ville && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {c.ville}</span>}
+                          {c.international ? <span className="text-blue-400">🌍 International</span> : <>
+                            {c.ville && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {c.ville}</span>}
+                            {c.region && <span>{c.region}</span>}
+                          </>}
                           {c.matricule_fiscale && <span className="flex items-center gap-1"><Hash className="w-3 h-3" /> {c.matricule_fiscale}</span>}
                         </div>
                       </div>
