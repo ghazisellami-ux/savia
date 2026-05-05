@@ -8,7 +8,7 @@ import {
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
-  MapPin, Globe,
+  MapPin, Globe, Phone, User, Landmark,
 } from 'lucide-react';
 import { equipements, documentsTechniques, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -968,8 +968,8 @@ export default function EquipementsPage() {
                       <div className="flex-1 min-w-[160px]">
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Type client</label>
                         <select className={INPUT_CLS} value={clientForm.type_client} onChange={e => setClientForm({ ...clientForm, type_client: e.target.value })}>
-                          <option value="Privé">🏢 Privé</option>
-                          <option value="Public">🏛️ Public</option>
+                          <option value="Privé">Privé</option>
+                          <option value="Public">Public</option>
                         </select>
                       </div>
                       <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
@@ -988,16 +988,16 @@ export default function EquipementsPage() {
                       <MapPin className="w-4 h-4 text-savia-accent" /> Localisation
                     </h3>
                     {clientForm.international ? (
-                      <p className="text-sm text-blue-400 italic">🌍 Client international — pas de filtre géographique</p>
+                      <p className="text-sm text-blue-400 italic flex items-center gap-2"><Globe className="w-4 h-4" /> Client international — pas de filtre géographique</p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                           <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région</label>
                           <select className={INPUT_CLS} value={clientForm.region} onChange={e => setClientForm({ ...clientForm, region: e.target.value, ville: '' })}>
                             <option value="">— Sélectionner —</option>
-                            <option value="Nord">🔵 Nord</option>
-                            <option value="Centre">🟢 Centre</option>
-                            <option value="Sud">🟠 Sud</option>
+                            <option value="Nord">Nord</option>
+                            <option value="Centre">Centre</option>
+                            <option value="Sud">Sud</option>
                           </select>
                         </div>
                         <div>
@@ -1078,7 +1078,7 @@ export default function EquipementsPage() {
                           {c.type_client && <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${c.type_client === 'Public' ? 'bg-blue-500/15 text-blue-400' : 'bg-purple-500/15 text-purple-400'}`}>{c.type_client}</span>}
                         </div>
                         <div className="flex items-center gap-3 text-xs text-savia-text-muted mt-0.5">
-                          {c.international ? <span className="text-blue-400">🌍 International</span> : <>
+                          {c.international ? <span className="text-blue-400 flex items-center gap-1"><Globe className="w-3 h-3" /> International</span> : <>
                             {c.ville && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {c.ville}</span>}
                             {c.region && <span>{c.region}</span>}
                           </>}
@@ -1111,8 +1111,8 @@ export default function EquipementsPage() {
                   </div>
                   {(c.contact || c.telephone) && (
                     <div className="flex items-center gap-3 text-xs text-savia-text-muted border-t border-savia-border/30 pt-2 mt-1">
-                      {c.contact && <span>👤 {c.contact}</span>}
-                      {c.telephone && <span>📞 {c.telephone}</span>}
+                      {c.contact && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {c.contact}</span>}
+                      {c.telephone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {c.telephone}</span>}
                     </div>
                   )}
                 </div>
