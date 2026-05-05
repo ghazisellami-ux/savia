@@ -228,33 +228,6 @@ export default function SavPage() {
     }
   };
 
-  // --- Download fiche intervention PDF (server-side FPDF2) ---
-  const handleDownloadFicheIntervention = async (interv: any) => {
-    try {
-      const token = localStorage.getItem('savia_token') || '';
-      const cn = localStorage.getItem('savia_company') || 'SAVIA';
-      const cl = localStorage.getItem('savia_logo') || '';
-      const res = await fetch(`/api/interventions/${interv.id}/fiche-pdf`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ company_name: cn, company_logo: cl }),
-      });
-      if (!res.ok) throw new Error('Erreur serveur: ' + res.status);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `fiche_intervention_${interv.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      console.error('Fiche PDF download error:', err);
-      alert('Erreur téléchargement PDF: ' + (err.message || 'Erreur inconnue'));
-    }
-  };
-
   const handleAiAnalyze = async () => {
     setIsAnalyzing(true);
     setAiError('');
