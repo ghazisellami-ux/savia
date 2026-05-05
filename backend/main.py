@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
