@@ -1451,7 +1451,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     # Update other fields
     fields = []
     params = []
-    for f in ["probleme", "cause", "solution", "pieces_utilisees", "cout",
+    for f in ["technicien", "probleme", "cause", "solution", "pieces_utilisees", "cout",
               "duree_minutes", "description", "notes", "type_erreur", "priorite",
               "fiche_validation"]:
         if f in body:
@@ -1825,6 +1825,14 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                             (new_interv["id"], demande_id)
                         )
                         logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
+                else:
+                    # Intervention déjà liée → mettre à jour technicien + statut (ex: réassignation après refus)
+                    interv_id = existing["intervention_id"]
+                    conn.execute(
+                        "UPDATE interventions SET technicien = %s, statut = %s WHERE id = %s",
+                        (technicien_assigne, "Assignée", interv_id)
+                    )
+                    logger.info(f"Intervention #{interv_id} réassignée à {technicien_assigne} (demande #{demande_id})")
         except Exception as e:
             logger.error(f"Erreur auto-création intervention: {e}")
 
