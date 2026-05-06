@@ -8,7 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import InterventionCard from '@/components/InterventionCard';
 import { ClipboardList, Loader2, Inbox } from 'lucide-react';
 
-const STATUTS = ['', 'En cours', 'En attente de piece', 'Cloturee'];
+const STATUTS = ['', 'En cours', 'En attente de piece', 'Assignée', 'Cloturee'];
 
 export default function InterventionsPage() {
   const router = useRouter();

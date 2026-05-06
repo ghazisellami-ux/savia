@@ -8,7 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import {
   Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
   XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
-  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft
+  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare
 } from 'lucide-react';
 
 const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
@@ -35,6 +35,7 @@ const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En attente de piece': { bg: 'rgba(245,158,11,0.12)',  color: '#B45309'      },
   'Cloturee':            { bg: 'rgba(34,197,94,0.12)',   color: '#15803D'      },
   'Assignée':            { bg: 'rgba(168,85,247,0.12)',  color: '#7C3AED'      },
+  'Refusée':             { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626'      },
 };
 
 type PiecesQty = Record<number, number>;
@@ -74,6 +75,9 @@ export default function InterventionDetailPage() {
   const [piecesQty, setPiecesQty]       = useState<PiecesQty>({});
   const [piecesRupture, setPiecesRupture] = useState<any[]>([]); // pièces demandées (rupture)
   const [searchRupture, setSearchRupture] = useState('');
+  const [showRefuseForm, setShowRefuseForm] = useState(false);
+  const [refuseRaison, setRefuseRaison] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
@@ -172,6 +176,38 @@ export default function InterventionDetailPage() {
   const statutStyle = STATUT_STYLES[form.statut] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
   const isClotured    = form.statut === 'Cloturee';
   const isAttenteP    = form.statut === 'En attente de piece';
+  const isAssignee    = form.statut === 'Assignée';
+
+  const handleAccept = async () => {
+    setActionLoading(true);
+    try {
+      await api.interventions.accept(id);
+      setForm(f => ({ ...f, statut: 'En cours' }));
+      setIntervention((prev: any) => ({ ...prev, statut: 'En cours' }));
+      setSuccess('Intervention acceptée ! Vous pouvez maintenant la compléter.');
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de l\'acceptation.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRefuse = async () => {
+    if (!refuseRaison.trim()) {
+      setError('Veuillez indiquer la raison du refus.');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await api.interventions.refuse(id, refuseRaison.trim());
+      setSuccess('Intervention refusée. Le manager sera notifié.');
+      setTimeout(() => router.replace('/interventions'), 2000);
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors du refus.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const toggleRupture = (p: any) => {
     setPiecesRupture(prev =>
@@ -238,7 +274,62 @@ export default function InterventionDetailPage() {
           </div>
         )}
 
-        <form onSubmit={handleSave}>
+        {/* ⓪ Accept/Refuse banner for Assignée interventions */}
+        {isAssignee && (
+          <div style={{ ...SECTION, border: '2px solid #7C3AED', background: 'rgba(168,85,247,0.04)' }}>
+            <h3 style={{ fontSize: '0.9rem', fontWeight: 800, color: '#7C3AED', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Bell style={{ width: 18, height: 18 }} /> Intervention assignée
+            </h3>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '16px', lineHeight: 1.5 }}>
+              Cette intervention vous a été assignée. Acceptez pour commencer le travail ou refusez avec une justification.
+            </p>
+
+            {!showRefuseForm ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <button type="button" onClick={handleAccept} disabled={actionLoading}
+                  style={{ padding: '14px 12px', background: 'linear-gradient(135deg, #22C55E, #15803D)', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.95rem', cursor: actionLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: actionLoading ? 0.7 : 1 }}>
+                  {actionLoading ? <Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> : <ThumbsUp style={{ width: 18, height: 18 }} />}
+                  Accepter
+                </button>
+                <button type="button" onClick={() => setShowRefuseForm(true)} disabled={actionLoading}
+                  style={{ padding: '14px 12px', background: 'rgba(239,68,68,0.08)', color: '#DC2626', border: '2px solid #DC2626', borderRadius: '12px', fontWeight: 800, fontSize: '0.95rem', cursor: actionLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                  <ThumbsDown style={{ width: 18, height: 18 }} /> Refuser
+                </button>
+              </div>
+            ) : (
+              <div>
+                <label style={{ ...LABEL, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <MessageSquare style={{ width: 14, height: 14 }} /> Raison du refus *
+                </label>
+                <textarea
+                  style={{ ...INPUT, resize: 'vertical', borderColor: '#DC2626', marginBottom: '12px' }}
+                  rows={3}
+                  placeholder="Expliquez la raison du refus (indisponibilité, compétence, etc.)"
+                  value={refuseRaison}
+                  onChange={e => setRefuseRaison(e.target.value)}
+                  autoFocus
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <button type="button" onClick={() => { setShowRefuseForm(false); setRefuseRaison(''); setError(''); }}
+                    style={{ padding: '12px', background: '#fff', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '10px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer' }}>
+                    Annuler
+                  </button>
+                  <button type="button" onClick={handleRefuse} disabled={actionLoading || !refuseRaison.trim()}
+                    style={{ padding: '12px', background: '#DC2626', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '0.9rem', cursor: (actionLoading || !refuseRaison.trim()) ? 'not-allowed' : 'pointer', opacity: (actionLoading || !refuseRaison.trim()) ? 0.6 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                    {actionLoading ? <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> : <ThumbsDown style={{ width: 16, height: 16 }} />}
+                    Confirmer le refus
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && !isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
+        {error && isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px', marginTop: '-8px' }}>{error}</p>}
+
+        {/* Only show full form when NOT in Assignée status (already accepted or other statuts) */}
+        {!isAssignee && <form onSubmit={handleSave}>
 
           {/* ① Diagnostic */}
           <div style={SECTION}>
@@ -547,14 +638,14 @@ export default function InterventionDetailPage() {
             </div>
           )}
 
-          {error && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
+          {error && !isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
 
           {/* ⑦ Bouton mise à jour */}
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Mettre à jour{selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}</>}
           </button>
-        </form>
+        </form>}
       </main>
       <BottomNav />
     </div>

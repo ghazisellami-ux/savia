@@ -1638,7 +1638,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                     description[:500],
                     description[:500],
                     code_erreur,
-                    "En cours",
+                    "Assignée",
                     urgence,
                     notes_interv,
                 ))
@@ -1752,7 +1752,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         description[:500],
                         description[:500],
                         demande_info.get("code_erreur", "") or "",
-                        "En cours",
+                        "Assignée",
                         urgence,
                         notes_interv,
                     ))
@@ -1770,6 +1770,86 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
             logger.error(f"Erreur auto-création intervention: {e}")
 
     return {"success": True}
+
+
+# ------ Technicien Accept / Refuse intervention ------
+
+@app.put("/api/interventions/{intervention_id}/accept")
+def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+    from db_engine import get_db
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
+            (intervention_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention introuvable")
+
+        conn.execute(
+            "UPDATE interventions SET statut = %s WHERE id = %s",
+            ("En cours", intervention_id)
+        )
+
+    tech_name = user.get("nom") or user.get("username") or "?"
+    machine = row["machine"] if row else ""
+    msg = (
+        f"\u2705 <b>INTERVENTION #{intervention_id} — ACCEPTÉE</b>\n\n"
+        f"\U0001f477 Technicien : <b>{tech_name}</b>\n"
+        f"\U0001f3e5 Équipement : <b>{machine}</b>\n"
+        f"\U0001f4ca Statut : <b>En cours</b>\n"
+        f"\U0001f550 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    _send_telegram(msg)
+
+    return {"success": True, "statut": "En cours"}
+
+
+@app.put("/api/interventions/{intervention_id}/refuse")
+def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+    from db_engine import get_db
+    raison = body.get("raison", "").strip()
+    if not raison:
+        raise HTTPException(status_code=400, detail="La raison du refus est obligatoire")
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, machine, technicien, statut, client FROM interventions WHERE id = %s",
+            (intervention_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention introuvable")
+
+        tech_name = user.get("nom") or user.get("username") or row.get("technicien", "?")
+        machine = row["machine"] if row else ""
+        client = row.get("client", "") or ""
+
+        # Mark intervention back to "En attente" and clear technician
+        conn.execute(
+            "UPDATE interventions SET statut = %s, technicien = %s, notes = COALESCE(notes, '') || %s WHERE id = %s",
+            ("En attente", "", f"\n[REFUS par {tech_name}] {raison}", intervention_id)
+        )
+
+        # Also update the linked demande if it exists
+        conn.execute("""
+            UPDATE demandes_intervention
+            SET statut = 'En attente', technicien_assigne = '',
+                notes_traitement = COALESCE(notes_traitement, '') || %s
+            WHERE intervention_id = %s
+        """, (f"\n[REFUS par {tech_name}] {raison}", intervention_id))
+
+    # Send Telegram notification
+    msg = (
+        f"\u274c <b>INTERVENTION #{intervention_id} — REFUSÉE</b>\n\n"
+        f"\U0001f477 Technicien : <b>{tech_name}</b>\n"
+        f"\U0001f3e5 Équipement : <b>{machine}</b>\n"
+        f"\U0001f3e2 Client : <b>{client}</b>\n"
+        f"\U0001f4ac Raison : <i>{raison}</i>\n\n"
+        f"\u23f3 Statut : <b>En attente</b> — à réassigner\n"
+        f"\U0001f550 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    _send_telegram(msg)
+
+    return {"success": True, "statut": "En attente"}
 
 
 # ==========================================

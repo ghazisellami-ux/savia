@@ -7,6 +7,8 @@ const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En attente de piece':{ bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
   'Cloturee':           { bg: 'rgba(34,197,94,0.12)',   color: '#15803D'        },
   'Assignée':           { bg: 'rgba(168,85,247,0.12)',  color: '#7C3AED'        },
+  'Refusée':            { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626'        },
+  'En attente':         { bg: 'rgba(239,68,68,0.12)',   color: '#DC2626'        },
 };
 
 interface InterventionCardProps {
