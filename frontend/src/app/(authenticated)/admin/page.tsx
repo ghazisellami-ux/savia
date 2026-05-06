@@ -32,6 +32,7 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'carte',              label: 'Carte Géographique',     icon: MapPin         },
   { key: 'sla',                label: 'Suivi SLA',              icon: ShieldCheck    },
   { key: 'admin',              label: 'Administration',         icon: Settings       },
+  { key: 'settings',           label: 'Paramètres',             icon: Cog            },
 ];
 
 // ─── DEFAULT PROFILES ─────────────────────────────────────
@@ -52,7 +53,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-purple-500/10',
     border: 'border-purple-500/30',
     description: 'Accès complet à toutes les fonctionnalités',
-    pages: ALL_PAGES.map(p => p.key),
+    pages: ALL_PAGES.filter(p => p.key !== 'settings').map(p => p.key),
   },
   {
     id: 'resp_technique',
