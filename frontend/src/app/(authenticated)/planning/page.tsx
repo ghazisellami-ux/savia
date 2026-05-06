@@ -6,7 +6,7 @@ import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
-  ChevronDown, Check
+  ChevronDown, Check, Download, MapPin
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -97,6 +97,9 @@ export default function PlanningPage() {
   const [filterEquip,   setFilterEquip]   = useState('Tous');
   const [filterTech,    setFilterTech]    = useState('Tous');
   const [filterStatut,  setFilterStatut]  = useState('Tous');
+  const [filterRegion,  setFilterRegion]  = useState('Tous');
+  const [filterVille,   setFilterVille]   = useState('Tous');
+  const [clientsFullData, setClientsFullData] = useState<any[]>([]);
 
   // Filtrage en cascade : domaine → client → équipement
   const equipsForDomaine = useMemo(() => {
@@ -155,6 +158,7 @@ export default function PlanningPage() {
         `${t.prenom || ''} ${t.nom || ''}`.trim()
       ).filter(Boolean);
       setTechsList(techNames);
+      setClientsFullData(clRes as any[]);
     } catch (err) {
       console.error('Failed to fetch planning', err);
     } finally {
@@ -372,12 +376,30 @@ export default function PlanningPage() {
       {/* ── Filter options derived from data ── */}
       {(() => {
         const fClients  = ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean))).sort()];
+        // Derive region/ville from clients data
+        const clientRegionMap = new Map<string, string>();
+        const clientVilleMap = new Map<string, string>();
+        clientsFullData.forEach((c: any) => {
+          const name = c.nom || c.Nom || '';
+          if (c.region) clientRegionMap.set(name, c.region);
+          if (c.ville) clientVilleMap.set(name, c.ville);
+        });
+        const getRegion = (client: string) => clientRegionMap.get(client) || '';
+        const getVille = (client: string) => clientVilleMap.get(client) || '';
+
+        const fRegions  = ['Tous', ...Array.from(new Set(data.map(d => getRegion(d.client)).filter(Boolean))).sort()];
+        const fVilles   = ['Tous', ...Array.from(new Set(
+          data.filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
+            .map(d => getVille(d.client)).filter(Boolean)
+        )).sort()];
         const fEquips   = ['Tous', ...Array.from(new Set(
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
         const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'Réalisée', 'En retard'];
         const filteredData = data
+          .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
+          .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
           .filter(d => filterClient === 'Tous' || d.client === filterClient)
           .filter(d => filterEquip  === 'Tous' || d.machine === filterEquip)
           .filter(d => filterTech   === 'Tous' || d.technicien === filterTech)
@@ -393,6 +415,20 @@ export default function PlanningPage() {
       <SectionCard title={"Toutes les Maintenances (" + filteredData.length + (filteredData.length !== data.length ? " / " + data.length : "") + ")"}>
         {/* Filter bar */}
         <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
+          {/* Région */}
+          <div className="flex items-center gap-2">
+            <MapPin className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <select value={filterRegion} onChange={e => { setFilterRegion(e.target.value); setFilterVille('Tous'); setFilterClient('Tous'); setFilterEquip('Tous'); }} className={selCls}>
+              {fRegions.map(r => <option key={r} value={r}>{r === 'Tous' ? 'Toutes les régions' : r}</option>)}
+            </select>
+          </div>
+          {/* Ville */}
+          <div className="flex items-center gap-2">
+            <MapPin className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+            <select value={filterVille} onChange={e => { setFilterVille(e.target.value); setFilterClient('Tous'); setFilterEquip('Tous'); }} className={selCls}>
+              {fVilles.map(v => <option key={v} value={v}>{v === 'Tous' ? 'Toutes les villes' : v}</option>)}
+            </select>
+          </div>
           {/* Client */}
           <div className="flex items-center gap-2">
             <Building2 className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
@@ -422,12 +458,63 @@ export default function PlanningPage() {
             </select>
           </div>
           {/* Reset */}
-          {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous') && (
-            <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); }}
+          {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous' || filterRegion !== 'Tous' || filterVille !== 'Tous') && (
+            <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); setFilterRegion('Tous'); setFilterVille('Tous'); }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all cursor-pointer">
               <X className="w-3 h-3" /> Réinitialiser
             </button>
           )}
+          {/* PDF Download */}
+          <button
+            onClick={() => {
+              const printData = filteredData.slice().sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+              const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : 'Tous les clients';
+              const w = window.open('', '_blank');
+              if (!w) return;
+              w.document.write(`<html><head><title>Planning Maintenance — ${filterLabel}</title>
+                <style>
+                  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; color: #1a1a2e; }
+                  h1 { font-size: 18px; color: #0d9488; border-bottom: 2px solid #0d9488; padding-bottom: 8px; }
+                  .meta { font-size: 11px; color: #666; margin-bottom: 16px; }
+                  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                  th { background: #0d9488; color: white; padding: 8px 6px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+                  td { padding: 6px; border-bottom: 1px solid #e2e8f0; }
+                  tr:nth-child(even) { background: #f8fafc; }
+                  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
+                  .planifiee { background: #dbeafe; color: #1e40af; }
+                  .encours { background: #fef3c7; color: #92400e; }
+                  .terminee, .realisee { background: #d1fae5; color: #065f46; }
+                  .retard { background: #fee2e2; color: #991b1b; }
+                  @media print { body { margin: 0; } }
+                </style>
+              </head><body>
+                <h1>📅 Planning Maintenance — ${filterLabel}</h1>
+                <div class="meta">Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'})} — ${printData.length} maintenance(s)</div>
+                <table>
+                  <thead><tr><th>Date</th><th>Client</th><th>Équipement</th><th>Technicien</th><th>Type</th><th>Récurrence</th><th>Statut</th></tr></thead>
+                  <tbody>${printData.map(ev => {
+                    const isOverdue = ev.date_planifiee && new Date(ev.date_planifiee) < new Date() && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
+                    const st = isOverdue ? 'En retard' : ev.statut;
+                    const cls = isOverdue ? 'retard' : st === 'Planifiée' ? 'planifiee' : st === 'En cours' ? 'encours' : 'terminee';
+                    return '<tr>' +
+                      '<td>' + (ev.date_planifiee || '—').substring(0,10) + '</td>' +
+                      '<td>' + (ev.client || '—') + '</td>' +
+                      '<td><b>' + ev.machine + '</b></td>' +
+                      '<td>' + (ev.technicien || '—') + '</td>' +
+                      '<td>' + ev.type_maintenance + '</td>' +
+                      '<td>' + (ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—') + '</td>' +
+                      '<td><span class="badge ' + cls + '">' + st + '</span></td>' +
+                    '</tr>';
+                  }).join('')}</tbody>
+                </table>
+              </body></html>`);
+              w.document.close();
+              setTimeout(() => { w.print(); }, 500);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/30 transition-all cursor-pointer ml-auto"
+          >
+            <Download className="w-3.5 h-3.5" /> Télécharger PDF
+          </button>
         </div>
         <div className="overflow-x-auto">
           <div className="overflow-y-auto" style={{maxHeight: '400px'}}>
