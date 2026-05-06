@@ -156,6 +156,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
               priority
               unoptimized
               className="object-contain w-full"
+              style={{ filter: 'brightness(0) invert(1)' }}
             />
             <div className="text-xs mt-0.5 font-semibold text-savia-text-muted">
               {user.nom} · <span className={ROLE_COLOR[user.role] || 'text-savia-text-muted'}>{user.role}</span>
