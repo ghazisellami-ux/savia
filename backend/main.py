@@ -553,6 +553,7 @@ def _start_garantie_daemon():
             logger.error(f"Failed to mark notification run: {e}")
 
     def _run():
+        import datetime as _dt
         time.sleep(30)
         while True:
             # sync_planning_to_interventions est idempotent → toujours exécuter
@@ -566,6 +567,20 @@ def _start_garantie_daemon():
                 logger.info("Notifications daemon: déjà exécuté aujourd'hui, skip (prochain cycle dans 1h)")
                 time.sleep(3600)  # Re-vérifier dans 1h (au cas où minuit passe)
                 continue
+
+            # ── Attendre 8h30 (heure Tunisie UTC+1) avant d'envoyer ──
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo("Africa/Tunis")
+            except Exception:
+                tz = _dt.timezone(_dt.timedelta(hours=1))
+            now_local = _dt.datetime.now(tz)
+            target_hour, target_minute = 8, 30
+            if now_local.hour < target_hour or (now_local.hour == target_hour and now_local.minute < target_minute):
+                target = now_local.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+                wait_seconds = (target - now_local).total_seconds()
+                logger.info(f"Notifications daemon: en attente jusqu'à 08:30 ({int(wait_seconds)}s)")
+                time.sleep(max(wait_seconds, 0))
 
             try:
                 check_garantie_expiry()
