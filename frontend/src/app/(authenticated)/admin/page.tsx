@@ -372,7 +372,8 @@ export default function AdminPage() {
           rolePerms[role][page.key] = p.pages.includes(page.key);
         });
       });
-      // Sauvegarder toutes les permissions (y compris Admin)
+      // Forcer settings = true pour Admin (page réservée à l'admin)
+      if (rolePerms['Admin']) rolePerms['Admin']['settings'] = true;
 
       const token = localStorage.getItem('savia_token') || '';
       const res = await fetch('/api/settings', {
