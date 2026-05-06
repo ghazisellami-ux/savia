@@ -1340,7 +1340,7 @@ def ajouter_intervention(intervention_dict):
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",

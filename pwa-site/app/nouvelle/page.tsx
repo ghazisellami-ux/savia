@@ -53,7 +53,7 @@ export default function NouvelleInterventionPage() {
   });
 
   const filteredEquips = useMemo(() =>
-    form.client ? equips.filter(e => e.client === form.client) : equips,
+    form.client ? equips.filter(e => (e.Client || e.client) === form.client) : equips,
     [equips, form.client]
   );
 
@@ -86,7 +86,12 @@ export default function NouvelleInterventionPage() {
     e.preventDefault();
     setError(''); setSaving(true);
     try {
-      const created = await api.interventions.create(form);
+      const payload = {
+        ...form,
+        technicien: form.technicien_assigne,
+        duree_minutes: Math.round((form.duree || 0) * 60),
+      };
+      const created = await api.interventions.create(payload);
       if (photoFile && created.id) {
         await api.interventions.uploadPhoto(created.id, photoFile).catch(() => {});
       }
@@ -127,14 +132,14 @@ export default function NouvelleInterventionPage() {
                 <label style={LABEL}>Client *</label>
                 <select style={INPUT} value={form.client} onChange={e => set('client', e.target.value)} required>
                   <option value="">— Choisir —</option>
-                  {clients.map((c: any) => <option key={c.id || c.nom} value={c.nom}>{c.nom}</option>)}
+                  {clients.map((c: any) => <option key={c.id || c.nom || c.Nom} value={c.nom || c.Nom}>{c.nom || c.Nom}</option>)}
                 </select>
               </div>
               <div>
                 <label style={LABEL}>Machine *</label>
                 <select style={INPUT} value={form.machine} onChange={e => set('machine', e.target.value)} required>
                   <option value="">— Choisir —</option>
-                  {filteredEquips.map((e: any) => <option key={e.id || e.nom} value={e.nom}>{e.nom}</option>)}
+                  {filteredEquips.map((e: any) => <option key={e.id || e.Nom || e.nom} value={e.Nom || e.nom}>{e.Nom || e.nom}</option>)}
                 </select>
               </div>
             </div>
