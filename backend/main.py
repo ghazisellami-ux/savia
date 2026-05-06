@@ -4207,9 +4207,33 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
                                 sous_contrat = True
                                 break
 
+        # Company info from admin settings
+        company_name = body.get("company_name", "SAVIA")
+        company_logo = body.get("company_logo", "")
+        import base64 as _b64
+        import urllib.request as _ur
+        _client_logo_io = None
+        if company_logo:
+            try:
+                clogo = company_logo.strip()
+                if clogo.startswith("data:"):
+                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
+                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
+                elif clogo.startswith("http"):
+                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
+                    with _ur.urlopen(req_, timeout=6) as _r:
+                        _client_logo_io = BytesIO(_r.read())
+            except Exception as _e:
+                logger.warning(f"Client logo error: {_e}")
+
         # Build PDF
         pdf = SaviaPDF(orientation="P", unit="mm", format="A4")
-        pdf.set_header_data(SAVIA_LOGO, None, "SAVIA", "", report_title="ATTESTATION DE BON FONCTIONNEMENT")
+        pdf.set_header_data(
+            SAVIA_LOGO, _client_logo_io,
+            company_name if company_name != "SAVIA" else "",
+            "",
+            report_title="ATTESTATION DE BON FONCTIONNEMENT"
+        )
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.set_top_margin(pdf.HEADER_H + 10)
         pdf.add_page()
@@ -4218,16 +4242,17 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         today_str = datetime.now().strftime("%d/%m/%Y")
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(100, 120, 140)
-        pdf.cell(W, 5, _sanitize(f"Date : {today_str}    |    Ref : ATT-{equip_id}-{datetime.now().strftime('%Y%m%d')}"), align="C")
+        pdf.cell(W, 5, _sanitize(f"Date : {today_str}    |    R\u00e9f : ATT-{equip_id}-{datetime.now().strftime('%Y%m%d')}"), align="C")
         pdf.ln(10)
 
         # Introduction
+        display_name = company_name if company_name and company_name != "SAVIA" else "SAVIA"
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(30, 40, 60)
         pdf.multi_cell(W, 6, _sanitize(
-            f"La societe SAVIA atteste par la presente que l'equipement ci-dessous, "
-            f"installe chez le client {client_name}, est en parfait etat de fonctionnement "
-            f"a la date du {today_str}."
+            f"La soci\u00e9t\u00e9 {display_name} atteste par la pr\u00e9sente que l'\u00e9quipement ci-dessous, "
+            f"install\u00e9 chez le client {client_name}, est en parfait \u00e9tat de fonctionnement "
+            f"\u00e0 la date du {today_str}."
         ), align="L")
         pdf.ln(6)
 
@@ -4241,17 +4266,17 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         pdf.set_xy(14, y0 + 2)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(15, 118, 110)
-        pdf.cell(W - 8, 6, "INFORMATIONS EQUIPEMENT")
+        pdf.cell(W - 8, 6, _sanitize("INFORMATIONS \u00c9QUIPEMENT"))
         pdf.set_text_color(30, 40, 60)
         left_x = 14
         right_x = pdf.w / 2 + 5
         row_h = 7
 
         for i, (label, value) in enumerate([
-            ("Equipement", _sanitize(nom)),
+            ("\u00c9quipement", _sanitize(nom)),
             ("Type", _sanitize(equip_type)),
-            ("Marque / Modele", _sanitize(f"{marque} {modele}".strip())),
-            ("N. de serie", _sanitize(num_serie)),
+            ("Marque / Mod\u00e8le", _sanitize(f"{marque} {modele}".strip())),
+            ("N\u00b0 de s\u00e9rie", _sanitize(num_serie)),
             ("Localisation", _sanitize(localisation)),
         ]):
             pdf.set_xy(left_x, y0 + 9 + i * row_h)
@@ -4290,9 +4315,9 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
 
         for i, (label, value) in enumerate([
             ("Client", _sanitize(client_name)),
-            ("Region / Ville", _sanitize(f"{client_region} - {client_ville}".strip(" -") or "-")),
+            ("R\u00e9gion / Ville", _sanitize(f"{client_region} - {client_ville}".strip(" -") or "-")),
             ("Adresse", _sanitize(client_adresse or "-")),
-            ("Telephone", _sanitize(client_telephone or "-")),
+            ("T\u00e9l\u00e9phone", _sanitize(client_telephone or "-")),
         ]):
             pdf.set_xy(left_x, y1 + 9 + i * row_h)
             pdf.set_font("Helvetica", "", 8)
@@ -4305,16 +4330,16 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(30, 40, 60)
         pdf.multi_cell(W, 6, _sanitize(
-            "Nous attestons que l'equipement susmentionne a ete verifie et teste par nos techniciens qualifies. "
-            "Tous les parametres de fonctionnement sont conformes aux specifications du fabricant. "
-            "L'equipement est apte a une utilisation normale dans le cadre de ses fonctions designees."
+            "Nous attestons que l'\u00e9quipement susmentionn\u00e9 a \u00e9t\u00e9 v\u00e9rifi\u00e9 et test\u00e9 par nos techniciens qualifi\u00e9s. "
+            "Tous les param\u00e8tres de fonctionnement sont conformes aux sp\u00e9cifications du fabricant. "
+            "L'\u00e9quipement est apte \u00e0 une utilisation normale dans le cadre de ses fonctions d\u00e9sign\u00e9es."
         ), align="L")
         pdf.ln(4)
 
         if sous_garantie and garantie_fin_str:
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(22, 163, 74)
-            pdf.cell(W, 6, _sanitize(f"Cet equipement est sous garantie jusqu'au {garantie_fin_str}."), align="L")
+            pdf.cell(W, 6, _sanitize(f"Cet \u00e9quipement est sous garantie jusqu'au {garantie_fin_str}."), align="L")
             pdf.ln(8)
             pdf.set_text_color(30, 40, 60)
 
@@ -4324,7 +4349,7 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(80, 90, 110)
         pdf.set_xy(14, y_sig)
-        pdf.cell(80, 6, "Pour SAVIA :")
+        pdf.cell(80, 6, _sanitize(f"Pour {display_name} :"))
         pdf.set_xy(14, y_sig + 8)
         pdf.set_font("Helvetica", "", 8)
         pdf.cell(80, 5, "Nom et signature :")
@@ -4343,7 +4368,7 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         pdf.set_y(-30)
         pdf.set_font("Helvetica", "I", 7)
         pdf.set_text_color(140, 150, 165)
-        pdf.cell(W, 4, _sanitize(f"Ce document est genere automatiquement par SAVIA - {today_str}"), align="C")
+        pdf.cell(W, 4, _sanitize(f"Ce document est g\u00e9n\u00e9r\u00e9 automatiquement par {display_name} - {today_str}"), align="C")
 
         buf = BytesIO()
         pdf.output(buf)

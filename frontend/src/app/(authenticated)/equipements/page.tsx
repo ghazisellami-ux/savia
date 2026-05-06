@@ -512,11 +512,13 @@ export default function EquipementsPage() {
 
   const handleDownloadAttestation = async (eq: Equipment) => {
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
+      const token = localStorage.getItem('savia_token') || '';
+      const cn = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl = localStorage.getItem('savia_logo') || '';
       const res = await fetch(`/api/equipements/${eq.id}/attestation-pdf`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ company_name: cn, company_logo: cl }),
       });
       if (!res.ok) throw new Error('Erreur PDF');
       const blob = await res.blob();
@@ -524,8 +526,8 @@ export default function EquipementsPage() {
       const a = document.createElement('a');
       a.href = url;
       a.download = `attestation_bon_fonctionnement_${eq.id}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch(e: any) { alert('Erreur: ' + (e.message || 'Inconnue')); }
   };
 
