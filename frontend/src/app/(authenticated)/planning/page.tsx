@@ -396,7 +396,7 @@ export default function PlanningPage() {
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
-        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'Réalisée', 'En retard'];
+        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard'];
         const filteredData = data
           .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
           .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
