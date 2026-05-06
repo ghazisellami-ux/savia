@@ -523,7 +523,9 @@ export default function AdminPage() {
               </div>
             }>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                {ALL_PAGES.map(page => {
+                {ALL_PAGES
+                  .filter(page => profile.id === 'admin' || page.key !== 'settings')
+                  .map(page => {
                   const checked = profile.pages.includes(page.key);
                   const Icon = page.icon;
                   const isAdminProfile = profile.id === 'admin';
