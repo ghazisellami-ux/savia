@@ -151,12 +151,11 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
             <Image
               src="/logo-savia.png"
               alt="SAVIA"
-              width={300}
-              height={190}
+              width={140}
+              height={45}
               priority
               unoptimized
-              className="object-contain w-full"
-              style={{ filter: 'brightness(0) invert(1)' }}
+              className="object-contain"
             />
             <div className="text-xs mt-0.5 font-semibold text-savia-text-muted">
               {user.nom} · <span className={ROLE_COLOR[user.role] || 'text-savia-text-muted'}>{user.role}</span>

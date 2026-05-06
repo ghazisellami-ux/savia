@@ -53,11 +53,11 @@ export default function LoginPage() {
               <Image
                 src="/logo-savia.png"
                 alt="SAVIA"
-                width={360}
-                height={234}
+                width={180}
+                height={60}
                 priority
                 className="object-contain"
-                style={{ maxWidth: '80%', height: 'auto', filter: 'brightness(0) invert(1)' }}
+                style={{ maxWidth: '60%', height: 'auto' }}
               />
             </div>
           </div>

@@ -46,11 +46,11 @@ export default function LoginPage() {
         <Image
           src="/site/logo-savia.png"
           alt="SAVIA"
-          width={396}
-          height={252}
+          width={180}
+          height={60}
           priority
           unoptimized
-          style={{ objectFit: 'contain', maxWidth: '80vw', height: 'auto' }}
+          style={{ objectFit: 'contain', maxWidth: '60vw', height: 'auto' }}
         />
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px', marginBottom: '28px', fontWeight: 600 }}>Interface Technicien</p>
       </div>

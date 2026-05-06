@@ -27,7 +27,7 @@ export default function Header({ syncCount = 0, notifCount = 0 }: HeaderProps) {
       padding: '0 16px', zIndex: 900,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <Image src="/logo-savia.png" alt="SAVIA" width={80} height={50} unoptimized className="object-contain" style={{ filter: 'brightness(0) invert(1)' }} />
+        <Image src="/logo-savia.png" alt="SAVIA" width={60} height={35} unoptimized className="object-contain" />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
