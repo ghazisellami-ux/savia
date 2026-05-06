@@ -466,50 +466,27 @@ export default function PlanningPage() {
           )}
           {/* PDF Download */}
           <button
-            onClick={() => {
-              const printData = filteredData.slice().sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
-              const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : 'Tous les clients';
-              const w = window.open('', '_blank');
-              if (!w) return;
-              w.document.write(`<html><head><title>Planning Maintenance — ${filterLabel}</title>
-                <style>
-                  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; color: #1a1a2e; }
-                  h1 { font-size: 18px; color: #0d9488; border-bottom: 2px solid #0d9488; padding-bottom: 8px; }
-                  .meta { font-size: 11px; color: #666; margin-bottom: 16px; }
-                  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-                  th { background: #0d9488; color: white; padding: 8px 6px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-                  td { padding: 6px; border-bottom: 1px solid #e2e8f0; }
-                  tr:nth-child(even) { background: #f8fafc; }
-                  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
-                  .planifiee { background: #dbeafe; color: #1e40af; }
-                  .encours { background: #fef3c7; color: #92400e; }
-                  .terminee, .realisee { background: #d1fae5; color: #065f46; }
-                  .retard { background: #fee2e2; color: #991b1b; }
-                  @media print { body { margin: 0; } }
-                </style>
-              </head><body>
-                <h1>📅 Planning Maintenance — ${filterLabel}</h1>
-                <div class="meta">Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'})} — ${printData.length} maintenance(s)</div>
-                <table>
-                  <thead><tr><th>Date</th><th>Client</th><th>Équipement</th><th>Technicien</th><th>Type</th><th>Récurrence</th><th>Statut</th></tr></thead>
-                  <tbody>${printData.map(ev => {
-                    const isOverdue = ev.date_planifiee && new Date(ev.date_planifiee) < new Date() && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                    const st = isOverdue ? 'En retard' : ev.statut;
-                    const cls = isOverdue ? 'retard' : st === 'Planifiée' ? 'planifiee' : st === 'En cours' ? 'encours' : 'terminee';
-                    return '<tr>' +
-                      '<td>' + (ev.date_planifiee || '—').substring(0,10) + '</td>' +
-                      '<td>' + (ev.client || '—') + '</td>' +
-                      '<td><b>' + ev.machine + '</b></td>' +
-                      '<td>' + (ev.technicien || '—') + '</td>' +
-                      '<td>' + ev.type_maintenance + '</td>' +
-                      '<td>' + (ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—') + '</td>' +
-                      '<td><span class="badge ' + cls + '">' + st + '</span></td>' +
-                    '</tr>';
-                  }).join('')}</tbody>
-                </table>
-              </body></html>`);
-              w.document.close();
-              setTimeout(() => { w.print(); }, 500);
+            onClick={async () => {
+              try {
+                const printData = filteredData.slice().sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+                const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : filterTech !== 'Tous' ? `Technicien: ${filterTech}` : 'Tous les clients';
+                const token = localStorage.getItem('savia_token') || '';
+                const cn = localStorage.getItem('savia_company') || 'SAVIA';
+                const cl = localStorage.getItem('savia_logo') || '';
+                const res = await fetch('/api/planning/pdf', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                  body: JSON.stringify({ rows: printData, filter_label: filterLabel, company_name: cn, company_logo: cl }),
+                });
+                if (!res.ok) throw new Error('Erreur ' + res.status);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `planning_maintenance.pdf`;
+                document.body.appendChild(a); a.click();
+                document.body.removeChild(a); URL.revokeObjectURL(url);
+              } catch (err: any) { alert('Erreur PDF: ' + (err.message || 'Inconnue')); }
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/30 transition-all cursor-pointer ml-auto"
           >

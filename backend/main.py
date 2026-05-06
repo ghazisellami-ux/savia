@@ -2138,6 +2138,152 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
     return {"ok": True, "created": len(created), "interventions": created}
 
 
+@app.post("/api/planning/pdf")
+def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
+    """Generate a maintenance planning PDF using FPDF with proper header."""
+    from io import BytesIO
+    from fastapi.responses import Response
+    import base64 as _b64
+    import urllib.request as _ur
+
+    SAVIA_LOGO = "/app/logo-savia.png"
+
+    try:
+        rows = body.get("rows", [])
+        filter_label = body.get("filter_label", "Tous les clients")
+        company_name = body.get("company_name", "SAVIA")
+        company_logo = body.get("company_logo", "")
+
+        # Client logo
+        _client_logo_io = None
+        if company_logo:
+            try:
+                clogo = company_logo.strip()
+                if clogo.startswith("data:"):
+                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
+                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
+                elif clogo.startswith("http"):
+                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
+                    with _ur.urlopen(req_, timeout=6) as _r:
+                        _client_logo_io = BytesIO(_r.read())
+            except Exception:
+                pass
+
+        display_name = company_name if company_name and company_name != "SAVIA" else "SAVIA"
+
+        pdf = SaviaPDF(orientation="L", unit="mm", format="A4")
+        pdf.set_header_data(
+            SAVIA_LOGO, _client_logo_io,
+            company_name if company_name != "SAVIA" else "",
+            "",
+            report_title="PLANNING DE MAINTENANCE"
+        )
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_top_margin(pdf.HEADER_H + 10)
+        pdf.add_page()
+        W = pdf.w - 20
+
+        today_str = datetime.now().strftime("%d/%m/%Y")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(100, 120, 140)
+        pdf.cell(W, 5, _sanitize(f"Filtre : {filter_label}  |  G\u00e9n\u00e9r\u00e9 le {today_str}  |  {len(rows)} maintenance(s)"), align="C")
+        pdf.ln(8)
+
+        # Table header
+        col_widths = [25, 50, 55, 40, 35, 30, 30]  # Date, Client, Equipement, Technicien, Type, Récurrence, Statut
+        headers = ["Date", "Client", "\u00c9quipement", "Technicien", "Type", "R\u00e9currence", "Statut"]
+
+        pdf.set_fill_color(15, 118, 110)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 8)
+        for i, h in enumerate(headers):
+            pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
+        pdf.ln()
+
+        # Table rows
+        pdf.set_text_color(30, 40, 60)
+        pdf.set_font("Helvetica", "", 7.5)
+        for idx, row in enumerate(rows):
+            if pdf.get_y() > pdf.h - 20:
+                pdf.add_page()
+                pdf.set_fill_color(15, 118, 110)
+                pdf.set_text_color(255, 255, 255)
+                pdf.set_font("Helvetica", "B", 8)
+                for i, h in enumerate(headers):
+                    pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
+                pdf.ln()
+                pdf.set_text_color(30, 40, 60)
+                pdf.set_font("Helvetica", "", 7.5)
+
+            # Alternate row colors
+            if idx % 2 == 0:
+                pdf.set_fill_color(248, 250, 252)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+
+            date_val = str(row.get("date_planifiee", "") or "")[:10]
+            client_val = str(row.get("client", "") or "\u2014")
+            machine_val = str(row.get("machine", "") or "\u2014")
+            tech_val = str(row.get("technicien", "") or "\u2014")
+            type_val = str(row.get("type_maintenance", "") or "\u2014")
+            recurrence_val = str(row.get("recurrence", "") or "")
+            if recurrence_val == "Aucune":
+                recurrence_val = "\u2014"
+            statut_val = str(row.get("statut", "") or "\u2014")
+
+            # Check overdue
+            is_overdue = False
+            if date_val and statut_val not in ["R\u00e9alis\u00e9e", "Termin\u00e9e", "Annul\u00e9e"]:
+                try:
+                    if datetime.strptime(date_val, "%Y-%m-%d") < datetime.now():
+                        is_overdue = True
+                        statut_val = "En retard"
+                except Exception:
+                    pass
+
+            vals = [date_val, client_val, machine_val, tech_val, type_val, recurrence_val, statut_val]
+            for i, v in enumerate(vals):
+                # Color statut cell
+                if i == 6:
+                    if is_overdue or "retard" in statut_val.lower():
+                        pdf.set_text_color(153, 27, 27)
+                        pdf.set_font("Helvetica", "B", 7.5)
+                    elif statut_val in ["R\u00e9alis\u00e9e", "Termin\u00e9e"]:
+                        pdf.set_text_color(6, 95, 70)
+                        pdf.set_font("Helvetica", "B", 7.5)
+                    elif statut_val == "En cours":
+                        pdf.set_text_color(146, 64, 14)
+                        pdf.set_font("Helvetica", "B", 7.5)
+                    else:
+                        pdf.set_text_color(30, 64, 175)
+                        pdf.set_font("Helvetica", "B", 7.5)
+
+                pdf.cell(col_widths[i], 6.5, _sanitize(v[:30]), border="B", fill=True, align="C" if i in [0, 5, 6] else "L")
+
+                if i == 6:
+                    pdf.set_text_color(30, 40, 60)
+                    pdf.set_font("Helvetica", "", 7.5)
+            pdf.ln()
+
+        # Footer
+        pdf.set_y(-25)
+        pdf.set_font("Helvetica", "I", 7)
+        pdf.set_text_color(140, 150, 165)
+        pdf.cell(W, 4, _sanitize(f"Ce document est g\u00e9n\u00e9r\u00e9 automatiquement par {display_name} - {today_str}"), align="C")
+
+        buf = BytesIO()
+        pdf.output(buf)
+        buf.seek(0)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=planning_maintenance_{datetime.now().strftime('%Y%m%d')}.pdf"}
+        )
+    except Exception as e:
+        logging.error(f"Planning PDF error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+
 @app.post("/api/interventions/{intervention_id}/factured")
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
     """Marque une intervention comme facturee (arrete les rappels)."""
