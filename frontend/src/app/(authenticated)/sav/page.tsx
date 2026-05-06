@@ -140,6 +140,7 @@ export default function SavPage() {
         if (!s) return 'En cours';
         const low = s.toLowerCase();
         if (low.includes('tur') || low.includes('termin') || low.includes('clotur')) return 'Cloturee';
+        if (low.includes('attente') && low.includes('pi')) return 'En attente de piece';
         if (low.includes('cours')) return 'En cours';
         if (low.includes('planif')) return 'Planifiee';
         return s;
@@ -697,13 +698,11 @@ export default function SavPage() {
               <option value="Tous">Tous les statuts</option>
               <option value="Cloturee">Cloturee</option>
               <option value="En cours">En cours</option>
-              <option value="Planifiee">Planifiee</option>
+              <option value="En attente de piece">En attente de pièce</option>
             </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="Tous">Tous les types</option>
-              <option value="Corrective">Corrective</option>
-              <option value="Préventive">Préventive</option>
-              <option value="Installation">Installation</option>
+              {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
             <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
