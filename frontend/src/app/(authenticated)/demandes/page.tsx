@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Search, Clock, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
-  Zap, FileText, Tag, Edit, Send, UserCheck, Lock
+  Zap, FileText, Tag, Edit, Send, UserCheck, Lock, Users
 } from 'lucide-react';
 import { demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -325,8 +325,11 @@ export default function DemandesPage() {
               <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{d.date}</span>
             </div>
             {d.technicien_assigne && (
-              <div className="mt-2 text-xs text-blue-400 flex items-center gap-1">
-                <UserCheck className="w-3 h-3" /> Technicien : <strong>{d.technicien_assigne}</strong>
+              <div className="mt-2 text-xs text-blue-400 flex items-center gap-1 flex-wrap">
+                <UserCheck className="w-3 h-3" /> Technicien{d.technicien_assigne.includes(',') ? 's' : ''} :
+                {d.technicien_assigne.split(',').map((t, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 font-semibold">{t.trim()}</span>
+                ))}
               </div>
             )}
             {d.notes_traitement && (
@@ -437,14 +440,34 @@ export default function DemandesPage() {
                 {canAssignTech && (
                   <div className="md:col-span-2">
                     <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                      <UserCheck className="w-3.5 h-3.5 text-blue-400" />
-                      <span className="text-blue-400">Assigner un technicien</span>
-                      <span className="text-xs font-normal text-savia-text-muted">(facultatif)</span>
+                      <Users className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="text-blue-400">Assigner des techniciens</span>
+                      <span className="text-xs font-normal text-savia-text-muted">(facultatif, multi-sélection)</span>
                     </label>
-                    <select className={INPUT_CLS} value={form.technicien_assigne}
-                      onChange={e => setForm({...form, technicien_assigne: e.target.value})}>
-                      <option value="">— Non assigné pour l&apos;instant —</option>
-                      {techs.map(t => <option key={t} value={t}>{t}</option>)}
+                    {/* Selected techs chips */}
+                    {form.technicien_assigne && (
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {form.technicien_assigne.split(',').filter(Boolean).map(t => (
+                          <span key={t.trim()} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 text-xs font-semibold">
+                            <UserCheck className="w-3 h-3" /> {t.trim()}
+                            <button type="button" onClick={() => {
+                              const updated = form.technicien_assigne.split(',').map(s => s.trim()).filter(s => s !== t.trim()).join(', ');
+                              setForm({...form, technicien_assigne: updated});
+                            }} className="ml-0.5 hover:text-red-400 cursor-pointer"><X className="w-3 h-3" /></button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <select className={INPUT_CLS} value=""
+                      onChange={e => {
+                        if (!e.target.value) return;
+                        const current = form.technicien_assigne ? form.technicien_assigne.split(',').map(s => s.trim()).filter(Boolean) : [];
+                        if (!current.includes(e.target.value)) {
+                          setForm({...form, technicien_assigne: [...current, e.target.value].join(', ')});
+                        }
+                      }}>
+                      <option value="">— Ajouter un technicien —</option>
+                      {techs.filter(t => !(form.technicien_assigne || '').split(',').map(s => s.trim()).includes(t)).map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
                 )}
@@ -510,12 +533,32 @@ export default function DemandesPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <UserCheck className="w-3.5 h-3.5 text-blue-400" /> Technicien assigné
+                  <Users className="w-3.5 h-3.5 text-blue-400" /> Techniciens assignés
                 </label>
-                <select className={INPUT_CLS} value={updateForm.technicien_assigne}
-                  onChange={e => setUpdateForm({...updateForm, technicien_assigne: e.target.value})}>
-                  <option value="">— Non assigné —</option>
-                  {techs.map(t => <option key={t} value={t}>{t}</option>)}
+                {/* Selected techs chips */}
+                {updateForm.technicien_assigne && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {updateForm.technicien_assigne.split(',').filter(Boolean).map(t => (
+                      <span key={t.trim()} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 text-xs font-semibold">
+                        <UserCheck className="w-3 h-3" /> {t.trim()}
+                        <button type="button" onClick={() => {
+                          const updated = updateForm.technicien_assigne.split(',').map(s => s.trim()).filter(s => s !== t.trim()).join(', ');
+                          setUpdateForm({...updateForm, technicien_assigne: updated});
+                        }} className="ml-0.5 hover:text-red-400 cursor-pointer"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <select className={INPUT_CLS} value=""
+                  onChange={e => {
+                    if (!e.target.value) return;
+                    const current = updateForm.technicien_assigne ? updateForm.technicien_assigne.split(',').map(s => s.trim()).filter(Boolean) : [];
+                    if (!current.includes(e.target.value)) {
+                      setUpdateForm({...updateForm, technicien_assigne: [...current, e.target.value].join(', ')});
+                    }
+                  }}>
+                  <option value="">— Ajouter un technicien —</option>
+                  {techs.filter(t => !(updateForm.technicien_assigne || '').split(',').map(s => s.trim()).includes(t)).map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div>
