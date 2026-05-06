@@ -1396,6 +1396,18 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                 # Extraire client depuis notes [Client]
                 notes = str(row.get("notes") or "")
                 client = notes[1:notes.index("]")] if notes.startswith("[") and "]" in notes else ""
+                # Si pas de client dans notes, chercher via equipement
+                if not client:
+                    try:
+                        with get_db() as conn2:
+                            eq_row = conn2.execute(
+                                'SELECT client FROM equipements WHERE nom = %s LIMIT 1',
+                                (machine,)
+                            ).fetchone()
+                            if eq_row:
+                                client = dict(eq_row).get('client', '') or ''
+                    except Exception:
+                        pass
                 for piece in pieces_attente:
                     ref = piece.get("reference") or piece.get("ref") or ""
                     nom = piece.get("designation") or piece.get("nom") or ref
@@ -1414,6 +1426,23 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                         "destination": "gestionnaire",
                     })
                     logger.info(f"Notif rupture créée: pièce {ref} pour intervention #{intervention_id}")
+
+                # ── Envoi Telegram immédiat ──
+                pieces_txt = ""
+                if pieces_attente:
+                    pieces_list = [f"  • {p.get('reference') or p.get('ref','')} — {p.get('designation') or p.get('nom','')}" for p in pieces_attente]
+                    pieces_txt = "\n🔩 Pièces demandées :\n" + "\n".join(pieces_list)
+                client_line = f"\n👤 Client : <b>{client}</b>" if client else ""
+                msg_tg = (
+                    f"⏳ <b>INTERVENTION EN ATTENTE DE PIÈCE — #{intervention_id}</b>\n\n"
+                    f"🏥 Machine : <b>{machine}</b>"
+                    f"{client_line}\n"
+                    f"👷 Technicien : <b>{technicien}</b>"
+                    f"{pieces_txt}\n\n"
+                    f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                )
+                _send_telegram_bot("telegram_stock", msg_tg)
+                _send_telegram_bot("telegram", msg_tg)
         except Exception as ne:
             logger.error(f"Erreur création notif rupture: {ne}")
 
