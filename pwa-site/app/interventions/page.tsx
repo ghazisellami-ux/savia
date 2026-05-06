@@ -8,14 +8,14 @@ import BottomNav from '@/components/BottomNav';
 import InterventionCard from '@/components/InterventionCard';
 import { ClipboardList, Loader2, Inbox } from 'lucide-react';
 
-const STATUTS = ['', 'En cours', 'En attente de piece', 'Assignée', 'Cloturee'];
+const STATUTS = ['', 'Assignée', 'En cours', 'En attente de piece', 'Cloturee'];
 
 export default function InterventionsPage() {
   const router = useRouter();
   const user = getUser();
   const [data, setData]         = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
-  const [statut, setStatut]     = useState('En cours'); // Par défaut: En cours
+  const [statut, setStatut]     = useState(''); // Par défaut: Toutes
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState('');
 
@@ -39,10 +39,8 @@ export default function InterventionsPage() {
       });
 
       setData(sorted);
-      // Appliquer le filtre par défaut "En cours"
-      setFiltered(sorted.filter(i =>
-        (i.statut || '').toLowerCase().includes('cours')
-      ));
+      // Afficher toutes les interventions par défaut
+      setFiltered(sorted);
     } catch {
       setError('Impossible de charger les interventions.');
     } finally {
