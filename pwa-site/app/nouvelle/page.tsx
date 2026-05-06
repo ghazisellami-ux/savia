@@ -130,7 +130,7 @@ export default function NouvelleInterventionPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Client *</label>
-                <select style={INPUT} value={form.client} onChange={e => set('client', e.target.value)} required>
+                <select style={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('machine', ''); }} required>
                   <option value="">— Choisir —</option>
                   {clients.map((c: any) => <option key={c.id || c.nom || c.Nom} value={c.nom || c.Nom}>{c.nom || c.Nom}</option>)}
                 </select>

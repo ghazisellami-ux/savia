@@ -1813,7 +1813,9 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, machine, technicien, statut, client FROM interventions WHERE id = %s",
+            """SELECT id, machine, technicien, statut, notes,
+                      (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
+               FROM interventions WHERE id = %s""",
             (intervention_id,)
         ).fetchone()
         if not row:
