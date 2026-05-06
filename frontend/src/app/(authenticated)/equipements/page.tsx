@@ -505,8 +505,28 @@ export default function EquipementsPage() {
   };
 
   const handleDeleteDoc = async (doc: DocTechnique) => {
+    if (!confirm('Supprimer ce document ?')) return;
     try { await documentsTechniques.delete(doc.id); await loadDocs(); }
     catch (err) { console.error("Delete doc failed", err); }
+  };
+
+  const handleDownloadAttestation = async (eq: Equipment) => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
+      const res = await fetch(`/api/equipements/${eq.id}/attestation-pdf`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error('Erreur PDF');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attestation_bon_fonctionnement_${eq.id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch(e: any) { alert('Erreur: ' + (e.message || 'Inconnue')); }
   };
 
   const filtered = useMemo(() => data.filter(eq => {
@@ -988,6 +1008,9 @@ export default function EquipementsPage() {
                     <span className={`text-sm font-bold ${eq.healthScore >= 85 ? 'text-green-400' : eq.healthScore >= 65 ? 'text-yellow-400' : 'text-red-400'}`}>{eq.healthScore}%</span>
                   </div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {(eq.statut.toLowerCase().includes('opérationnel') || eq.statut.toLowerCase().includes('actif')) && (
+                      <button onClick={() => handleDownloadAttestation(eq)} className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 cursor-pointer" title="Attestation de bon fonctionnement"><Download className="w-3.5 h-3.5" /></button>
+                    )}
                     {!isLecteur && (
                       <>
                         <button onClick={() => startEdit(eq)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
