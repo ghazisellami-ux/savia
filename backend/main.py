@@ -3878,6 +3878,19 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         duree_h = round(duree_min / 60, 2) if duree_min else 0
         deplacement = interv.get("deplacement", 0) or 0
 
+        # Fetch client region/ville
+        client_region = ""
+        client_ville = ""
+        if client_name:
+            try:
+                with get_db() as conn:
+                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
+                    if cl_row:
+                        client_region = dict(cl_row).get("region", "") or ""
+                        client_ville = dict(cl_row).get("ville", "") or ""
+            except Exception:
+                pass
+
         # Client logo
         company_name = body.get("company_name", "SAVIA")
         company_logo = body.get("company_logo", "")
@@ -3920,7 +3933,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         pdf.set_fill_color(242, 252, 250)
         pdf.set_draw_color(180, 220, 215)
         pdf.set_line_width(0.3)
-        pdf.rect(10, y0, W, 44, style="FD")
+        pdf.rect(10, y0, W, 58, style="FD")
         pdf.set_xy(14, y0 + 2)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(15, 118, 110)
@@ -3947,6 +3960,8 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
 
         # Right column
         for i, (label, value, color) in enumerate([
+            ("Region", _sanitize(client_region or "-"), (30, 40, 60)),
+            ("Ville", _sanitize(client_ville or "-"), (30, 40, 60)),
             ("Sous garantie", "Oui" if sous_garantie else "Non", (22, 163, 74) if sous_garantie else (200, 50, 50)),
             ("Sous contrat", "Oui" if sous_contrat else "Non", (22, 163, 74) if sous_contrat else (200, 50, 50)),
             ("Technicien", _sanitize(str(interv.get("technicien", "-"))), (30, 40, 60)),
@@ -3961,7 +3976,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         pdf.set_text_color(30, 40, 60)
 
         # ── SECTION: DETAILS INTERVENTION ──
-        pdf.set_y(y0 + 48)
+        pdf.set_y(y0 + 62)
         y1 = pdf.get_y()
         pdf.set_fill_color(240, 245, 255)
         pdf.set_draw_color(180, 200, 230)
