@@ -157,7 +157,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
               unoptimized
               className="object-contain"
             />
-            <div className="text-xs mt-0.5 font-semibold text-savia-text-muted">
+            <div className="text-xs mt-5 font-semibold text-savia-text-muted">
               {user.nom} · <span className={ROLE_COLOR[user.role] || 'text-savia-text-muted'}>{user.role}</span>
             </div>
           </div>
