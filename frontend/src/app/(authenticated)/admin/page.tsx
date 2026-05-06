@@ -37,6 +37,15 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
 // ─── DEFAULT PROFILES ─────────────────────────────────────
 const DEFAULT_PROFILES: Profile[] = [
   {
+    id: 'admin',
+    nom: 'Admin',
+    couleur: 'text-red-400',
+    bg: 'bg-red-500/10',
+    border: 'border-red-500/30',
+    description: 'Super-administrateur — accès total, modifiable uniquement par l\'admin',
+    pages: ALL_PAGES.map(p => p.key),
+  },
+  {
     id: 'manager',
     nom: 'Manager',
     couleur: 'text-purple-400',
@@ -84,7 +93,8 @@ const DEFAULT_PROFILES: Profile[] = [
 ];
 
 const PROFILE_ROLE_MAP: Record<string, string> = {
-  manager: 'Admin',
+  admin: 'Admin',
+  manager: 'Manager',
   resp_technique: 'Technicien',
   gestionnaire_stock: 'Gestionnaire',
   technicien: 'Technicien',
@@ -361,8 +371,7 @@ export default function AdminPage() {
           rolePerms[role][page.key] = p.pages.includes(page.key);
         });
       });
-      // Admin a toujours tout
-      rolePerms['Admin'] = Object.fromEntries(ALL_PAGES.map(p => [p.key, true]));
+      // Sauvegarder toutes les permissions (y compris Admin)
 
       const token = localStorage.getItem('savia_token') || '';
       const res = await fetch('/api/settings', {
@@ -381,7 +390,8 @@ export default function AdminPage() {
   };
 
   const roleColor = (role: string) => {
-    if (role === 'Admin') return 'bg-purple-500/10 text-purple-400';
+    if (role === 'Admin') return 'bg-red-500/10 text-red-400';
+    if (role === 'Manager') return 'bg-purple-500/10 text-purple-400';
     if (role === 'Technicien') return 'bg-blue-500/10 text-blue-400';
     if (role === 'Gestionnaire') return 'bg-amber-500/10 text-amber-400';
     return 'bg-green-500/10 text-green-400';
@@ -515,9 +525,12 @@ export default function AdminPage() {
                 {ALL_PAGES.map(page => {
                   const checked = profile.pages.includes(page.key);
                   const Icon = page.icon;
+                  const isAdminProfile = profile.id === 'admin';
+                  const isCurrentUserAdmin = currentUser?.username === 'admin';
+                  const canToggle = !isAdminProfile || isCurrentUserAdmin;
                   return (
-                    <label key={page.key} onClick={() => togglePage(profile.id, page.key)}
-                      className={`flex items-center gap-2 p-2.5 rounded-lg cursor-pointer transition-all border ${checked ? `${profile.bg} ${profile.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
+                    <label key={page.key} onClick={() => canToggle && togglePage(profile.id, page.key)}
+                      className={`flex items-center gap-2 p-2.5 rounded-lg transition-all border ${!canToggle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${checked ? `${profile.bg} ${profile.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
                       <div className={`w-4 h-4 rounded shrink-0 flex items-center justify-center border transition-all ${checked ? `${profile.couleur.replace('text-', 'bg-').replace('-400', '-500')} border-transparent` : 'border-savia-border'}`}>
                         {checked && <span className="text-white text-xs font-black">✓</span>}
                       </div>

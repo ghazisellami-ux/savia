@@ -44,6 +44,12 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
     reports: true, contrats: true, admin: true, settings: true, demandes: true,
     finances: true, carte: true, sla: true,
   },
+  Manager: {
+    dashboard: true, supervision: true, equipements: true, predictions: true,
+    base_connaissances: true, sav: true, planning: true, pieces: true,
+    reports: true, contrats: true, admin: true, settings: true, demandes: true,
+    finances: true, carte: true, sla: true,
+  },
   Technicien: {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: true,
@@ -117,7 +123,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const hasPermission = useCallback((page: string): boolean => {
     if (!user) return false;
-    if (user.role === 'Admin') return true;
     // Si les permissions sont vides → fallback sur les défauts du rôle
     const perms = Object.keys(permissions).length > 0
       ? permissions
