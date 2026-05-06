@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesAnnexes as typesAnnexesApi } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 // Tunisian cities for dropdown
@@ -204,16 +204,26 @@ export default function EquipementsPage() {
   const [customAnnexeTypes, setCustomAnnexeTypes] = useState<string[]>([]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
+  const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
-  // Types list based on domain + annexe state
+  // Types list based on domain + annexe state + custom types
   const availableTypes = useMemo(() => {
+    const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+    const customList = customTypesForDomain[domKey] || [];
+    let base: string[];
     if (form.Domaine === 'Radiologie' && form.EstAnnexe) {
-      return [...TYPES_ANNEXES_RADIOLOGIE, ...customAnnexeTypes.filter(t => !TYPES_ANNEXES_RADIOLOGIE.includes(t))];
+      base = [...TYPES_ANNEXES_RADIOLOGIE];
+    } else {
+      base = [...(TYPES_PAR_DOMAINE[form.Domaine] || TYPES_PAR_DOMAINE['Radiologie'])];
     }
-    return TYPES_PAR_DOMAINE[form.Domaine] || TYPES_PAR_DOMAINE['Radiologie'];
-  }, [form.Domaine, form.EstAnnexe, customAnnexeTypes]);
+    // Merge custom types (avoid duplicates)
+    for (const ct of customList) {
+      if (!base.includes(ct)) base.push(ct);
+    }
+    return base;
+  }, [form.Domaine, form.EstAnnexe, customTypesForDomain]);
 
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
   const dynamicTypes = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))], [data]);
@@ -307,10 +317,17 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
-  const loadCustomAnnexeTypes = useCallback(async () => {
+  const loadCustomTypes = useCallback(async () => {
     try {
-      const res = await typesAnnexesApi.list();
-      setCustomAnnexeTypes(res.map(t => t.nom));
+      const allDomaines = [...DOMAINES, '__annexe__'];
+      const results: Record<string, string[]> = {};
+      for (const d of allDomaines) {
+        const res = await typesEquipApi.list(d);
+        results[d] = res.map(t => t.nom);
+      }
+      setCustomTypesForDomain(results);
+      // Keep legacy state for backward compat
+      setCustomAnnexeTypes(results['__annexe__'] || []);
     } catch { /* ignore */ }
   }, []);
 
@@ -326,7 +343,7 @@ export default function EquipementsPage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); loadFabricants(); loadCustomAnnexeTypes(); }, [loadData, loadFabricants, loadCustomAnnexeTypes]);
+  useEffect(() => { loadData(); loadFabricants(); loadCustomTypes(); }, [loadData, loadFabricants, loadCustomTypes]);
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
 
   // Load clients
@@ -693,8 +710,9 @@ export default function EquipementsPage() {
                             onChange={e => setCustomTypeValue(e.target.value)} />
                           <button type="button" onClick={async () => {
                             if (customTypeValue.trim()) {
-                              await typesAnnexesApi.create(customTypeValue.trim());
-                              await loadCustomAnnexeTypes();
+                              const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                              await typesEquipApi.create(customTypeValue.trim(), domKey);
+                              await loadCustomTypes();
                               setForm({ ...form, Type: customTypeValue.trim() });
                             }
                             setCustomTypeMode(false); setCustomTypeValue('');
@@ -708,7 +726,7 @@ export default function EquipementsPage() {
                           else setForm({ ...form, Type: e.target.value });
                         }}>
                           {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                          {form.EstAnnexe && <option value="__autre_type__">+ Autre (saisie manuelle)</option>}
+                          <option value="__autre_type__">+ Autre (saisie manuelle)</option>
                         </select>
                       )}
                       {form.EstAnnexe && !customTypeMode && (

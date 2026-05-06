@@ -632,11 +632,13 @@ def init_db():
         )
         """)
 
-        # Custom annexe types table
+        # Custom equipment types table (per domain)
         conn.execute("""
-        CREATE TABLE IF NOT EXISTS types_annexes_custom (
+        CREATE TABLE IF NOT EXISTS types_equipement_custom (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT UNIQUE NOT NULL
+            nom TEXT NOT NULL,
+            domaine TEXT NOT NULL DEFAULT '',
+            UNIQUE(nom, domaine)
         )
         """)
 
@@ -1174,17 +1176,17 @@ def ajouter_fabricant(nom):
     return True
 
 
-def lire_types_annexes_custom():
-    """Retourne la liste des types annexes personnalisés."""
+def lire_types_equipement_custom(domaine=""):
+    """Retourne la liste des types d'équipement personnalisés pour un domaine."""
     with get_db() as conn:
-        rows = conn.execute("SELECT id, nom FROM types_annexes_custom ORDER BY nom").fetchall()
+        rows = conn.execute("SELECT id, nom, domaine FROM types_equipement_custom WHERE domaine = ? ORDER BY nom", (domaine,)).fetchall()
         return [dict(r) for r in rows]
 
 
-def ajouter_type_annexe_custom(nom):
-    """Ajoute un type annexe personnalisé. Ignore si déjà existant."""
+def ajouter_type_equipement_custom(nom, domaine=""):
+    """Ajoute un type d'équipement personnalisé. Ignore si déjà existant pour ce domaine."""
     with get_db() as conn:
-        conn.execute("INSERT OR IGNORE INTO types_annexes_custom (nom) VALUES (?)", (nom.strip(),))
+        conn.execute("INSERT OR IGNORE INTO types_equipement_custom (nom, domaine) VALUES (?, ?)", (nom.strip(), domaine))
     return True
 
 

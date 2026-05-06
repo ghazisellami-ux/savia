@@ -40,7 +40,7 @@ from db_engine import (
     lire_clients as db_lire_clients, ajouter_client, modifier_client, supprimer_client,
     migrer_clients_depuis_equipements,
     lire_fabricants, ajouter_fabricant,
-    lire_types_annexes_custom, ajouter_type_annexe_custom,
+    lire_types_equipement_custom, ajouter_type_equipement_custom,
 )
 
 logger = logging.getLogger("savia-api")
@@ -1049,17 +1049,18 @@ def post_fabricant(payload: dict = Body(...), user: dict = Depends(_verify_token
     return {"ok": True}
 
 
-@app.get("/api/types-annexes")
-def get_types_annexes(user: dict = Depends(_verify_token)):
-    return lire_types_annexes_custom()
+@app.get("/api/types-equipement-custom")
+def get_types_equipement_custom(domaine: str = Query(""), user: dict = Depends(_verify_token)):
+    return lire_types_equipement_custom(domaine)
 
 
-@app.post("/api/types-annexes")
-def post_type_annexe(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+@app.post("/api/types-equipement-custom")
+def post_type_equipement_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
     nom = payload.get("nom", "").strip()
+    domaine = payload.get("domaine", "").strip()
     if not nom:
         raise HTTPException(400, "Nom requis")
-    ajouter_type_annexe_custom(nom)
+    ajouter_type_equipement_custom(nom, domaine)
     return {"ok": True}
 
 

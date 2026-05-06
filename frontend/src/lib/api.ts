@@ -250,9 +250,9 @@ export const fabricants = {
   create: (nom: string) => request<{ ok: boolean }>('/api/fabricants', { method: 'POST', body: JSON.stringify({ nom }) }),
 };
 
-export const typesAnnexes = {
-  list: () => request<Array<{ id: number; nom: string }>>('/api/types-annexes'),
-  create: (nom: string) => request<{ ok: boolean }>('/api/types-annexes', { method: 'POST', body: JSON.stringify({ nom }) }),
+export const typesEquipement = {
+  list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
+  create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: JSON.stringify({ nom, domaine }) }),
 };
 
 export const admin = {
