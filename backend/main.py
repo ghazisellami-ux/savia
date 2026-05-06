@@ -3270,8 +3270,9 @@ class SaviaPDF(FPDF):
         savia_w = 0
         if self._savia_logo and os.path.exists(self._savia_logo):
             try:
-                self.image(self._savia_logo, x=8, y=y0, h=H - 4)
-                savia_w = 24
+                logo_h = (H - 4) * 0.4
+                self.image(self._savia_logo, x=8, y=y0 + (H - 4 - logo_h) / 2, h=logo_h)
+                savia_w = 12
             except Exception:
                 savia_w = 0
 
