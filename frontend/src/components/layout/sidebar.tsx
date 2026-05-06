@@ -144,7 +144,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
       {/* Logo + toggle */}
       <div className={clsx(
         'border-b border-savia-border flex items-center',
-        isCollapsed ? 'p-2 justify-center' : 'p-3'
+        isCollapsed ? 'p-4 justify-center' : 'p-6'
       )}>
         {!isCollapsed && (
           <div className="flex-1 flex flex-col items-center">
