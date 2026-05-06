@@ -228,8 +228,8 @@ export const knowledge = {
 
 export const clients = {
   list: () => request<Array<Record<string, unknown>>>('/api/clients'),
-  create: (data: Record<string, unknown>) => request<{ ok: boolean }>('/api/clients', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Record<string, unknown>) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  create: (data: Record<string, unknown>) => request<{ ok: boolean }>('/api/clients', { method: 'POST', body: data }),
+  update: (id: number, data: Record<string, unknown>) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
   importExcel: async (file: File) => {
     const fd = new FormData();
