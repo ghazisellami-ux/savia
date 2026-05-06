@@ -151,8 +151,8 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
             <Image
               src="/logo-savia.png"
               alt="SAVIA"
-              width={140}
-              height={45}
+              width={98}
+              height={32}
               priority
               unoptimized
               className="object-contain"
