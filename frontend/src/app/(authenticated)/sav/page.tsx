@@ -98,6 +98,28 @@ export default function SavPage() {
   const [form, setForm] = useState(emptyForm);
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_minutes: '' });
 
+  // Custom intervention types ("Autre" pattern)
+  const TYPES_INTERVENTION_BASE = ['Corrective', 'Préventive', 'Installation', 'Formation', 'Démo'];
+  const [customInterventionTypes, setCustomInterventionTypes] = useState<string[]>([]);
+  const [customTypeMode, setCustomTypeMode] = useState(false);
+  const [customTypeValue, setCustomTypeValue] = useState('');
+
+  // Load custom types from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('savia_custom_intervention_types');
+      if (saved) setCustomInterventionTypes(JSON.parse(saved));
+    } catch {}
+  }, []);
+
+  const allInterventionTypes = useMemo(() => {
+    const merged = [...TYPES_INTERVENTION_BASE];
+    for (const ct of customInterventionTypes) {
+      if (!merged.includes(ct)) merged.push(ct);
+    }
+    return merged;
+  }, [customInterventionTypes]);
+
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
   const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
@@ -1243,9 +1265,35 @@ export default function SavPage() {
             </div>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Type</label>
-            <select className={INPUT_CLS} value={form.type_intervention} onChange={e => setForm({...form, type_intervention: e.target.value})}>
-              <option>Corrective</option><option>Préventive</option><option>Installation</option>
-            </select></div>
+            {customTypeMode ? (
+              <div className="flex gap-2">
+                <input className={INPUT_CLS} placeholder="Saisir le type..." value={customTypeValue} onChange={e => setCustomTypeValue(e.target.value)} autoFocus />
+                <button type="button" onClick={() => {
+                  const val = customTypeValue.trim();
+                  if (val) {
+                    const updated = [...customInterventionTypes, val];
+                    setCustomInterventionTypes(updated);
+                    localStorage.setItem('savia_custom_intervention_types', JSON.stringify(updated));
+                    setForm({...form, type_intervention: val});
+                  }
+                  setCustomTypeMode(false);
+                  setCustomTypeValue('');
+                }} className="px-3 py-1 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer"><Check className="w-4 h-4" /></button>
+                <button type="button" onClick={() => { setCustomTypeMode(false); setCustomTypeValue(''); }} className="px-3 py-1 rounded-lg bg-savia-surface-hover text-savia-text-muted text-sm hover:opacity-90 cursor-pointer"><X className="w-4 h-4" /></button>
+              </div>
+            ) : (
+              <select className={INPUT_CLS} value={form.type_intervention} onChange={e => {
+                if (e.target.value === '__autre__') {
+                  setCustomTypeMode(true);
+                } else {
+                  setForm({...form, type_intervention: e.target.value});
+                }
+              }}>
+                {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                <option value="__autre__">✏️ Autre (saisie manuelle)</option>
+              </select>
+            )}
+          </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Zap className="w-3.5 h-3.5" /> Code erreur</label><input className={INPUT_CLS} placeholder="Ex: E147" value={form.code_erreur} onChange={e => setForm({...form, code_erreur: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Type erreur</label>
             <select className={INPUT_CLS} value={form.type_erreur} onChange={e => setForm({...form, type_erreur: e.target.value})}>
