@@ -11,7 +11,7 @@ import {
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
 
@@ -60,6 +60,7 @@ export default function SavPage() {
   const [allPieces, setAllPieces] = useState<any[]>([]);
   const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
   const [equipementsData, setEquipementsData] = useState<any[]>([]);
+  const [clientsData, setClientsData] = useState<any[]>([]);
   const [contratsData, setContratsData] = useState<any[]>([]);
   const [intervDetailItem, setIntervDetailItem] = useState<any>(null);
   const [lichboxId, setLightboxId] = useState<number | null>(null);
@@ -93,7 +94,7 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_minutes: '60', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_minutes: '60', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
   const [form, setForm] = useState(emptyForm);
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_minutes: '' });
 
@@ -163,6 +164,7 @@ export default function SavPage() {
     });
     // Charger équipements + contrats pour la fiche PDF
     equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
+    clientsApi.list().then((res: any) => setClientsData(res || [])).catch(() => {});
     contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
   }, []);
 
@@ -1175,7 +1177,20 @@ export default function SavPage() {
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Nouvelle Intervention" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Machine *</label><input className={INPUT_CLS} placeholder="Ex: Scanner GE" value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> Client *</label>
+            <select className={INPUT_CLS} value={form.client} onChange={e => setForm({...form, client: e.target.value, machine: ''})}>
+              <option value="">— Sélectionner un client —</option>
+              {clientsData.map((c: any) => <option key={c.id || c.nom} value={c.nom}>{c.nom}</option>)}
+            </select>
+          </div>
+          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Équipement *</label>
+            <select className={INPUT_CLS} value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} disabled={!form.client}>
+              <option value="">{form.client ? '— Sélectionner un équipement —' : '← Choisir un client d\'abord'}</option>
+              {equipementsData
+                .filter((eq: any) => (eq.Client || eq.client || '') === form.client)
+                .map((eq: any) => <option key={eq.id || eq.Nom || eq.nom} value={eq.Nom || eq.nom}>{eq.Nom || eq.nom}</option>)}
+            </select>
+          </div>
           <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Techniciens</label>
             {/* Chips */}
             {form.technicien && (
