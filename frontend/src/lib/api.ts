@@ -247,12 +247,12 @@ export const clients = {
 
 export const fabricants = {
   list: () => request<Array<{ id: number; nom: string }>>('/api/fabricants'),
-  create: (nom: string) => request<{ ok: boolean }>('/api/fabricants', { method: 'POST', body: JSON.stringify({ nom }) }),
+  create: (nom: string) => request<{ ok: boolean }>('/api/fabricants', { method: 'POST', body: { nom } }),
 };
 
 export const typesEquipement = {
   list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
-  create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: JSON.stringify({ nom, domaine }) }),
+  create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
 };
 
 export const admin = {

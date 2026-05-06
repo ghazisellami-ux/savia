@@ -625,22 +625,52 @@ def init_db():
         _safe_add_column("equipements", "service")
 
         # Fabricants table
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS fabricants (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT UNIQUE NOT NULL
-        )
-        """)
+        if USE_PG:
+            try:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS fabricants (
+                        id SERIAL PRIMARY KEY,
+                        nom TEXT UNIQUE NOT NULL
+                    )
+                """)
+                conn._conn.commit()
+            except Exception:
+                try: conn._conn.rollback()
+                except Exception: pass
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS fabricants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT UNIQUE NOT NULL
+            )
+            """)
 
         # Custom equipment types table (per domain)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS types_equipement_custom (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT NOT NULL,
-            domaine TEXT NOT NULL DEFAULT '',
-            UNIQUE(nom, domaine)
-        )
-        """)
+        if USE_PG:
+            try:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS types_equipement_custom (
+                        id SERIAL PRIMARY KEY,
+                        nom TEXT NOT NULL,
+                        domaine TEXT NOT NULL DEFAULT '',
+                        UNIQUE(nom, domaine)
+                    )
+                """)
+                conn._conn.commit()
+            except Exception:
+                try: conn._conn.rollback()
+                except Exception: pass
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS types_equipement_custom (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT NOT NULL,
+                domaine TEXT NOT NULL DEFAULT '',
+                UNIQUE(nom, domaine)
+            )
+            """)
 
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:

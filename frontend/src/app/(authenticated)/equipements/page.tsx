@@ -473,6 +473,7 @@ export default function EquipementsPage() {
 
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
+      setCustomTypeMode(false); setCustomTypeValue('');
       // Auto-save fabricant if new
       if (form.Fabricant.trim() && !fabricantsList.includes(form.Fabricant.trim())) {
         try { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); } catch {}
