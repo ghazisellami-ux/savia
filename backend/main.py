@@ -41,6 +41,7 @@ from db_engine import (
     migrer_clients_depuis_equipements,
     lire_fabricants, ajouter_fabricant,
     lire_types_equipement_custom, ajouter_type_equipement_custom,
+    lire_types_intervention_custom, ajouter_type_intervention_custom,
 )
 
 logger = logging.getLogger("savia-api")
@@ -1061,6 +1062,20 @@ def post_type_equipement_custom(payload: dict = Body(...), user: dict = Depends(
     if not nom:
         raise HTTPException(400, "Nom requis")
     ajouter_type_equipement_custom(nom, domaine)
+    return {"ok": True}
+
+
+@app.get("/api/types-intervention-custom")
+def get_types_intervention_custom(user: dict = Depends(_verify_token)):
+    return lire_types_intervention_custom()
+
+
+@app.post("/api/types-intervention-custom")
+def post_type_intervention_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    nom = payload.get("nom", "").strip()
+    if not nom:
+        raise HTTPException(400, "Nom requis")
+    ajouter_type_intervention_custom(nom)
     return {"ok": True}
 
 

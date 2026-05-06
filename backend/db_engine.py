@@ -672,6 +672,28 @@ def init_db():
             )
             """)
 
+        # Custom intervention types table
+        if USE_PG:
+            try:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS types_intervention_custom (
+                        id SERIAL PRIMARY KEY,
+                        nom TEXT UNIQUE NOT NULL
+                    )
+                """)
+                conn._conn.commit()
+            except Exception:
+                try: conn._conn.rollback()
+                except Exception: pass
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS types_intervention_custom (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT UNIQUE NOT NULL
+            )
+            """)
+
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
             try:
@@ -1217,6 +1239,25 @@ def ajouter_type_equipement_custom(nom, domaine=""):
     """Ajoute un type d'équipement personnalisé. Ignore si déjà existant pour ce domaine."""
     with get_db() as conn:
         conn.execute("INSERT OR IGNORE INTO types_equipement_custom (nom, domaine) VALUES (?, ?)", (nom.strip(), domaine))
+    return True
+
+
+def lire_types_intervention_custom():
+    """Retourne la liste des types d'intervention personnalisés."""
+    with get_db() as conn:
+        ph = "%s" if USE_PG else "?"
+        rows = conn.execute("SELECT id, nom FROM types_intervention_custom ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_type_intervention_custom(nom):
+    """Ajoute un type d'intervention personnalisé. Ignore si déjà existant."""
+    ph = "%s" if USE_PG else "?"
+    with get_db() as conn:
+        if USE_PG:
+            conn.execute(f"INSERT INTO types_intervention_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
+        else:
+            conn.execute(f"INSERT OR IGNORE INTO types_intervention_custom (nom) VALUES ({ph})", (nom.strip(),))
     return True
 
 

@@ -255,6 +255,11 @@ export const typesEquipement = {
   create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
 };
 
+export const typesIntervention = {
+  list: () => request<Array<{ id: number; nom: string }>>('/api/types-intervention-custom'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/types-intervention-custom', { method: 'POST', body: { nom } }),
+};
+
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
   createUser: (data: Record<string, unknown>) =>
@@ -317,4 +322,4 @@ export const sla = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention };

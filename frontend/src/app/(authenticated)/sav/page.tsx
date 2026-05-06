@@ -11,7 +11,7 @@ import {
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention } from '@/lib/api';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
 
@@ -104,12 +104,11 @@ export default function SavPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
 
-  // Load custom types from localStorage on mount
+  // Load custom types from database on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('savia_custom_intervention_types');
-      if (saved) setCustomInterventionTypes(JSON.parse(saved));
-    } catch {}
+    typesIntervention.list()
+      .then((res) => setCustomInterventionTypes(res.map(t => t.nom)))
+      .catch(() => {});
   }, []);
 
   const allInterventionTypes = useMemo(() => {
@@ -1268,13 +1267,14 @@ export default function SavPage() {
             {customTypeMode ? (
               <div className="flex gap-2">
                 <input className={INPUT_CLS} placeholder="Saisir le type..." value={customTypeValue} onChange={e => setCustomTypeValue(e.target.value)} autoFocus />
-                <button type="button" onClick={() => {
+                <button type="button" onClick={async () => {
                   const val = customTypeValue.trim();
                   if (val) {
-                    const updated = [...customInterventionTypes, val];
-                    setCustomInterventionTypes(updated);
-                    localStorage.setItem('savia_custom_intervention_types', JSON.stringify(updated));
-                    setForm({...form, type_intervention: val});
+                    try {
+                      await typesIntervention.create(val);
+                      setCustomInterventionTypes(prev => [...prev, val]);
+                      setForm({...form, type_intervention: val});
+                    } catch { /* ignore duplicate */ }
                   }
                   setCustomTypeMode(false);
                   setCustomTypeValue('');
