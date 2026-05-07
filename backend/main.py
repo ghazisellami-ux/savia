@@ -556,12 +556,6 @@ def _start_garantie_daemon():
         import datetime as _dt
         time.sleep(30)
         while True:
-            # sync_planning_to_interventions est idempotent → toujours exécuter
-            try:
-                sync_planning_to_interventions()
-            except Exception as e:
-                logger.error(f"Planning sync daemon error: {e}")
-
             # Les notifications Telegram ne doivent partir qu'une fois par jour
             if _already_ran_today():
                 logger.info("Notifications daemon: déjà exécuté aujourd'hui, skip (prochain cycle dans 1h)")
@@ -581,6 +575,12 @@ def _start_garantie_daemon():
                 wait_seconds = (target - now_local).total_seconds()
                 logger.info(f"Notifications daemon: en attente jusqu'à 08:30 ({int(wait_seconds)}s)")
                 time.sleep(max(wait_seconds, 0))
+
+            # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
+            try:
+                sync_planning_to_interventions()
+            except Exception as e:
+                logger.error(f"Planning sync daemon error: {e}")
 
             try:
                 check_garantie_expiry()
