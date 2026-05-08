@@ -3111,46 +3111,59 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
     if not data:
         raise HTTPException(status_code=400, detail="Aucune donnée d'analyse.")
 
+    # Find DejaVuSans font path
+    import glob
+    font_path = None
+    for p in glob.glob("/usr/share/fonts/**/DejaVuSans.ttf", recursive=True):
+        font_path = p
+        break
+    font_bold_path = None
+    for p in glob.glob("/usr/share/fonts/**/DejaVuSans-Bold.ttf", recursive=True):
+        font_bold_path = p
+        break
+
     class CostPDF(FPDF):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            if font_path:
+                self.add_font('dejavu', '', font_path)
+            if font_bold_path:
+                self.add_font('dejavu', 'B', font_bold_path)
+            self._fn = 'dejavu' if font_path else 'Helvetica'
+
         def header(self):
-            # Brand bar
-            self.set_fill_color(47, 65, 86)  # Navy #2F4156
+            self.set_fill_color(47, 65, 86)
             self.rect(0, 0, 210, 18, 'F')
-            self.set_font('Helvetica', 'B', 13)
+            self.set_font(self._fn, 'B', 13)
             self.set_text_color(255, 255, 255)
             self.set_y(4)
-            self.cell(0, 10, 'SAVIA — Analyse Financière IA', align='C')
+            self.cell(0, 10, 'SAVIA - Analyse Financiere IA', align='C')
             self.ln(16)
 
         def footer(self):
             self.set_y(-12)
-            self.set_font('Helvetica', '', 7)
+            self.set_font(self._fn, '', 7)
             self.set_text_color(150, 150, 150)
             from datetime import datetime
-            self.cell(0, 10, f'Généré le {datetime.now().strftime("%d/%m/%Y à %H:%M")} | SAVIA Maintenance — Confidentiel', align='C')
+            self.cell(0, 10, f'Genere le {datetime.now().strftime("%d/%m/%Y a %H:%M")} | SAVIA Maintenance', align='C')
 
         def section_card(self, title, content, color_rgb):
             r, g, b = color_rgb
-            # Colored left bar + light bg
-            x, y = self.get_x(), self.get_y()
-            if y > 260:
+            if self.get_y() > 255:
                 self.add_page()
-                y = self.get_y()
 
-            self.set_font('Helvetica', 'B', 9)
+            self.set_font(self._fn, 'B', 9)
             self.set_text_color(r, g, b)
-            self.cell(0, 6, title.upper(), ln=True)
+            self.cell(0, 6, title.upper(), new_x="LMARGIN", new_y="NEXT")
 
-            self.set_font('Helvetica', '', 8.5)
+            self.set_font(self._fn, '', 8.5)
             self.set_text_color(50, 50, 50)
-            # Handle bullet points
-            lines = (content or '—').split('\n')
+            lines = (content or '-').split('\n')
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                # Draw colored bar on the left
-                cx, cy = self.get_x(), self.get_y()
+                cy = self.get_y()
                 self.set_fill_color(r, g, b)
                 self.rect(10, cy, 1.5, 4.5, 'F')
                 self.set_x(14)
@@ -3162,14 +3175,14 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
     pdf.add_page()
 
     # KPIs summary bar
-    pdf.set_fill_color(238, 243, 246)  # Light grey
+    pdf.set_fill_color(238, 243, 246)
     pdf.rect(10, pdf.get_y(), 190, 14, 'F')
-    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_font(pdf._fn, 'B', 8)
     pdf.set_text_color(47, 65, 86)
     y0 = pdf.get_y() + 2
     kpi_items = [
         f"Revenu: {kpis.get('revenu_total', 0):,} TND".replace(',', ' '),
-        f"Coûts: {kpis.get('cout_total', 0):,} TND".replace(',', ' '),
+        f"Couts: {kpis.get('cout_total', 0):,} TND".replace(',', ' '),
         f"Marge: {kpis.get('marge_pct', 0)}%",
         f"Rentables: {kpis.get('nb_rentables', 0)}/{kpis.get('nb_clients', 0)}",
     ]
@@ -3179,19 +3192,19 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
     pdf.ln(16)
 
     # Title
-    pdf.set_font('Helvetica', 'B', 12)
+    pdf.set_font(pdf._fn, 'B', 12)
     pdf.set_text_color(47, 65, 86)
-    pdf.cell(0, 8, 'Résultat de l\'Analyse IA', ln=True)
+    pdf.cell(0, 8, "Resultat de l'Analyse IA", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(3)
 
     # Cards
     sections = [
-        ("Clients Coûteux", data.get("clients_couteux", ""), (239, 68, 68)),       # red
-        ("Causes Identifiées", data.get("causes", ""), (249, 115, 22)),             # orange
-        ("Optimisations Proposées", data.get("optimisations", ""), (22, 163, 74)),  # green
-        ("Analyse TCO — Coût Total de Possession", data.get("tco_analyse", ""), (13, 148, 136)),  # teal
-        ("Clients Performants", data.get("clients_performants", ""), (59, 130, 246)),  # blue
-        ("Recommandations Stratégiques", data.get("recommandations", ""), (139, 92, 246)),  # purple
+        ("Clients Couteux", data.get("clients_couteux", ""), (239, 68, 68)),
+        ("Causes Identifiees", data.get("causes", ""), (249, 115, 22)),
+        ("Optimisations Proposees", data.get("optimisations", ""), (22, 163, 74)),
+        ("Analyse TCO - Cout Total de Possession", data.get("tco_analyse", ""), (13, 148, 136)),
+        ("Clients Performants", data.get("clients_performants", ""), (59, 130, 246)),
+        ("Recommandations Strategiques", data.get("recommandations", ""), (139, 92, 246)),
     ]
     for title, content, color in sections:
         pdf.section_card(title, content, color)
@@ -3201,12 +3214,12 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
     conf = data.get("confiance", 0)
     if tags or conf:
         pdf.ln(2)
-        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_font(pdf._fn, 'B', 8)
         pdf.set_text_color(86, 124, 141)
         tag_str = '   '.join([f'[{t}]' for t in tags])
         if conf:
             tag_str += f'   [Confiance: {conf}%]'
-        pdf.cell(0, 5, tag_str, ln=True)
+        pdf.cell(0, 5, tag_str, new_x="LMARGIN", new_y="NEXT")
 
     buf = BytesIO()
     pdf.output(buf)
