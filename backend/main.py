@@ -1388,7 +1388,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         try:
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT machine, technicien, notes FROM interventions WHERE id = %s",
+                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = %s",
                     (intervention_id,)
                 ).fetchone()
             if row:
@@ -1464,6 +1464,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                         "equipement": machine,
                         "client": client,
                         "technicien": technicien,
+                        "probleme": row.get("probleme", "") if row else "",
                     })
                     # Notification gestionnaire
                     ajouter_notification_piece({
@@ -2034,11 +2035,14 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
             "intervention_id": d.get("intervention_id") or "",
             "equipement": d.get("equipement") or "",
             "client": d.get("client") or "",
+            "probleme": d.get("probleme") or "",
             "demande_id": int(d["id"]),
         })
 
     for tech, demandes in tech_map.items():
         machines = ", ".join(set(d["equipement"] for d in demandes if d["equipement"]))
+        clients = ", ".join(set(d["client"] for d in demandes if d.get("client")))
+        problemes = "; ".join(set(d["probleme"] for d in demandes if d.get("probleme")))
         inter_ids = ", ".join(f"#{d['intervention_id']}" for d in demandes if d.get("intervention_id"))
         nb = len(demandes)
         # Notification PWA → technicien
@@ -2048,6 +2052,7 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
             "piece_nom": nom_piece,
             "technicien": tech,
             "equipement": machines,
+            "client": clients,
             "message": (
                 f"✅ La pièce demandée {reference} ({nom_piece}) est maintenant disponible — "
                 f"{nb} intervention(s) en attente : {inter_ids or 'N/A'}"
@@ -2063,16 +2068,26 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
         all_machines = ", ".join(
             set(d["equipement"] for ds in tech_map.values() for d in ds if d.get("equipement"))
         ) or "N/A"
+        all_clients = ", ".join(
+            set(d["client"] for ds in tech_map.values() for d in ds if d.get("client"))
+        ) or "N/A"
+        all_problemes = "; ".join(
+            set(d["probleme"] for ds in tech_map.values() for d in ds if d.get("probleme"))
+        )
         all_inter_ids = ", ".join(
             f"#{d['intervention_id']}" for ds in tech_map.values() for d in ds if d.get("intervention_id")
         ) or "N/A"
+        client_line = f"\n👤 Client : <b>{all_clients}</b>" if all_clients != "N/A" else ""
+        probleme_line = f"\n🔧 Problème : {all_problemes}" if all_problemes else ""
         msg_tg = (
             f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
             f"🔩 Pièce : <b>{nom_piece}</b>\n"
             f"🏷 Référence : <b>{reference}</b>\n"
             f"📦 Stock actuel : <b>{stock}</b>\n\n"
             f"🔗 Intervention(s) : {all_inter_ids}\n"
-            f"🏥 Équipement(s) : {all_machines}\n"
+            f"🏥 Équipement(s) : {all_machines}"
+            f"{client_line}"
+            f"{probleme_line}\n"
             f"👷 Technicien(s) : {all_techs}\n"
             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
@@ -2120,6 +2135,9 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
             ref = demande.get("reference") or ""
             designation = demande.get("designation") or ref
             intervention_id = demande.get("intervention_id") or ""
+            client = demande.get("client") or ""
+            equipement = demande.get("equipement") or ""
+            probleme = demande.get("probleme") or ""
             if tech:
                 ajouter_notification_piece({
                     "type": "piece_dispo",
@@ -2127,16 +2145,24 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
                     "piece_nom": designation,
                     "technicien": tech,
                     "intervention_id": intervention_id,
+                    "equipement": equipement,
+                    "client": client,
                     "message": f"✅ La pièce demandée {ref} ({designation}) est maintenant disponible — intervention #{intervention_id}",
                     "source": "stock",
                     "destination": "technicien",
                 })
-                # Telegram
+                # Telegram avec détails complets
+                client_line = f"\n👤 Client : <b>{client}</b>" if client else ""
+                equip_line = f"\n🏥 Équipement : <b>{equipement}</b>" if equipement else ""
+                probleme_line = f"\n🔧 Problème : {probleme}" if probleme else ""
                 msg_tg = (
                     f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
                     f"🔩 Pièce : <b>{designation}</b>\n"
                     f"🏷 Référence : <b>{ref}</b>\n"
-                    f"🔗 Intervention : #{intervention_id}\n"
+                    f"🔗 Intervention : #{intervention_id}"
+                    f"{client_line}"
+                    f"{equip_line}"
+                    f"{probleme_line}\n"
                     f"👷 Technicien : {tech}\n"
                     f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )

@@ -816,11 +816,17 @@ def init_db():
             equipement TEXT DEFAULT '',
             client TEXT DEFAULT '',
             technicien TEXT DEFAULT '',
+            probleme TEXT DEFAULT '',
             statut TEXT DEFAULT 'en_attente',
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             date_resolution TIMESTAMP
         )
         """)
+        # Migration: ajouter colonne probleme si elle n'existe pas
+        try:
+            conn.execute("ALTER TABLE pieces_demandees ADD COLUMN IF NOT EXISTS probleme TEXT DEFAULT ''")
+        except Exception:
+            pass
 
         # --- Migration PII (Pillier 2: Privacy by Design) ---
         try:
@@ -1669,8 +1675,8 @@ def ajouter_piece_demandee(demande_dict):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO pieces_demandees
-            (reference, designation, intervention_id, equipement, client, technicien, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, 'en_attente')
+            (reference, designation, intervention_id, equipement, client, technicien, probleme, statut)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'en_attente')
         """, (
             demande_dict.get("reference", ""),
             demande_dict.get("designation", ""),
@@ -1678,6 +1684,7 @@ def ajouter_piece_demandee(demande_dict):
             demande_dict.get("equipement", ""),
             demande_dict.get("client", ""),
             demande_dict.get("technicien", ""),
+            demande_dict.get("probleme", ""),
         ))
     return True
 

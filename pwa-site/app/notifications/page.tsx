@@ -19,10 +19,11 @@ export default function NotificationsPage() {
 
   const markRead = async (id: number) => {
     await api.notifications.markRead(id).catch(() => {});
-    setNotifs(n => n.map(x => x.id === id ? { ...x, lue: true } : x));
+    setNotifs(n => n.map(x => x.id === id ? { ...x, statut: 'lu' } : x));
   };
 
-  const unread = notifs.filter(n => !n.lue).length;
+  const isRead = (n: any) => n.statut === 'lu' || n.statut === 'traite';
+  const unread = notifs.filter(n => !isRead(n)).length;
 
   const isRupture = (n: any) => n.type === 'piece_rupture';
   const isDispo = (n: any) => n.type === 'piece_dispo';
@@ -52,11 +53,11 @@ export default function NotificationsPage() {
             return (
               <div key={n.id} className="animate-fade-up"
                 style={{
-                  background: n.lue ? '#fff' : bgColor,
+                  background: isRead(n) ? '#fff' : bgColor,
                   border: '1px solid var(--border)',
-                  borderLeft: `4px solid ${n.lue ? 'var(--border)' : accentColor}`,
+                  borderLeft: `4px solid ${isRead(n) ? 'var(--border)' : accentColor}`,
                   borderRadius: 'var(--radius)', padding: '14px 16px',
-                  opacity: n.lue ? 0.6 : 1,
+                  opacity: isRead(n) ? 0.6 : 1,
                 }}>
 
                 {/* Header: badge type + date */}
@@ -119,13 +120,13 @@ export default function NotificationsPage() {
 
                 {/* Message (optional fallback) */}
                 {n.message && !(n.piece_nom || n.piece_reference) && (
-                  <p style={{ fontWeight: n.lue ? 400 : 600, color: 'var(--navy)', fontSize: '0.85rem', marginTop: '6px' }}>
+                  <p style={{ fontWeight: isRead(n) ? 400 : 600, color: 'var(--navy)', fontSize: '0.85rem', marginTop: '6px' }}>
                     {n.message}
                   </p>
                 )}
 
                 {/* Mark as read button */}
-                {!n.lue && (
+                {!isRead(n) && (
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
                     <button onClick={() => markRead(n.id)}
                       style={{ background: `${accentColor}15`, color: accentColor, border: `1px solid ${accentColor}30`, padding: '4px 14px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>

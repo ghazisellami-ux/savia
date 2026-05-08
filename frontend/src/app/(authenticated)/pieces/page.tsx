@@ -399,11 +399,18 @@ export default function PiecesPage() {
                 <button
                   onClick={() => {
                     setLinkedDemandeId(d.id);
+                    // Matcher le nom machine vers un type d'équipement connu
+                    const machineStr = (d.equipement || '').toLowerCase();
+                    const matchedType = TYPES_EQUIPEMENTS.find(t => {
+                      const keywords = t.toLowerCase().split(/[\s/]+/);
+                      return keywords.some(kw => kw.length >= 3 && machineStr.includes(kw));
+                    });
                     setForm({
                       ...emptyForm,
                       reference: d.reference || '',
                       designation: d.designation || '',
-                      equipement_type: d.equipement || emptyForm.equipement_type,
+                      equipement_type: matchedType || emptyForm.equipement_type,
+                      notes: d.equipement ? `Équipement: ${d.equipement}` : '',
                     });
                     setShowAddModal(true);
                   }}
