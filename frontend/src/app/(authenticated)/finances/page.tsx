@@ -38,7 +38,7 @@ export default function FinancesPage() {
   const [tab, setTab] = useState<'clients' | 'tco'>('clients');
   const [sortCol, setSortCol] = useState('marge');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [aiRecos, setAiRecos] = useState<string | null>(null);
+  const [aiRecos, setAiRecos] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
 
