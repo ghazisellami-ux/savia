@@ -3190,8 +3190,8 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
             if pdf.get_y() > 270:
                 pdf.add_page()
             cy = pdf.get_y()
-            # Small colored bullet dot
-            pdf.set_fill_color(r, g, b)
+            # Small black bullet dot
+            pdf.set_fill_color(50, 50, 50)
             pdf.ellipse(12, cy + 1.2, 2, 2, 'F')
             pdf.set_x(16)
             pdf.multi_cell(pdf.w - 28, 4.2, _sanitize(bullet))

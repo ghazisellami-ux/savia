@@ -287,10 +287,12 @@ export const ai = {
   analyzeCostsPdf: async (result: any, kpis: any) => {
     const token = localStorage.getItem('token');
     const base = process.env.NEXT_PUBLIC_API_URL || '';
+    const cn = localStorage.getItem('savia_company') || 'SAVIA';
+    const cl = localStorage.getItem('savia_logo') || '';
     const res = await fetch(`${base}/api/ai/analyze-costs/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ result, kpis }),
+      body: JSON.stringify({ result, kpis, company_name: cn, company_logo: cl }),
     });
     if (!res.ok) throw new Error('Erreur PDF');
     const blob = await res.blob();
