@@ -522,6 +522,117 @@ def check_facturation_reminders():
         return {'sav': 0, 'manager': 0}
 
 
+def check_sla_alerts():
+    """
+    Vérifie les interventions actives par rapport aux SLA des contrats :
+    - ⚠️ Bot SAV : alerte quand une intervention atteint 75% du SLA (zone danger)
+    - 🔴 Bot Manager : alerte quand une intervention dépasse le SLA du contrat
+    """
+    from datetime import datetime as _dt
+    try:
+        df_contrats = lire_contrats()
+        df_interv = lire_interventions()
+        df_equip = lire_equipements()
+
+        # Build client → SLA mapping from active contracts
+        client_sla = {}
+        if df_contrats is not None and not df_contrats.empty:
+            for _, c in df_contrats.iterrows():
+                cl = c.get("client", "")
+                sla_h = c.get("sla_temps_reponse_h", 24)
+                statut = str(c.get("statut", "")).lower()
+                if cl and "actif" in statut:
+                    if cl not in client_sla or sla_h < client_sla[cl]:
+                        client_sla[cl] = int(sla_h)
+
+        if not client_sla:
+            return  # No active contracts with SLA
+
+        # Build machine → client mapping
+        machine_client = {}
+        if df_equip is not None and not df_equip.empty:
+            for _, eq in df_equip.iterrows():
+                machine_client[eq.get("Nom", "")] = eq.get("Client", "")
+
+        now = _dt.now()
+        danger_items = []   # 75-100% SLA
+        breached_items = [] # >100% SLA
+
+        if df_interv is not None and not df_interv.empty:
+            active = df_interv[~df_interv["statut"].str.lower().str.contains("termin|clotur|clôtur", na=False)]
+            for _, interv in active.iterrows():
+                machine = interv.get("machine", "")
+                cl = machine_client.get(machine, "")
+                if cl not in client_sla:
+                    continue  # No SLA for this client
+
+                sla_h = client_sla[cl]
+                start_str = interv.get("date_debut_intervention") or interv.get("date", "")
+                try:
+                    start = pd.to_datetime(start_str)
+                    if pd.isna(start):
+                        continue
+                except Exception:
+                    continue
+
+                elapsed_h = round((now - start).total_seconds() / 3600, 1)
+                pct = round((elapsed_h / sla_h) * 100, 1) if sla_h > 0 else 100
+                remaining_h = round(sla_h - elapsed_h, 1)
+
+                item = {
+                    "id": interv.get("id"),
+                    "machine": machine,
+                    "client": cl,
+                    "technicien": interv.get("technicien", ""),
+                    "statut": interv.get("statut", ""),
+                    "sla_h": sla_h,
+                    "elapsed_h": elapsed_h,
+                    "remaining_h": remaining_h,
+                    "pct": pct,
+                }
+
+                if pct > 100:
+                    breached_items.append(item)
+                elif pct >= 75:
+                    danger_items.append(item)
+
+        # ⚠️ Bot SAV : zone danger (75-100%)
+        if danger_items:
+            lines = '\n'.join(
+                f"  ⚠️ <b>#{d['id']}</b> — {d['machine']}"
+                f"\n    👤 {d['client']} | 👷 {d['technicien'] or 'Non assigné'}"
+                f"\n    ⏱ {d['elapsed_h']}h / {d['sla_h']}h ({d['pct']}%) — reste {max(0, d['remaining_h'])}h"
+                for d in sorted(danger_items, key=lambda x: -x['pct'])
+            )
+            msg = (
+                f"⚠️ <b>ALERTE SLA — Zone Danger</b>\n"
+                f"<i>{len(danger_items)} intervention(s) approchent le délai SLA :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {now.strftime('%d/%m/%Y %H:%M')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            logger.info(f"SLA danger alerts: {len(danger_items)} envoyée(s) au bot SAV")
+
+        # 🔴 Bot Manager : dépassement SLA
+        if breached_items:
+            lines = '\n'.join(
+                f"  🔴 <b>#{b['id']}</b> — {b['machine']}"
+                f"\n    👤 {b['client']} | 👷 {b['technicien'] or 'Non assigné'}"
+                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {round(b['elapsed_h'] - b['sla_h'], 1)}h</b>"
+                for b in sorted(breached_items, key=lambda x: -x['pct'])
+            )
+            msg = (
+                f"🔴 <b>ALERTE SLA — DÉPASSEMENT</b>\n"
+                f"<i>{len(breached_items)} intervention(s) dépassent le délai contractuel :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {now.strftime('%d/%m/%Y %H:%M')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"SLA breach alerts: {len(breached_items)} envoyée(s) au bot Manager")
+
+    except Exception as e:
+        logger.error(f"check_sla_alerts error: {e}")
+
 
 def _start_garantie_daemon():
     """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
@@ -603,12 +714,16 @@ def _start_garantie_daemon():
                 check_facturation_reminders()
             except Exception as e:
                 logger.error(f"Facturation reminders daemon error: {e}")
+            try:
+                check_sla_alerts()
+            except Exception as e:
+                logger.error(f"SLA alerts daemon error: {e}")
 
             _mark_ran_today()
             logger.info("Notifications daemon: cycle terminé, prochain dans 1h")
             time.sleep(3600)  # Vérifier toutes les heures (mais skip si déjà fait aujourd'hui)
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation, 1x/jour)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA, 1x/jour)")
 
 
 def check_contrat_expiry():
