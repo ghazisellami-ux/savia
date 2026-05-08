@@ -2987,6 +2987,127 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 
 
 # ==========================================
+# AI CHATBOT — Assistant conversationnel
+# ==========================================
+
+@app.post("/api/ai/chat")
+def ai_chat(body: dict, user: dict = Depends(_verify_token)):
+    """Assistant IA conversationnel — répond aux questions en langage naturel sur les données SAVIA."""
+    from datetime import date, timedelta
+    try:
+        from ai_engine import _call_ia, AI_AVAILABLE
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
+
+    message = body.get("message", "").strip()
+    history = body.get("history", [])
+    if not message:
+        raise HTTPException(status_code=400, detail="Message vide.")
+
+    # ── Aggregate compact data context ──
+    today = date.today()
+    ctx_parts = []
+    try:
+        df_interv = lire_interventions()
+        if not df_interv.empty:
+            total = len(df_interv)
+            by_statut = df_interv['statut'].value_counts().to_dict() if 'statut' in df_interv.columns else {}
+            by_type = df_interv['type_intervention'].value_counts().head(5).to_dict() if 'type_intervention' in df_interv.columns else {}
+            by_tech = df_interv['technicien'].value_counts().head(5).to_dict() if 'technicien' in df_interv.columns else {}
+            by_machine = df_interv['machine'].value_counts().head(5).to_dict() if 'machine' in df_interv.columns else {}
+            by_client = df_interv['client'].value_counts().head(5).to_dict() if 'client' in df_interv.columns else {}
+            # This month
+            mois = 0
+            if 'date' in df_interv.columns:
+                month_str = today.strftime('%Y-%m')
+                mois = int(df_interv['date'].astype(str).str[:7].eq(month_str).sum())
+            ctx_parts.append(f"INTERVENTIONS: {total} total, {mois} ce mois. Statuts: {by_statut}. Types(top5): {by_type}. Techniciens(top5): {by_tech}. Machines(top5): {by_machine}. Clients(top5): {by_client}.")
+    except Exception:
+        pass
+    try:
+        df_equip = lire_equipements()
+        if not df_equip.empty:
+            n = len(df_equip)
+            by_dom = df_equip['domaine'].value_counts().to_dict() if 'domaine' in df_equip.columns else {}
+            by_st = df_equip['Statut'].value_counts().to_dict() if 'Statut' in df_equip.columns else {}
+            by_cl = df_equip['Client'].value_counts().head(5).to_dict() if 'Client' in df_equip.columns else {}
+            ctx_parts.append(f"EQUIPEMENTS: {n} total. Domaines: {by_dom}. Statuts: {by_st}. Clients(top5): {by_cl}.")
+    except Exception:
+        pass
+    try:
+        df_pieces = lire_pieces()
+        if not df_pieces.empty:
+            n = len(df_pieces)
+            rupture = []
+            if 'stock_actuel' in df_pieces.columns and 'stock_minimum' in df_pieces.columns:
+                low = df_pieces[df_pieces['stock_actuel'] <= df_pieces['stock_minimum']]
+                rupture = low['nom'].head(5).tolist() if 'nom' in low.columns else []
+            ctx_parts.append(f"PIECES: {n} références. En rupture/stock bas: {rupture if rupture else 'aucune'}.")
+    except Exception:
+        pass
+    try:
+        df_plan = lire_planning()
+        if not df_plan.empty:
+            upcoming = df_plan[df_plan['date_prevue'].astype(str).str[:10] >= str(today)]
+            n_upcoming = len(upcoming) if not upcoming.empty else 0
+            ctx_parts.append(f"PLANNING: {n_upcoming} maintenances à venir.")
+    except Exception:
+        pass
+    try:
+        df_contrats = lire_contrats()
+        if not df_contrats.empty:
+            n = len(df_contrats)
+            ctx_parts.append(f"CONTRATS: {n} contrats.")
+    except Exception:
+        pass
+
+    data_context = "\n".join(ctx_parts) if ctx_parts else "Données non disponibles."
+
+    # ── Build conversation ──
+    hist_text = ""
+    for h in history[-6:]:
+        role = "Utilisateur" if h.get("role") == "user" else "Assistant"
+        hist_text += f"{role}: {h.get('content','')}\n"
+
+    prompt = f"""Tu es SAVIA Assistant, l'assistant IA intelligent de la plateforme SAVIA de gestion de maintenance d'équipements médicaux.
+
+RÔLE: Tu aides les responsables techniques, managers et techniciens à comprendre leurs données, prendre des décisions et obtenir des insights sur leur parc d'équipements.
+
+DONNÉES EN TEMPS RÉEL DE LA PLATEFORME:
+{data_context}
+
+DATE DU JOUR: {today.strftime('%d/%m/%Y')}
+
+RÈGLES:
+- Réponds en français, de manière concise et professionnelle
+- Utilise les données ci-dessus pour répondre avec des chiffres précis
+- Si la question ne concerne pas les données, réponds quand même de manière utile (conseils maintenance, bonnes pratiques...)
+- Formate ta réponse en texte simple (pas de markdown complexe), utilise des puces • pour les listes
+- À la fin de ta réponse, sur une ligne séparée commençant par SUGGESTIONS:, propose 2-3 questions de suivi pertinentes séparées par |
+
+{f"HISTORIQUE DE CONVERSATION:{chr(10)}{hist_text}" if hist_text else ""}
+
+QUESTION DE L'UTILISATEUR: {message}"""
+
+    raw = _call_ia(prompt, timeout=60)
+    if not raw:
+        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
+
+    # Parse suggestions from response
+    response_text = raw.strip()
+    suggestions = []
+    if "SUGGESTIONS:" in response_text:
+        parts = response_text.split("SUGGESTIONS:")
+        response_text = parts[0].strip()
+        if len(parts) > 1:
+            suggestions = [s.strip() for s in parts[1].strip().split("|") if s.strip()]
+
+    return {"response": response_text, "suggestions": suggestions[:3]}
+
+
+# ==========================================
 # ADMIN — Utilisateurs
 # ==========================================
 

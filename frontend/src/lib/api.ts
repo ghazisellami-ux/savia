@@ -280,6 +280,8 @@ export const ai = {
     request<{ok: boolean, result: any}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
   analyzePieces: (pieces: any[], sym: string = "TND") =>
     request<{ok: boolean, result: any}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
+  chat: (message: string, history: Array<{role: string, content: string}> = []) =>
+    request<{response: string, suggestions: string[]}>('/api/ai/chat', { method: 'POST', body: { message, history } }),
 };
 
 // --- Logs / S3 ---
