@@ -55,6 +55,8 @@ export default function PiecesPage() {
   const [feedbackSuccess, setFeedbackSuccess] = useState('');
   const [notifData, setNotifData] = useState<any[]>([]);
   const [notifCount, setNotifCount] = useState(0);
+  const [editDomaineFilter, setEditDomaineFilter] = useState('');
+  const [editTypeFilter, setEditTypeFilter] = useState('');
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -467,9 +469,31 @@ export default function PiecesPage() {
       )}
 
       {/* TAB 2: MODIFIER / SUPPRIMER */}
-      {activeTab === 2 && (
+      {activeTab === 2 && (() => {
+        const editFiltered = filtered.filter(p => {
+          if (editDomaineFilter && (p as any).domaine !== editDomaineFilter) return false;
+          if (editTypeFilter && p.equipement_type !== editTypeFilter) return false;
+          return true;
+        });
+        const availableTypes = editDomaineFilter
+          ? (DOMAINES_TYPES[editDomaineFilter] || [])
+          : [...new Set(filtered.map(p => p.equipement_type).filter(Boolean))].sort();
+        return (
         <div className="space-y-3">
-          {filtered.map(p => {
+          <div className="flex gap-3 flex-wrap">
+            <select value={editDomaineFilter} onChange={e => { setEditDomaineFilter(e.target.value); setEditTypeFilter(''); }}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Tous domaines</option>
+              {ALL_DOMAINES.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select value={editTypeFilter} onChange={e => setEditTypeFilter(e.target.value)}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Tous types équipement</option>
+              {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <span className="flex items-center text-xs text-savia-text-muted ml-auto">{editFiltered.length} pièce(s)</span>
+          </div>
+          {editFiltered.map(p => {
             const isLow = p.stock_actuel <= p.stock_minimum;
             return (
               <div key={p.id} className={`glass rounded-xl p-4 border ${isLow ? 'border-red-500/20' : 'border-savia-border/30'}`}>
@@ -513,7 +537,8 @@ export default function PiecesPage() {
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* TAB 3: PRÉDICTIONS IA */}
       {activeTab === 3 && (
