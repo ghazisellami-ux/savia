@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
-import { Bell, BellOff, Loader2, Check } from 'lucide-react';
+import { Bell, BellOff, Loader2, Check, Package, AlertTriangle, Wrench, User, Building2, Hash } from 'lucide-react';
 
 export default function NotificationsPage() {
   const router = useRouter();
@@ -24,6 +24,9 @@ export default function NotificationsPage() {
 
   const unread = notifs.filter(n => !n.lue).length;
 
+  const isRupture = (n: any) => n.type === 'piece_rupture';
+  const isDispo = (n: any) => n.type === 'piece_dispo';
+
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)' }}>
       <Header notifCount={unread} />
@@ -39,33 +42,100 @@ export default function NotificationsPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {notifs.map(n => (
-            <div key={n.id} className="animate-fade-up"
-              style={{
-                background: '#fff', border: '1px solid var(--border)',
-                borderLeft: n.lue ? '4px solid var(--border)' : '4px solid var(--teal)',
-                borderRadius: 'var(--radius)', padding: '14px 16px',
-                opacity: n.lue ? 0.65 : 1,
-              }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontWeight: n.lue ? 400 : 700, color: 'var(--navy)', fontSize: '0.9rem', marginBottom: '4px' }}>
-                    {n.message || n.titre || n.contenu}
-                  </p>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    {n.date_envoi ? new Date(n.date_envoi).toLocaleString('fr-FR') : ''}
-                  </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {notifs.map(n => {
+            const rupture = isRupture(n);
+            const dispo = isDispo(n);
+            const accentColor = rupture ? '#e67e22' : dispo ? '#27ae60' : 'var(--teal)';
+            const bgColor = rupture ? 'rgba(230,126,34,0.06)' : dispo ? 'rgba(39,174,96,0.06)' : '#fff';
+
+            return (
+              <div key={n.id} className="animate-fade-up"
+                style={{
+                  background: n.lue ? '#fff' : bgColor,
+                  border: '1px solid var(--border)',
+                  borderLeft: `4px solid ${n.lue ? 'var(--border)' : accentColor}`,
+                  borderRadius: 'var(--radius)', padding: '14px 16px',
+                  opacity: n.lue ? 0.6 : 1,
+                }}>
+
+                {/* Header: badge type + date */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '4px',
+                    fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '12px',
+                    background: rupture ? 'rgba(230,126,34,0.15)' : 'rgba(39,174,96,0.15)',
+                    color: accentColor,
+                  }}>
+                    {rupture ? <><AlertTriangle style={{ width: 11, height: 11 }} /> Rupture de stock</> : <><Package style={{ width: 11, height: 11 }} /> Pièce disponible</>}
+                  </span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                    {n.date_creation ? new Date(n.date_creation).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
                 </div>
+
+                {/* Piece info */}
+                {(n.piece_nom || n.piece_reference) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                    <Package style={{ width: 14, height: 14, color: accentColor, flexShrink: 0 }} />
+                    <span style={{ fontWeight: 700, color: 'var(--navy)', fontSize: '0.9rem' }}>{n.piece_nom || n.piece_reference}</span>
+                    {n.piece_reference && n.piece_nom && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'monospace', background: 'rgba(0,0,0,0.04)', padding: '1px 6px', borderRadius: '4px' }}>{n.piece_reference}</span>
+                    )}
+                  </div>
+                )}
+
+                {/* Detail grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.78rem', color: 'var(--navy)' }}>
+                  {n.intervention_id && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Hash style={{ width: 12, height: 12, color: 'var(--teal)' }} />
+                      <span style={{ color: 'var(--text-dim)' }}>Intervention</span>
+                      <span style={{ fontWeight: 600 }}>#{n.intervention_id}</span>
+                    </div>
+                  )}
+                  {n.equipement && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Wrench style={{ width: 12, height: 12, color: 'var(--teal)' }} />
+                      <span style={{ color: 'var(--text-dim)' }}>Équip.</span>
+                      <span style={{ fontWeight: 600 }}>{n.equipement}</span>
+                    </div>
+                  )}
+                  {n.client && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Building2 style={{ width: 12, height: 12, color: 'var(--teal)' }} />
+                      <span style={{ color: 'var(--text-dim)' }}>Client</span>
+                      <span style={{ fontWeight: 600 }}>{n.client}</span>
+                    </div>
+                  )}
+                  {n.technicien && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <User style={{ width: 12, height: 12, color: 'var(--teal)' }} />
+                      <span style={{ color: 'var(--text-dim)' }}>Tech.</span>
+                      <span style={{ fontWeight: 600 }}>{n.technicien}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Message (optional fallback) */}
+                {n.message && !(n.piece_nom || n.piece_reference) && (
+                  <p style={{ fontWeight: n.lue ? 400 : 600, color: 'var(--navy)', fontSize: '0.85rem', marginTop: '6px' }}>
+                    {n.message}
+                  </p>
+                )}
+
+                {/* Mark as read button */}
                 {!n.lue && (
-                  <button onClick={() => markRead(n.id)}
-                    style={{ marginLeft: '12px', background: 'rgba(86,124,141,0.12)', color: 'var(--teal)', border: 'none', padding: '4px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Check style={{ width: 12, height: 12 }} /> Lu
-                  </button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                    <button onClick={() => markRead(n.id)}
+                      style={{ background: `${accentColor}15`, color: accentColor, border: `1px solid ${accentColor}30`, padding: '4px 14px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Check style={{ width: 12, height: 12 }} /> Marquer comme lu
+                    </button>
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </main>
       <BottomNav notifCount={unread} />

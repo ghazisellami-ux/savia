@@ -90,6 +90,6 @@ export const api = {
   // Notifications
   notifications: {
     list: () => req<any[]>('/api/notifications'),
-    markRead: (id: number) => req<any>(`/api/notifications/${id}/read`, { method: 'PUT' }),
+    markRead: (id: number) => req<any>(`/api/notifications/${id}/read`, { method: 'PATCH' }),
   },
 };
