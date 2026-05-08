@@ -1991,18 +1991,16 @@ def _normalize_ref(ref: str) -> str:
 
 
 def _refs_match(ref1: str, ref2: str) -> bool:
-    """Vérifie si deux références correspondent (matching flou)."""
+    """Vérifie si deux références correspondent (matching strict normalisé).
+    Normalise en supprimant tirets, espaces, points, underscores et compare en minuscule.
+    Ex: PS-XR400 == PSXR400 == ps xr 400  ✅
+    Ex: XR400 != PS-XR400  ❌ (pas de matching partiel pour éviter les faux positifs)
+    """
     n1 = _normalize_ref(ref1)
     n2 = _normalize_ref(ref2)
     if not n1 or not n2:
         return False
-    # Exact match après normalisation
-    if n1 == n2:
-        return True
-    # L'une contient l'autre (pour les cas PS-XR400 vs XR400)
-    if n1 in n2 or n2 in n1:
-        return len(min(n1, n2, key=len)) >= 3  # au moins 3 caractères communs
-    return False
+    return n1 == n2
 
 
 def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: int):
