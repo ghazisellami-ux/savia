@@ -42,6 +42,26 @@ export default function FinancesPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
 
+  // Helper: render AI text with bullet points as styled list
+  const formatBullets = (text: string) => {
+    if (!text) return <span className="text-savia-text-muted">—</span>;
+    // Split by bullet marker (•) and filter empty
+    const parts = text.split('•').map(s => s.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      return <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{text}</p>;
+    }
+    return (
+      <ul className="space-y-1.5 text-sm text-savia-text leading-relaxed">
+        {parts.map((pt, i) => (
+          <li key={i} className="flex gap-2 items-start">
+            <span className="mt-1 w-1.5 h-1.5 rounded-full bg-current opacity-40 shrink-0" />
+            <span>{pt}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -276,14 +296,14 @@ export default function FinancesPage() {
                 <h3 className="text-xs font-black uppercase tracking-wider text-red-500 flex items-center gap-1.5 mb-2">
                   <AlertTriangle className="w-3.5 h-3.5" /> Clients Coûteux
                 </h3>
-                <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.clients_couteux || '—'}</p>
+                {formatBullets(aiRecos.clients_couteux)}
               </div>
               {/* Causes */}
               <div className="glass rounded-xl p-5 border-l-4 border-orange-400">
                 <h3 className="text-xs font-black uppercase tracking-wider text-orange-500 flex items-center gap-1.5 mb-2">
                   <TrendingDown className="w-3.5 h-3.5" /> Causes Identifiées
                 </h3>
-                <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.causes || '—'}</p>
+                {formatBullets(aiRecos.causes)}
               </div>
             </div>
 
@@ -292,7 +312,7 @@ export default function FinancesPage() {
               <h3 className="text-xs font-black uppercase tracking-wider text-green-600 flex items-center gap-1.5 mb-2">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Optimisations Proposées
               </h3>
-              <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.optimisations || '—'}</p>
+              {formatBullets(aiRecos.optimisations)}
             </div>
 
             {/* Row 2b: TCO full width */}
@@ -300,7 +320,7 @@ export default function FinancesPage() {
               <h3 className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5 mb-2" style={{ color: '#0d9488' }}>
                 <Cpu className="w-3.5 h-3.5" /> Analyse TCO — Coût Total de Possession
               </h3>
-              <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.tco_analyse || '—'}</p>
+              {formatBullets(aiRecos.tco_analyse)}
             </div>
 
             {/* Row 3: 2 cards */}
@@ -310,14 +330,14 @@ export default function FinancesPage() {
                 <h3 className="text-xs font-black uppercase tracking-wider text-blue-500 flex items-center gap-1.5 mb-2">
                   <TrendingUp className="w-3.5 h-3.5" /> Clients Performants
                 </h3>
-                <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.clients_performants || '—'}</p>
+                {formatBullets(aiRecos.clients_performants)}
               </div>
               {/* Recommandations */}
               <div className="glass rounded-xl p-5 border-l-4 border-purple-400">
                 <h3 className="text-xs font-black uppercase tracking-wider text-purple-500 flex items-center gap-1.5 mb-2">
                   <Brain className="w-3.5 h-3.5" /> Recommandations Stratégiques
                 </h3>
-                <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.recommandations || '—'}</p>
+                {formatBullets(aiRecos.recommandations)}
               </div>
             </div>
 

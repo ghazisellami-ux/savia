@@ -3101,125 +3101,133 @@ IMPORTANT: Sois un consultant expert. Chaque section doit faire 4-8 lignes avec 
 
 @app.post("/api/ai/analyze-costs/pdf")
 def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
-    """Génère un PDF à partir du résultat d'analyse IA des coûts."""
-    from fpdf import FPDF
+    """Genere un PDF a partir du resultat d'analyse IA des couts."""
     from io import BytesIO
     from starlette.responses import StreamingResponse
+    import base64 as _b64
+    import urllib.request as _ur
 
     data = body.get("result", {})
     kpis = body.get("kpis", {})
+    company_name = body.get("company_name", "")
+    company_logo = body.get("company_logo", "")
     if not data:
-        raise HTTPException(status_code=400, detail="Aucune donnée d'analyse.")
+        raise HTTPException(status_code=400, detail="Aucune donnee d'analyse.")
 
-    # Find DejaVuSans font path
-    import glob
-    font_path = None
-    for p in glob.glob("/usr/share/fonts/**/DejaVuSans.ttf", recursive=True):
-        font_path = p
-        break
-    font_bold_path = None
-    for p in glob.glob("/usr/share/fonts/**/DejaVuSans-Bold.ttf", recursive=True):
-        font_bold_path = p
-        break
+    SAVIA_LOGO = "/app/logo-savia.png"
 
-    class CostPDF(FPDF):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, **kw)
-            if font_path:
-                self.add_font('dejavu', '', font_path)
-            if font_bold_path:
-                self.add_font('dejavu', 'B', font_bold_path)
-            self._fn = 'dejavu' if font_path else 'Helvetica'
+    # Client logo
+    _client_logo_io = None
+    if company_logo:
+        try:
+            clogo = company_logo.strip()
+            if clogo.startswith("data:"):
+                _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
+                _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
+            elif clogo.startswith("http"):
+                req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
+                with _ur.urlopen(req_, timeout=6) as _r:
+                    _client_logo_io = BytesIO(_r.read())
+        except Exception:
+            pass
 
-        def header(self):
-            self.set_fill_color(47, 65, 86)
-            self.rect(0, 0, 210, 18, 'F')
-            self.set_font(self._fn, 'B', 13)
-            self.set_text_color(255, 255, 255)
-            self.set_y(4)
-            self.cell(0, 10, 'SAVIA - Analyse Financiere IA', align='C')
-            self.ln(16)
-
-        def footer(self):
-            self.set_y(-12)
-            self.set_font(self._fn, '', 7)
-            self.set_text_color(150, 150, 150)
-            from datetime import datetime
-            self.cell(0, 10, f'Genere le {datetime.now().strftime("%d/%m/%Y a %H:%M")} | SAVIA Maintenance', align='C')
-
-        def section_card(self, title, content, color_rgb):
-            r, g, b = color_rgb
-            if self.get_y() > 255:
-                self.add_page()
-
-            self.set_font(self._fn, 'B', 9)
-            self.set_text_color(r, g, b)
-            self.cell(0, 6, title.upper(), new_x="LMARGIN", new_y="NEXT")
-
-            self.set_font(self._fn, '', 8.5)
-            self.set_text_color(50, 50, 50)
-            lines = (content or '-').split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                cy = self.get_y()
-                self.set_fill_color(r, g, b)
-                self.rect(10, cy, 1.5, 4.5, 'F')
-                self.set_x(14)
-                self.multi_cell(180, 4.5, line)
-            self.ln(4)
-
-    pdf = CostPDF('P', 'mm', 'A4')
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf = SaviaPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_header_data(
+        SAVIA_LOGO, _client_logo_io,
+        company_name if company_name and company_name != "SAVIA" else "",
+        "",
+        report_title="ANALYSE FINANCIERE IA"
+    )
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_top_margin(pdf.HEADER_H + 10)
     pdf.add_page()
 
     # KPIs summary bar
+    ky = pdf.get_y() + 2
     pdf.set_fill_color(238, 243, 246)
-    pdf.rect(10, pdf.get_y(), 190, 14, 'F')
-    pdf.set_font(pdf._fn, 'B', 8)
+    pdf.rect(8, ky, pdf.w - 16, 12, 'F')
+    pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(47, 65, 86)
-    y0 = pdf.get_y() + 2
     kpi_items = [
-        f"Revenu: {kpis.get('revenu_total', 0):,} TND".replace(',', ' '),
-        f"Couts: {kpis.get('cout_total', 0):,} TND".replace(',', ' '),
+        f"Revenu: {_fmt_number(kpis.get('revenu_total', 0))} TND",
+        f"Couts: {_fmt_number(kpis.get('cout_total', 0))} TND",
         f"Marge: {kpis.get('marge_pct', 0)}%",
         f"Rentables: {kpis.get('nb_rentables', 0)}/{kpis.get('nb_clients', 0)}",
     ]
-    pdf.set_y(y0)
-    pdf.set_x(12)
-    pdf.cell(0, 5, '   |   '.join(kpi_items))
+    pdf.set_xy(10, ky + 2)
+    pdf.cell(pdf.w - 20, 8, _sanitize("   |   ".join(kpi_items)), align="C")
     pdf.ln(16)
 
-    # Title
-    pdf.set_font(pdf._fn, 'B', 12)
-    pdf.set_text_color(47, 65, 86)
-    pdf.cell(0, 8, "Resultat de l'Analyse IA", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(3)
+    # Section card renderer with bullet support
+    def render_card(title, content, color_rgb):
+        r, g, b = color_rgb
+        W = pdf.w - 20  # usable width
 
-    # Cards
-    sections = [
-        ("Clients Couteux", data.get("clients_couteux", ""), (239, 68, 68)),
-        ("Causes Identifiees", data.get("causes", ""), (249, 115, 22)),
+        if pdf.get_y() > 250:
+            pdf.add_page()
+
+        # Colored section header
+        pdf.set_fill_color(r, g, b)
+        pdf.rect(10, pdf.get_y(), W, 7, 'F')
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_x(12)
+        pdf.cell(W - 4, 7, _sanitize(title.upper()), new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(1)
+
+        # Content: split by bullet markers
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(50, 50, 50)
+        raw = content or "-"
+        bullets = [b.strip() for b in raw.replace('\n', ' ').split(chr(0x2022)) if b.strip()]
+        if not bullets:
+            bullets = [b.strip() for b in raw.split('\n') if b.strip()]
+
+        for bullet in bullets:
+            if not bullet:
+                continue
+            if pdf.get_y() > 270:
+                pdf.add_page()
+            cy = pdf.get_y()
+            # Small colored bullet dot
+            pdf.set_fill_color(r, g, b)
+            pdf.ellipse(12, cy + 1.2, 2, 2, 'F')
+            pdf.set_x(16)
+            pdf.multi_cell(pdf.w - 28, 4.2, _sanitize(bullet))
+            pdf.ln(0.8)
+
+        pdf.ln(3)
+
+    # Render all cards
+    cards = [
+        ("Clients Couteux", data.get("clients_couteux", ""), (220, 53, 53)),
+        ("Causes Identifiees", data.get("causes", ""), (234, 88, 12)),
         ("Optimisations Proposees", data.get("optimisations", ""), (22, 163, 74)),
         ("Analyse TCO - Cout Total de Possession", data.get("tco_analyse", ""), (13, 148, 136)),
-        ("Clients Performants", data.get("clients_performants", ""), (59, 130, 246)),
-        ("Recommandations Strategiques", data.get("recommandations", ""), (139, 92, 246)),
+        ("Clients Performants", data.get("clients_performants", ""), (37, 99, 235)),
+        ("Recommandations Strategiques", data.get("recommandations", ""), (124, 58, 237)),
     ]
-    for title, content, color in sections:
-        pdf.section_card(title, content, color)
+    for title, content, color in cards:
+        render_card(title, content, color)
 
-    # Tags
+    # Tags & confidence
     tags = data.get("tags", [])
     conf = data.get("confiance", 0)
     if tags or conf:
         pdf.ln(2)
-        pdf.set_font(pdf._fn, 'B', 8)
+        pdf.set_font("Helvetica", "B", 7.5)
         pdf.set_text_color(86, 124, 141)
-        tag_str = '   '.join([f'[{t}]' for t in tags])
+        tag_parts = [f"[{_sanitize(t)}]" for t in tags]
         if conf:
-            tag_str += f'   [Confiance: {conf}%]'
-        pdf.cell(0, 5, tag_str, new_x="LMARGIN", new_y="NEXT")
+            tag_parts.append(f"[Confiance: {conf}%]")
+        pdf.cell(0, 5, "   ".join(tag_parts), new_x="LMARGIN", new_y="NEXT")
+
+    # Footer info
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 4, _sanitize(f"Genere le {datetime.now().strftime('%d/%m/%Y a %H:%M')} | SAVIA Maintenance - Confidentiel"), align="C")
 
     buf = BytesIO()
     pdf.output(buf)
