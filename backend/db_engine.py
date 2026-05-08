@@ -806,6 +806,22 @@ def init_db():
         )
         """)
 
+        # Table Pièces demandées (non référencées) par les techniciens
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS pieces_demandees (
+            id SERIAL PRIMARY KEY,
+            reference TEXT NOT NULL,
+            designation TEXT NOT NULL DEFAULT '',
+            intervention_id INTEGER,
+            equipement TEXT DEFAULT '',
+            client TEXT DEFAULT '',
+            technicien TEXT DEFAULT '',
+            statut TEXT DEFAULT 'en_attente',
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            date_resolution TIMESTAMP
+        )
+        """)
+
         # --- Migration PII (Pillier 2: Privacy by Design) ---
         try:
             # Transférer nom_complet et email de utilisateurs vers user_pii
@@ -1642,6 +1658,50 @@ def notifications_rupture_pour_piece(piece_reference):
             "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = %s AND statut != 'traite'",
             conn, params=(piece_reference,)
         )
+
+
+# ==========================================
+# FONCTIONS CRUD — PIÈCES DEMANDÉES (NON RÉFÉRENCÉES)
+# ==========================================
+
+def ajouter_piece_demandee(demande_dict):
+    """Ajoute une demande de pièce non référencée."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO pieces_demandees
+            (reference, designation, intervention_id, equipement, client, technicien, statut)
+            VALUES (%s, %s, %s, %s, %s, %s, 'en_attente')
+        """, (
+            demande_dict.get("reference", ""),
+            demande_dict.get("designation", ""),
+            demande_dict.get("intervention_id"),
+            demande_dict.get("equipement", ""),
+            demande_dict.get("client", ""),
+            demande_dict.get("technicien", ""),
+        ))
+    return True
+
+
+def lire_pieces_demandees_en_attente(reference=None):
+    """Lit les demandes de pièces en attente, optionnellement filtrées par référence (ILIKE)."""
+    query = "SELECT * FROM pieces_demandees WHERE statut = 'en_attente'"
+    params = []
+    if reference:
+        query += " AND LOWER(reference) = LOWER(%s)"
+        params.append(reference)
+    query += " ORDER BY date_creation DESC"
+    with get_db() as conn:
+        return read_sql(query, conn, params=params)
+
+
+def resoudre_piece_demandee(demande_id):
+    """Marque une demande de pièce comme disponible."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE pieces_demandees SET statut = 'disponible', date_resolution = CURRENT_TIMESTAMP WHERE id = %s",
+            (demande_id,)
+        )
+    return True
 
 
 # ==========================================

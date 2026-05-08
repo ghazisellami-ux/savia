@@ -59,6 +59,8 @@ export default function SavPage() {
   const [fiches, setFiches] = useState<any[]>([]);
   const [allPieces, setAllPieces] = useState<any[]>([]);
   const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
+  const [manualPieces, setManualPieces] = useState<{reference: string; designation: string}[]>([]); // pièces non référencées
+  const [manualPieceForm, setManualPieceForm] = useState({reference: '', designation: ''});
   const [equipementsData, setEquipementsData] = useState<any[]>([]);
   const [clientsData, setClientsData] = useState<any[]>([]);
   const [contratsData, setContratsData] = useState<any[]>([]);
@@ -228,6 +230,10 @@ export default function SavPage() {
           designation: p.designation || p.nom || '',
           ref: p.reference || '',
         }));
+        // Pièces non référencées (saisie libre)
+        if (manualPieces.length > 0) {
+          payload.pieces_manuelles = manualPieces;
+        }
       }
       await interventions.update(selectedIntervention.id, payload);
       // Upload fiche photo si clôture + fichier sélectionné
@@ -240,6 +246,8 @@ export default function SavPage() {
       }
       setFicheFile(null);
       setRupturePieces([]);
+      setManualPieces([]);
+      setManualPieceForm({reference: '', designation: ''});
       setShowStatusModal(false);
       setSelectedIntervention(null);
       await loadData();
@@ -1321,6 +1329,7 @@ export default function SavPage() {
             <select className={INPUT_CLS} value={statusForm.statut} onChange={e => {
               setStatusForm({...statusForm, statut: e.target.value});
               setRupturePieces([]); // reset pièces sélectionnées si on change de statut
+              setManualPieces([]); setManualPieceForm({reference: '', designation: ''});
             }}>
               <option>En cours</option>
               <option>En attente de pièce</option>
@@ -1375,6 +1384,62 @@ export default function SavPage() {
               </div>
             );
           })()}
+          {statusForm.statut === 'En attente de pièce' && (
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+                <label className="block text-sm font-semibold text-blue-400 mb-2 flex items-center gap-1.5">
+                  <span>🆕</span> Demander une pièce non référencée
+                  <span className="text-xs font-normal text-savia-text-muted ml-1">(saisir manuellement)</span>
+                </label>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="text"
+                    placeholder="Référence (ex: PS-XR400)"
+                    className={INPUT_CLS + " flex-1 text-sm"}
+                    value={manualPieceForm.reference}
+                    onChange={e => setManualPieceForm(prev => ({...prev, reference: e.target.value}))}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Désignation (ex: Carte alimentation)"
+                    className={INPUT_CLS + " flex-1 text-sm"}
+                    value={manualPieceForm.designation}
+                    onChange={e => setManualPieceForm(prev => ({...prev, designation: e.target.value}))}
+                  />
+                  <button
+                    type="button"
+                    disabled={!manualPieceForm.reference.trim()}
+                    onClick={() => {
+                      if (manualPieceForm.reference.trim()) {
+                        setManualPieces(prev => [...prev, {reference: manualPieceForm.reference.trim(), designation: manualPieceForm.designation.trim() || manualPieceForm.reference.trim()}]);
+                        setManualPieceForm({reference: '', designation: ''});
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-blue-500 hover:bg-blue-600 disabled:opacity-40 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    + Ajouter
+                  </button>
+                </div>
+                {manualPieces.length > 0 && (
+                  <div className="space-y-1 mt-2">
+                    {manualPieces.map((mp, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-blue-500/15 border border-blue-500/30 rounded-lg px-3 py-1.5">
+                        <span className="text-sm text-savia-text flex-1">
+                          <span className="font-bold">{mp.reference}</span> — {mp.designation}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setManualPieces(prev => prev.filter((_, i) => i !== idx))}
+                          className="text-red-400 hover:text-red-300 text-xs cursor-pointer"
+                        >✕</button>
+                      </div>
+                    ))}
+                    <div className="text-xs text-blue-300 font-medium mt-1">
+                      📨 {manualPieces.length} pièce(s) non référencée(s) → demande envoyée au gestionnaire + notification dès disponibilité
+                    </div>
+                  </div>
+                )}
+              </div>
+          )}
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Problème identifié</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.probleme} onChange={e => setStatusForm({...statusForm, probleme: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>

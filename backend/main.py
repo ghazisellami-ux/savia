@@ -29,6 +29,7 @@ from db_engine import (
     lire_pieces, ajouter_piece, modifier_piece, supprimer_piece,
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
+    ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee,
     lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
@@ -1446,6 +1447,59 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         except Exception as ne:
             logger.error(f"Erreur création notif rupture: {ne}")
 
+        # ── Pièces manuelles (non référencées dans le stock) ──
+        pieces_manuelles = body.get("pieces_manuelles") or []
+        if pieces_manuelles:
+            try:
+                for pm in pieces_manuelles:
+                    ref = pm.get("reference") or ""
+                    designation = pm.get("designation") or ref
+                    if not ref:
+                        continue
+                    # Enregistrer la demande
+                    ajouter_piece_demandee({
+                        "reference": ref,
+                        "designation": designation,
+                        "intervention_id": intervention_id,
+                        "equipement": machine,
+                        "client": client,
+                        "technicien": technicien,
+                    })
+                    # Notification gestionnaire
+                    ajouter_notification_piece({
+                        "type": "piece_rupture",
+                        "intervention_id": intervention_id,
+                        "piece_reference": ref,
+                        "piece_nom": designation,
+                        "intervention_ref": f"#{intervention_id}",
+                        "equipement": machine,
+                        "client": client,
+                        "technicien": technicien,
+                        "message": f"🆕 Pièce non référencée demandée: {ref} ({designation}) "
+                                   f"pour intervention #{intervention_id} sur {machine}",
+                        "source": "sav",
+                        "destination": "gestionnaire",
+                    })
+                    logger.info(f"Demande pièce manuelle créée: {ref} pour intervention #{intervention_id}")
+
+                # Telegram pour pièces manuelles
+                pm_list = [f"  • {p.get('reference','')} — {p.get('designation','')}" for p in pieces_manuelles if p.get("reference")]
+                if pm_list:
+                    client_line_m = f"\n👤 Client : <b>{client}</b>" if client else ""
+                    msg_tg_m = (
+                        f"🆕 <b>DEMANDE PIÈCE NON RÉFÉRENCÉE — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>"
+                        f"{client_line_m}\n"
+                        f"👷 Technicien : <b>{technicien}</b>\n"
+                        f"🔩 Pièces demandées :\n" + "\n".join(pm_list) + "\n\n"
+                        f"⚠️ Ces pièces ne sont pas dans le stock — à commander\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram_bot("telegram_stock", msg_tg_m)
+                    _send_telegram_bot("telegram", msg_tg_m)
+            except Exception as pe:
+                logger.error(f"Erreur pièces manuelles: {pe}")
+
     if new_statut:
         update_intervention_statut(intervention_id, new_statut)
     # Update other fields
@@ -1930,9 +1984,94 @@ def get_pieces(user: dict = Depends(_verify_token)):
     return _df_to_records(lire_pieces())
 
 
+def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: int):
+    """Vérifie si des demandes de pièces en attente correspondent à cette référence.
+    Si oui, envoie notifications PWA + Telegram et marque les demandes comme résolues."""
+    df_demandes = lire_pieces_demandees_en_attente(reference=reference)
+    if df_demandes.empty:
+        return
+
+    # Grouper par technicien
+    tech_map: dict = {}
+    for _, d in df_demandes.iterrows():
+        t = d.get("technicien") or "inconnu"
+        if t not in tech_map:
+            tech_map[t] = []
+        tech_map[t].append({
+            "intervention_id": d.get("intervention_id") or "",
+            "equipement": d.get("equipement") or "",
+            "client": d.get("client") or "",
+            "demande_id": int(d["id"]),
+        })
+
+    for tech, demandes in tech_map.items():
+        machines = ", ".join(set(d["equipement"] for d in demandes if d["equipement"]))
+        inter_ids = ", ".join(f"#{d['intervention_id']}" for d in demandes if d.get("intervention_id"))
+        nb = len(demandes)
+        # Notification PWA → technicien
+        ajouter_notification_piece({
+            "type": "piece_dispo",
+            "piece_reference": reference,
+            "piece_nom": nom_piece,
+            "technicien": tech,
+            "equipement": machines,
+            "message": (
+                f"✅ La pièce demandée {reference} ({nom_piece}) est maintenant disponible — "
+                f"{nb} intervention(s) en attente : {inter_ids or 'N/A'}"
+            ),
+            "source": "stock",
+            "destination": "technicien",
+        })
+        logger.info(f"Notif pièce demandée disponible pour {tech}: {reference}")
+
+    # Telegram : pièce demandée disponible
+    try:
+        all_techs = ", ".join(tech_map.keys()) or "N/A"
+        all_machines = ", ".join(
+            set(d["equipement"] for ds in tech_map.values() for d in ds if d.get("equipement"))
+        ) or "N/A"
+        all_inter_ids = ", ".join(
+            f"#{d['intervention_id']}" for ds in tech_map.values() for d in ds if d.get("intervention_id")
+        ) or "N/A"
+        msg_tg = (
+            f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
+            f"🔩 Pièce : <b>{nom_piece}</b>\n"
+            f"🏷 Référence : <b>{reference}</b>\n"
+            f"📦 Stock actuel : <b>{stock}</b>\n\n"
+            f"🔗 Intervention(s) : {all_inter_ids}\n"
+            f"🏥 Équipement(s) : {all_machines}\n"
+            f"👷 Technicien(s) : {all_techs}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        _send_telegram_bot("telegram_stock", msg_tg)
+        _send_telegram_bot("telegram", msg_tg)
+        logger.info(f"Telegram pièce demandée disponible envoyé: {reference}")
+    except Exception as tg_err:
+        logger.error(f"Telegram pièce demandée dispo erreur: {tg_err}")
+
+    # Marquer les demandes comme résolues
+    for ds in tech_map.values():
+        for d in ds:
+            try:
+                resoudre_piece_demandee(d["demande_id"])
+            except Exception:
+                pass
+
+
 @app.post("/api/pieces")
 def create_piece(body: dict, user: dict = Depends(_verify_token)):
     ajouter_piece(body)
+
+    # Vérifier si cette pièce était demandée par un technicien (non référencée)
+    reference = body.get("reference", "")
+    stock = int(body.get("stock_actuel", 0) or 0)
+    nom_piece = body.get("designation", "") or reference
+    if reference and stock > 0:
+        try:
+            _check_pieces_demandees_disponibles(reference, nom_piece, stock)
+        except Exception as e:
+            logger.error(f"Erreur check pièces demandées (POST): {e}")
+
     return {"ok": True}
 
 
@@ -2031,6 +2170,13 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
         except Exception as ne:
             logger.error(f"Erreur notif réappro pièce {piece_id}: {ne}")
 
+    # Vérifier aussi les pièces demandées manuellement (non référencées)
+    if nouveau_stock is not None and reference:
+        try:
+            if int(nouveau_stock) > 0:
+                _check_pieces_demandees_disponibles(reference, nom_piece, int(nouveau_stock))
+        except Exception as e:
+            logger.error(f"Erreur check pièces demandées (PUT): {e}")
 
     return {"ok": True}
 
