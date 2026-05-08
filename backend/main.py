@@ -887,8 +887,11 @@ def get_dashboard_kpis(
 
         # Disponibilité = % équipements opérationnels
         dispo = 100.0
-        if not df_eq.empty and "Statut" in df_eq.columns:
-            op = len(df_eq[~df_eq["Statut"].isin(["Hors Service", "Critique"])])
+        statut_col = "Statut" if "Statut" in df_eq.columns else ("statut" if "statut" in df_eq.columns else None)
+        if not df_eq.empty and statut_col:
+            # Exclure tous les équipements non opérationnels (En panne, Hors Service, Critique, etc.)
+            non_op_statuts = {"en panne", "hors service", "critique", "arrêt", "arret"}
+            op = len(df_eq[~df_eq[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
             dispo = round((op / nb_eq) * 100, 1) if nb_eq > 0 else 100
 
         # MTBF approximation
