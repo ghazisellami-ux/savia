@@ -260,6 +260,9 @@ export default function EquipementsPage() {
   const emptyClientForm = { nom: '', code_client: '', matricule_fiscale: '', ville: '', region: '', contact: '', telephone: '', adresse: '', type_client: 'Privé', international: false as boolean };
   const [clientForm, setClientForm] = useState(emptyClientForm);
   const [clientSearch, setClientSearch] = useState('');
+  const [clientTypeFilter, setClientTypeFilter] = useState('');
+  const [clientRegionFilter, setClientRegionFilter] = useState('');
+  const [clientVilleFilter, setClientVilleFilter] = useState('');
   const [savingClient, setSavingClient] = useState(false);
   const [importingExcel, setImportingExcel] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
@@ -1194,11 +1197,34 @@ export default function EquipementsPage() {
             </div>
           )}
 
-          {/* Client Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
-            <input type="text" placeholder="Rechercher un client..." value={clientSearch} onChange={e => setClientSearch(e.target.value)}
-              className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
+          {/* Client Search + Filters */}
+          <div className="flex gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+              <input type="text" placeholder="Rechercher un client..." value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+                className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
+            </div>
+            <select value={clientTypeFilter} onChange={e => setClientTypeFilter(e.target.value)}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Tous les types</option>
+              {[...new Set(clientsList.map(c => c.type_client).filter(Boolean))].sort().map(t =>
+                <option key={t} value={t}>{t === 'Public' ? '🏛️' : '🏢'} {t}</option>
+              )}
+            </select>
+            <select value={clientRegionFilter} onChange={e => { setClientRegionFilter(e.target.value); setClientVilleFilter(''); }}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Toutes régions</option>
+              <option value="Nord">🔵 Nord</option>
+              <option value="Centre">🟢 Centre</option>
+              <option value="Sud">🟠 Sud</option>
+            </select>
+            <select value={clientVilleFilter} onChange={e => setClientVilleFilter(e.target.value)}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Toutes villes</option>
+              {[...new Set(clientsList.filter(c => !clientRegionFilter || c.region === clientRegionFilter).map(c => c.ville).filter(Boolean))].sort().map(v =>
+                <option key={v} value={v}>📍 {v}</option>
+              )}
+            </select>
           </div>
 
           {/* Client Cards */}
@@ -1206,7 +1232,13 @@ export default function EquipementsPage() {
             <div className="flex justify-center items-center h-32"><Loader2 className="w-6 h-6 animate-spin text-savia-accent" /></div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {clientsList.filter(c => !clientSearch || c.nom.toLowerCase().includes(clientSearch.toLowerCase())).map(c => (
+              {clientsList.filter(c => {
+                if (clientSearch && !c.nom.toLowerCase().includes(clientSearch.toLowerCase())) return false;
+                if (clientTypeFilter && c.type_client !== clientTypeFilter) return false;
+                if (clientRegionFilter && c.region !== clientRegionFilter) return false;
+                if (clientVilleFilter && c.ville !== clientVilleFilter) return false;
+                return true;
+              }).map(c => (
                 <div key={c.id} className="glass rounded-xl p-5 hover:border-savia-accent/30 transition-all group">
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-start gap-3">
