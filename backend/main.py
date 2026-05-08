@@ -2094,7 +2094,6 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
             f"👷 Technicien(s) : {all_techs}\n"
             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
-        _send_telegram_bot("telegram_stock", msg_tg)
         _send_telegram_bot("telegram", msg_tg)
         logger.info(f"Telegram pièce demandée disponible envoyé: {reference}")
     except Exception as tg_err:
@@ -2169,7 +2168,6 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
                     f"👷 Technicien : {tech}\n"
                     f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
-                _send_telegram_bot("telegram_stock", msg_tg)
                 _send_telegram_bot("telegram", msg_tg)
         
         return {"ok": True}
