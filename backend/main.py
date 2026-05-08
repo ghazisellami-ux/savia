@@ -3825,6 +3825,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     col_w = [total_w / n_cols] * n_cols
                 # Header row
                 pdf.set_font("Helvetica", "B", 7.5)
+                pdf.set_draw_color(1, 180, 188)
                 pdf.set_fill_color(1, 180, 188)
                 pdf.set_text_color(255, 255, 255)
                 for i, h in enumerate(tbl_head):
@@ -3875,6 +3876,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             else:
                 col_w = [total_w / n_cols] * n_cols
             pdf.set_font("Helvetica", "B", 8)
+            pdf.set_draw_color(1, 180, 188)
             pdf.set_fill_color(1, 180, 188)
             pdf.set_text_color(255, 255, 255)
             for i, h in enumerate(data.head):
