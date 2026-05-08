@@ -198,7 +198,7 @@ def check_garantie_expiry():
 
 def check_planning_reminder():
     """
-    Vérifie les maintenances préventives planifiées dans les 7 prochains jours
+    Vérifie les maintenances préventives planifiées dans les 14 prochains jours
     et envoie un rappel Telegram pour chacune.
     """
     from datetime import date, timedelta
@@ -207,7 +207,7 @@ def check_planning_reminder():
         if df is None or df.empty:
             return []
         today = date.today()
-        alert_limit = today + timedelta(days=7)
+        alert_limit = today + timedelta(days=14)
         reminders = []
         for _, row in df.iterrows():
             statut = str(row.get('statut', '') or '').strip()
@@ -243,7 +243,7 @@ def check_planning_reminder():
             )
             msg = (
                 f"🔧 <b>Rappel Maintenance Préventive</b>\n"
-                f"<i>{len(reminders)} maintenance(s) dans les 7 prochains jours :</i>\n\n"
+                f"<i>{len(reminders)} maintenance(s) dans les 14 prochains jours :</i>\n\n"
                 f"{lines}\n\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
