@@ -171,6 +171,8 @@ export default function EquipementsPage() {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
+  const [filterDomaine, setFilterDomaine] = useState('Tous');
+  const [filterStatut, setFilterStatut] = useState('Tous');
   const [showAddForm, setShowAddForm] = useState(false);
   const [data, setData] = useState<Equipment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -227,6 +229,8 @@ export default function EquipementsPage() {
 
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
   const dynamicTypes = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))], [data]);
+  const dynamicDomaines = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.domaine).filter(Boolean)))], [data]);
+  const dynamicStatuts = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.statut).filter(Boolean)))], [data]);
 
   const matriculeClientMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -539,10 +543,12 @@ export default function EquipementsPage() {
     if (isLecteur && user?.client && eq.client !== user.client) return false;
     if (filterType !== 'Tous' && eq.type !== filterType) return false;
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
+    if (filterDomaine !== 'Tous' && eq.domaine !== filterDomaine) return false;
+    if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
     if (search && !eq.nom.toLowerCase().includes(search.toLowerCase()) &&
         !eq.numSerie.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [search, filterType, filterClient, data, isLecteur, user]);
+  }), [search, filterType, filterClient, filterDomaine, filterStatut, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
     if (docFilterEquip !== 'Tous' && doc.equipement_nom !== docFilterEquip) return false;
@@ -955,8 +961,14 @@ export default function EquipementsPage() {
                 onChange={e => setSearch(e.target.value)}
                 className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
+            <select value={filterDomaine} onChange={e => setFilterDomaine(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {dynamicDomaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
+            </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
+            </select>
+            <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {dynamicStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
             </select>
             {!isLecteur && (
               <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
