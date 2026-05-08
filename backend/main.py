@@ -3815,10 +3815,12 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.cell(0, 7, _sanitize(str(tbl_title)), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
                 n_cols = len(tbl_head)
                 total_w = page_w - 20
-                # Equal distribution: each column gets the same width
-                # Exception: 2-col tables use 38%/62% (label/value)
+                # Smart column width distribution
                 if n_cols == 2:
                     col_w = [total_w * 0.38, total_w * 0.62]
+                elif n_cols == 7:
+                    # Optimized for SAV: Date(12%), Machine(18%), Client(18%), Technicien(18%), Type(12%), Statut(12%), Durée(10%)
+                    col_w = [total_w * p for p in [0.12, 0.18, 0.18, 0.18, 0.12, 0.12, 0.10]]
                 else:
                     col_w = [total_w / n_cols] * n_cols
                 # Header row
@@ -3844,8 +3846,11 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                     pdf.set_fill_color(244, 252, 251) if fill else pdf.set_fill_color(255, 255, 255)
                     pdf.set_text_color(25, 35, 55)
                     for i, cell in enumerate(row[:n_cols]):
-                        val_s = _sanitize(str(cell)[:45]) if cell is not None else "-"
-                        align = "R" if i == n_cols - 1 else "L"
+                        # Dynamically truncate based on column width (~2.5mm per char at 7.5pt)
+                        max_chars = max(5, int(col_w[i] / 2.3))
+                        raw = str(cell) if cell is not None else "-"
+                        val_s = _sanitize(raw[:max_chars])
+                        align = "C" if i >= n_cols - 3 else "L"
                         pdf.cell(col_w[i], 6.5, val_s, border=1, fill=fill, align=align)
                     pdf.ln()
                 pdf.ln(4)

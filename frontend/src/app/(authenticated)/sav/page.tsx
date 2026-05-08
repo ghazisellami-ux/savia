@@ -367,7 +367,7 @@ export default function SavPage() {
         ],
         tables: [{
           title: 'Détail des interventions',
-          head: ['Date', 'Machine', 'Client', 'Technicien', 'Type', 'Statut', 'Durée', 'Coût (TND)'],
+          head: ['Date', 'Machine', 'Client', 'Technicien', 'Type', 'Statut', 'Durée'],
           rows: pdfFiltered.map(i => [
             i.date.substring(0, 10),
             i.machine || '-',
@@ -376,7 +376,6 @@ export default function SavPage() {
             i.type    || '-',
             i.statut  || '-',
             (i.duree  || 0) + 'h',
-            (i.cout   || i.coutPieces || 0).toLocaleString('fr'),
           ]),
         }],
       };
