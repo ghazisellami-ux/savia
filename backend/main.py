@@ -2341,7 +2341,8 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
                     f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
                     f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
                 )
-                _send_telegram(msg)
+                _send_telegram_bot("telegram_sav", msg)
+                _send_telegram_bot("telegram_manager", msg)
         except Exception as e:
             logger.error(f"Erreur génération planning pour contrat #{contrat_id}: {e}")
     return {"ok": True, "contrat_id": contrat_id, "nb_plannings": nb_plannings}
