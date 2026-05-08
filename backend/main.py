@@ -3211,18 +3211,6 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
     for title, content, color in cards:
         render_card(title, content, color)
 
-    # Tags & confidence
-    tags = data.get("tags", [])
-    conf = data.get("confiance", 0)
-    if tags or conf:
-        pdf.ln(2)
-        pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_text_color(86, 124, 141)
-        tag_parts = [f"[{_sanitize(t)}]" for t in tags]
-        if conf:
-            tag_parts.append(f"[Confiance: {conf}%]")
-        pdf.cell(0, 5, "   ".join(tag_parts), new_x="LMARGIN", new_y="NEXT")
-
     # Footer info
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 7)
