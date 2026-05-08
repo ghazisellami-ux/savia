@@ -2994,7 +2994,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
     """Analyse IA structurée des coûts clients — retourne des cartes comme le diagnostic IA."""
     try:
-        from ai_engine import _call_ia, AI_AVAILABLE
+        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     if not AI_AVAILABLE:
