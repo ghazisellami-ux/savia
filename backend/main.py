@@ -3005,6 +3005,13 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
     if not clients_data:
         raise HTTPException(status_code=400, detail="Aucune donnée client.")
 
+    # ── Fetch TCO data server-side ──
+    tco_data = []
+    try:
+        tco_data = finances_tco(client=None, user=user)
+    except Exception:
+        pass
+
     # Build compact summary
     avg_cout = sum(c.get('cout_total', 0) for c in clients_data) / max(len(clients_data), 1)
     client_lines = []
@@ -3029,6 +3036,26 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
         )
     summary = "\n".join(client_lines)
 
+    # ── TCO summary (top 15 by cost) ──
+    tco_summary = ""
+    if tco_data:
+        top_tco = sorted(tco_data, key=lambda x: x.get('tco_total', 0), reverse=True)[:15]
+        tco_total_global = sum(t.get('tco_total', 0) for t in tco_data)
+        tco_lines = []
+        for t in top_tco:
+            age_ans = round(t.get('age_jours', 0) / 365, 1)
+            tco_lines.append(
+                f"  {t.get('equipement','?')} ({t.get('client','')}): "
+                f"TCO={t.get('tco_total',0)} TND, "
+                f"pièces={t.get('cout_pieces',0)} TND, MO={t.get('cout_main_oeuvre',0)} TND, interv={t.get('cout_interventions',0)} TND, "
+                f"nb_interv={t.get('nb_interventions',0)} (corr={t.get('nb_correctives',0)}/prev={t.get('nb_preventives',0)}), "
+                f"âge={age_ans}ans, TCO/mois={t.get('tco_mensuel',0)} TND"
+            )
+        tco_summary = f"""
+═══ TCO — TOTAL COST OF OWNERSHIP (Top 15 équipements) ═══
+TCO global parc: {round(tco_total_global)} TND | Nb équipements: {len(tco_data)} | TCO moyen/équipement: {round(tco_total_global/max(len(tco_data),1))} TND
+{chr(10).join(tco_lines)}"""
+
     prompt = f"""Tu es un expert en gestion financière de maintenance biomédicale (GMAO). Analyse ces données financières SAVIA en profondeur.
 
 ═══ INDICATEURS GLOBAUX ═══
@@ -3042,6 +3069,7 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
 
 ═══ DONNÉES DÉTAILLÉES PAR CLIENT ═══
 {summary}
+{tco_summary}
 
 ═══ CONSIGNES D'ANALYSE ═══
 Retourne UNIQUEMENT un JSON valide avec cette structure exacte:
@@ -3054,9 +3082,11 @@ Retourne UNIQUEMENT un JSON valide avec cette structure exacte:
 
   "clients_performants": "Pour chaque client rentable: nomme-le, donne sa marge en % et TND, son ratio préventif/correctif, son coût par équipement. Explique POURQUOI il performe (bon ratio préventif, peu de pannes, contrat bien dimensionné...). Identifie les bonnes pratiques réplicables. Utilise • pour chaque client.",
 
+  "tco_analyse": "Analyse TCO du parc équipement: identifie les 3-5 équipements avec le TCO le plus élevé, calcule le TCO/mois et compare-le à la moyenne du parc. Pour chaque équipement critique: donne le TCO total, la ventilation pièces/MO/interventions, l'âge, le ratio correctif/préventif. Indique si le TCO justifie un remplacement (seuil: TCO > 60% du prix neuf estimé ou TCO/mois en hausse). Propose un plan de renouvellement priorisé. Utilise • pour chaque équipement.",
+
   "recommandations": "Actions stratégiques prioritaires classées par impact: renégociation tarifaire avec montants suggérés, plan de transition corrective→préventive avec calendrier, optimisation stock pièces de rechange (quelles pièces, quel fournisseur), seuils d'alerte à mettre en place (coût/équipement max, ratio correctif max), KPIs de suivi mensuel à implémenter. Utilise • pour chaque recommandation.",
 
-  "tags": ["3-5 tags pertinents parmi: Surcoût Pièces, Ratio Correctif Élevé, Marge Négative, Contrat Sous-dimensionné, Maintenance Préventive Insuffisante, Optimisation Stock, Renégociation Contrat, Performance Élevée, Équipements Critiques"],
+  "tags": ["3-5 tags pertinents parmi: Surcoût Pièces, Ratio Correctif Élevé, Marge Négative, Contrat Sous-dimensionné, Maintenance Préventive Insuffisante, Optimisation Stock, Renégociation Contrat, Performance Élevée, Équipements Critiques, TCO Élevé, Renouvellement Requis"],
   "confiance": 85
 }}
 

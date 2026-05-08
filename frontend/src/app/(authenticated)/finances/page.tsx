@@ -295,6 +295,14 @@ export default function FinancesPage() {
               <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.optimisations || '—'}</p>
             </div>
 
+            {/* Row 2b: TCO full width */}
+            <div className="glass rounded-xl p-5 border-l-4 border-teal-400" style={{ borderLeftColor: '#2dd4bf' }}>
+              <h3 className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5 mb-2" style={{ color: '#0d9488' }}>
+                <Cpu className="w-3.5 h-3.5" /> Analyse TCO — Coût Total de Possession
+              </h3>
+              <p className="text-sm text-savia-text leading-relaxed whitespace-pre-line">{aiRecos.tco_analyse || '—'}</p>
+            </div>
+
             {/* Row 3: 2 cards */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Clients Performants */}
