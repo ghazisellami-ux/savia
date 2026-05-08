@@ -58,7 +58,7 @@ export default function PiecesPage() {
   const [editDomaineFilter, setEditDomaineFilter] = useState('');
   const [editTypeFilter, setEditTypeFilter] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
-  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -157,6 +157,14 @@ export default function PiecesPage() {
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
+      // Si liée à une demande, résoudre la demande + notifier le technicien
+      if (linkedDemandeId) {
+        try {
+          await piecesDemandees.resoudre(linkedDemandeId);
+        } catch { }
+        setLinkedDemandeId(null);
+        await loadDemandes();
+      }
       setForm(emptyForm);
       setShowAddModal(false);
       await loadData();
@@ -389,25 +397,26 @@ export default function PiecesPage() {
                   </div>
                 </div>
                 <button
-                  onClick={async () => {
-                    setResolvingId(d.id);
-                    try {
-                      await piecesDemandees.resoudre(d.id);
-                      await loadDemandes();
-                    } catch { }
-                    setResolvingId(null);
+                  onClick={() => {
+                    setLinkedDemandeId(d.id);
+                    setForm({
+                      ...emptyForm,
+                      reference: d.reference || '',
+                      designation: d.designation || '',
+                      equipement_type: d.equipement || emptyForm.equipement_type,
+                    });
+                    setShowAddModal(true);
                   }}
-                  disabled={resolvingId === d.id}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-green-600 hover:bg-green-500 disabled:opacity-50 transition-all cursor-pointer whitespace-nowrap ml-3"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-green-600 hover:bg-green-500 transition-all cursor-pointer whitespace-nowrap ml-3"
                 >
-                  {resolvingId === d.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCheck className="w-3.5 h-3.5" />}
-                  Disponible
+                  <Plus className="w-3.5 h-3.5" />
+                  Ajouter au stock
                 </button>
               </div>
             ))}
           </div>
           <p className="text-xs text-blue-400/80 mt-2">
-            💡 Quand vous ajoutez la pièce au stock, le système détectera automatiquement les demandes correspondantes (matching flou). Vous pouvez aussi résoudre manuellement ci-dessus.
+            💡 Cliquez sur « Ajouter au stock » pour créer la pièce pré-remplie. Le technicien sera notifié automatiquement après la création.
           </p>
         </div>
       )}
