@@ -11,9 +11,9 @@ import {
 import {
   DollarSign, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2,
   Building2, Wrench, Cpu, Loader2, Filter, ArrowUpDown, ChevronDown, ChevronUp,
-  PieChart as PieChartIcon, BarChart3, Clock, Package,
+  PieChart as PieChartIcon, BarChart3, Clock, Package, Sparkles, Brain,
 } from 'lucide-react';
-import { finances, clients as clientsApi } from '@/lib/api';
+import { finances, clients as clientsApi, ai } from '@/lib/api';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
 
 const FMT = (n: number) => n.toLocaleString('fr-FR');
@@ -38,6 +38,9 @@ export default function FinancesPage() {
   const [tab, setTab] = useState<'clients' | 'tco'>('clients');
   const [sortCol, setSortCol] = useState('marge');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [aiRecos, setAiRecos] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -111,6 +114,51 @@ export default function FinancesPage() {
       marge: c.marge || 0,
     }));
   }, [clientsData]);
+
+  // AI Cost Recommendation
+  const analyzeAiCosts = useCallback(async () => {
+    if (aiLoading || clientsData.length === 0) return;
+    setAiLoading(true);
+    setAiError('');
+    setAiRecos(null);
+    try {
+      const avgCout = clientsData.reduce((a: number, c: any) => a + (c.cout_total || 0), 0) / clientsData.length;
+      const clientSummary = clientsData.map((c: any) => {
+        const ecart = avgCout > 0 ? Math.round(((c.cout_total || 0) - avgCout) / avgCout * 100) : 0;
+        return `${c.client}: revenu=${FMT(c.revenu_contrats || 0)} TND, coûts=${FMT(c.cout_total || 0)} TND, marge=${c.marge_pct || 0}%, interv=${c.nb_interventions || 0}, equip=${c.nb_equipements || 0}, écart_vs_moy=${ecart > 0 ? '+' : ''}${ecart}%`;
+      }).join('\n');
+
+      const prompt = `Analyse financière des clients SAVIA — recommandations de coûts:
+
+Coût moyen par client: ${FMT(Math.round(avgCout))} TND
+Marge globale: ${kpis.marge_pct || 0}%
+Clients rentables: ${kpis.nb_rentables || 0} / ${kpis.nb_clients || 0}
+
+Détails par client:
+${clientSummary}
+
+Donne-moi:
+1. Les clients qui coûtent significativement plus que la moyenne (avec le % d'écart)
+2. Les causes probables (nombre d'interventions élevé, coût pièces, etc.)
+3. Des suggestions d'optimisation concrètes pour réduire les coûts
+4. Les clients les plus rentables et pourquoi
+5. Des recommandations stratégiques (renégociation contrats, maintenance préventive, etc.)
+
+Formate avec des titres clairs et des puces •. Sois précis avec les chiffres.`;
+
+      const res = await ai.chat(prompt);
+      setAiRecos(res.response);
+    } catch (err: any) {
+      const msg = err.message || '';
+      if (msg.includes('503') || msg.includes('429') || msg.includes('Quota') || msg.includes('UNAVAILABLE')) {
+        setAiError('⏳ Quota IA atteint. Réessayez dans 1 minute.');
+      } else {
+        setAiError(`Erreur: ${msg}`);
+      }
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiLoading, clientsData, kpis]);
 
   if (!canSeeCosts) {
     return (
@@ -209,6 +257,85 @@ export default function FinancesPage() {
           </ResponsiveContainer>
         </SectionCard>
       </div>
+
+      {/* 💰 AI Cost Recommendations */}
+      <SectionCard title={
+        <span className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-amber-500" />
+          <span>Recommandations IA de Coûts</span>
+        </span>
+      }>
+        {!aiRecos && !aiLoading && !aiError && (
+          <div className="flex flex-col items-center py-8 gap-4">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, rgba(86,124,141,0.1), rgba(47,65,86,0.1))' }}>
+              <Brain className="w-7 h-7 text-savia-accent" />
+            </div>
+            <div className="text-center max-w-md">
+              <p className="text-savia-text font-semibold text-sm">Analyse IA des coûts par client</p>
+              <p className="text-savia-text-muted text-xs mt-1">
+                L&apos;IA analysera vos données financières pour identifier les clients qui coûtent plus que la moyenne et proposer des optimisations concrètes.
+              </p>
+            </div>
+            <button
+              onClick={analyzeAiCosts}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90 cursor-pointer"
+              style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}
+            >
+              <Sparkles className="w-4 h-4" />
+              Analyser les coûts
+            </button>
+          </div>
+        )}
+
+        {aiLoading && (
+          <div className="flex flex-col items-center py-10 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
+            <p className="text-sm text-savia-text-muted">Analyse des données financières en cours...</p>
+          </div>
+        )}
+
+        {aiError && (
+          <div className="flex flex-col items-center py-6 gap-3">
+            <p className="text-sm text-amber-600 font-medium">{aiError}</p>
+            <button
+              onClick={analyzeAiCosts}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-white cursor-pointer"
+              style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Réessayer
+            </button>
+          </div>
+        )}
+
+        {aiRecos && (
+          <div className="space-y-3">
+            <div className="rounded-xl p-5 text-sm leading-relaxed text-savia-text" style={{ background: '#EEF3F6', boxShadow: 'inset 2px 2px 4px #e3dac7, inset -2px -2px 4px #ffffff' }}>
+              {aiRecos.split('\n').map((line, i) => {
+                // Bold titles
+                if (line.match(/^\d+\.|^#+|^[A-Z\u00C0-\u017F].*:$/)) {
+                  return <p key={i} className={`font-bold text-savia-accent-blue ${i > 0 ? 'mt-3' : ''}`}>{line}</p>;
+                }
+                // Bullet points
+                if (line.trim().startsWith('•') || line.trim().startsWith('-') || line.trim().startsWith('*')) {
+                  return <p key={i} className="ml-3 mt-1">{line}</p>;
+                }
+                if (!line.trim()) return <br key={i} />;
+                return <p key={i} className={i > 0 ? 'mt-1' : ''}>{line}</p>;
+              })}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={analyzeAiCosts}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-savia-text-muted hover:text-savia-accent transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3 h-3" />
+                Relancer l&apos;analyse
+              </button>
+            </div>
+          </div>
+        )}
+      </SectionCard>
 
       {/* Tab Toggle */}
       <div className="flex rounded-lg overflow-hidden border border-savia-border w-fit">
