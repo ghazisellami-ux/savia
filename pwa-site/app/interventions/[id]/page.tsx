@@ -75,6 +75,8 @@ export default function InterventionDetailPage() {
   const [piecesQty, setPiecesQty]       = useState<PiecesQty>({});
   const [piecesRupture, setPiecesRupture] = useState<any[]>([]); // pièces demandées (rupture)
   const [searchRupture, setSearchRupture] = useState('');
+  const [manualPieces, setManualPieces] = useState<{reference: string; designation: string}[]>([]);
+  const [manualPieceForm, setManualPieceForm] = useState({reference: '', designation: ''});
   const [showRefuseForm, setShowRefuseForm] = useState(false);
   const [refuseRaison, setRefuseRaison] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
@@ -161,7 +163,7 @@ export default function InterventionDetailPage() {
         reference: p.reference || '',
         designation: p.designation || p.nom || '',
       }));
-      await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture });
+      await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture, ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) });
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
       setSuccess('Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
@@ -575,6 +577,58 @@ export default function InterventionDetailPage() {
                   ))}
                 </div>
               )}
+
+              {/* Pièce non référencée — saisie libre */}
+              <div style={{ marginTop: '14px', borderTop: '1px solid rgba(245,158,11,0.2)', paddingTop: '14px' }}>
+                <p style={{ fontSize: '0.78rem', fontWeight: 700, color: '#2563EB', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  🆕 Demander une pièce non référencée
+                </p>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Référence"
+                    style={{ ...INPUT, flex: 1, fontSize: '0.85rem', padding: '10px 12px' }}
+                    value={manualPieceForm.reference}
+                    onChange={e => setManualPieceForm(prev => ({...prev, reference: e.target.value}))}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Désignation"
+                    style={{ ...INPUT, flex: 1, fontSize: '0.85rem', padding: '10px 12px' }}
+                    value={manualPieceForm.designation}
+                    onChange={e => setManualPieceForm(prev => ({...prev, designation: e.target.value}))}
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={!manualPieceForm.reference.trim()}
+                  onClick={() => {
+                    if (manualPieceForm.reference.trim()) {
+                      setManualPieces(prev => [...prev, {reference: manualPieceForm.reference.trim(), designation: manualPieceForm.designation.trim() || manualPieceForm.reference.trim()}]);
+                      setManualPieceForm({reference: '', designation: ''});
+                    }
+                  }}
+                  style={{ width: '100%', padding: '10px', background: !manualPieceForm.reference.trim() ? '#e5e7eb' : '#2563EB', color: !manualPieceForm.reference.trim() ? '#9ca3af' : '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem', cursor: !manualPieceForm.reference.trim() ? 'not-allowed' : 'pointer' }}
+                >
+                  + Ajouter à la demande
+                </button>
+                {manualPieces.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    {manualPieces.map((mp, idx) => (
+                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.2)', borderRadius: '8px', padding: '8px 12px', marginBottom: '4px' }}>
+                        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--navy)' }}>
+                          <strong>{mp.reference}</strong> — {mp.designation}
+                        </span>
+                        <button type="button" onClick={() => setManualPieces(prev => prev.filter((_, i) => i !== idx))}
+                          style={{ background: 'none', border: 'none', color: '#ef4444', fontWeight: 700, fontSize: '1rem', cursor: 'pointer', padding: '2px 6px' }}>✕</button>
+                      </div>
+                    ))}
+                    <p style={{ fontSize: '0.7rem', color: '#2563EB', fontWeight: 600, marginTop: '6px' }}>
+                      📨 {manualPieces.length} pièce(s) non référencée(s) — notification dès disponibilité
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
