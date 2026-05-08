@@ -3590,6 +3590,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             pdf.set_text_color(50, 70, 90)
             pdf.cell(0, 6, "Repartition par type", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_font("Helvetica", "B", 8)
+            pdf.set_draw_color(1, 180, 188)
             pdf.set_fill_color(1, 180, 188)
             pdf.set_text_color(255, 255, 255)
             pdf.cell(100, 7, "Type", border=1, fill=True)
