@@ -130,7 +130,7 @@ export default function ReportsPage() {
         { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
         { label: 'Clôturées',     val: String(nbClot), color: [22,163,74] },
         { label: 'Taux rés.',     val: tauxStr, color: [234,179,8] },
-        { label: 'Coût (TND)',    val: costStr, color: [239,68,68] },
+        { label: 'Coût (TND)',    val: costStr, color: [59,130,246] },
       ],
       type_data: Object.entries(types).map(function(e) { return [e[0], String(e[1])]; }),
       head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
@@ -371,8 +371,8 @@ export default function ReportsPage() {
                     <div className="text-xs text-savia-text-muted mt-1">Clôturées</div>
                   </div>
                   <div className="glass rounded-xl p-4 text-center">
-                    <DollarSign className="w-5 h-5 text-red-400 mx-auto mb-1" />
-                    <div className="text-3xl font-black text-red-400">{cout.toLocaleString('fr')}</div>
+                    <DollarSign className="w-5 h-5 text-blue-400 mx-auto mb-1" />
+                    <div className="text-3xl font-black text-blue-400">{cout.toLocaleString('fr')}</div>
                     <div className="text-xs text-savia-text-muted mt-1">Coût total (TND)</div>
                   </div>
                 </div>
