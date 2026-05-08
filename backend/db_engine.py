@@ -2312,15 +2312,15 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                 UPDATE interventions
                 SET statut='Cloturee', probleme=%s, cause=%s, solution=%s,
                     pieces_utilisees=COALESCE(pieces_utilisees, '') || %s, duree_minutes=%s,
-                    cout_pieces=%s, cout=%s, date=%s
+                    cout_pieces=%s, cout=%s, date=%s, date_cloture=%s
                 WHERE id=%s
-            """, (probleme, cause, solution, f" | {pieces_str}", duree_val, total_cout_pieces, cout_total, date_cloture, intervention_id))
+            """, (probleme, cause, solution, f" | {pieces_str}", duree_val, total_cout_pieces, cout_total, date_cloture, date_cloture, intervention_id))
         else:
             conn.execute("""
                 UPDATE interventions
-                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s, duree_minutes=%s, cout=%s, date=%s
+                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s, duree_minutes=%s, cout=%s, date=%s, date_cloture=%s
                 WHERE id=%s
-            """, (probleme, cause, solution, duree_val, cout_total, date_cloture, intervention_id))
+            """, (probleme, cause, solution, duree_val, cout_total, date_cloture, date_cloture, intervention_id))
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
         row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()

@@ -1200,15 +1200,15 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
         with get_db() as conn:
             rows = conn.execute("""
                 SELECT i.id, i.machine, i.technicien, i.type_intervention,
-                       i.date_cloture, i.facture_envoyee, i.notes,
+                       COALESCE(i.date_cloture, i.date) as date_cloture,
+                       i.facture_envoyee, i.notes,
                        i.pieces_utilisees, i.cout, i.duree_minutes,
                        i.description, i.probleme, i.cause, i.solution,
                        i.priorite, i.type_erreur, i.code_erreur,
                        i.date_debut_intervention, i.date, i.cout_pieces
                 FROM interventions i
                 WHERE i.statut IN ('Cloturee', 'Terminee', 'Terminée')
-                  AND i.date_cloture IS NOT NULL
-                ORDER BY i.date_cloture DESC
+                ORDER BY COALESCE(i.date_cloture, i.date) DESC
             """).fetchall()
         today = date.today()
         result = []
