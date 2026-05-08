@@ -4565,8 +4565,12 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
         # --- Client profitability ---
         clients_profit = []
         all_clients = []
+        # Only include clients that have a maintenance contract
+        contrat_clients = set()
+        if not df_contrats.empty and "client" in df_contrats.columns:
+            contrat_clients = set(df_contrats["client"].dropna().unique().tolist())
         if not df_equip.empty and "Client" in df_equip.columns:
-            all_clients = sorted(df_equip["Client"].dropna().unique().tolist())
+            all_clients = sorted([c for c in df_equip["Client"].dropna().unique().tolist() if c in contrat_clients])
 
         for cl in all_clients:
             if client and cl != client:
