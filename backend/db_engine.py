@@ -624,6 +624,11 @@ def init_db():
         # Service column on equipements
         _safe_add_column("equipements", "service")
 
+        # Contract → Planning auto-generation columns
+        _safe_add_column("contrats", "recurrence_maintenance")
+        _safe_add_column("contrats", "date_premiere_maintenance")
+        _safe_add_column("planning_maintenance", "contrat_id", "INTEGER", "NULL")
+
         # Fabricants table
         if USE_PG:
             try:
@@ -2183,12 +2188,13 @@ def lire_contrats(client=None):
         return read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
 
 def ajouter_contrat(contrat_dict):
-    """Ajoute un contrat."""
+    """Ajoute un contrat et retourne son ID."""
     with get_db() as conn:
         conn.execute("""
             INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
-                sla_temps_reponse_h, interventions_incluses, montant, conditions, notes, fichier_contrat, equipement)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             contrat_dict.get("client", ""),
             contrat_dict.get("type_contrat", "Standard"),
@@ -2201,8 +2207,86 @@ def ajouter_contrat(contrat_dict):
             contrat_dict.get("notes", ""),
             contrat_dict.get("fichier_contrat", ""),
             contrat_dict.get("equipement", ""),
+            contrat_dict.get("recurrence_maintenance", ""),
+            contrat_dict.get("date_premiere_maintenance", ""),
         ))
+        # Retrieve the newly created contrat ID
+        row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
+        contrat_id = dict(row)["id"] if row else None
     _trigger_backup()
+    return contrat_id
+
+
+def generer_planning_from_contrat(contrat_id):
+    """
+    Génère automatiquement les entrées de planning de maintenance préventive
+    à partir d'un contrat, selon sa récurrence et ses dates.
+    Retourne le nombre d'entrées créées.
+    """
+    from dateutil.relativedelta import relativedelta
+
+    RECURRENCE_DELTAS = {
+        "Hebdomadaire": relativedelta(weeks=1),
+        "Mensuelle": relativedelta(months=1),
+        "Trimestrielle": relativedelta(months=3),
+        "Semestrielle": relativedelta(months=6),
+        "Annuelle": relativedelta(years=1),
+    }
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM contrats WHERE id = ?", (contrat_id,)
+        ).fetchone()
+        if not row:
+            return 0
+
+        contrat = dict(row)
+        recurrence = (contrat.get("recurrence_maintenance") or "").strip()
+        if not recurrence or recurrence not in RECURRENCE_DELTAS:
+            return 0
+
+        date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
+        date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
+        equipement = contrat.get("equipement", "")
+        client = contrat.get("client", "")
+
+        if not date_fin_str or not date_premiere_str:
+            return 0
+
+        try:
+            from datetime import date as _date
+            date_premiere = _date.fromisoformat(date_premiere_str)
+            date_fin = _date.fromisoformat(date_fin_str)
+        except ValueError:
+            return 0
+
+        delta = RECURRENCE_DELTAS[recurrence]
+        count = 0
+        current_date = date_premiere
+
+        while current_date <= date_fin:
+            conn.execute("""
+                INSERT INTO planning_maintenance
+                    (machine, client, type_maintenance, description,
+                     date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                equipement,
+                client,
+                "Préventive",
+                f"MP Contrat #{contrat_id} — {equipement}" if equipement else f"MP Contrat #{contrat_id}",
+                current_date.isoformat(),
+                "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
+                recurrence,
+                contrat_id,
+                "Planifiée",
+                f"[{client}] Généré automatiquement depuis contrat #{contrat_id}" if client else f"Généré automatiquement depuis contrat #{contrat_id}",
+            ))
+            count += 1
+            current_date = current_date + delta
+
+    return count
+
 
 def modifier_contrat(contrat_id, contrat_dict):
     """Modifie un contrat existant."""

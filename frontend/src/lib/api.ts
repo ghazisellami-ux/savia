@@ -201,7 +201,7 @@ export const contrats = {
     return request<Array<Record<string, unknown>>>(`/api/contrats${qs}`);
   },
   create: (data: Record<string, unknown>) =>
-    request<{ ok: boolean }>('/api/contrats', { method: 'POST', body: data }),
+    request<{ ok: boolean; contrat_id?: number; nb_plannings?: number }>('/api/contrats', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) =>

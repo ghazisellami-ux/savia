@@ -125,11 +125,15 @@ export default function ContratsPage() {
         notes: form.notes,
         statut: form.statut,
       };
-      await (contrats as any).create(payload);
-      setSaveMsg('✅ Contrat créé avec succès !');
+      const result = await (contrats as any).create(payload) as any;
+      const nbPlannings = result?.nb_plannings || 0;
+      const planningMsg = nbPlannings > 0
+        ? `\n📅 ${nbPlannings} maintenance(s) préventive(s) planifiées automatiquement`
+        : '';
+      setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
       setForm(emptyForm());
       await load();
-      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 1500);
+      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, nbPlannings > 0 ? 3000 : 1500);
     } catch (err: any) {
       setSaveMsg(`❌ Erreur: ${err?.message || 'Indisponible'}`);
     } finally { setIsSaving(false); }
@@ -639,7 +643,7 @@ export default function ContratsPage() {
 
               {/* Save message */}
               {saveMsg && (
-                <div className={`p-3 rounded-lg text-sm font-semibold ${saveMsg.includes('✅') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                <div className={`p-3 rounded-lg text-sm font-semibold whitespace-pre-line ${saveMsg.includes('✅') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
                   {saveMsg}
                 </div>
               )}

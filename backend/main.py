@@ -30,7 +30,7 @@ from db_engine import (
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
     ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee, lire_toutes_pieces_demandees,
-    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat,
+    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
     lire_techniciens, ajouter_technicien, update_technicien, supprimer_technicien,
@@ -238,7 +238,7 @@ def check_planning_reminder():
                 f"  • <b>{r['machine']}</b>"
                 + (f" — {r['client']}" if r['client'] else "")
                 + f"\n    📅 {r['date']} ({r['jours']}j)"
-                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else "")
+                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else " | ⚠️ <b>Technicien non assigné</b>")
                 + (f"\n    📝 {r['description'][:60]}" if r['description'] else "")
                 for r in sorted(reminders, key=lambda x: x['jours'])
             )
@@ -2320,8 +2320,31 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
 
 @app.post("/api/contrats")
 def create_contrat(body: dict, user: dict = Depends(_verify_token)):
-    ajouter_contrat(body)
-    return {"ok": True}
+    contrat_id = ajouter_contrat(body)
+    nb_plannings = 0
+    if contrat_id:
+        try:
+            nb_plannings = generer_planning_from_contrat(contrat_id)
+            if nb_plannings > 0:
+                logger.info(f"Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées automatiquement")
+                # Notification Telegram
+                recurrence = body.get("recurrence_maintenance", "")
+                equipement = body.get("equipement", "")
+                client = body.get("client", "")
+                date_fin = body.get("date_fin", "")
+                msg = (
+                    f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
+                    f"👤 Client : <b>{client}</b>\n"
+                    + (f"🏥 Équipement : <b>{equipement}</b>\n" if equipement else "")
+                    + f"🔄 Récurrence : <b>{recurrence}</b>\n"
+                    f"📅 Jusqu'au : {date_fin}\n\n"
+                    f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
+                    f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
+                )
+                _send_telegram(msg)
+        except Exception as e:
+            logger.error(f"Erreur génération planning pour contrat #{contrat_id}: {e}")
+    return {"ok": True, "contrat_id": contrat_id, "nb_plannings": nb_plannings}
 
 
 @app.put("/api/contrats/{contrat_id}")
