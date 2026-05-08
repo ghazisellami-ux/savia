@@ -189,8 +189,9 @@ def check_garantie_expiry():
                 f"{lines}\n\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
-            _send_telegram(msg)
-            logger.info(f"Garantie check: {len(alerts)} alerte(s) envoyée(s)")
+            _send_telegram_bot("telegram_sav", msg)
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Garantie check: {len(alerts)} alerte(s) envoyée(s) aux bots SAV + Manager")
         return alerts
     except Exception as e:
         logger.error(f"Garantie expiry check error: {e}")
@@ -830,8 +831,9 @@ def check_contrat_expiry():
                 f"{lines}\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
-            _send_telegram(msg)
-            logger.info(f"Contrat check: {len(alerts)} alerte(s) envoyée(s)")
+            _send_telegram_bot("telegram_sav", msg)
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Contrat check: {len(alerts)} alerte(s) envoyée(s) aux bots SAV + Manager")
         return alerts
     except Exception as e:
         logger.error(f"Contrat expiry check error: {e}")
