@@ -66,11 +66,20 @@ export default function AiChatbot() {
       };
       setMessages(prev => [...prev, aiMsg]);
     } catch (err: any) {
+      const msg = err.message || '';
+      const isQuota = msg.includes('Quota') || msg.includes('503') || msg.includes('429') || msg.includes('UNAVAILABLE') || msg.includes('exhausted') || msg.includes('Timeout');
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `❌ Erreur: ${err.message || "L'IA n'est pas disponible pour le moment."}`,
+        content: isQuota
+          ? "⏳ L'IA est temporairement surchargée (quota atteint). Veuillez réessayer dans environ 1 minute.\n\n💡 Astuce : les quotas se réinitialisent chaque minute. Votre question sera traitée dès que le quota sera disponible."
+          : `❌ Erreur: ${msg || "L'IA n'est pas disponible pour le moment."}`,
+        suggestions: isQuota ? ['🔄 Réessayer ma question'] : undefined,
         timestamp: new Date(),
       }]);
+      // Store last question for retry
+      if (isQuota) {
+        setInput(text.trim());
+      }
     } finally {
       setIsLoading(false);
     }
