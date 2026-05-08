@@ -3010,30 +3010,57 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
     client_lines = []
     for c in clients_data:
         ecart = round(((c.get('cout_total', 0) - avg_cout) / avg_cout * 100)) if avg_cout > 0 else 0
-        client_lines.append(f"{c.get('client','?')}: revenu={c.get('revenu_contrats',0)} TND, coûts={c.get('cout_total',0)} TND, marge={c.get('marge_pct',0)}%, interventions={c.get('nb_interventions',0)}, equipements={c.get('nb_equipements',0)}, écart_vs_moy={'+' if ecart>0 else ''}{ecart}%")
+        nb_interv = c.get('nb_interventions', 0)
+        nb_equip = c.get('nb_equipements', 0)
+        ratio_interv = round(nb_interv / nb_equip, 1) if nb_equip > 0 else 0
+        client_lines.append(
+            f"{c.get('client','?')}: "
+            f"revenu={c.get('revenu_contrats',0)} TND, "
+            f"coûts_total={c.get('cout_total',0)} TND, "
+            f"coût_interventions={c.get('cout_interventions',0)} TND, "
+            f"coût_pièces={c.get('cout_pieces',0)} TND, "
+            f"coût_main_oeuvre={c.get('cout_main_oeuvre',0)} TND, "
+            f"marge={c.get('marge_pct',0)}%, "
+            f"interventions={nb_interv} (correctives={c.get('nb_correctives',0)}, préventives={c.get('nb_preventives',0)}), "
+            f"equipements={nb_equip}, "
+            f"ratio_interv/equip={ratio_interv}, "
+            f"ratio_préventif={round(c.get('nb_preventives',0)/nb_interv*100) if nb_interv>0 else 0}%, "
+            f"écart_vs_moy={'+' if ecart>0 else ''}{ecart}%"
+        )
     summary = "\n".join(client_lines)
 
-    prompt = f"""Analyse les données financières de maintenance SAVIA et retourne un JSON structuré.
+    prompt = f"""Tu es un expert en gestion financière de maintenance biomédicale (GMAO). Analyse ces données financières SAVIA en profondeur.
 
-Coût moyen par client: {round(avg_cout)} TND
-Marge globale: {kpis.get('marge_pct',0)}%
-Clients rentables: {kpis.get('nb_rentables',0)} / {kpis.get('nb_clients',0)}
+═══ INDICATEURS GLOBAUX ═══
+• Coût moyen par client: {round(avg_cout)} TND
+• Marge globale: {kpis.get('marge_pct',0)}%
+• Marge brute: {kpis.get('marge_globale',0)} TND
+• Revenu total contrats: {kpis.get('revenu_total',0)} TND
+• Coût total: {kpis.get('cout_total',0)} TND
+• Clients rentables: {kpis.get('nb_rentables',0)} / {kpis.get('nb_clients',0)}
+• Clients déficitaires: {kpis.get('nb_deficitaires',0)}
 
-Données par client:
+═══ DONNÉES DÉTAILLÉES PAR CLIENT ═══
 {summary}
 
+═══ CONSIGNES D'ANALYSE ═══
 Retourne UNIQUEMENT un JSON valide avec cette structure exacte:
 {{
-  "clients_couteux": "Texte décrivant les clients qui coûtent significativement plus que la moyenne, avec les % d'écart et les chiffres précis. Utilise • pour les puces.",
-  "causes": "Texte décrivant les causes probables des surcoûts identifiés (nombre d'interventions élevé, coût pièces, ratio interventions/équipements...). Utilise • pour les puces.",
-  "optimisations": "Texte proposant des suggestions d'optimisation concrètes et actionnables pour réduire les coûts. Utilise • pour les puces.",
-  "clients_performants": "Texte sur les clients les plus rentables, pourquoi ils performent bien, et ce qu'on peut apprendre d'eux. Utilise • pour les puces.",
-  "recommandations": "Texte avec les recommandations stratégiques (renégociation de contrats, passage en préventif, optimisation stock pièces...). Utilise • pour les puces.",
-  "tags": ["tag1", "tag2", "tag3"],
+  "clients_couteux": "Pour chaque client dont le coût dépasse la moyenne: nomme-le, donne son écart en % et en TND vs la moyenne, son ratio interventions/équipement, la répartition de ses coûts (pièces vs MO vs interventions). Indique le coût par équipement. Utilise • pour chaque client. Sois PRÉCIS avec tous les chiffres.",
+
+  "causes": "Analyse technique des causes racines: taux de maintenance corrective vs préventive par client (un ratio préventif <30% est problématique), coût moyen par intervention, concentration des coûts pièces ou main d'œuvre, équipements vieillissants potentiels, fréquence d'interventions anormale (>4 interv/équipement/an = critique). Utilise • pour chaque cause identifiée avec les chiffres.",
+
+  "optimisations": "Propositions concrètes avec estimation d'impact financier: ex. 'Augmenter le préventif de X à Y% pour [client] → économie estimée de Z TND/an', 'Négocier un contrat pièces forfaitaire pour [client]', 'Former les techniciens sur [type d'équipement] pour réduire le taux de rappel'. Chiffre chaque recommandation. Utilise • pour chaque proposition.",
+
+  "clients_performants": "Pour chaque client rentable: nomme-le, donne sa marge en % et TND, son ratio préventif/correctif, son coût par équipement. Explique POURQUOI il performe (bon ratio préventif, peu de pannes, contrat bien dimensionné...). Identifie les bonnes pratiques réplicables. Utilise • pour chaque client.",
+
+  "recommandations": "Actions stratégiques prioritaires classées par impact: renégociation tarifaire avec montants suggérés, plan de transition corrective→préventive avec calendrier, optimisation stock pièces de rechange (quelles pièces, quel fournisseur), seuils d'alerte à mettre en place (coût/équipement max, ratio correctif max), KPIs de suivi mensuel à implémenter. Utilise • pour chaque recommandation.",
+
+  "tags": ["3-5 tags pertinents parmi: Surcoût Pièces, Ratio Correctif Élevé, Marge Négative, Contrat Sous-dimensionné, Maintenance Préventive Insuffisante, Optimisation Stock, Renégociation Contrat, Performance Élevée, Équipements Critiques"],
   "confiance": 85
 }}
 
-Sois PRÉCIS avec les chiffres. Chaque section doit faire 2-4 lignes maximum. Retourne UNIQUEMENT le JSON, rien d'autre."""
+IMPORTANT: Sois un consultant expert. Chaque section doit faire 4-8 lignes avec des données chiffrées précises. Retourne UNIQUEMENT le JSON, rien d'autre."""
 
     raw = _call_ia(prompt, timeout=90, is_json=True)
     if not raw:
