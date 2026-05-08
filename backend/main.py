@@ -3099,6 +3099,125 @@ IMPORTANT: Sois un consultant expert. Chaque section doit faire 4-8 lignes avec 
     return {"ok": True, "result": result}
 
 
+@app.post("/api/ai/analyze-costs/pdf")
+def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token)):
+    """Génère un PDF à partir du résultat d'analyse IA des coûts."""
+    from fpdf import FPDF
+    from io import BytesIO
+    from starlette.responses import StreamingResponse
+
+    data = body.get("result", {})
+    kpis = body.get("kpis", {})
+    if not data:
+        raise HTTPException(status_code=400, detail="Aucune donnée d'analyse.")
+
+    class CostPDF(FPDF):
+        def header(self):
+            # Brand bar
+            self.set_fill_color(47, 65, 86)  # Navy #2F4156
+            self.rect(0, 0, 210, 18, 'F')
+            self.set_font('Helvetica', 'B', 13)
+            self.set_text_color(255, 255, 255)
+            self.set_y(4)
+            self.cell(0, 10, 'SAVIA — Analyse Financière IA', align='C')
+            self.ln(16)
+
+        def footer(self):
+            self.set_y(-12)
+            self.set_font('Helvetica', '', 7)
+            self.set_text_color(150, 150, 150)
+            from datetime import datetime
+            self.cell(0, 10, f'Généré le {datetime.now().strftime("%d/%m/%Y à %H:%M")} | SAVIA Maintenance — Confidentiel', align='C')
+
+        def section_card(self, title, content, color_rgb):
+            r, g, b = color_rgb
+            # Colored left bar + light bg
+            x, y = self.get_x(), self.get_y()
+            if y > 260:
+                self.add_page()
+                y = self.get_y()
+
+            self.set_font('Helvetica', 'B', 9)
+            self.set_text_color(r, g, b)
+            self.cell(0, 6, title.upper(), ln=True)
+
+            self.set_font('Helvetica', '', 8.5)
+            self.set_text_color(50, 50, 50)
+            # Handle bullet points
+            lines = (content or '—').split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # Draw colored bar on the left
+                cx, cy = self.get_x(), self.get_y()
+                self.set_fill_color(r, g, b)
+                self.rect(10, cy, 1.5, 4.5, 'F')
+                self.set_x(14)
+                self.multi_cell(180, 4.5, line)
+            self.ln(4)
+
+    pdf = CostPDF('P', 'mm', 'A4')
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+
+    # KPIs summary bar
+    pdf.set_fill_color(238, 243, 246)  # Light grey
+    pdf.rect(10, pdf.get_y(), 190, 14, 'F')
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_text_color(47, 65, 86)
+    y0 = pdf.get_y() + 2
+    kpi_items = [
+        f"Revenu: {kpis.get('revenu_total', 0):,} TND".replace(',', ' '),
+        f"Coûts: {kpis.get('cout_total', 0):,} TND".replace(',', ' '),
+        f"Marge: {kpis.get('marge_pct', 0)}%",
+        f"Rentables: {kpis.get('nb_rentables', 0)}/{kpis.get('nb_clients', 0)}",
+    ]
+    pdf.set_y(y0)
+    pdf.set_x(12)
+    pdf.cell(0, 5, '   |   '.join(kpi_items))
+    pdf.ln(16)
+
+    # Title
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.set_text_color(47, 65, 86)
+    pdf.cell(0, 8, 'Résultat de l\'Analyse IA', ln=True)
+    pdf.ln(3)
+
+    # Cards
+    sections = [
+        ("Clients Coûteux", data.get("clients_couteux", ""), (239, 68, 68)),       # red
+        ("Causes Identifiées", data.get("causes", ""), (249, 115, 22)),             # orange
+        ("Optimisations Proposées", data.get("optimisations", ""), (22, 163, 74)),  # green
+        ("Analyse TCO — Coût Total de Possession", data.get("tco_analyse", ""), (13, 148, 136)),  # teal
+        ("Clients Performants", data.get("clients_performants", ""), (59, 130, 246)),  # blue
+        ("Recommandations Stratégiques", data.get("recommandations", ""), (139, 92, 246)),  # purple
+    ]
+    for title, content, color in sections:
+        pdf.section_card(title, content, color)
+
+    # Tags
+    tags = data.get("tags", [])
+    conf = data.get("confiance", 0)
+    if tags or conf:
+        pdf.ln(2)
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.set_text_color(86, 124, 141)
+        tag_str = '   '.join([f'[{t}]' for t in tags])
+        if conf:
+            tag_str += f'   [Confiance: {conf}%]'
+        pdf.cell(0, 5, tag_str, ln=True)
+
+    buf = BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=SAVIA_Analyse_Couts_IA.pdf"}
+    )
+
+
 # ==========================================
 # AI CHATBOT — Assistant conversationnel
 # ==========================================

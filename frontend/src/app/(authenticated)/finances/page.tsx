@@ -11,7 +11,7 @@ import {
 import {
   DollarSign, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2,
   Building2, Wrench, Cpu, Loader2, Filter, ArrowUpDown, ChevronDown, ChevronUp,
-  PieChart as PieChartIcon, BarChart3, Clock, Package, Sparkles, Brain,
+  PieChart as PieChartIcon, BarChart3, Clock, Package, Sparkles, Brain, Download,
 } from 'lucide-react';
 import { finances, clients as clientsApi, ai } from '@/lib/api';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
@@ -331,9 +331,14 @@ export default function FinancesPage() {
                   ✓ Confiance: {aiRecos.confiance}%
                 </span>
               )}
-              <button onClick={analyzeAiCosts} className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-savia-text-muted hover:text-savia-accent transition-colors cursor-pointer">
-                <Sparkles className="w-3 h-3" /> Relancer
-              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={() => ai.analyzeCostsPdf(aiRecos, kpis)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white cursor-pointer" style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}>
+                  <Download className="w-3 h-3" /> Télécharger PDF
+                </button>
+                <button onClick={analyzeAiCosts} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-savia-text-muted hover:text-savia-accent transition-colors cursor-pointer">
+                  <Sparkles className="w-3 h-3" /> Relancer
+                </button>
+              </div>
             </div>
           </div>
         )}

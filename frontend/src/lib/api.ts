@@ -284,6 +284,23 @@ export const ai = {
     request<{response: string, suggestions: string[]}>('/api/ai/chat', { method: 'POST', body: { message, history } }),
   analyzeCosts: (clients: any[], kpis: any) =>
     request<{ok: boolean, result: any}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis } }),
+  analyzeCostsPdf: async (result: any, kpis: any) => {
+    const token = localStorage.getItem('token');
+    const base = process.env.NEXT_PUBLIC_API_URL || '';
+    const res = await fetch(`${base}/api/ai/analyze-costs/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ result, kpis }),
+    });
+    if (!res.ok) throw new Error('Erreur PDF');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'SAVIA_Analyse_Couts_IA.pdf';
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // --- Logs / S3 ---
