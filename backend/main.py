@@ -29,7 +29,7 @@ from db_engine import (
     lire_pieces, ajouter_piece, modifier_piece, supprimer_piece,
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
-    ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee,
+    ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee, lire_toutes_pieces_demandees,
     lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
@@ -1984,16 +1984,51 @@ def get_pieces(user: dict = Depends(_verify_token)):
     return _df_to_records(lire_pieces())
 
 
+def _normalize_ref(ref: str) -> str:
+    """Normalise une référence pour matching flou: supprime tirets, espaces, points, underscores, met en minuscule."""
+    import re
+    return re.sub(r'[\s\-_.\\/]+', '', ref).lower().strip()
+
+
+def _refs_match(ref1: str, ref2: str) -> bool:
+    """Vérifie si deux références correspondent (matching flou)."""
+    n1 = _normalize_ref(ref1)
+    n2 = _normalize_ref(ref2)
+    if not n1 or not n2:
+        return False
+    # Exact match après normalisation
+    if n1 == n2:
+        return True
+    # L'une contient l'autre (pour les cas PS-XR400 vs XR400)
+    if n1 in n2 or n2 in n1:
+        return len(min(n1, n2, key=len)) >= 3  # au moins 3 caractères communs
+    return False
+
+
 def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: int):
     """Vérifie si des demandes de pièces en attente correspondent à cette référence.
+    Utilise un matching flou (normalisation des tirets, espaces, casse).
     Si oui, envoie notifications PWA + Telegram et marque les demandes comme résolues."""
-    df_demandes = lire_pieces_demandees_en_attente(reference=reference)
+    # Récupérer TOUTES les demandes en attente et filtrer par matching flou
+    df_demandes = lire_pieces_demandees_en_attente()  # sans filtre ref
     if df_demandes.empty:
         return
 
+    # Filtrer par matching flou
+    matched_indices = []
+    for idx, d in df_demandes.iterrows():
+        demande_ref = d.get("reference") or ""
+        if _refs_match(reference, demande_ref):
+            matched_indices.append(idx)
+    
+    if not matched_indices:
+        return
+    
+    df_matched = df_demandes.loc[matched_indices]
+
     # Grouper par technicien
     tech_map: dict = {}
-    for _, d in df_demandes.iterrows():
+    for _, d in df_matched.iterrows():
         t = d.get("technicien") or "inconnu"
         if t not in tech_map:
             tech_map[t] = []
@@ -2056,6 +2091,64 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
                 resoudre_piece_demandee(d["demande_id"])
             except Exception:
                 pass
+
+
+# ── API Pièces demandées (non référencées) ──
+
+@app.get("/api/pieces-demandees")
+def get_pieces_demandees(statut: str = None, user: dict = Depends(_verify_token)):
+    """Liste les demandes de pièces. ?statut=en_attente pour filtrer."""
+    df = lire_toutes_pieces_demandees(statut=statut)
+    return _df_to_records(df)
+
+
+@app.post("/api/pieces-demandees/{demande_id}/resoudre")
+def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token)):
+    """Résoudre manuellement une demande de pièce (le gestionnaire confirme la disponibilité)."""
+    try:
+        # Récupérer la demande pour envoyer la notification
+        df = lire_toutes_pieces_demandees()
+        demande = None
+        for _, d in df.iterrows():
+            if int(d["id"]) == demande_id:
+                demande = d
+                break
+        
+        resoudre_piece_demandee(demande_id)
+        
+        # Envoyer notification au technicien si on a les infos
+        if demande is not None:
+            tech = demande.get("technicien") or ""
+            ref = demande.get("reference") or ""
+            designation = demande.get("designation") or ref
+            intervention_id = demande.get("intervention_id") or ""
+            if tech:
+                ajouter_notification_piece({
+                    "type": "piece_dispo",
+                    "piece_reference": ref,
+                    "piece_nom": designation,
+                    "technicien": tech,
+                    "intervention_id": intervention_id,
+                    "message": f"✅ La pièce demandée {ref} ({designation}) est maintenant disponible — intervention #{intervention_id}",
+                    "source": "stock",
+                    "destination": "technicien",
+                })
+                # Telegram
+                msg_tg = (
+                    f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
+                    f"🔩 Pièce : <b>{designation}</b>\n"
+                    f"🏷 Référence : <b>{ref}</b>\n"
+                    f"🔗 Intervention : #{intervention_id}\n"
+                    f"👷 Technicien : {tech}\n"
+                    f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                )
+                _send_telegram_bot("telegram_stock", msg_tg)
+                _send_telegram_bot("telegram", msg_tg)
+        
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Erreur résolution pièce demandée: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/pieces")

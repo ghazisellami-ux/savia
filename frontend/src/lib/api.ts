@@ -169,6 +169,11 @@ export const pieces = {
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
 };
 
+export const piecesDemandees = {
+  list: (statut?: string) => request<Array<Record<string, unknown>>>(`/api/pieces-demandees${statut ? `?statut=${statut}` : ''}`),
+  resoudre: (id: number) => request<{ok: boolean}>(`/api/pieces-demandees/${id}/resoudre`, { method: 'POST' }),
+};
+
 // --- Notifications ---
 export const notifications = {
   list: () => request<Array<Record<string, unknown>>>('/api/notifications'),
@@ -345,4 +350,4 @@ export const sla = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention };

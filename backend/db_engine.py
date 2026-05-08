@@ -1704,6 +1704,18 @@ def resoudre_piece_demandee(demande_id):
     return True
 
 
+def lire_toutes_pieces_demandees(statut=None):
+    """Lit toutes les demandes de pièces, optionnellement filtrées par statut."""
+    query = "SELECT * FROM pieces_demandees WHERE 1=1"
+    params = []
+    if statut:
+        query += " AND statut = %s"
+        params.append(statut)
+    query += " ORDER BY date_creation DESC"
+    with get_db() as conn:
+        return read_sql(query, conn, params=params)
+
+
 # ==========================================
 # FONCTIONS CRUD — AUDIT LOG
 # ==========================================

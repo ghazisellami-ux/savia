@@ -6,7 +6,7 @@ import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Spar
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
   Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
-import { pieces, interventions, ai, notifications as notifApi } from '@/lib/api';
+import { pieces, interventions, ai, notifications as notifApi, piecesDemandees } from '@/lib/api';
 
 interface Piece {
   id: number;
@@ -57,6 +57,8 @@ export default function PiecesPage() {
   const [notifCount, setNotifCount] = useState(0);
   const [editDomaineFilter, setEditDomaineFilter] = useState('');
   const [editTypeFilter, setEditTypeFilter] = useState('');
+  const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -85,6 +87,15 @@ export default function PiecesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Charger les demandes de pièces en attente
+  const loadDemandes = useCallback(async () => {
+    try {
+      const res = await piecesDemandees.list('en_attente');
+      setPendingDemandes(res as any[]);
+    } catch { /* silencieux */ }
+  }, []);
+  useEffect(() => { loadDemandes(); }, [loadDemandes]);
 
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
@@ -351,6 +362,53 @@ export default function PiecesPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Alerte pièces demandées (non référencées) */}
+      {pendingDemandes.length > 0 && (
+        <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <ShoppingCart className="w-5 h-5 text-blue-400" />
+            <span className="font-bold text-blue-400">{pendingDemandes.length} pièce(s) demandée(s) par les techniciens</span>
+            <span className="text-xs text-savia-text-muted ml-2">(non référencées — à commander)</span>
+          </div>
+          <div className="space-y-2 max-h-52 overflow-y-auto">
+            {pendingDemandes.map((d: any) => (
+              <div key={d.id} className="flex items-center justify-between p-3 rounded-lg bg-blue-500/10 border-l-4 border-blue-500">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-sm">{d.reference}</span>
+                    <span className="text-xs text-savia-text-muted">— {d.designation}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-savia-text-muted mt-1 flex-wrap">
+                    <span className="flex items-center gap-1"><Hash className="w-3 h-3" /> Interv. #{d.intervention_id}</span>
+                    <span className="flex items-center gap-1"><User className="w-3 h-3" /> {d.technicien}</span>
+                    <span className="flex items-center gap-1"><Package2 className="w-3 h-3" /> {d.equipement}</span>
+                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {d.date_creation ? new Date(d.date_creation).toLocaleDateString('fr-FR') : ''}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    setResolvingId(d.id);
+                    try {
+                      await piecesDemandees.resoudre(d.id);
+                      await loadDemandes();
+                    } catch { }
+                    setResolvingId(null);
+                  }}
+                  disabled={resolvingId === d.id}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-green-600 hover:bg-green-500 disabled:opacity-50 transition-all cursor-pointer whitespace-nowrap ml-3"
+                >
+                  {resolvingId === d.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCheck className="w-3.5 h-3.5" />}
+                  Disponible
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-blue-400/80 mt-2">
+            💡 Quand vous ajoutez la pièce au stock, le système détectera automatiquement les demandes correspondantes (matching flou). Vous pouvez aussi résoudre manuellement ci-dessus.
+          </p>
         </div>
       )}
 
