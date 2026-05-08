@@ -634,6 +634,62 @@ def check_sla_alerts():
         logger.error(f"check_sla_alerts error: {e}")
 
 
+
+def check_planning_retard():
+    """
+    Vérifie les maintenances planifiées en retard (date_prevue passée mais statut toujours 'Planifiée').
+    Envoie une alerte au Bot Manager.
+    """
+    from datetime import date
+    try:
+        df = lire_planning()
+        if df is None or df.empty:
+            return
+        today = date.today()
+        retard_items = []
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip()
+            if statut != 'Planifiée':
+                continue
+            date_str = str(row.get('date_prevue', '') or '').strip()
+            if not date_str:
+                continue
+            try:
+                date_prevue = date.fromisoformat(date_str[:10])
+                if date_prevue < today:
+                    jours_retard = (today - date_prevue).days
+                    retard_items.append({
+                        'id': row.get('id', '?'),
+                        'machine': row.get('machine', '?'),
+                        'client': row.get('client', ''),
+                        'technicien': row.get('technicien_assigne', ''),
+                        'date': date_prevue.strftime('%d/%m/%Y'),
+                        'jours': jours_retard,
+                        'description': row.get('description', ''),
+                    })
+            except Exception:
+                continue
+
+        if retard_items:
+            lines = '\n'.join(
+                f"  🔴 <b>#{r['id']}</b> — {r['machine']}"
+                + (f" — {r['client']}" if r['client'] else "")
+                + f"\n    📅 Prévue le {r['date']} (<b>{r['jours']}j de retard</b>)"
+                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else " | ⚠️ Technicien non assigné")
+                for r in sorted(retard_items, key=lambda x: -x['jours'])
+            )
+            msg = (
+                f"🔴 <b>PLANNING EN RETARD</b>\n"
+                f"<i>{len(retard_items)} maintenance(s) non réalisée(s) :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Planning retard: {len(retard_items)} alerte(s) envoyée(s) au bot Manager")
+    except Exception as e:
+        logger.error(f"check_planning_retard error: {e}")
+
+
 def _start_garantie_daemon():
     """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
     import threading, time
@@ -718,12 +774,16 @@ def _start_garantie_daemon():
                 check_sla_alerts()
             except Exception as e:
                 logger.error(f"SLA alerts daemon error: {e}")
+            try:
+                check_planning_retard()
+            except Exception as e:
+                logger.error(f"Planning retard daemon error: {e}")
 
             _mark_ran_today()
             logger.info("Notifications daemon: cycle terminé, prochain dans 1h")
             time.sleep(3600)  # Vérifier toutes les heures (mais skip si déjà fait aujourd'hui)
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA, 1x/jour)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, 1x/jour)")
 
 
 def check_contrat_expiry():
@@ -1850,6 +1910,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
+    _send_telegram_bot("telegram_sav", msg)
 
     # --- Auto-créer une intervention SAV si technicien assigné dès la création ---
     if technicien_assigne and demande_id:
