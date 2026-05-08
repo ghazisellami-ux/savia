@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Sparkles,
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
-  Bell, CheckCheck, Package2 } from 'lucide-react';
+  Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
 import { pieces, interventions, ai, notifications as notifApi } from '@/lib/api';
 
 interface Piece {
@@ -798,49 +798,84 @@ export default function PiecesPage() {
                   const isDispo = n.type === 'piece_dispo';
                   const isUnread = n.statut === 'non_lu';
                   return (
-                    <div key={n.id} className={`flex items-start gap-3 p-4 rounded-xl border transition-colors ${
+                    <div key={n.id} className={`p-4 rounded-xl border transition-colors ${
                       isUnread
                         ? isRupture
                           ? 'bg-orange-500/10 border-orange-500/30'
                           : 'bg-green-500/10 border-green-500/30'
                         : 'bg-savia-surface-hover/40 border-savia-border/30 opacity-70'
                     }`}>
-                      <div className={`mt-0.5 p-2 rounded-full flex-shrink-0 ${
-                        isRupture ? 'bg-orange-500/20 text-orange-400'
-                        : isDispo ? 'bg-green-500/20 text-green-400'
-                        : 'bg-blue-500/20 text-blue-400'
-                      }`}>
-                        {isRupture ? <AlertTriangle className="w-4 h-4" /> : <Package2 className="w-4 h-4" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                            isRupture ? 'bg-orange-500/20 text-orange-400'
-                            : 'bg-green-500/20 text-green-400'
-                          }`}>
-                            {isRupture ? 'Rupture' : 'Disponible'}
-                          </span>
-                          {isUnread && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold">NOUVEAU</span>
-                          )}
-                          <span className="text-xs text-savia-text-muted ml-auto">
-                            {n.date_creation ? new Date(n.date_creation).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
-                          </span>
+                      {/* Header: icon + badge + date + action */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className={`p-1.5 rounded-full flex-shrink-0 ${
+                          isRupture ? 'bg-orange-500/20 text-orange-400'
+                          : isDispo ? 'bg-green-500/20 text-green-400'
+                          : 'bg-blue-500/20 text-blue-400'
+                        }`}>
+                          {isRupture ? <AlertTriangle className="w-4 h-4" /> : <Package2 className="w-4 h-4" />}
                         </div>
-                        <p className="text-sm text-savia-text leading-relaxed">{n.message}</p>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          isRupture ? 'bg-orange-500/20 text-orange-400' : 'bg-green-500/20 text-green-400'
+                        }`}>
+                          {isRupture ? 'Rupture de stock' : 'Pièce disponible'}
+                        </span>
+                        {isUnread && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-bold">NOUVEAU</span>
+                        )}
+                        <span className="text-xs text-savia-text-muted ml-auto">
+                          {n.date_creation ? new Date(n.date_creation).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                        </span>
+                        <button
+                          onClick={() => notifApi.markDone(Number(n.id)).then(loadNotifs)}
+                          title="Marquer comme traité"
+                          className="flex-shrink-0 p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-green-400 transition-colors cursor-pointer"
+                        >
+                          <CheckCheck className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Piece info */}
+                      {(n.piece_nom || n.piece_reference) && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <Package className="w-4 h-4 flex-shrink-0" style={{ color: isRupture ? '#e67e22' : '#27ae60' }} />
+                          <span className="font-bold text-sm">{n.piece_nom || n.piece_reference}</span>
+                          {n.piece_reference && n.piece_nom && (
+                            <span className="text-[11px] font-mono bg-savia-surface-hover px-1.5 py-0.5 rounded text-savia-text-muted">{n.piece_reference}</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Detail grid */}
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        {n.intervention_id && (
+                          <div className="flex items-center gap-1.5">
+                            <Hash className="w-3 h-3 text-savia-accent" />
+                            <span className="text-savia-text-muted">Intervention</span>
+                            <span className="font-semibold">#{n.intervention_id}</span>
+                          </div>
+                        )}
                         {n.equipement && (
-                          <div className="mt-1.5 flex items-center gap-1 text-xs text-savia-text-muted">
-                            <Wrench className="w-3 h-3" /> {n.equipement}
+                          <div className="flex items-center gap-1.5">
+                            <Wrench className="w-3 h-3 text-savia-accent" />
+                            <span className="text-savia-text-muted">Équip.</span>
+                            <span className="font-semibold">{n.equipement}</span>
+                          </div>
+                        )}
+                        {n.client && (
+                          <div className="flex items-center gap-1.5">
+                            <Building2 className="w-3 h-3 text-savia-accent" />
+                            <span className="text-savia-text-muted">Client</span>
+                            <span className="font-semibold">{n.client}</span>
+                          </div>
+                        )}
+                        {n.technicien && (
+                          <div className="flex items-center gap-1.5">
+                            <User className="w-3 h-3 text-savia-accent" />
+                            <span className="text-savia-text-muted">Tech.</span>
+                            <span className="font-semibold">{n.technicien}</span>
                           </div>
                         )}
                       </div>
-                      <button
-                        onClick={() => notifApi.markDone(Number(n.id)).then(loadNotifs)}
-                        title="Marquer comme traité"
-                        className="flex-shrink-0 p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-green-400 transition-colors cursor-pointer"
-                      >
-                        <CheckCheck className="w-4 h-4" />
-                      </button>
                     </div>
                   );
                 })}
