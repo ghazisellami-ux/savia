@@ -24,6 +24,8 @@ const emptyForm = (): Record<string, any> => ({
 export default function ClientsPage() {
   const [search, setSearch] = useState('');
   const [regionFilter, setRegionFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [villeFilter, setVilleFilter] = useState('');
   const [data, setData] = useState<Client[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -54,8 +56,20 @@ export default function ClientsPage() {
   const filtered = data.filter(c => {
     if (search && !c.nom.toLowerCase().includes(search.toLowerCase())) return false;
     if (regionFilter && c.region !== regionFilter) return false;
+    if (typeFilter && c.type_client !== typeFilter) return false;
+    if (villeFilter && c.ville !== villeFilter) return false;
     return true;
   });
+
+  // Compute unique type_client values from data
+  const typeOptions = [...new Set(data.map(c => c.type_client).filter(Boolean))].sort();
+  // Compute ville options filtered by current region selection
+  const villeOptions = [...new Set(
+    data
+      .filter(c => !regionFilter || c.region === regionFilter)
+      .map(c => c.ville)
+      .filter(Boolean)
+  )].sort();
 
   const totalMachines = data.reduce((a,c) => a+c.nb_equipements, 0);
   const totalInterv = data.reduce((a,c) => a+c.nb_interventions, 0);
@@ -144,19 +158,29 @@ export default function ClientsPage() {
         <div className="glass rounded-xl p-4 text-center"><div className="text-3xl font-black text-yellow-400">{avgHealth}%</div><div className="text-xs text-savia-text-muted mt-1">Santé moyenne</div></div>
       </div>
 
-      {/* Search + Region filter */}
+      {/* Search + Filters */}
       <div className="flex gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
           <input type="text" placeholder="Rechercher un client..." value={search} onChange={e => setSearch(e.target.value)}
             className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
         </div>
-        <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+          className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
+          <option value="">Tous les types</option>
+          {typeOptions.map(t => <option key={t} value={t}>{t === 'Public' ? '🏛️' : '🏢'} {t}</option>)}
+        </select>
+        <select value={regionFilter} onChange={e => { setRegionFilter(e.target.value); setVilleFilter(''); }}
           className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
           <option value="">Toutes régions</option>
           <option value="Nord">🔵 Nord</option>
           <option value="Centre">🟢 Centre</option>
           <option value="Sud">🟠 Sud</option>
+        </select>
+        <select value={villeFilter} onChange={e => setVilleFilter(e.target.value)}
+          className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
+          <option value="">Toutes villes</option>
+          {villeOptions.map(v => <option key={v} value={v}>📍 {v}</option>)}
         </select>
       </div>
 
