@@ -2537,7 +2537,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             existing = conn.execute(
-                "SELECT id FROM logs_uploaded WHERE content_hash = ? AND equipement = ?",
+                "SELECT id FROM logs_uploaded WHERE content_hash = %s AND equipement = %s",
                 (content_hash, equipement)
             ).fetchone()
             if existing:
@@ -2545,7 +2545,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
                 # Update parsed_errors on duplicate if not already stored
                 if parsed_errors_str:
                     conn.execute(
-                        "UPDATE logs_uploaded SET parsed_errors = ? WHERE id = ? AND (parsed_errors IS NULL OR parsed_errors = '')",
+                        "UPDATE logs_uploaded SET parsed_errors = %s WHERE id = %s AND (parsed_errors IS NULL OR parsed_errors = '')",
                         (parsed_errors_str, eid)
                     )
                 return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
@@ -2567,14 +2567,16 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
             # Métadonnées en PostgreSQL
             cursor = conn.execute(
                 """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
             )
+            new_row = cursor.fetchone()
+            new_id = (new_row["id"] if isinstance(new_row, dict) else new_row[0]) if new_row else None
             conn.execute(
-                "INSERT INTO audit_log (username, action, details) VALUES (?, ?, ?)",
+                "INSERT INTO audit_log (username, action, details) VALUES (%s, %s, %s)",
                 (username, "Upload Log", f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)")
             )
-            return {"ok": True, "id": cursor.lastrowid, "s3_key": s3_key,
+            return {"ok": True, "id": new_id, "s3_key": s3_key,
                     "message": f"Log enregistré — {size_bytes} octets, {nb_errors} erreur(s), S3: {'ok' if s3_key else 'fallback'}"}
     except Exception as e:
         logger.error(f"Log upload error: {e}")
@@ -2588,7 +2590,7 @@ def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
         with get_db() as conn:
             if equipement:
                 rows = conn.execute(
-                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = ? ORDER BY uploaded_at DESC",
+                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = %s ORDER BY uploaded_at DESC",
                     (equipement,)
                 ).fetchall()
             else:
@@ -2609,7 +2611,7 @@ def get_log(log_id: int, user: dict = Depends(_verify_token)):
     """Récupère le contenu d'un log depuis S3/MinIO."""
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
+            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = %s", (log_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Log non trouvé")
             # Support both dict (PG) and tuple (SQLite) rows
