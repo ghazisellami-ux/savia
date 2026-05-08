@@ -130,14 +130,13 @@ export default function ReportsPage() {
         { label: 'Interventions', val: String(nbIntv), color: [15,118,110] },
         { label: 'Clôturées',     val: String(nbClot), color: [22,163,74] },
         { label: 'Taux rés.',     val: tauxStr, color: [234,179,8] },
-        { label: 'Coût (TND)',    val: costStr, color: [59,130,246] },
       ],
       type_data: Object.entries(types).map(function(e) { return [e[0], String(e[1])]; }),
-      head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
+      head: ['Date','Machine','Type','Technicien','Statut'],
       table_title: 'Détail \u2014 ' + label,
       rows: monthData.slice(0,100).map(function(i: any) { return [
         (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
-        i.technicien||'', i.statut||'', Math.round(i.cout||0),
+        i.technicien||'', i.statut||'',
       ]; }),
     });
   };
@@ -359,7 +358,7 @@ export default function ReportsPage() {
             monthData.forEach((i: any) => { const t = i.type_intervention || 'Autre'; types[t] = (types[t] || 0) + 1; });
             return (
               <div className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="glass rounded-xl p-4 text-center">
                     <Activity className="w-5 h-5 text-savia-accent mx-auto mb-1" />
                     <div className="text-3xl font-black text-savia-accent">{nbIntv}</div>
@@ -369,11 +368,6 @@ export default function ReportsPage() {
                     <CheckCircle2 className="w-5 h-5 text-green-400 mx-auto mb-1" />
                     <div className="text-3xl font-black text-green-400">{nbClot}</div>
                     <div className="text-xs text-savia-text-muted mt-1">Clôturées</div>
-                  </div>
-                  <div className="glass rounded-xl p-4 text-center">
-                    <DollarSign className="w-5 h-5 text-blue-400 mx-auto mb-1" />
-                    <div className="text-3xl font-black text-blue-400">{cout.toLocaleString('fr')}</div>
-                    <div className="text-xs text-savia-text-muted mt-1">Coût total (TND)</div>
                   </div>
                 </div>
                 {Object.keys(types).length > 0 && (
