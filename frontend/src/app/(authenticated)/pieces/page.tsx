@@ -252,6 +252,7 @@ export default function PiecesPage() {
           date: (inter.date || '').substring(0, 10),
           piece: partName,
           equipement: inter.machine || '',
+          client: inter.client || '',
           technicien: inter.technicien || '',
           statut: inter.statut || '',
         });
@@ -441,7 +442,7 @@ export default function PiecesPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-savia-bg">
                     <tr className="border-b border-savia-border">
-                      {['Date', 'Pièce', 'Équipement', 'Technicien', 'Statut'].map(h => (
+                      {['Date', 'Pièce', 'Équipement', 'Client', 'Technicien', 'Statut'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted">{h}</th>
                       ))}
                     </tr>
@@ -452,6 +453,7 @@ export default function PiecesPage() {
                         <td className="py-2 px-3 text-xs">{t.date}</td>
                         <td className="py-2 px-3 font-semibold text-savia-accent">{t.piece}</td>
                         <td className="py-2 px-3">{t.equipement}</td>
+                        <td className="py-2 px-3 text-sm">{t.client}</td>
                         <td className="py-2 px-3">{t.technicien}</td>
                         <td className="py-2 px-3"><span className={`px-2 py-0.5 rounded-full text-xs font-bold ${t.statut?.toLowerCase().includes('tur') ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'}`}>{t.statut}</span></td>
                       </tr>
