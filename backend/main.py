@@ -2987,6 +2987,62 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 
 
 # ==========================================
+# AI — Analyse des coûts (cartes structurées)
+# ==========================================
+
+@app.post("/api/ai/analyze-costs")
+def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token)):
+    """Analyse IA structurée des coûts clients — retourne des cartes comme le diagnostic IA."""
+    try:
+        from ai_engine import _call_ia, AI_AVAILABLE
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
+
+    clients_data = body.get("clients", [])
+    kpis = body.get("kpis", {})
+    if not clients_data:
+        raise HTTPException(status_code=400, detail="Aucune donnée client.")
+
+    # Build compact summary
+    avg_cout = sum(c.get('cout_total', 0) for c in clients_data) / max(len(clients_data), 1)
+    client_lines = []
+    for c in clients_data:
+        ecart = round(((c.get('cout_total', 0) - avg_cout) / avg_cout * 100)) if avg_cout > 0 else 0
+        client_lines.append(f"{c.get('client','?')}: revenu={c.get('revenu_contrats',0)} TND, coûts={c.get('cout_total',0)} TND, marge={c.get('marge_pct',0)}%, interventions={c.get('nb_interventions',0)}, equipements={c.get('nb_equipements',0)}, écart_vs_moy={'+' if ecart>0 else ''}{ecart}%")
+    summary = "\n".join(client_lines)
+
+    prompt = f"""Analyse les données financières de maintenance SAVIA et retourne un JSON structuré.
+
+Coût moyen par client: {round(avg_cout)} TND
+Marge globale: {kpis.get('marge_pct',0)}%
+Clients rentables: {kpis.get('nb_rentables',0)} / {kpis.get('nb_clients',0)}
+
+Données par client:
+{summary}
+
+Retourne UNIQUEMENT un JSON valide avec cette structure exacte:
+{{
+  "clients_couteux": "Texte décrivant les clients qui coûtent significativement plus que la moyenne, avec les % d'écart et les chiffres précis. Utilise • pour les puces.",
+  "causes": "Texte décrivant les causes probables des surcoûts identifiés (nombre d'interventions élevé, coût pièces, ratio interventions/équipements...). Utilise • pour les puces.",
+  "optimisations": "Texte proposant des suggestions d'optimisation concrètes et actionnables pour réduire les coûts. Utilise • pour les puces.",
+  "clients_performants": "Texte sur les clients les plus rentables, pourquoi ils performent bien, et ce qu'on peut apprendre d'eux. Utilise • pour les puces.",
+  "recommandations": "Texte avec les recommandations stratégiques (renégociation de contrats, passage en préventif, optimisation stock pièces...). Utilise • pour les puces.",
+  "tags": ["tag1", "tag2", "tag3"],
+  "confiance": 85
+}}
+
+Sois PRÉCIS avec les chiffres. Chaque section doit faire 2-4 lignes maximum. Retourne UNIQUEMENT le JSON, rien d'autre."""
+
+    raw = _call_ia(prompt, timeout=90, is_json=True)
+    if not raw:
+        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
+    result = clean_json_response(raw)
+    return {"ok": True, "result": result}
+
+
+# ==========================================
 # AI CHATBOT — Assistant conversationnel
 # ==========================================
 

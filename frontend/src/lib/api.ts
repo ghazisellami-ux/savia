@@ -282,6 +282,8 @@ export const ai = {
     request<{ok: boolean, result: any}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
   chat: (message: string, history: Array<{role: string, content: string}> = []) =>
     request<{response: string, suggestions: string[]}>('/api/ai/chat', { method: 'POST', body: { message, history } }),
+  analyzeCosts: (clients: any[], kpis: any) =>
+    request<{ok: boolean, result: any}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis } }),
 };
 
 // --- Logs / S3 ---
