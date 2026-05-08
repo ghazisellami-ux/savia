@@ -976,15 +976,47 @@ export default function SupervisionPage() {
                   </thead>
                   <tbody>
                     {filteredHistory.map((log: any) => (
-                      <tr key={log.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
+                      <tr key={log.id}
+                        onClick={() => {
+                          const equip = (log.equipement || '').trim();
+                          setSelectedMachine(equip);
+                          setSelectedEquip(equip);
+                          setSelectedLogId(log.id);
+                          setSelectedError('');
+                          setAiResult(null);
+                          setShowAiDiag(false);
+                          setLogLoadFailed(false);
+                          fetchLogErrors(log.id);
+                          setTimeout(() => {
+                            const el = document.getElementById('error-analysis-section');
+                            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }, 300);
+                        }}
+                        className={`border-b border-savia-border/50 cursor-pointer transition-colors
+                          ${selectedLogId === log.id ? 'bg-savia-accent/10 border-l-2 border-l-savia-accent' : 'hover:bg-savia-surface-hover/50'}`}
+                      >
                         <td className="py-2 px-3 text-xs text-savia-text-muted">
                           {log.uploaded_at ? new Date(log.uploaded_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
                         </td>
                         <td className="py-2 px-3 font-semibold">
                           <button
-                            onClick={() => { setSelectedMachine((log.equipement || '').trim()); }}
-                            title="Recharger pour analyse"
-                            className="text-left hover:text-savia-accent transition-colors cursor-pointer"
+                            onClick={() => {
+                              const equip = (log.equipement || '').trim();
+                              setSelectedMachine(equip);
+                              setSelectedEquip(equip);
+                              setSelectedLogId(log.id);
+                              setSelectedError('');
+                              setAiResult(null);
+                              setShowAiDiag(false);
+                              setLogLoadFailed(false);
+                              fetchLogErrors(log.id);
+                              setTimeout(() => {
+                                const el = document.getElementById('error-analysis-section');
+                                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 300);
+                            }}
+                            title="Voir les erreurs détectées"
+                            className={`text-left hover:text-savia-accent transition-colors cursor-pointer ${selectedLogId === log.id ? 'text-savia-accent font-bold' : ''}`}
                           >
                             {log.equipement}
                           </button>
