@@ -7,7 +7,10 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
-
+import {
+  XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area, PieChart, Pie, Cell,
+} from 'recharts';
 import dynamic from 'next/dynamic';
 const ApexChart = dynamic(() => import('react-apexcharts'), { ssr: false });
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
@@ -493,41 +496,30 @@ export default function DashboardPage() {
 
         {/* Répartition types erreurs */}
         <SectionCard title={<span className="flex items-center gap-2"><Crosshair className="w-5 h-5 text-purple-400" /> Types d&apos;Erreurs</span>}>
-          <ApexChart
-            type="donut"
-            height={280}
-            series={DEMO_TYPES.map(d => d.value)}
-            options={{
-              labels: DEMO_TYPES.map(d => d.name),
-              colors: DEMO_TYPES.map(d => d.color),
-              chart: { background: 'transparent', fontFamily: 'Inter, sans-serif' },
-              plotOptions: {
-                pie: {
-                  donut: {
-                    size: '65%',
-                    labels: {
-                      show: true,
-                      name: { fontSize: '13px', color: '#94a3b8' },
-                      value: { fontSize: '20px', fontWeight: 700, color: '#f1f5f9' },
-                      total: { show: true, label: 'Total', fontSize: '12px', color: '#64748b',
-                        formatter: () => String(DEMO_TYPES.reduce((s, d) => s + d.value, 0)),
-                      },
-                    },
-                  },
-                },
-              },
-              dataLabels: { enabled: false },
-              stroke: { width: 2, colors: ['#0a0f1a'] },
-              tooltip: { theme: 'dark', style: { fontSize: '12px' } },
-              legend: {
-                position: 'bottom',
-                labels: { colors: '#94a3b8' },
-                fontSize: '11px',
-                markers: { size: 6, shape: 'circle' as const },
-              },
-              theme: { mode: 'dark' },
-            }}
-          />
+          <ResponsiveContainer width="100%" height={280}>
+            <PieChart>
+              <Pie
+                data={DEMO_TYPES}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={90}
+                paddingAngle={3}
+                dataKey="value"
+                stroke="none"
+              >
+                {DEMO_TYPES.map((entry, i) => (
+                  <Cell key={i} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
         </SectionCard>
       </div>
 
@@ -634,28 +626,27 @@ export default function DashboardPage() {
 
       {/* Disponibilité Trend */}
       <SectionCard title={<span className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-400" /> Tendance Disponibilité (6 mois)</span>}>
-        <ApexChart
-          type="area"
-          height={200}
-          series={[{ name: 'Disponibilité', data: [97.2, 96.5, 95.8, 97.1, 98.0, 96.8] }]}
-          options={{
-            chart: { toolbar: { show: false }, background: 'transparent', fontFamily: 'Inter, sans-serif' },
-            colors: [CHART_STYLE.accent],
-            fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.3, opacityTo: 0, stops: [0, 100] } },
-            stroke: { curve: 'smooth', width: 2 },
-            xaxis: {
-              categories: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun'],
-              labels: { style: { colors: '#64748b', fontSize: '12px' } },
-              axisBorder: { show: false },
-              axisTicks: { show: false },
-            },
-            yaxis: { min: 94, max: 100, labels: { style: { colors: '#64748b', fontSize: '12px' }, formatter: (v: number) => `${v}%` } },
-            grid: { borderColor: 'rgba(45,212,191,0.08)', strokeDashArray: 3, xaxis: { lines: { show: false } } },
-            dataLabels: { enabled: false },
-            tooltip: { theme: 'dark', style: { fontSize: '12px' }, y: { formatter: (v: number) => `${v}%` } },
-            theme: { mode: 'dark' },
-          }}
-        />
+        <ResponsiveContainer width="100%" height={200}>
+          <AreaChart data={[
+            { mois: 'Jan', dispo: 97.2 }, { mois: 'Fév', dispo: 96.5 },
+            { mois: 'Mar', dispo: 95.8 }, { mois: 'Avr', dispo: 97.1 },
+            { mois: 'Mai', dispo: 98.0 }, { mois: 'Jun', dispo: 96.8 },
+          ]}>
+            <defs>
+              <linearGradient id="dispoGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+            <YAxis domain={[94, 100]} stroke={CHART_STYLE.text} fontSize={12} />
+            <Tooltip
+              contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+              formatter={(value) => [`${value}%`, 'Disponibilité']}
+            />
+            <Area type="monotone" dataKey="dispo" stroke={CHART_STYLE.accent} fill="url(#dispoGrad)" strokeWidth={2} />
+          </AreaChart>
+        </ResponsiveContainer>
       </SectionCard>
 
       {/* Footer */}
