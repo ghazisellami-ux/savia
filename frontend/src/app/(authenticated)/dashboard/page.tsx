@@ -9,7 +9,7 @@ import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, RadialBarChart, RadialBar, Legend,
+  PieChart, Pie, Cell, Legend,
   AreaChart, Area,
 } from 'recharts';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
@@ -548,32 +548,53 @@ export default function DashboardPage() {
           </div>
         </SectionCard>
 
-        {/* Gauge Santé Globale */}
+        {/* Gauge Santé Globale — Cercle SVG animé */}
         <SectionCard title={<span className="flex items-center gap-2"><Target className="w-5 h-5 text-savia-accent" /> Jauge Santé Globale</span>}>
-          <ResponsiveContainer width="100%" height={280}>
-            <RadialBarChart
-              cx="50%"
-              cy="50%"
-              innerRadius="60%"
-              outerRadius="90%"
-              data={gaugeData}
-              startAngle={180}
-              endAngle={0}
-              barSize={16}
-            >
-              <RadialBar
-                dataKey="value"
-                cornerRadius={8}
-                background={{ fill: '#1e293b' }}
-              />
-              <text x="50%" y="55%" textAnchor="middle" fill="#94a3b8" fontSize="32" fontWeight="800">
-                {scoreGlobal}%
-              </text>
-              <text x="50%" y="68%" textAnchor="middle" fill="#94a3b8" fontSize="12" opacity="0.75">
-                Santé Globale
-              </text>
-            </RadialBarChart>
-          </ResponsiveContainer>
+          {(() => {
+            const size = 200;
+            const strokeWidth = 14;
+            const radius = (size - strokeWidth) / 2;
+            const circumference = 2 * Math.PI * radius;
+            const offset = circumference - (scoreGlobal / 100) * circumference;
+            const color = scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444';
+            const label = scoreGlobal >= 60 ? 'Bon' : scoreGlobal >= 30 ? 'Attention' : 'Critique';
+            return (
+              <div className="flex flex-col items-center justify-center py-4">
+                <div className="relative" style={{ width: size, height: size }}>
+                  <svg width={size} height={size} className="-rotate-90">
+                    {/* Background circle */}
+                    <circle
+                      cx={size / 2} cy={size / 2} r={radius}
+                      fill="none" stroke="#1e293b" strokeWidth={strokeWidth}
+                    />
+                    {/* Glow filter */}
+                    <defs>
+                      <filter id="glow">
+                        <feGaussianBlur stdDeviation="3" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                    </defs>
+                    {/* Progress circle */}
+                    <circle
+                      cx={size / 2} cy={size / 2} r={radius}
+                      fill="none" stroke={color} strokeWidth={strokeWidth}
+                      strokeLinecap="round"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={offset}
+                      filter="url(#glow)"
+                      style={{ transition: 'stroke-dashoffset 1.5s ease-out, stroke 0.5s ease' }}
+                    />
+                  </svg>
+                  {/* Center text */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-4xl font-black" style={{ color }}>{scoreGlobal}%</span>
+                    <span className="text-xs font-semibold mt-1" style={{ color, opacity: 0.8 }}>{label}</span>
+                  </div>
+                </div>
+                <div className="text-xs text-savia-text-muted mt-3">Santé Globale du Parc</div>
+              </div>
+            );
+          })()}
         </SectionCard>
       </div>
 
