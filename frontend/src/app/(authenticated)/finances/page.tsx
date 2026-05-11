@@ -159,6 +159,7 @@ export default function FinancesPage() {
   const revenueCostChart = useMemo(() => {
     return clientsData.map((c: any) => ({
       name: (c.client || '').length > 12 ? (c.client || '').substring(0, 12) + '…' : c.client,
+      fullName: c.client || '',
       revenu: c.revenu_contrats || 0,
       cout: c.cout_total || 0,
       marge: c.marge || 0,
@@ -260,6 +261,10 @@ export default function FinancesPage() {
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
                 formatter={(value: any) => [`${FMT(Number(value))} TND`]}
+                labelFormatter={(_label: any, payload: any) => {
+                  const item = payload?.[0]?.payload;
+                  return item?.fullName || _label;
+                }}
               />
               <Bar dataKey="revenu" name="Revenu" fill={COLORS.green} radius={[4, 4, 0, 0]} />
               <Bar dataKey="cout" name="Coûts" fill={COLORS.red} radius={[4, 4, 0, 0]} />
