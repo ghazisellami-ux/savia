@@ -262,15 +262,12 @@ export default function ContratsPage() {
       const blob = await res.blob();
       console.log('Received PDF blob, size:', blob.size);
       if (!blob || blob.size === 0) throw new Error('PDF vide reçu');
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `contrat_${c.id}.pdf`;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      console.log('Triggering download link...');
-      setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); console.log('Cleanup finished.'); }, 3000);
+      // Open PDF in new tab — most reliable cross-browser method
+      const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+      const url = URL.createObjectURL(pdfBlob);
+      window.open(url, '_blank');
+      // Cleanup after a delay so the new tab can load
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     } catch(err: any) {
       console.error('PDF Error:', err);
       alert('Erreur PDF: ' + (err?.message || err));
