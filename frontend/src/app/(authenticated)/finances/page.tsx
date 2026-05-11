@@ -11,7 +11,7 @@ import {
 import {
   DollarSign, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2,
   Building2, Wrench, Cpu, Loader2, Filter, ArrowUpDown, ChevronDown, ChevronUp,
-  PieChart as PieChartIcon, BarChart3, Clock, Package, Sparkles, Brain, Download,
+  PieChart as PieChartIcon, BarChart3, Clock, Package, Sparkles, Brain, Download, Search, X,
 } from 'lucide-react';
 import { finances, clients as clientsApi, ai } from '@/lib/api';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
@@ -41,6 +41,12 @@ export default function FinancesPage() {
   const [aiRecos, setAiRecos] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+
+  // Table filters
+  const [tableSearch, setTableSearch] = useState('');
+  const [tableClientFilter, setTableClientFilter] = useState('');
+  const [tcoClientFilter, setTcoClientFilter] = useState('');
+  const [tcoEquipFilter, setTcoEquipFilter] = useState('');
 
   // Helper: render AI text with bullet points as styled list
   const formatBullets = (text: string) => {
@@ -93,13 +99,37 @@ export default function FinancesPage() {
 
   const kpis = data?.kpis || {};
   const clientsData = useMemo(() => {
-    const arr = (data?.clients || []) as any[];
+    let arr = (data?.clients || []) as any[];
+    // Apply table client filter
+    if (tableClientFilter) arr = arr.filter((c: any) => c.client === tableClientFilter);
+    // Apply search
+    if (tableSearch) {
+      const q = tableSearch.toLowerCase();
+      arr = arr.filter((c: any) => (c.client || '').toLowerCase().includes(q));
+    }
     return [...arr].sort((a, b) => {
       const va = a[sortCol] ?? 0;
       const vb = b[sortCol] ?? 0;
       return sortDir === 'asc' ? va - vb : vb - va;
     });
-  }, [data, sortCol, sortDir]);
+  }, [data, sortCol, sortDir, tableClientFilter, tableSearch]);
+
+  // Filtered TCO data
+  const filteredTco = useMemo(() => {
+    let arr = (tcoData || []) as any[];
+    if (tcoClientFilter) arr = arr.filter((t: any) => t.client === tcoClientFilter);
+    if (tcoEquipFilter) {
+      const q = tcoEquipFilter.toLowerCase();
+      arr = arr.filter((t: any) => (t.equipement || '').toLowerCase().includes(q));
+    }
+    return arr;
+  }, [tcoData, tcoClientFilter, tcoEquipFilter]);
+
+  // Unique client names from TCO data
+  const tcoClientNames = useMemo(() => {
+    const names = [...new Set((tcoData || []).map((t: any) => t.client).filter(Boolean))];
+    return names.sort();
+  }, [tcoData]);
 
   const handleSort = (col: string) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -377,6 +407,38 @@ export default function FinancesPage() {
       {/* Clients Profitability Table */}
       {tab === 'clients' && (
         <SectionCard title={<span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-savia-accent" /> Rentabilité par Client</span>}>
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-savia-text-dim" />
+              <input
+                type="text"
+                placeholder="Rechercher un client..."
+                value={tableSearch}
+                onChange={e => setTableSearch(e.target.value)}
+                className="w-full bg-savia-bg/50 border border-savia-border rounded-lg pl-9 pr-8 py-2 text-sm text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+              />
+              {tableSearch && (
+                <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-savia-surface-hover cursor-pointer">
+                  <X className="w-3.5 h-3.5 text-savia-text-dim" />
+                </button>
+              )}
+            </div>
+            <select
+              value={tableClientFilter}
+              onChange={e => setTableClientFilter(e.target.value)}
+              className="bg-savia-bg/50 border border-savia-border rounded-lg px-3 py-2 text-sm text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              <option value="">Tous les clients</option>
+              {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {(tableSearch || tableClientFilter) && (
+              <button onClick={() => { setTableSearch(''); setTableClientFilter(''); }} className="text-xs text-savia-accent hover:underline cursor-pointer">
+                Réinitialiser
+              </button>
+            )}
+            <span className="ml-auto text-xs text-savia-text-dim">{clientsData.length} résultat{clientsData.length > 1 ? 's' : ''}</span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -420,6 +482,38 @@ export default function FinancesPage() {
       {/* TCO Table */}
       {tab === 'tco' && (
         <SectionCard title={<span className="flex items-center gap-2"><Cpu className="w-4 h-4 text-blue-400" /> TCO — Total Cost of Ownership</span>}>
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <select
+              value={tcoClientFilter}
+              onChange={e => setTcoClientFilter(e.target.value)}
+              className="bg-savia-bg/50 border border-savia-border rounded-lg px-3 py-2 text-sm text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              <option value="">Tous les clients</option>
+              {tcoClientNames.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-savia-text-dim" />
+              <input
+                type="text"
+                placeholder="Rechercher un équipement..."
+                value={tcoEquipFilter}
+                onChange={e => setTcoEquipFilter(e.target.value)}
+                className="w-full bg-savia-bg/50 border border-savia-border rounded-lg pl-9 pr-8 py-2 text-sm text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+              />
+              {tcoEquipFilter && (
+                <button onClick={() => setTcoEquipFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-savia-surface-hover cursor-pointer">
+                  <X className="w-3.5 h-3.5 text-savia-text-dim" />
+                </button>
+              )}
+            </div>
+            {(tcoClientFilter || tcoEquipFilter) && (
+              <button onClick={() => { setTcoClientFilter(''); setTcoEquipFilter(''); }} className="text-xs text-savia-accent hover:underline cursor-pointer">
+                Réinitialiser
+              </button>
+            )}
+            <span className="ml-auto text-xs text-savia-text-dim">{filteredTco.length} équipement{filteredTco.length > 1 ? 's' : ''}</span>
+          </div>
           <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-bg z-10">
@@ -436,7 +530,7 @@ export default function FinancesPage() {
                 </tr>
               </thead>
               <tbody>
-                {(tcoData || []).map((t: any, i: number) => (
+                {filteredTco.map((t: any, i: number) => (
                   <tr key={`${t.equipement}-${i}`} className="border-b border-savia-border/20 hover:bg-savia-surface-hover/20 transition-colors">
                     <td className="py-3 px-3">
                       <div className="font-bold">{t.equipement}</div>
@@ -456,8 +550,8 @@ export default function FinancesPage() {
                     <td className="py-3 px-2 text-right text-xs text-savia-text-muted">{FMT(t.tco_mensuel)}/m</td>
                   </tr>
                 ))}
-                {(tcoData || []).length === 0 && (
-                  <tr><td colSpan={9} className="py-8 text-center text-savia-text-muted">Aucune donnée TCO</td></tr>
+                {filteredTco.length === 0 && (
+                  <tr><td colSpan={9} className="py-8 text-center text-savia-text-muted">{tcoClientFilter || tcoEquipFilter ? 'Aucun résultat pour ce filtre' : 'Aucune donnée TCO'}</td></tr>
                 )}
               </tbody>
             </table>
