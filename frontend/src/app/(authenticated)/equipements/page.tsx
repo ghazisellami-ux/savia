@@ -11,6 +11,7 @@ import {
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
 import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi } from '@/lib/api';
+import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
 // Tunisian cities for dropdown
@@ -504,10 +505,11 @@ export default function EquipementsPage() {
   const handleDownloadDoc = async (doc: DocTechnique) => {
     try {
       const result = await documentsTechniques.download(doc.id);
-      const link = document.createElement('a');
-      link.href = `data:application/octet-stream;base64,${result.contenu_base64}`;
-      link.download = result.nom_fichier || doc.nom_fichier;
-      link.click();
+      const byteChars = atob(result.contenu_base64);
+      const byteArray = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([byteArray], { type: 'application/octet-stream' });
+      downloadBlob(blob, result.nom_fichier || doc.nom_fichier);
     } catch (err) { console.error("Download failed", err); }
   };
 
@@ -529,12 +531,7 @@ export default function EquipementsPage() {
       });
       if (!res.ok) throw new Error('Erreur PDF');
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `attestation_bon_fonctionnement_${eq.id}.pdf`;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
+      downloadBlob(blob, `attestation_bon_fonctionnement_${eq.id}.pdf`);
     } catch(e: any) { alert('Erreur: ' + (e.message || 'Inconnue')); }
   };
 

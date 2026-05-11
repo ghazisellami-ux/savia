@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { contrats, equipements, pieces as piecesApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { downloadBlob } from '@/lib/download';
 import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
   X, ChevronDown, Package, Bell, RefreshCcw, CheckSquare, StickyNote,
@@ -260,14 +261,8 @@ export default function ContratsPage() {
       });
       if (!res.ok) throw new Error('Erreur HTTP ' + res.status);
       const blob = await res.blob();
-      console.log('Received PDF blob, size:', blob.size);
       if (!blob || blob.size === 0) throw new Error('PDF vide reçu');
-      // Open PDF in new tab — most reliable cross-browser method
-      const pdfBlob = new Blob([blob], { type: 'application/pdf' });
-      const url = URL.createObjectURL(pdfBlob);
-      window.open(url, '_blank');
-      // Cleanup after a delay so the new tab can load
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      downloadBlob(blob, `contrat_${c.id}.pdf`);
     } catch(err: any) {
       console.error('PDF Error:', err);
       alert('Erreur PDF: ' + (err?.message || err));

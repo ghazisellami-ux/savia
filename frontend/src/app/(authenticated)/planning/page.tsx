@@ -9,6 +9,7 @@ import {
   ChevronDown, Check, Download, MapPin
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
+import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
@@ -480,12 +481,7 @@ export default function PlanningPage() {
                 });
                 if (!res.ok) throw new Error('Erreur ' + res.status);
                 const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `planning_maintenance.pdf`;
-                document.body.appendChild(a); a.click();
-                document.body.removeChild(a); URL.revokeObjectURL(url);
+                downloadBlob(blob, 'planning_maintenance.pdf');
               } catch (err: any) { alert('Erreur PDF: ' + (err.message || 'Inconnue')); }
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/30 transition-all cursor-pointer ml-auto"

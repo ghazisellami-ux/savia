@@ -12,6 +12,7 @@ import {
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention } from '@/lib/api';
+import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
 
@@ -395,12 +396,7 @@ export default function SavPage() {
       });
       if (!res.ok) throw new Error('Erreur ' + res.status);
       const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url;
-      a.download = `rapport_sav_${pdfDateFrom}_${pdfDateTo}.pdf`;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
+      downloadBlob(blob, `rapport_sav_${pdfDateFrom}_${pdfDateTo}.pdf`);
     } catch (err: any) {
       alert('Erreur PDF: ' + err.message);
     } finally {
@@ -429,11 +425,7 @@ export default function SavPage() {
       });
       if (!res.ok) throw new Error('Erreur ' + res.status);
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'analyse_ia_sav.pdf';
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
+      downloadBlob(blob, 'analyse_ia_sav.pdf');
     } catch(err: any) { alert('Erreur PDF: ' + err.message); }
     finally { setIsPdfGenerating(false); }
   };
@@ -451,12 +443,7 @@ export default function SavPage() {
       });
       if (!res.ok) throw new Error('Erreur ' + res.status);
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `fiche_intervention_${interv.id}.pdf`;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
+      downloadBlob(blob, `fiche_intervention_${interv.id}.pdf`);
     } catch (err: any) { alert('Erreur PDF: ' + err.message); }
   };
 
