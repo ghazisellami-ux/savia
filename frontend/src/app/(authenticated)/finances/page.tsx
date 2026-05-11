@@ -1,6 +1,6 @@
 'use client';
 // ==========================================
-// 💰 Finances — Rentabilité & TCO Dashboard
+// 💰 Rentabilité Client — Rentabilité & TCO Dashboard
 // ==========================================
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { SectionCard, KpiCard } from '@/components/ui/cards';
@@ -179,7 +179,7 @@ export default function FinancesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black gradient-text flex items-center gap-3">
-            <DollarSign className="w-7 h-7" /> Tableau de Bord Financier
+            <DollarSign className="w-7 h-7" /> Rentabilité Client
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Rentabilité par client · TCO par équipement · Marges</p>
         </div>

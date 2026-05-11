@@ -28,7 +28,7 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'pieces',             label: 'Pièces de Rechange',     icon: Cog            },
   { key: 'reports',            label: 'Rapports & Exports',     icon: FileText       },
   { key: 'contrats',           label: 'Contrats & SLA',         icon: ClipboardCheck },
-  { key: 'finances',           label: 'Finances',               icon: DollarSign     },
+  { key: 'finances',           label: 'Rentabilité Client',     icon: DollarSign     },
   { key: 'carte',              label: 'Carte Géographique',     icon: MapPin         },
   { key: 'sla',                label: 'Suivi SLA',              icon: ShieldCheck    },
   { key: 'admin',              label: 'Administration',         icon: Settings       },

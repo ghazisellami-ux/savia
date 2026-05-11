@@ -28,7 +28,7 @@ const NAV_ITEMS = [
   { key: 'pieces',             label: 'Pièces de Rechange',     href: '/pieces',      icon: Cog            },
   { key: 'reports',            label: 'Rapports & Exports',     href: '/reports',     icon: FileText       },
   { key: 'contrats',           label: 'Contrats',               href: '/contrats',    icon: ClipboardCheck },
-  { key: 'finances',           label: 'Finances',               href: '/finances',    icon: DollarSign     },
+  { key: 'finances',           label: 'Rentabilité Client',     href: '/finances',    icon: DollarSign     },
   { key: 'carte',              label: 'Carte Géographique',     href: '/carte',       icon: MapPin         },
   { key: 'sla',                label: 'Suivi SLA',              href: '/sla',         icon: ShieldCheck    },
   { key: 'admin',              label: 'Administration',         href: '/admin',       icon: Settings       },
