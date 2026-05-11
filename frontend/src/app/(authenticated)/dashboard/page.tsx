@@ -9,7 +9,7 @@ import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
-  AreaChart, Area, PieChart, Pie, Cell,
+  BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
 } from 'recharts';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
@@ -446,24 +446,15 @@ export default function DashboardPage() {
         {/* Interventions par mois */}
         <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>} className="lg:col-span-2">
           <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={monthlyChartData}>
-              <defs>
-                <linearGradient id="corrGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="prevGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
-                  <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
-                </linearGradient>
-              </defs>
+            <BarChart data={monthlyChartData} barGap={4}>
               <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
               <YAxis stroke={CHART_STYLE.text} fontSize={12} />
-              <Tooltip contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }} />
-              <Legend wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }} />
-              <Area type="monotone" dataKey="corrective" name="Corrective" stroke="#ef4444" fill="url(#corrGrad)" strokeWidth={2} />
-              <Area type="monotone" dataKey="preventive" name="Préventive" stroke={CHART_STYLE.accent} fill="url(#prevGrad)" strokeWidth={2} />
-            </AreaChart>
+              <Tooltip
+                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+              />
+              <Bar dataKey="corrective" name="Corrective" fill="#ef4444" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="preventive" name="Préventive" fill={CHART_STYLE.accent} radius={[4, 4, 0, 0]} />
+            </BarChart>
           </ResponsiveContainer>
         </SectionCard>
 
