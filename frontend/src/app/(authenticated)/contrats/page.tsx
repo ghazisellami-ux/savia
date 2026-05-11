@@ -255,14 +255,19 @@ export default function ContratsPage() {
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Erreur ' + res.status);
+      if (!res.ok) throw new Error('Erreur HTTP ' + res.status);
       const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url; a.download = `contrat_${c.id}.pdf`;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch(err: any) { alert('Erreur PDF: ' + err.message); }
+      if (!blob || blob.size === 0) throw new Error('PDF vide reçu');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `contrat_${c.id}.pdf`;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      // Delay cleanup so browser can start the download
+      setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 3000);
+    } catch(err: any) { alert('Erreur PDF: ' + (err?.message || err)); }
     finally { setIsPdfGen(false); }
   };
 
