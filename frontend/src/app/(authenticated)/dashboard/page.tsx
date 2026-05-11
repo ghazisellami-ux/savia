@@ -10,7 +10,7 @@ import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, RadialBarChart, RadialBar, Legend,
-  AreaChart, Area,
+  AreaChart, Area, LineChart, Line,
 } from 'recharts';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
@@ -107,6 +107,7 @@ export default function DashboardPage() {
   const [allInterventions, setAllInterventions] = useState<any[]>([]);
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
   const [showAnomalies, setShowAnomalies] = useState(false);
+  const [chartMode, setChartMode] = useState<'bar' | 'stacked' | 'area' | 'line'>('bar');
   const [isLoading, setIsLoading] = useState(true);
 
   // --- Computed date range ---
@@ -445,17 +446,73 @@ export default function DashboardPage() {
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Interventions par mois */}
-        <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>} className="lg:col-span-2">
+        <SectionCard title={
+          <div className="flex items-center justify-between w-full">
+            <span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>
+            <div className="flex gap-1 bg-savia-bg/60 rounded-lg p-0.5">
+              {[
+                { key: 'bar' as const, label: 'Barres' },
+                { key: 'stacked' as const, label: 'Empilé' },
+                { key: 'area' as const, label: 'Aire' },
+                { key: 'line' as const, label: 'Ligne' },
+              ].map(opt => (
+                <button key={opt.key} onClick={() => setChartMode(opt.key)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                    chartMode === opt.key
+                      ? 'bg-savia-accent text-white shadow-sm'
+                      : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover/50'
+                  }`}>{opt.label}</button>
+              ))}
+            </div>
+          </div>
+        } className="lg:col-span-2">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={monthlyChartData} barGap={4}>
-              <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
-              <YAxis stroke={CHART_STYLE.text} fontSize={12} />
-              <Tooltip
-                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              />
-              <Bar dataKey="corrective" name="Corrective" fill="#ef4444" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="preventive" name="Préventive" fill={CHART_STYLE.accent} radius={[4, 4, 0, 0]} />
-            </BarChart>
+            {chartMode === 'bar' ? (
+              <BarChart data={monthlyChartData} barGap={4}>
+                <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+                <YAxis stroke={CHART_STYLE.text} fontSize={12} />
+                <Tooltip contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }} />
+                <Bar dataKey="corrective" name="Corrective" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="preventive" name="Préventive" fill={CHART_STYLE.accent} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            ) : chartMode === 'stacked' ? (
+              <BarChart data={monthlyChartData}>
+                <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+                <YAxis stroke={CHART_STYLE.text} fontSize={12} />
+                <Tooltip contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }} />
+                <Bar dataKey="corrective" name="Corrective" stackId="a" fill="#ef4444" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="preventive" name="Préventive" stackId="a" fill={CHART_STYLE.accent} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            ) : chartMode === 'area' ? (
+              <AreaChart data={monthlyChartData}>
+                <defs>
+                  <linearGradient id="corrGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="prevGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+                <YAxis stroke={CHART_STYLE.text} fontSize={12} />
+                <Tooltip contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }} />
+                <Area type="monotone" dataKey="corrective" name="Corrective" stroke="#ef4444" fill="url(#corrGrad)" strokeWidth={2} />
+                <Area type="monotone" dataKey="preventive" name="Préventive" stroke={CHART_STYLE.accent} fill="url(#prevGrad)" strokeWidth={2} />
+              </AreaChart>
+            ) : (
+              <LineChart data={monthlyChartData}>
+                <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+                <YAxis stroke={CHART_STYLE.text} fontSize={12} />
+                <Tooltip contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }} />
+                <Line type="monotone" dataKey="corrective" name="Corrective" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 4, fill: '#ef4444' }} activeDot={{ r: 6 }} />
+                <Line type="monotone" dataKey="preventive" name="Préventive" stroke={CHART_STYLE.accent} strokeWidth={2.5} dot={{ r: 4, fill: CHART_STYLE.accent }} activeDot={{ r: 6 }} />
+              </LineChart>
+            )}
           </ResponsiveContainer>
         </SectionCard>
 
