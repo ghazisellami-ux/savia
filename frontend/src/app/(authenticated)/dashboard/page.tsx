@@ -11,7 +11,8 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
   AreaChart, Area, PieChart, Pie, Cell,
 } from 'recharts';
-import { ResponsiveBar } from '@nivo/bar';
+import dynamic from 'next/dynamic';
+const ApexChart = dynamic(() => import('react-apexcharts'), { ssr: false });
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
 
@@ -446,34 +447,51 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Interventions par mois */}
         <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>} className="lg:col-span-2">
-          <div style={{ height: 280 }}>
-            <ResponsiveBar
-              data={monthlyChartData}
-              keys={['corrective', 'preventive']}
-              indexBy="mois"
-              groupMode="grouped"
-              margin={{ top: 10, right: 20, bottom: 40, left: 40 }}
-              padding={0.25}
-              borderRadius={4}
-              colors={['#ef4444', '#2dd4bf']}
-              theme={{
-                text: { fill: '#94a3b8' },
-                axis: { ticks: { text: { fill: '#64748b', fontSize: 12 } }, domain: { line: { stroke: '#334155' } } },
-                grid: { line: { stroke: 'rgba(45,212,191,0.08)' } },
-                tooltip: { container: { background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: '8px', color: '#f1f5f9', fontSize: 12 } },
-                legends: { text: { fill: '#94a3b8', fontSize: 11 } },
-              }}
-              axisBottom={{ tickSize: 0, tickPadding: 8 }}
-              axisLeft={{ tickSize: 0, tickPadding: 8 }}
-              enableGridY={true}
-              enableLabel={false}
-              animate={true}
-              motionConfig="gentle"
-              legends={[
-                { dataFrom: 'keys', anchor: 'bottom', direction: 'row', translateY: 36, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: 'circle' },
-              ]}
-            />
-          </div>
+          <ApexChart
+            type="bar"
+            height={280}
+            series={[
+              { name: 'Corrective', data: monthlyChartData.map((d: any) => d.corrective) },
+              { name: 'Préventive', data: monthlyChartData.map((d: any) => d.preventive) },
+            ]}
+            options={{
+              chart: {
+                toolbar: { show: false },
+                fontFamily: 'Inter, sans-serif',
+                background: 'transparent',
+                animations: { enabled: true, speed: 600 },
+              },
+              plotOptions: {
+                bar: { borderRadius: 5, columnWidth: '55%', borderRadiusApplication: 'end' },
+              },
+              colors: ['#ef4444', '#2dd4bf'],
+              dataLabels: { enabled: false },
+              xaxis: {
+                categories: monthlyChartData.map((d: any) => d.mois),
+                labels: { style: { colors: '#64748b', fontSize: '12px' } },
+                axisBorder: { show: false },
+                axisTicks: { show: false },
+              },
+              yaxis: {
+                labels: { style: { colors: '#64748b', fontSize: '12px' } },
+              },
+              grid: {
+                borderColor: 'rgba(45,212,191,0.08)',
+                strokeDashArray: 3,
+                xaxis: { lines: { show: false } },
+              },
+              tooltip: {
+                theme: 'dark',
+                style: { fontSize: '12px' },
+              },
+              legend: {
+                labels: { colors: '#94a3b8' },
+                fontSize: '12px',
+                markers: { size: 6, shape: 'circle' as const },
+              },
+              theme: { mode: 'dark' },
+            }}
+          />
         </SectionCard>
 
         {/* Répartition types erreurs */}
