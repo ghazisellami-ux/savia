@@ -1,13 +1,14 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
+import { contrats, equipements, pieces as piecesApi } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
   X, ChevronDown, Package, Bell, RefreshCcw, CheckSquare, StickyNote,
   Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Building2,
-  Eye, Download
+  Eye, Download, Edit2
 } from 'lucide-react';
-import { contrats, equipements, pieces as piecesApi } from '@/lib/api';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
@@ -50,12 +51,15 @@ const emptyForm = () => ({
 });
 
 export default function ContratsPage() {
+  const { user } = useAuth();
+  const canEdit = user?.role === 'Admin' || user?.role === 'Manager';
   const [search, setSearch] = useState('');
   const [data, setData] = useState<Contrat[]>([]);
   const [equips, setEquips] = useState<any[]>([]);
   const [stockPieces, setStockPieces] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingContrat, setEditingContrat] = useState<Contrat | null>(null);
   const [selectedContrat, setSelectedContrat] = useState<Contrat | null>(null);
   const [isPdfGen, setIsPdfGen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -125,18 +129,48 @@ export default function ContratsPage() {
         notes: form.notes,
         statut: form.statut,
       };
-      const result = await (contrats as any).create(payload) as any;
-      const nbPlannings = result?.nb_plannings || 0;
-      const planningMsg = nbPlannings > 0
-        ? `\n📅 ${nbPlannings} maintenance(s) préventive(s) planifiées automatiquement`
-        : '';
-      setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
+      if (editingContrat) {
+        await (contrats as any).update(editingContrat.id, payload);
+        setSaveMsg('✅ Contrat mis à jour avec succès !');
+      } else {
+        const result = await (contrats as any).create(payload) as any;
+        const nbPlannings = result?.nb_plannings || 0;
+        const planningMsg = nbPlannings > 0
+          ? `\n📅 ${nbPlannings} maintenance(s) préventive(s) planifiées automatiquement`
+          : '';
+        setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
+      }
       setForm(emptyForm());
+      setEditingContrat(null);
       await load();
-      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, nbPlannings > 0 ? 3000 : 1500);
+      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 1500);
     } catch (err: any) {
       setSaveMsg(`❌ Erreur: ${err?.message || 'Indisponible'}`);
     } finally { setIsSaving(false); }
+  };
+
+  const openEdit = (c: Contrat) => {
+    setEditingContrat(c);
+    setForm({
+      client: c.client,
+      equipement: c.equipement,
+      type_contrat: c.type_contrat,
+      date_debut: c.date_debut,
+      date_fin: c.date_fin,
+      sla_temps_reponse_h: c.sla_temps_reponse_h,
+      montant: c.montant,
+      avec_pieces: false,
+      pieces_selectionnees: [],
+      rappel_avant: 30,
+      rappel_unite: 'jours' as 'jours' | 'mois',
+      recurrence_maintenance: RECURRENCES[2],
+      date_premiere_maintenance: c.date_debut,
+      conditions: c.conditions,
+      notes: c.notes,
+      statut: c.statut,
+    });
+    setSaveMsg('');
+    setShowModal(true);
   };
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
@@ -242,7 +276,7 @@ export default function ContratsPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion des contrats SAV et maintenance préventive</p>
         </div>
-        <button onClick={() => { setForm(emptyForm()); setSaveMsg(''); setShowModal(true); }}
+        <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setSaveMsg(''); setShowModal(true); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
           <Plus className="w-4 h-4" /> Nouveau contrat
         </button>
@@ -356,6 +390,14 @@ export default function ContratsPage() {
                 >
                   <Eye className="w-3.5 h-3.5" /> Voir les détails
                 </button>
+                {canEdit && (
+                  <button
+                    onClick={() => openEdit(c)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-blue-400 hover:bg-blue-500/10 border border-blue-400/20 transition-all cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" /> Modifier
+                  </button>
+                )}
                 <button
                   onClick={() => handleContratPdf(c)}
                   disabled={isPdfGen}
@@ -453,7 +495,8 @@ export default function ContratsPage() {
             {/* Modal header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
               <h2 className="text-lg font-black gradient-text flex items-center gap-2">
-                <Plus className="w-5 h-5 text-savia-accent" /> Nouveau Contrat
+                {editingContrat ? <Edit2 className="w-5 h-5 text-blue-400" /> : <Plus className="w-5 h-5 text-savia-accent" />}
+                {editingContrat ? `Modifier le contrat #${editingContrat.id}` : 'Nouveau Contrat'}
               </h2>
               <button onClick={() => setShowModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-savia-text transition-all cursor-pointer">
                 <X className="w-5 h-5" />
@@ -658,7 +701,7 @@ export default function ContratsPage() {
               <button onClick={handleSave} disabled={isSaving || !form.client}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {isSaving ? 'Enregistrement...' : 'Créer le contrat'}
+                {isSaving ? 'Enregistrement...' : editingContrat ? 'Mettre à jour' : 'Créer le contrat'}
               </button>
             </div>
           </div>
