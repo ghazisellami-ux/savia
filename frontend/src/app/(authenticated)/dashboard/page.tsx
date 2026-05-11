@@ -9,7 +9,7 @@ import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
-  AreaChart, Area,
+  AreaChart, Area, Treemap, Cell,
 } from 'recharts';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
@@ -467,36 +467,41 @@ export default function DashboardPage() {
           </ResponsiveContainer>
         </SectionCard>
 
-        {/* Répartition types erreurs — Cards */}
+        {/* Répartition types erreurs — Treemap */}
         <SectionCard title={<span className="flex items-center gap-2"><Crosshair className="w-5 h-5 text-purple-400" /> Types d&apos;Erreurs</span>}>
-          <div className="space-y-3">
-            {(() => {
-              const total = DEMO_TYPES.reduce((s, t) => s + t.value, 0);
-              return DEMO_TYPES.map((t, i) => {
-                const pct = Math.round((t.value / total) * 100);
+          <ResponsiveContainer width="100%" height={280}>
+            <Treemap
+              data={DEMO_TYPES}
+              dataKey="value"
+              nameKey="name"
+              aspectRatio={4 / 3}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              content={(props: any) => {
+                const { x, y, width, height, name, value, color } = props;
+                if (!width || !height || width < 20 || height < 20) return <g />;
+                const total = DEMO_TYPES.reduce((s, t) => s + t.value, 0);
+                const pct = Math.round(((value || 0) / total) * 100);
                 return (
-                  <div key={i} className="group">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
-                        <span className="text-sm font-semibold text-savia-text">{t.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold" style={{ color: t.color }}>{pct}%</span>
-                        <span className="text-[10px] text-savia-text-dim">({t.value})</span>
-                      </div>
-                    </div>
-                    <div className="w-full h-2 rounded-full bg-savia-bg/80 overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-1000 ease-out"
-                        style={{ width: `${pct}%`, backgroundColor: t.color, boxShadow: `0 0 8px ${t.color}40` }}
-                      />
-                    </div>
-                  </div>
+                  <g>
+                    <rect x={x} y={y} width={width} height={height} rx={6} ry={6}
+                      fill={color || '#64748b'} fillOpacity={0.85} stroke="#0f172a" strokeWidth={2} />
+                    {width > 50 && height > 45 && (
+                      <>
+                        <text x={x + width / 2} y={y + height / 2 - 8} textAnchor="middle"
+                          fill="#fff" fontSize={13} fontWeight="700">{name}</text>
+                        <text x={x + width / 2} y={y + height / 2 + 12} textAnchor="middle"
+                          fill="#fff" fontSize={18} fontWeight="800" opacity={0.9}>{pct}%</text>
+                      </>
+                    )}
+                  </g>
                 );
-              });
-            })()}
-          </div>
+              }}
+            >
+              {DEMO_TYPES.map((entry, i) => (
+                <Cell key={i} fill={entry.color} />
+              ))}
+            </Treemap>
+          </ResponsiveContainer>
         </SectionCard>
       </div>
 
