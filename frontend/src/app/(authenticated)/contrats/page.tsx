@@ -213,8 +213,10 @@ export default function ContratsPage() {
 
   const handleContratPdf = async (c: Contrat) => {
     setIsPdfGen(true);
+    console.log('Starting PDF generation for contract:', c.id);
     try {
       const token = localStorage.getItem('savia_token') || '';
+      if (!token) { throw new Error('Session expirée'); }
       const cn    = localStorage.getItem('savia_company') || 'SAVIA';
       const cl    = localStorage.getItem('savia_logo') || '';
       const fin   = new Date(c.date_fin);
@@ -250,6 +252,7 @@ export default function ContratsPage() {
           ],
         }],
       };
+      console.log('Sending request to PDF API...');
       const res = await fetch('/api/reports/generate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -257,6 +260,7 @@ export default function ContratsPage() {
       });
       if (!res.ok) throw new Error('Erreur HTTP ' + res.status);
       const blob = await res.blob();
+      console.log('Received PDF blob, size:', blob.size);
       if (!blob || blob.size === 0) throw new Error('PDF vide reçu');
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -265,9 +269,12 @@ export default function ContratsPage() {
       link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
-      // Delay cleanup so browser can start the download
-      setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 3000);
-    } catch(err: any) { alert('Erreur PDF: ' + (err?.message || err)); }
+      console.log('Triggering download link...');
+      setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); console.log('Cleanup finished.'); }, 3000);
+    } catch(err: any) {
+      console.error('PDF Error:', err);
+      alert('Erreur PDF: ' + (err?.message || err));
+    }
     finally { setIsPdfGen(false); }
   };
 
