@@ -8,8 +8,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
-  XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
   AreaChart, Area,
 } from 'recharts';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
@@ -468,32 +467,36 @@ export default function DashboardPage() {
           </ResponsiveContainer>
         </SectionCard>
 
-        {/* Répartition types erreurs */}
+        {/* Répartition types erreurs — Cards */}
         <SectionCard title={<span className="flex items-center gap-2"><Crosshair className="w-5 h-5 text-purple-400" /> Types d&apos;Erreurs</span>}>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={DEMO_TYPES}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={3}
-                dataKey="value"
-                stroke="none"
-              >
-                {DEMO_TYPES.map((entry, i) => (
-                  <Cell key={i} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              />
-              <Legend
-                wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          <div className="space-y-3">
+            {(() => {
+              const total = DEMO_TYPES.reduce((s, t) => s + t.value, 0);
+              return DEMO_TYPES.map((t, i) => {
+                const pct = Math.round((t.value / total) * 100);
+                return (
+                  <div key={i} className="group">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
+                        <span className="text-sm font-semibold text-savia-text">{t.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold" style={{ color: t.color }}>{pct}%</span>
+                        <span className="text-[10px] text-savia-text-dim">({t.value})</span>
+                      </div>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-savia-bg/80 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-1000 ease-out"
+                        style={{ width: `${pct}%`, backgroundColor: t.color, boxShadow: `0 0 8px ${t.color}40` }}
+                      />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
         </SectionCard>
       </div>
 
