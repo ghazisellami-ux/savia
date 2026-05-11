@@ -635,7 +635,7 @@ export default function DashboardPage() {
       <div className="text-center py-4 border-t border-savia-border/50">
         <span className="gradient-text font-bold text-sm">SAVIA</span>
         <span className="text-savia-text-dim text-xs ml-2">
-          Powered by SIC Radiologie • Maintenance Prédictive
+          Powered by SIC • Maintenance Prédictive
         </span>
       </div>
     </div>
