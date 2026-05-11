@@ -433,9 +433,8 @@ export default function DashboardPage() {
 
       {/* Health Animation Banner */}
       <div className="glass rounded-xl p-4 flex items-center gap-5">
-        <div className="relative w-14 h-14 flex-shrink-0">
-          <div className="absolute inset-0 rounded-full border-2 border-savia-accent animate-ping opacity-20" />
-          <div className="absolute inset-2 rounded-full bg-gradient-to-br from-savia-accent to-savia-success animate-pulse shadow-lg shadow-savia-accent/30" />
+        <div className="w-12 h-12 flex-shrink-0 rounded-xl bg-gradient-to-br from-savia-accent/20 to-savia-success/20 flex items-center justify-center">
+          <Activity className="w-6 h-6 text-savia-accent" />
         </div>
         <div>
           <div className="text-lg font-extrabold gradient-text flex items-center gap-2"><Heart className="w-5 h-5 text-red-400" /> Santé du Parc d&apos;Équipements</div>
