@@ -158,8 +158,7 @@ export default function FinancesPage() {
   // Revenue vs Cost bar chart
   const revenueCostChart = useMemo(() => {
     return clientsData.map((c: any) => ({
-      name: (c.client || '').length > 12 ? (c.client || '').substring(0, 12) + '…' : c.client,
-      fullName: c.client || '',
+      name: c.client || '',
       revenu: c.revenu_contrats || 0,
       cout: c.cout_total || 0,
       marge: c.marge || 0,
@@ -253,18 +252,14 @@ export default function FinancesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Revenue vs Cost */}
         <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-4 h-4 text-savia-accent" /> Revenu vs Coûts par Client</span>}>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={revenueCostChart} barGap={2}>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={revenueCostChart} barGap={2} margin={{ bottom: 40 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(45,212,191,0.08)" />
-              <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
+              <XAxis dataKey="name" stroke="#64748b" fontSize={10} angle={-25} textAnchor="end" interval={0} height={60} />
               <YAxis stroke="#64748b" fontSize={11} />
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
                 formatter={(value: any) => [`${FMT(Number(value))} TND`]}
-                labelFormatter={(_label: any, payload: any) => {
-                  const item = payload?.[0]?.payload;
-                  return item?.fullName || _label;
-                }}
               />
               <Bar dataKey="revenu" name="Revenu" fill={COLORS.green} radius={[4, 4, 0, 0]} />
               <Bar dataKey="cout" name="Coûts" fill={COLORS.red} radius={[4, 4, 0, 0]} />
