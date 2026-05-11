@@ -44,7 +44,7 @@ export default function LoginPage() {
       {/* Logo */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '8px' }}>
         <Image
-          src="/site/logo-savia.png"
+          src="/logo-savia.png"
           alt="SAVIA"
           width={180}
           height={60}

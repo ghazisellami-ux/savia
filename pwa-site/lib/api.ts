@@ -2,7 +2,7 @@
 // 🔌 API Client — SAVIA Site
 // All /api/* calls go through Next.js proxy → backend
 // ==========================================
-const API_BASE = '/site'; // Must match basePath for Next.js rewrites to work
+const API_BASE = ''; // PWA has its own domain, no basePath needed
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_site_token') : null;

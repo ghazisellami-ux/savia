@@ -4,7 +4,6 @@ const BACKEND = process.env.BACKEND_URL || "http://backend:8000";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  basePath: "/site",
   async rewrites() {
     return [
       {
@@ -19,7 +18,7 @@ const nextConfig: NextConfig = {
         source: "/sw.js",
         headers: [
           { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
-          { key: "Service-Worker-Allowed", value: "/site/" },
+          { key: "Service-Worker-Allowed", value: "/" },
         ],
       },
     ];
