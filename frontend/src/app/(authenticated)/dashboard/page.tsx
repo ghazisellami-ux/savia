@@ -9,8 +9,9 @@ import { useCanSeeCosts } from '@/lib/use-role-guard';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
-  BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
+  AreaChart, Area, PieChart, Pie, Cell,
 } from 'recharts';
+import { ResponsiveBar } from '@nivo/bar';
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
 
@@ -445,17 +446,34 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Interventions par mois */}
         <SectionCard title={<span className="flex items-center gap-2"><BarChart3 className="w-5 h-5 text-savia-accent" /> Interventions / Mois</span>} className="lg:col-span-2">
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={monthlyChartData} barGap={4}>
-              <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
-              <YAxis stroke={CHART_STYLE.text} fontSize={12} />
-              <Tooltip
-                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              />
-              <Bar dataKey="corrective" name="Corrective" fill="#ef4444" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="preventive" name="Préventive" fill={CHART_STYLE.accent} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div style={{ height: 280 }}>
+            <ResponsiveBar
+              data={monthlyChartData}
+              keys={['corrective', 'preventive']}
+              indexBy="mois"
+              groupMode="grouped"
+              margin={{ top: 10, right: 20, bottom: 40, left: 40 }}
+              padding={0.25}
+              borderRadius={4}
+              colors={['#ef4444', '#2dd4bf']}
+              theme={{
+                text: { fill: '#94a3b8' },
+                axis: { ticks: { text: { fill: '#64748b', fontSize: 12 } }, domain: { line: { stroke: '#334155' } } },
+                grid: { line: { stroke: 'rgba(45,212,191,0.08)' } },
+                tooltip: { container: { background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: '8px', color: '#f1f5f9', fontSize: 12 } },
+                legends: { text: { fill: '#94a3b8', fontSize: 11 } },
+              }}
+              axisBottom={{ tickSize: 0, tickPadding: 8 }}
+              axisLeft={{ tickSize: 0, tickPadding: 8 }}
+              enableGridY={true}
+              enableLabel={false}
+              animate={true}
+              motionConfig="gentle"
+              legends={[
+                { dataFrom: 'keys', anchor: 'bottom', direction: 'row', translateY: 36, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: 'circle' },
+              ]}
+            />
+          </div>
         </SectionCard>
 
         {/* Répartition types erreurs */}
