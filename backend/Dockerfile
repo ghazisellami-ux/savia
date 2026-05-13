@@ -23,10 +23,10 @@ COPY logo-savia.png ./
 RUN mkdir -p /app/data
 
 # Environment variables
-ENV PORT=8000
+ENV PORT=8001
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 8000
+EXPOSE 8001
 
 # Start with uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
