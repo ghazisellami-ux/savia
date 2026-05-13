@@ -629,6 +629,13 @@ def init_db():
         _safe_add_column("contrats", "date_premiere_maintenance")
         _safe_add_column("planning_maintenance", "contrat_id", "INTEGER", "NULL")
 
+        # User profile & page permissions (used by admin panel)
+        _safe_add_column("utilisateurs", "profil")
+        _safe_add_column("utilisateurs", "pages_autorisees")
+
+        # Technicien enrichment columns
+        _safe_add_column("techniciens", "niveau_competence")
+
         # Fabricants table
         if USE_PG:
             try:
