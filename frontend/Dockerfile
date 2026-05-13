@@ -26,8 +26,10 @@ CMD ["npm", "run", "dev"]
 FROM deps AS builder
 WORKDIR /app
 COPY . .
-# NEXT_PUBLIC_* vars are baked at build time
-# Empty = frontend uses relative URLs (Nginx proxies /api/* to backend)
+# BACKEND_URL is used by next.config.ts rewrites at build time
+ARG BACKEND_URL=http://backend:8001
+ENV BACKEND_URL=${BACKEND_URL}
+ENV NEXT_PUBLIC_API_URL=
 RUN npm run build
 
 # ── Stage 4: Production Runner ────────────
