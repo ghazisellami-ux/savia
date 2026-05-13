@@ -27,7 +27,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -52,11 +52,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8001:8001"
     volumes:
       - ./data:/app/data
     environment:
-      PORT: ${PORT:-8000}
+      PORT: ${PORT:-8001}
       JWT_SECRET: ${JWT_SECRET}
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       S3_ENDPOINT: http://minio:9000
@@ -84,7 +84,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
       NODE_ENV: production
     depends_on:
       - backend
@@ -98,7 +98,7 @@ services:
     ports:
       - "3001:3001"
     environment:
-      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
       PORT: 3001
       HOSTNAME: 0.0.0.0
     depends_on:
