@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const BACKEND = process.env.BACKEND_URL || "http://backend:8000";
+const BACKEND = process.env.BACKEND_URL || "http://backend:8001";
 
 const nextConfig: NextConfig = {
   output: "standalone",
