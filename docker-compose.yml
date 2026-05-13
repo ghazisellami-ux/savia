@@ -86,6 +86,8 @@ services:
     environment:
       BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
       NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
     depends_on:
       - backend
     restart: unless-stopped
