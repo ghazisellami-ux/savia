@@ -28,7 +28,6 @@ WORKDIR /app
 COPY . .
 # NEXT_PUBLIC_* vars are baked at build time
 # Empty = frontend uses relative URLs (Nginx proxies /api/* to backend)
-ENV NEXT_PUBLIC_API_URL=
 RUN npm run build
 
 # ── Stage 4: Production Runner ────────────
