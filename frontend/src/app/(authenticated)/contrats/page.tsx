@@ -214,56 +214,24 @@ export default function ContratsPage() {
 
   const handleContratPdf = async (c: Contrat) => {
     setIsPdfGen(true);
-    console.log('Starting PDF generation for contract:', c.id);
+    console.log('Starting contract PDF generation for:', c.id);
     try {
       const token = localStorage.getItem('savia_token') || '';
       if (!token) { throw new Error('Session expirée'); }
-      const cn    = localStorage.getItem('savia_company') || 'SAVIA';
-      const cl    = localStorage.getItem('savia_logo') || '';
-      const fin   = new Date(c.date_fin);
-      const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
-      const statutLabel = daysLeft < 0 ? 'Expiré' : daysLeft <= 60 ? `Expire dans ${daysLeft}j` : c.statut;
-      const payload = {
-        title: `Contrat de Maintenance #${c.id}`,
-        subtitle: `${c.type_contrat} — ${c.client}`,
-        filename: `contrat_${c.id}_${c.client.replace(/\s+/g,'_')}`,
-        company_name: cn, company_logo: cl,
-        is_ai_report: false,
-        kpis: [
-          { label: 'Client',      val: c.client,                                    color: '#01B4BC' },
-          { label: 'Équipement',  val: c.equipement || 'N/A',                       color: '#5FA55A' },
-          { label: 'Type',        val: c.type_contrat,                              color: '#FA8925' },
-          { label: 'Montant/an',  val: (c.montant||0).toLocaleString('fr') + ' TND', color: '#5FA55A' },
-        ],
-        tables: [{
-          title: 'Détails du Contrat',
-          head: ['Champ', 'Valeur'],
-          rows: [
-            ['Référence',         `#${c.id}`],
-            ['Client',            c.client],
-            ['Équipement',        c.equipement || '—'],
-            ['Type de contrat',   c.type_contrat],
-            ['Date de début',     c.date_debut],
-            ['Date de fin',       c.date_fin],
-            ['SLA Temps réponse', c.sla_temps_reponse_h + 'h'],
-            ['Montant annuel',    (c.montant||0).toLocaleString('fr') + ' TND'],
-            ['Statut',            statutLabel],
-            ...(c.conditions ? [['Conditions', c.conditions.substring(0, 200)]] : []),
-            ...(c.notes      ? [['Notes',      c.notes.substring(0, 200)]]      : []),
-          ],
-        }],
-      };
-      console.log('Sending request to PDF API...');
-      const res = await fetch('/api/reports/generate-pdf', {
+      const cn = localStorage.getItem('savia_company') || 'SAVIA';
+      const cl = localStorage.getItem('savia_logo') || '';
+
+      const res = await fetch(`/api/contrats/${c.id}/contrat-pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ company_name: cn, company_logo: cl }),
       });
       if (!res.ok) throw new Error('Erreur HTTP ' + res.status);
       const blob = await res.blob();
       if (!blob || blob.size === 0) throw new Error('PDF vide reçu');
-      downloadBlob(blob, `contrat_${c.id}.pdf`);
-    } catch(err: any) {
+      const safeClient = c.client.replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
+      downloadBlob(blob, `contrat_maintenance_${c.id}_${safeClient}.pdf`);
+    } catch (err: any) {
       console.error('PDF Error:', err);
       alert('Erreur PDF: ' + (err?.message || err));
     }
