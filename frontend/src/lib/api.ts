@@ -127,6 +127,8 @@ export const interventions = {
     request<Array<Record<string, unknown>>>('/api/interventions/facturation'),
   markFactured: (id: number) =>
     request<{ ok: boolean }>(`/api/interventions/${id}/factured`, { method: 'POST' }),
+  delete: (id: number) =>
+    request<{ ok: boolean }>(`/api/interventions/${id}`, { method: 'DELETE' }),
 };
 
 // --- Équipements ---

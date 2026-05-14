@@ -1372,6 +1372,17 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
     return {"ok": True}
 
 
+@app.delete("/api/interventions/{intervention_id}")
+def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Supprime une intervention. Réservé aux Admin et Manager."""
+    role = (user.get("role") or "").strip()
+    if role not in ("Admin", "Manager"):
+        raise HTTPException(status_code=403, detail="Seuls les Admin et Manager peuvent supprimer une intervention.")
+    with get_db() as conn:
+        conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
+    return {"ok": True}
+
+
 @app.get("/api/interventions/facturation")
 def get_facturation_tracking(user: dict = Depends(_verify_token)):
     """Retourne les interventions cloturees avec le suivi de facturation."""
