@@ -9,7 +9,7 @@ import {
   ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
-  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X
+  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
@@ -54,6 +54,7 @@ const MONTHS = [
 export default function SavPage() {
   const { user } = useAuth();
   const isTechnicien = user?.role === 'Technicien';
+  const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
 
   const [activeTab, setActiveTab] = useState(0);
   const [ficheFile, setFicheFile] = useState<File | null>(null);
@@ -91,6 +92,8 @@ export default function SavPage() {
   const [factFilter, setFactFilter] = useState<'all' | 'pending' | 'done' | 'overdue'>('all');
   const [factDetailItem, setFactDetailItem] = useState<any>(null);
   const [savTechDropdownOpen, setSavTechDropdownOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<Intervention | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return d.toISOString().substring(0, 10);
@@ -518,6 +521,21 @@ export default function SavPage() {
       setFacturationData(updated);
     } catch (e) { console.error('Mark factured failed', e); }
   };
+
+  // Delete intervention handler
+  const handleDeleteIntervention = async () => {
+    if (!deleteConfirm) return;
+    setIsDeleting(true);
+    try {
+      await interventions.delete(deleteConfirm.id);
+      setDeleteConfirm(null);
+      await loadData();
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de la suppression.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
   const filteredFacturation = useMemo(() => {
     return facturationData.filter((f: any) => {
       if (factFilter === 'done') return f.facture_envoyee;
@@ -783,6 +801,13 @@ export default function SavPage() {
                               title="Télécharger fiche PDF"
                               className="p-1.5 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors">
                               <Download className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button onClick={() => setDeleteConfirm(i)}
+                              title="Supprimer l'intervention"
+                              className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -1854,6 +1879,44 @@ export default function SavPage() {
                 className="px-4 py-2 rounded-lg text-sm font-bold bg-savia-surface-hover text-savia-text hover:bg-savia-border cursor-pointer transition-colors"
               >
                 Fermer
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <Modal open onClose={() => setDeleteConfirm(null)} title="Confirmer la suppression">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/30">
+              <AlertTriangle className="w-8 h-8 text-red-400 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-bold text-red-400">Cette action est irréversible</p>
+                <p className="text-xs text-savia-text-muted mt-1">L&apos;intervention sera définitivement supprimée de la base de données.</p>
+              </div>
+            </div>
+
+            <div className="glass rounded-xl p-4 space-y-2">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-savia-text-dim">ID :</span> <span className="font-mono text-savia-accent">#{deleteConfirm.id}</span></div>
+                <div><span className="text-savia-text-dim">Date :</span> <span className="font-semibold">{deleteConfirm.date.substring(0, 10)}</span></div>
+                <div><span className="text-savia-text-dim">Machine :</span> <span className="font-semibold">{deleteConfirm.machine}</span></div>
+                <div><span className="text-savia-text-dim">Client :</span> <span className="font-semibold">{deleteConfirm.client || '—'}</span></div>
+                <div><span className="text-savia-text-dim">Technicien :</span> <span className="font-semibold">{deleteConfirm.technicien}</span></div>
+                <div><span className="text-savia-text-dim">Statut :</span> <span className="font-semibold">{deleteConfirm.statut}</span></div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => setDeleteConfirm(null)}
+                className="px-5 py-2.5 rounded-lg text-sm font-bold bg-savia-surface-hover text-savia-text hover:bg-savia-border cursor-pointer transition-colors">
+                Annuler
+              </button>
+              <button onClick={handleDeleteIntervention} disabled={isDeleting}
+                className="px-5 py-2.5 rounded-lg text-sm font-bold bg-red-500 text-white hover:bg-red-600 cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-2">
+                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Supprimer définitivement
               </button>
             </div>
           </div>
