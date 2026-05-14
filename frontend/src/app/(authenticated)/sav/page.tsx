@@ -100,7 +100,7 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_minutes: '60', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
   const [form, setForm] = useState(emptyForm);
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_minutes: '' });
 
@@ -160,7 +160,7 @@ export default function SavPage() {
         technicien: item.technicien || 'Non assign\u00e9',
         duree: Math.round((item.duree_minutes || 0) / 60),
         duree_minutes: item.duree_minutes || 0,
-        deplacement: item.deplacement || 0,
+        deplacement: Math.round((item.duree_deplacement || 0) / 60 * 10) / 10,
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         probleme: item.probleme || '',
@@ -203,7 +203,8 @@ export default function SavPage() {
     try {
       await interventions.create({
         ...form,
-        duree_minutes: Number(form.duree_minutes),
+        duree_minutes: Math.round(Number(form.duree_heures) * 60),
+        duree_deplacement: Math.round(Number(form.duree_deplacement) * 60),
         cout_pieces: Number(form.cout_pieces),
       });
       setForm(emptyForm);
@@ -1321,7 +1322,8 @@ export default function SavPage() {
             <select className={INPUT_CLS} value={form.priorite} onChange={e => setForm({...form, priorite: e.target.value})}>
               {PRIORITES.map(p => <option key={p}>{p}</option>)}
             </select></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (min)</label><input type="number" className={INPUT_CLS} value={form.duree_minutes} onChange={e => setForm({...form, duree_minutes: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_heures} onChange={e => setForm({...form, duree_heures: e.target.value})} /></div>
+          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_deplacement} onChange={e => setForm({...form, duree_deplacement: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><DollarSign className="w-3.5 h-3.5" /> Coût pièces (TND)</label><input type="number" className={INPUT_CLS} value={form.cout_pieces} onChange={e => setForm({...form, cout_pieces: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Pièces utilisées</label><input className={INPUT_CLS} placeholder="Ex: Tube RX, Câble" value={form.pieces_utilisees} onChange={e => setForm({...form, pieces_utilisees: e.target.value})} /></div>
           <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5" /> Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Décrivez le problème..." value={form.probleme} onChange={e => setForm({...form, probleme: e.target.value})} /></div>
