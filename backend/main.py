@@ -1369,17 +1369,27 @@ def get_interventions(
 @app.post("/api/interventions")
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
     ajouter_intervention(body)
-    return {"ok": True}
-
-
-@app.delete("/api/interventions/{intervention_id}")
-def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
-    """Supprime une intervention. Réservé aux Admin et Manager."""
-    role = (user.get("role") or "").strip()
-    if role not in ("Admin", "Manager"):
-        raise HTTPException(status_code=403, detail="Seuls les Admin et Manager peuvent supprimer une intervention.")
-    with get_db() as conn:
-        conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
+    # Notification Telegram au bot technique
+    try:
+        machine = body.get("machine", "N/A")
+        technicien = body.get("technicien", "N/A")
+        type_interv = body.get("type_intervention", "N/A")
+        priorite = body.get("priorite", "Moyenne")
+        description = body.get("description", "") or body.get("probleme", "")
+        client = body.get("client", "")
+        msg = (
+            f"🔧 <b>Nouvelle Intervention</b>\n"
+            f"📋 Machine : <b>{machine}</b>\n"
+            f"{'🏢 Client : ' + client + chr(10) if client else ''}"
+            f"👨‍🔧 Technicien : {technicien}\n"
+            f"🔹 Type : {type_interv}\n"
+            f"⚡ Priorité : {priorite}\n"
+            f"{'📝 ' + description[:200] + chr(10) if description else ''}"
+            f"📅 Date : {body.get('date', 'N/A')}"
+        )
+        _send_telegram_bot("telegram", msg)
+    except Exception as e:
+        logger.warning(f"Notification Telegram nouvelle intervention échouée: {e}")
     return {"ok": True}
 
 
@@ -1698,7 +1708,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     fields = []
     params = []
     for f in ["technicien", "probleme", "cause", "solution", "pieces_utilisees", "cout",
-              "duree_minutes", "description", "notes", "type_erreur", "priorite",
+              "duree_minutes", "duree_deplacement", "description", "notes", "type_erreur", "priorite",
               "fiche_validation"]:
         if f in body:
             fields.append(f"{f} = %s")

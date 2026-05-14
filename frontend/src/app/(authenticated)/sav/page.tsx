@@ -102,7 +102,7 @@ export default function SavPage() {
 
   const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
   const [form, setForm] = useState(emptyForm);
-  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_minutes: '' });
+  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '' });
 
   // Custom intervention types ("Autre" pattern)
   const TYPES_INTERVENTION_BASE = ['Corrective', 'Préventive', 'Installation', 'Formation', 'Démo'];
@@ -226,7 +226,8 @@ export default function SavPage() {
         probleme: statusForm.probleme,
         cause: statusForm.cause,
         solution: statusForm.solution,
-        duree_minutes: Number(statusForm.duree_minutes) || selectedIntervention.duree_minutes,
+        duree_minutes: Math.round(Number(statusForm.duree_heures) * 60) || selectedIntervention.duree_minutes,
+        duree_deplacement: Math.round(Number(statusForm.duree_deplacement) * 60),
       };
       // Envoyer les pièces en rupture sélectionnées pour générer des notifications
       if (statusForm.statut.toLowerCase().includes('attente') && statusForm.statut.toLowerCase().includes('pi')) {
@@ -787,7 +788,7 @@ export default function SavPage() {
                         <div className="flex items-center gap-1">
                           <button onClick={() => {
                             setSelectedIntervention(i);
-                            setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_minutes: String(i.duree_minutes) });
+                            setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), duree_deplacement: String(Math.round(((i.deplacement || 0) / 60) * 100) / 100) });
                             setShowStatusModal(true);
                           }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
                             <Edit className="w-3.5 h-3.5" />
@@ -1457,7 +1458,10 @@ export default function SavPage() {
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Problème identifié</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.probleme} onChange={e => setStatusForm({...statusForm, probleme: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (min)</label><input type="number" className={INPUT_CLS} value={statusForm.duree_minutes} onChange={e => setStatusForm({...statusForm, duree_minutes: e.target.value})} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 1.5" value={statusForm.duree_heures} onChange={e => setStatusForm({...statusForm, duree_heures: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 0.5" value={statusForm.duree_deplacement} onChange={e => setStatusForm({...statusForm, duree_deplacement: e.target.value})} /></div>
+          </div>
           {statusForm.statut.toLowerCase().includes('tur') && (
             <div>
               <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
