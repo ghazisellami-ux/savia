@@ -5748,7 +5748,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             pdf.set_x(LM + 4)
             pdf.set_font("Helvetica", "", 9.5)
             pdf.set_text_color(35, 45, 65)
-            pdf.cell(4, 5.2, "\u2022")
+            pdf.cell(4, 5.2, "-")
             pdf.multi_cell(W - 8, 5.2, _sanitize(it))
         pdf.ln(2)
 
@@ -5811,7 +5811,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             pdf.set_x(LM + 4)
             pdf.set_font("Helvetica", "", 9.5)
             pdf.set_text_color(35, 45, 65)
-            pdf.cell(4, 5.2, "\u2022")
+            pdf.cell(4, 5.2, "-")
             pdf.multi_cell(W - 8, 5.2, _sanitize(it))
         pdf.ln(2)
         article_n += 1
