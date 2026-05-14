@@ -1887,7 +1887,7 @@ export default function SavPage() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
-        <Modal open onClose={() => setDeleteConfirm(null)} title="Confirmer la suppression">
+        <Modal isOpen={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Confirmer la suppression">
           <div className="space-y-4">
             <div className="flex items-center gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/30">
               <AlertTriangle className="w-8 h-8 text-red-400 flex-shrink-0" />
