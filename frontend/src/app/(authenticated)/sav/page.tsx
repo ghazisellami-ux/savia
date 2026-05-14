@@ -63,6 +63,8 @@ export default function SavPage() {
   const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
   const [manualPieces, setManualPieces] = useState<{reference: string; designation: string}[]>([]); // pièces non référencées
   const [manualPieceForm, setManualPieceForm] = useState({reference: '', designation: ''});
+  const [selectedPieces, setSelectedPieces] = useState<any[]>([]); // pièces sélectionnées pour nouvelle intervention
+  const [piecesDropdownOpen, setPiecesDropdownOpen] = useState(false);
   const [equipementsData, setEquipementsData] = useState<any[]>([]);
   const [clientsData, setClientsData] = useState<any[]>([]);
   const [contratsData, setContratsData] = useState<any[]>([]);
@@ -100,7 +102,7 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', cout_pieces: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
   const [form, setForm] = useState(emptyForm);
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '' });
 
@@ -205,9 +207,11 @@ export default function SavPage() {
         ...form,
         duree_minutes: Math.round(Number(form.duree_heures) * 60),
         duree_deplacement: Math.round(Number(form.duree_deplacement) * 60),
-        cout_pieces: Number(form.cout_pieces),
+        pieces_utilisees: selectedPieces.map((p: any) => `${p.designation} (${p.reference})`).join(', '),
+        cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + (p.prix_unitaire || 0), 0),
       });
       setForm(emptyForm);
+      setSelectedPieces([]);
       setShowAddModal(false);
       await loadData();
     } catch (err) {
@@ -1225,7 +1229,7 @@ export default function SavPage() {
             </select>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Équipement *</label>
-            <select className={INPUT_CLS} value={form.machine} onChange={e => setForm({...form, machine: e.target.value})} disabled={!form.client}>
+            <select className={INPUT_CLS} value={form.machine} onChange={e => { setForm({...form, machine: e.target.value}); setSelectedPieces([]); setPiecesDropdownOpen(false); }} disabled={!form.client}>
               <option value="">{form.client ? '— Sélectionner un équipement —' : '← Choisir un client d\'abord'}</option>
               {equipementsData
                 .filter((eq: any) => (eq.Client || eq.client || '') === form.client)
@@ -1325,8 +1329,70 @@ export default function SavPage() {
             </select></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_heures} onChange={e => setForm({...form, duree_heures: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_deplacement} onChange={e => setForm({...form, duree_deplacement: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><DollarSign className="w-3.5 h-3.5" /> Coût pièces (TND)</label><input type="number" className={INPUT_CLS} value={form.cout_pieces} onChange={e => setForm({...form, cout_pieces: e.target.value})} /></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Pièces utilisées</label><input className={INPUT_CLS} placeholder="Ex: Tube RX, Câble" value={form.pieces_utilisees} onChange={e => setForm({...form, pieces_utilisees: e.target.value})} /></div>
+          <div className="md:col-span-2">
+            <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Pièces utilisées</label>
+            {/* Chips des pièces sélectionnées */}
+            {selectedPieces.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {selectedPieces.map((p: any) => (
+                  <span key={p.id || p.reference} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    {p.designation} <span className="text-savia-text-muted">({p.reference})</span>
+                    <button type="button" onClick={() => setSelectedPieces(prev => prev.filter(x => x.id !== p.id))} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+                <span className="text-xs text-savia-text-muted self-center ml-1">Total: {selectedPieces.reduce((a: number, p: any) => a + (p.prix_unitaire || 0), 0).toLocaleString('fr')} TND</span>
+              </div>
+            )}
+            {/* Dropdown */}
+            <div className="relative">
+              <button type="button" onClick={() => setPiecesDropdownOpen(!piecesDropdownOpen)}
+                className={INPUT_CLS + ' flex items-center justify-between cursor-pointer text-left'}
+                disabled={!form.machine}>
+                <span className={selectedPieces.length > 0 ? 'text-savia-text' : 'text-savia-text-dim'}>
+                  {!form.machine ? '← Choisir un équipement d\'abord' : selectedPieces.length > 0 ? `${selectedPieces.length} pièce(s) sélectionnée(s)` : '-- Sélectionner des pièces --'}
+                </span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${piecesDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {piecesDropdownOpen && (() => {
+                const selectedEquip = equipementsData.find((eq: any) => (eq.Nom || eq.nom) === form.machine);
+                const equipType = selectedEquip?.Type || selectedEquip?.type || '';
+                const filteredPieces = allPieces.filter((p: any) => {
+                  if (!equipType) return true;
+                  const pt = (p.equipement_type || '').toLowerCase();
+                  const et = equipType.toLowerCase();
+                  return pt.includes(et) || et.includes(pt) || pt === et;
+                });
+                return (
+                  <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-56 overflow-y-auto">
+                    {filteredPieces.length === 0 ? (
+                      <div className="px-3 py-4 text-sm text-savia-text-muted text-center italic">Aucune pièce disponible pour ce type d'équipement</div>
+                    ) : filteredPieces.map((p: any) => {
+                      const isSelected = selectedPieces.some((s: any) => s.id === p.id);
+                      return (
+                        <button key={p.id} type="button" onClick={() => {
+                          setSelectedPieces(prev => isSelected ? prev.filter(x => x.id !== p.id) : [...prev, p]);
+                        }}
+                          className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                            isSelected ? 'text-emerald-400 font-semibold' : 'text-savia-text'
+                          }`}>
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                            isSelected ? 'bg-emerald-500 border-emerald-500' : 'border-savia-border'
+                          }`}>
+                            {isSelected && <Check className="w-3 h-3 text-white" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium">{p.designation}</span>
+                            <span className="text-xs text-savia-text-muted ml-1.5">{p.reference}</span>
+                          </div>
+                          <span className="text-xs text-savia-text-muted whitespace-nowrap">{(p.prix_unitaire || 0).toLocaleString('fr')} TND · Stock: {p.stock_actuel ?? 0}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
           <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5" /> Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Décrivez le problème..." value={form.probleme} onChange={e => setForm({...form, probleme: e.target.value})} /></div>
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-savia-border/30">
