@@ -636,6 +636,9 @@ def init_db():
         # Technicien enrichment columns
         _safe_add_column("techniciens", "niveau_competence")
 
+        # Travel time column on interventions
+        _safe_add_column("interventions", "duree_deplacement", "INTEGER", "0")
+
         # Fabricants table
         if USE_PG:
             try:
@@ -1414,8 +1417,9 @@ def ajouter_intervention(intervention_dict):
             INSERT INTO interventions (date, machine, technicien, type_intervention,
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, duree_minutes,
-                                       code_erreur, statut, notes, type_erreur, priorite)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       code_erreur, statut, notes, type_erreur, priorite,
+                                       duree_deplacement)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
@@ -1433,6 +1437,7 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("notes") or "",
             intervention_dict.get("type_erreur") or "",
             intervention_dict.get("priorite") or "",
+            intervention_dict.get("duree_deplacement", 0),
         ))
     _trigger_backup()
     return True
