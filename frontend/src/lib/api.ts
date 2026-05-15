@@ -238,7 +238,7 @@ export const clients = {
   create: (data: Record<string, unknown>) => request<{ ok: boolean }>('/api/clients', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
-  importExcel: async (file: File) => {
+  importExcel: async (file: File): Promise<Record<string, unknown>> => {
     const fd = new FormData();
     fd.append('file', file);
     const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
@@ -248,7 +248,7 @@ export const clients = {
       body: fd,
     });
     if (!res.ok) throw new Error('Erreur import: ' + res.status);
-    return res.json();
+    return res.json() as Promise<Record<string, unknown>>;
   },
 };
 
@@ -282,16 +282,16 @@ export const ai = {
   analyzePerformance: (kpis: Record<string, unknown>, sym: string = "EUR") => 
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
   analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "") =>
-    request<{ok: boolean, result: any}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
   analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
-    request<{ok: boolean, result: any}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
-  analyzePieces: (pieces: any[], sym: string = "TND") =>
-    request<{ok: boolean, result: any}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
+  analyzePieces: (pieces: Array<Record<string, unknown>>, sym: string = "TND") =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym } }),
   chat: (message: string, history: Array<{role: string, content: string}> = []) =>
     request<{response: string, suggestions: string[]}>('/api/ai/chat', { method: 'POST', body: { message, history } }),
-  analyzeCosts: (clients: any[], kpis: any) =>
-    request<{ok: boolean, result: any}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis } }),
-  analyzeCostsPdf: async (result: any, kpis: any) => {
+  analyzeCosts: (clients: Array<Record<string, unknown>>, kpis: Record<string, unknown>) =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis } }),
+  analyzeCostsPdf: async (result: Record<string, unknown>, kpis: Record<string, unknown>) => {
     const token = localStorage.getItem('token');
     const base = process.env.NEXT_PUBLIC_API_URL || '';
     const cn = localStorage.getItem('savia_company') || 'SAVIA';
@@ -357,4 +357,7 @@ export const settings = {
 };
 
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, settings };
+
+// Default export for backward compatibility
+const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, settings };
+export default apiClient;
