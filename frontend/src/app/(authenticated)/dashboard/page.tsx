@@ -47,13 +47,18 @@ const CHART_STYLE = {
 const MONTH_NAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
   'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
-const DEMO_TYPES = [
-  { name: 'Hardware', value: 35, color: '#ef4444' },
-  { name: 'Software', value: 25, color: '#3b82f6' },
-  { name: 'Calibration', value: 20, color: '#f59e0b' },
-  { name: 'Power', value: 12, color: '#8b5cf6' },
-  { name: 'Autre', value: 8, color: '#64748b' },
-];
+// Color palette for error types
+const ERROR_TYPE_COLORS: Record<string, string> = {
+  'Hardware': '#ef4444',
+  'Software': '#3b82f6',
+  'Calibration': '#f59e0b',
+  'Power': '#8b5cf6',
+  'Électrique': '#fbbf24',
+  'Mécanique': '#ec4899',
+  'Pneumatique': '#06b6d4',
+  'Hydraulique': '#8b5cf6',
+  'Autre': '#64748b',
+};
 
 // --- Helpers ---
 function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
@@ -197,6 +202,40 @@ export default function DashboardPage() {
       };
     });
   }, [allInterventions, selectedMonth, selectedYear]);
+
+  // Compute error types distribution from real interventions
+  const errorTypesData = useMemo(() => {
+    if (!allInterventions || allInterventions.length === 0) {
+      // Return empty array if no interventions
+      return [];
+    }
+
+    // Count error types from interventions
+    const errorTypeCount: Record<string, number> = {};
+    let totalWithErrorType = 0;
+
+    allInterventions.forEach((interv: any) => {
+      const errorType = (interv.type_erreur || '').trim();
+      if (errorType) {
+        errorTypeCount[errorType] = (errorTypeCount[errorType] || 0) + 1;
+        totalWithErrorType++;
+      }
+    });
+
+    // If no error types found, return empty
+    if (totalWithErrorType === 0) {
+      return [];
+    }
+
+    // Convert to percentage and create chart data
+    return Object.entries(errorTypeCount)
+      .map(([name, count]) => ({
+        name,
+        value: Math.round((count / totalWithErrorType) * 100),
+        color: ERROR_TYPE_COLORS[name] || '#64748b',
+      }))
+      .sort((a, b) => b.value - a.value); // Sort by percentage descending
+  }, [allInterventions]);
 
   // Gauge data for RadialBarChart
   const gaugeData = [{ name: 'Santé', value: scoreGlobal, fill: scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444' }];
@@ -496,30 +535,40 @@ export default function DashboardPage() {
 
         {/* Répartition types erreurs */}
         <SectionCard title={<span className="flex items-center gap-2"><Crosshair className="w-5 h-5 text-purple-400" /> Types d&apos;Erreurs</span>}>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={DEMO_TYPES}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={3}
-                dataKey="value"
-                stroke="none"
-              >
-                {DEMO_TYPES.map((entry, i) => (
-                  <Cell key={i} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              />
-              <Legend
-                wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          {errorTypesData.length === 0 ? (
+            <div className="flex items-center justify-center h-[280px] text-savia-text-muted">
+              <div className="text-center">
+                <Crosshair className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">Aucun type d&apos;erreur enregistré</p>
+              </div>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie
+                  data={errorTypesData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={90}
+                  paddingAngle={3}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {errorTypesData.map((entry, i) => (
+                    <Cell key={i} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+                  formatter={(value: any) => `${value}%`}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: 11, color: CHART_STYLE.text }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
         </SectionCard>
       </div>
 
