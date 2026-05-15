@@ -777,12 +777,19 @@ export default function EquipementsPage() {
                             <button type="button" onClick={async () => {
                               if (customDomaineValue.trim()) {
                                 try {
+                                  const domaineName = customDomaineValue.trim();
                                   await fetch('/api/domaines-custom', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ nom: customDomaineValue.trim() })
+                                    body: JSON.stringify({ nom: domaineName })
                                   });
+                                  // Reload custom types to get the new domain
                                   await loadCustomTypes();
+                                  // Select the newly created domain
+                                  setForm({ ...form, Domaine: domaineName, Type: 'Autre', EstAnnexe: false });
+                                  // Clear the input
+                                  setCustomDomaineValue('');
+                                  setCustomDomaineMode(false);
                                 } catch (err) {
                                   console.error("Erreur sauvegarde domaine:", err);
                                 }
@@ -846,6 +853,9 @@ export default function EquipementsPage() {
                               // If it's a custom domain, use the custom domain name
                               if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
                                 domKey = customDomaineValue.trim();
+                              } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                // If it's a custom domain (not in TYPES_PAR_DOMAINE), use it directly
+                                domKey = form.Domaine;
                               }
                               
                               const typeValue = customTypeValue.trim();
