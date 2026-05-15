@@ -3986,15 +3986,18 @@ def get_settings(user: dict = Depends(_verify_token)):
     ]
     try:
         with get_db() as conn:
-            rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
-                (keys,)
-            ).fetchall()
             result = {k: "" for k in keys}
-            for row in rows:
-                result[row["cle"]] = row["valeur"] or ""
+            for k in keys:
+                row = conn.execute(
+                    "SELECT valeur FROM config_client WHERE cle = ?",
+                    (k,)
+                ).fetchone()
+                if row:
+                    result[k] = row["valeur"] or ""
             return result
-    except Exception:
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_settings: {e}\n{traceback.format_exc()}")
         # Fallback: chercher clé par clé
         result = {}
         for k in keys:
@@ -4007,17 +4010,19 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             for k, v in body.items():
+                # Use SQLite-compatible syntax with ? placeholder
                 conn.execute(
                     """
-                    INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
-                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
+                    INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    ON CONFLICT (cle) DO UPDATE SET valeur = excluded.valeur
                     """,
                     (k, str(v))
                 )
         return {"ok": True}
     except Exception as e:
         import traceback
-        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}\n{traceback.format_exc()}")
+        logger.error(f"Erreur update_settings: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
 
 
 # ==========================================
