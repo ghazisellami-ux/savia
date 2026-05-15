@@ -3986,15 +3986,18 @@ def get_settings(user: dict = Depends(_verify_token)):
     ]
     try:
         with get_db() as conn:
-            rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
-                (keys,)
-            ).fetchall()
             result = {k: "" for k in keys}
-            for row in rows:
-                result[row["cle"]] = row["valeur"] or ""
+            for k in keys:
+                row = conn.execute(
+                    "SELECT valeur FROM config_client WHERE cle = ?",
+                    (k,)
+                ).fetchone()
+                if row:
+                    result[k] = row["valeur"] or ""
             return result
-    except Exception:
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_settings: {e}\n{traceback.format_exc()}")
         # Fallback: chercher clé par clé
         result = {}
         for k in keys:
@@ -4007,17 +4010,19 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             for k, v in body.items():
+                # Use SQLite-compatible syntax with ? placeholder
                 conn.execute(
                     """
-                    INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
-                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
+                    INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    ON CONFLICT (cle) DO UPDATE SET valeur = excluded.valeur
                     """,
                     (k, str(v))
                 )
         return {"ok": True}
     except Exception as e:
         import traceback
-        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}\n{traceback.format_exc()}")
+        logger.error(f"Erreur update_settings: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
 
 
 # ==========================================
@@ -6001,14 +6006,24 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 cout_pieces = cl_interventions["cout_pieces"].sum() if "cout_pieces" in cl_interventions.columns else 0
                 duree_totale = cl_interventions["duree_minutes"].sum() if "duree_minutes" in cl_interventions.columns else 0
 
-            # Get taux horaire from config
+            # Get taux horaire from config (required, no default)
             try:
-                taux = float(get_config("taux_horaire_technicien", "25"))
-            except Exception:
-                taux = 25.0
+                taux_str = get_config("taux_horaire_technicien", "")
+                if not taux_str:
+                    raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+                taux = float(taux_str)
+            except (ValueError, TypeError) as e:
+                raise HTTPException(400, f"Erreur: {str(e)}")
+            
+            # Calculate labor cost from duration
             cout_mo = float((duree_totale / 60.0) * taux)
+            
+            # cout_interv already includes labor + parts, so we need to extract the service cost
+            # Service cost = Total intervention cost - Labor cost - Parts cost
+            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
 
-            cout_total = float(cout_interv) + float(cout_pieces) + cout_mo
+            # Total cost = Service cost + Labor cost + Parts cost (no double-counting)
+            cout_total = cout_service + cout_mo + float(cout_pieces)
             marge = float(revenu) - cout_total
             marge_pct = round((marge / float(revenu) * 100), 1) if float(revenu) > 0 else 0.0
 
@@ -6018,7 +6033,7 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 "client": cl,
                 "nb_equipements": int(nb_equip),
                 "revenu_contrats": round(float(revenu), 0),
-                "cout_interventions": round(float(cout_interv), 0),
+                "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
                 "cout_main_oeuvre": round(float(cout_mo), 0),
                 "cout_total": round(float(cout_total), 0),
@@ -6068,9 +6083,12 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
             return tco_list
 
         try:
-            taux = float(get_config("taux_horaire_technicien", "25"))
-        except Exception:
-            taux = 25.0
+            taux_str = get_config("taux_horaire_technicien", "")
+            if not taux_str:
+                raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+            taux = float(taux_str)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, f"Erreur: {str(e)}")
 
         for _, eq in df_equip.iterrows():
             nom = eq.get("Nom", "")
@@ -6094,7 +6112,9 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
                 nb_preventives = nb_interv - nb_correctives
 
             cout_mo = (duree / 60.0) * taux
-            tco_total = float(cout_interv) + float(cout_pieces) + cout_mo
+            # Extract service cost (intervention cost - labor - parts)
+            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
+            tco_total = float(cout_service) + float(cout_pieces) + cout_mo
 
             # Installation age (days)
             age_jours = 0
@@ -6118,7 +6138,7 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
                 "nb_interventions": int(nb_interv),
                 "nb_correctives": int(nb_correctives),
                 "nb_preventives": int(nb_preventives),
-                "cout_interventions": round(float(cout_interv), 0),
+                "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
                 "cout_main_oeuvre": round(float(cout_mo), 0),
                 "tco_total": round(float(tco_total), 0),

@@ -9,9 +9,9 @@ import {
   ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
-  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2
+  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2, Package
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
@@ -111,12 +111,26 @@ export default function SavPage() {
   const [customInterventionTypes, setCustomInterventionTypes] = useState<string[]>([]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
+  const [tauxHoraire, setTauxHoraire] = useState<number>(0);
 
   // Load custom types from database on mount
   useEffect(() => {
     typesIntervention.list()
       .then((res) => setCustomInterventionTypes(res.map(t => t.nom)))
       .catch(() => {});
+  }, []);
+
+  // Load hourly rate from settings on mount
+  useEffect(() => {
+    settings.get()
+      .then((settingsData) => {
+        const rate = parseFloat(settingsData.taux_horaire_technicien || '0') || 0;
+        setTauxHoraire(rate);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch hourly rate:', err);
+        setTauxHoraire(0);
+      });
   }, []);
 
   const allInterventionTypes = useMemo(() => {
@@ -283,9 +297,26 @@ export default function SavPage() {
       const nb_correctives = allInterv.filter(i => i.type.toLowerCase().includes('correct')).length;
       const nb_preventives = allInterv.filter(i => i.type.toLowerCase().includes('ventive')).length;
       const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
+      
+      // Calculate costs correctly (avoid double counting)
+      // Use the same logic as Rentabilité Client page
       const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
       const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
       const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
+      
+      // Use hourly rate from state (fetched on component mount)
+      // This ensures consistency with Rentabilité Client page
+      if (tauxHoraire <= 0) {
+        setAiError('Erreur: Taux horaire technicien non configuré dans les paramètres');
+        setIsAnalyzing(false);
+        return;
+      }
+      
+      const totalCoutMO = (totalDureeMin / 60.0) * tauxHoraire;
+      
+      // Service cost = Total intervention cost - Labor cost - Parts cost
+      const totalCoutService = Math.max(0, totalCoutInterv - totalCoutMO - totalCoutPieces);
+      
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
       const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
@@ -334,9 +365,9 @@ export default function SavPage() {
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
-        cout_interventions: totalCoutInterv, cout_pieces: totalCoutPieces,
-        cout_total: totalCoutInterv + totalCoutPieces,
-        cout_moyen: nb_total > 0 ? Math.round((totalCoutInterv + totalCoutPieces) / nb_total) : 0,
+        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMO,
+        cout_total: totalCoutInterv,
+        cout_moyen: nb_total > 0 ? Math.round(totalCoutInterv / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
@@ -506,8 +537,16 @@ export default function SavPage() {
   }, [filtered]);
 
   // Financial summary
+  // Recalculate costs using current hourly rate (same as Rentabilité Client page)
+  const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
   const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
   const coutInterventions = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  
+  // Recalculate labor cost based on current hourly rate
+  const coutMainOeuvre = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
+  
+  // Service cost = Total intervention cost - Labor cost - Parts cost
+  const coutService = Math.max(0, coutInterventions - coutMainOeuvre - coutPieces);
 
   const tabs = [
     { icon: <Wrench className="w-4 h-4" />, label: 'Interventions' },
@@ -916,22 +955,22 @@ export default function SavPage() {
       {activeTab === 2 && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="glass rounded-xl p-6 text-center border border-blue-500/20">
-              <div className="flex justify-center mb-2"><DollarSign className="w-6 h-6 text-blue-400" /></div>
-              <div className="text-sm text-blue-400 font-bold uppercase tracking-wider mb-2">Coût Interventions</div>
-              <div className="text-4xl font-black text-blue-400">{coutInterventions.toLocaleString('fr')} TND</div>
-              <div className="text-xs text-savia-text-muted mt-2">Charge technique (main d&apos;œuvre)</div>
-            </div>
             <div className="glass rounded-xl p-6 text-center border border-purple-500/20">
-              <div className="flex justify-center mb-2"><Wrench className="w-6 h-6 text-purple-400" /></div>
+              <div className="flex justify-center mb-2"><Package className="w-6 h-6 text-purple-400" /></div>
               <div className="text-sm text-purple-400 font-bold uppercase tracking-wider mb-2">Coût Pièces</div>
               <div className="text-4xl font-black text-purple-400">{coutPieces.toLocaleString('fr')} TND</div>
               <div className="text-xs text-savia-text-muted mt-2">Pièces de rechange utilisées</div>
             </div>
+            <div className="glass rounded-xl p-6 text-center border border-blue-500/20">
+              <div className="flex justify-center mb-2"><Users className="w-6 h-6 text-blue-400" /></div>
+              <div className="text-sm text-blue-400 font-bold uppercase tracking-wider mb-2">Coût Main d&apos;œuvre</div>
+              <div className="text-4xl font-black text-blue-400">{coutMainOeuvre.toLocaleString('fr')} TND</div>
+              <div className="text-xs text-savia-text-muted mt-2">Charge technique ({totalDureeMin} min)</div>
+            </div>
             <div className="glass rounded-xl p-6 text-center border border-cyan-500/20">
               <div className="flex justify-center mb-2"><TrendingUp className="w-6 h-6 text-cyan-400" /></div>
               <div className="text-sm text-cyan-400 font-bold uppercase tracking-wider mb-2">Coût Total</div>
-              <div className="text-4xl font-black text-cyan-400">{(coutInterventions + coutPieces).toLocaleString('fr')} TND</div>
+              <div className="text-4xl font-black text-cyan-400">{(coutPieces + coutMainOeuvre).toLocaleString('fr')} TND</div>
               <div className="text-xs text-savia-text-muted mt-2">Dépenses totales maintenance</div>
             </div>
           </div>
