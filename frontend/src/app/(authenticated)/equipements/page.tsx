@@ -208,6 +208,8 @@ export default function EquipementsPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
+  const [customDomaineMode, setCustomDomaineMode] = useState(false);
+  const [customDomaineValue, setCustomDomaineValue] = useState('');
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
@@ -435,6 +437,17 @@ export default function EquipementsPage() {
       GarantieDuree: eq.garantieDuree || 0,
       Service: eq.service || '',
     });
+    
+    // If domaine is custom (not in DOMAINES), set custom domain mode
+    const isCustomDomaine = eq.domaine && !DOMAINES.includes(eq.domaine as Domaine);
+    if (isCustomDomaine) {
+      setCustomDomaineMode(true);
+      setCustomDomaineValue(eq.domaine);
+    } else {
+      setCustomDomaineMode(false);
+      setCustomDomaineValue('');
+    }
+    
     // If fabricant not in list, enable custom mode
     if (eq.marque && !fabricantsList.includes(eq.marque)) {
       setCustomFabricant(true);
@@ -445,7 +458,7 @@ export default function EquipementsPage() {
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
-  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); };
+  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); };
 
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -459,6 +472,12 @@ export default function EquipementsPage() {
     setIsSaving(true);
     try {
       const payload: any = { ...form };
+      
+      // If "Autre" domain is selected and custom domain is provided, use it
+      if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+        payload.Domaine = customDomaineValue.trim();
+      }
+      
       if (docFiles.length > 0) payload.DocumentTechnique = docFiles.map(f => f.name).join(', ');
 
       let targetEquipId: number | null = null;
@@ -482,6 +501,7 @@ export default function EquipementsPage() {
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
       setCustomTypeMode(false); setCustomTypeValue('');
+      setCustomDomaineMode(false); setCustomDomaineValue('');
       // Auto-save fabricant if new
       if (form.Fabricant.trim() && !fabricantsList.includes(form.Fabricant.trim())) {
         try { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); } catch {}
@@ -683,7 +703,15 @@ export default function EquipementsPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {DOMAINES.map(d => (
                           <button key={d} type="button"
-                            onClick={() => setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] })}
+                            onClick={() => {
+                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] });
+                              if (d === 'Autre') {
+                                setCustomDomaineMode(true);
+                              } else {
+                                setCustomDomaineMode(false);
+                                setCustomDomaineValue('');
+                              }
+                            }}
                             className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border ${
                               form.Domaine === d ? DOMAINE_ACTIVE[d] : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
                             }`}
@@ -695,6 +723,25 @@ export default function EquipementsPage() {
                           </button>
                         ))}
                       </div>
+                      
+                      {/* Custom domain input when "Autre" is selected */}
+                      {form.Domaine === 'Autre' && (
+                        <div className="mt-4 p-4 rounded-xl bg-purple-500/10 border border-purple-500/30">
+                          <label className="block text-xs font-semibold text-purple-400 uppercase tracking-wider mb-2">
+                            Domaine personnalisé
+                          </label>
+                          <input 
+                            type="text"
+                            placeholder="Ex: Cardiologie, Dermatologie, Ophtalmologie..."
+                            value={customDomaineValue}
+                            onChange={e => setCustomDomaineValue(e.target.value)}
+                            className={INPUT_CLS}
+                          />
+                          <p className="text-xs text-purple-400/70 mt-2">
+                            Entrez le nom du domaine médical personnalisé. Il sera disponible dans la page Pièces de Rechange.
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Annexe checkbox — uniquement Radiologie */}
