@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
-import { contrats, equipements, pieces as piecesApi } from '@/lib/api';
+import { contrats, equipements, pieces as piecesApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { downloadBlob } from '@/lib/download';
 import {
@@ -57,6 +57,7 @@ export default function ContratsPage() {
   const [search, setSearch] = useState('');
   const [data, setData] = useState<Contrat[]>([]);
   const [equips, setEquips] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
   const [stockPieces, setStockPieces] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -69,7 +70,7 @@ export default function ContratsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [ctrs, eqs, pcs] = await Promise.all([contrats.list(), equipements.list(), piecesApi.list()]);
+      const [ctrs, eqs, cls, pcs] = await Promise.all([contrats.list(), equipements.list(), clientsApi.list(), piecesApi.list()]);
       setData((ctrs as any[]).map((item: any) => ({
         id: String(item.id || ''),
         client: item.client || item.Client || '',
@@ -84,6 +85,7 @@ export default function ContratsPage() {
         notes: item.notes || '',
       })));
       setEquips(eqs as any[]);
+      setClients(cls as any[]);
       setStockPieces(pcs as any[]);
     } catch (err) { console.error(err); }
     finally { setIsLoading(false); }
@@ -92,7 +94,7 @@ export default function ContratsPage() {
   useEffect(() => { load(); }, [load]);
 
   // Derived lists
-  const clients = [...new Set(equips.map((e: any) => e.Client).filter(Boolean))].sort();
+  const clientsList = clients.map((c: any) => c.nom).sort();
   const equipsByClient = form.client
     ? equips.filter((e: any) => e.Client === form.client)
     : [];
@@ -487,7 +489,7 @@ export default function ContratsPage() {
                     <label className={LABEL}>Client *</label>
                     <select className={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('equipement', ''); }}>
                       <option value="">— Sélectionner un client —</option>
-                      {clients.map(c => <option key={c} value={c}>{c}</option>)}
+                      {clientsList.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div>
