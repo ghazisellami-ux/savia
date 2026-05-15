@@ -334,6 +334,19 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadCustomDomaines = useCallback(async () => {
+    try {
+      const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+      const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
+      const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
+      setCustomDomaines(domaineNames);
+      return domaineNames;
+    } catch (err) {
+      console.error("Erreur chargement domaines personnalisés:", err);
+      return [];
+    }
+  }, []);
+
   const loadCustomTypes = useCallback(async () => {
     try {
       const allDomaines = [...DOMAINES, '__annexe__'];
@@ -345,15 +358,9 @@ export default function EquipementsPage() {
       
       // Load custom domains and their types
       try {
-        const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
-        const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
+        const customDomainesList = await loadCustomDomaines();
         
-        // Extract domain names and set them
-        const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
-        setCustomDomaines(domaineNames);
-        
-        for (const domaine of customDomainesList) {
-          const domaineName = domaine.nom || domaine;
+        for (const domaineName of customDomainesList) {
           try {
             const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
             results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
@@ -369,7 +376,7 @@ export default function EquipementsPage() {
       // Keep legacy state for backward compat
       setCustomAnnexeTypes(results['__annexe__'] || []);
     } catch { /* ignore */ }
-  }, []);
+  }, [loadCustomDomaines]);
 
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
@@ -807,7 +814,9 @@ export default function EquipementsPage() {
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ nom: domaineName })
                                   });
-                                  // Reload custom types to get the new domain
+                                  // Reload custom domains to get the new domain
+                                  const updatedDomaines = await loadCustomDomaines();
+                                  // Load types for all domains
                                   await loadCustomTypes();
                                   // Select the newly created domain
                                   setForm({ ...form, Domaine: domaineName, Type: 'Autre', EstAnnexe: false });
