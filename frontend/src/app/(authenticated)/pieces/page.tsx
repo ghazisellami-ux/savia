@@ -6,7 +6,7 @@ import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Spar
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
   Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
-import { pieces, interventions, ai, notifications as notifApi, piecesDemandees } from '@/lib/api';
+import { pieces, interventions, ai, notifications as notifApi, piecesDemandees, equipements } from '@/lib/api';
 
 interface Piece {
   id: number;
@@ -59,6 +59,9 @@ export default function PiecesPage() {
   const [editTypeFilter, setEditTypeFilter] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
+  const [customParts, setCustomParts] = useState<string[]>([]);
+  const [showCustomPartInput, setShowCustomPartInput] = useState(false);
+  const [customPartInput, setCustomPartInput] = useState('');
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -96,6 +99,29 @@ export default function PiecesPage() {
     } catch { /* silencieux */ }
   }, []);
   useEffect(() => { loadDemandes(); }, [loadDemandes]);
+
+  // Charger les pièces personnalisées depuis les équipements
+  const loadCustomParts = useCallback(async () => {
+    try {
+      const equipRes = await equipements.list();
+      const parts = new Set<string>();
+      (equipRes as any[]).forEach((eq: any) => {
+        // Extraire les pièces personnalisées des notes/localisation
+        const notes = (eq.Notes || eq.notes || '').trim();
+        if (notes && notes.length > 0) {
+          // Chercher les pièces mentionnées (format: "Pièce: XXX" ou simplement du texte)
+          const lines = notes.split('\n').filter((l: string) => l.trim().length > 0);
+          lines.forEach((line: string) => {
+            if (line.toLowerCase().includes('pièce') || line.toLowerCase().includes('piece')) {
+              parts.add(line.trim());
+            }
+          });
+        }
+      });
+      setCustomParts(Array.from(parts).sort());
+    } catch { /* silencieux */ }
+  }, []);
+  useEffect(() => { loadCustomParts(); }, [loadCustomParts]);
 
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
@@ -1002,6 +1028,57 @@ export default function PiecesPage() {
                 </label>
               </div>
             )}
+            
+            {/* Pièces personnalisées (Autre) */}
+            {customParts.length > 0 && (
+              <div className="md:col-span-2">
+                <label className="block text-sm text-savia-text-muted mb-2">Pièces personnalisées enregistrées</label>
+                <div className="space-y-2">
+                  {customParts.map((part, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setForm({...form, designation: part, equipement_type: 'Autre'})}
+                      className="w-full text-left px-3 py-2 rounded-lg text-sm bg-savia-surface-hover border border-savia-border hover:border-savia-accent/50 hover:bg-savia-accent/5 transition-all cursor-pointer text-savia-text"
+                    >
+                      <span className="font-semibold">{part}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomPartInput(!showCustomPartInput)}
+                    className="w-full px-3 py-2 rounded-lg text-sm bg-savia-surface-hover border border-dashed border-savia-accent/40 hover:border-savia-accent text-savia-accent font-semibold transition-all cursor-pointer"
+                  >
+                    + Ajouter une nouvelle pièce personnalisée
+                  </button>
+                  {showCustomPartInput && (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Nom de la pièce..."
+                        value={customPartInput}
+                        onChange={e => setCustomPartInput(e.target.value)}
+                        className={INPUT_CLS}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (customPartInput.trim()) {
+                            setForm({...form, designation: customPartInput.trim(), equipement_type: 'Autre'});
+                            setCustomPartInput('');
+                            setShowCustomPartInput(false);
+                          }
+                        }}
+                        className="px-3 py-2 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer"
+                      >
+                        Utiliser
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
