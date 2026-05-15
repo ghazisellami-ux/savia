@@ -2450,9 +2450,11 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         cout_total = 0.0
         try:
             config_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
-            taux_horaire = float(config_row["valeur"]) if config_row else 0.0
-        except Exception:
-            taux_horaire = 0.0
+            if not config_row or not config_row["valeur"]:
+                raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+            taux_horaire = float(config_row["valeur"])
+        except (ValueError, TypeError) as e:
+            raise Exception(f"Erreur configuration: {str(e)}")
         cout_total = round((duree_val / 60) * taux_horaire, 2) + total_cout_pieces
 
         # 2. Mettre à jour l'intervention (date = date de clôture)

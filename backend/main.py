@@ -6001,11 +6001,14 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 cout_pieces = cl_interventions["cout_pieces"].sum() if "cout_pieces" in cl_interventions.columns else 0
                 duree_totale = cl_interventions["duree_minutes"].sum() if "duree_minutes" in cl_interventions.columns else 0
 
-            # Get taux horaire from config
+            # Get taux horaire from config (required, no default)
             try:
-                taux = float(get_config("taux_horaire_technicien", "25"))
-            except Exception:
-                taux = 25.0
+                taux_str = get_config("taux_horaire_technicien", "")
+                if not taux_str:
+                    raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+                taux = float(taux_str)
+            except (ValueError, TypeError) as e:
+                raise HTTPException(400, f"Erreur: {str(e)}")
             cout_mo = float((duree_totale / 60.0) * taux)
 
             cout_total = float(cout_interv) + float(cout_pieces) + cout_mo
@@ -6068,9 +6071,12 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
             return tco_list
 
         try:
-            taux = float(get_config("taux_horaire_technicien", "25"))
-        except Exception:
-            taux = 25.0
+            taux_str = get_config("taux_horaire_technicien", "")
+            if not taux_str:
+                raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+            taux = float(taux_str)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, f"Erreur: {str(e)}")
 
         for _, eq in df_equip.iterrows():
             nom = eq.get("Nom", "")
