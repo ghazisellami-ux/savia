@@ -60,8 +60,6 @@ export default function PiecesPage() {
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
-  const [showCustomDomaineInput, setShowCustomDomaineInput] = useState(false);
-  const [customDomaineInput, setCustomDomaineInput] = useState('');
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -100,15 +98,26 @@ export default function PiecesPage() {
   }, []);
   useEffect(() => { loadDemandes(); }, [loadDemandes]);
 
-  // Charger les domaines personnalisés
+  // Charger les domaines personnalisés depuis les équipements
   const loadCustomDomaines = useCallback(async () => {
     try {
-      const res = await fetch('/api/domaines-custom', {
+      // Récupérer tous les équipements
+      const equipRes = await fetch('/api/equipements', {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      if (res.ok) {
-        const data = await res.json();
-        setCustomDomaines(data.map((d: any) => d.nom || d).sort());
+      if (equipRes.ok) {
+        const equipData = await equipRes.json();
+        const domaines = new Set<string>();
+        
+        // Extraire les domaines personnalisés (ceux qui ne sont pas dans ALL_DOMAINES)
+        (equipData as any[]).forEach((eq: any) => {
+          const domaine = eq.Domaine || eq.domaine;
+          if (domaine && !ALL_DOMAINES.includes(domaine)) {
+            domaines.add(domaine);
+          }
+        });
+        
+        setCustomDomaines(Array.from(domaines).sort());
       }
     } catch { /* silencieux */ }
   }, []);
@@ -993,57 +1002,21 @@ export default function PiecesPage() {
                   }`}>{d}</button>
               ))}
               {/* Domaines personnalisés */}
-              {customDomaines.map(d => (
-                <button key={d} type="button"
-                  onClick={() => setForm({...form, domaine: d, equipement_type: 'Autre', est_annexe: false})}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                    form.domaine === d
-                      ? 'bg-purple-600 text-white border-purple-600 shadow-md'
-                      : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
-                  }`}>{d}</button>
-              ))}
-              {/* Bouton pour ajouter un nouveau domaine */}
-              <button type="button"
-                onClick={() => setShowCustomDomaineInput(!showCustomDomaineInput)}
-                className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border border-dashed border-savia-accent/40 hover:border-savia-accent text-savia-accent hover:bg-savia-accent/5">
-                + Autre
-              </button>
+              {customDomaines.length > 0 && (
+                <>
+                  <div className="w-full h-px bg-savia-border my-1" />
+                  {customDomaines.map(d => (
+                    <button key={d} type="button"
+                      onClick={() => setForm({...form, domaine: d, equipement_type: 'Autre', est_annexe: false})}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                        form.domaine === d
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                          : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                      }`}>{d}</button>
+                    ))}
+                </>
+              )}
             </div>
-            {showCustomDomaineInput && (
-              <div className="flex gap-2 mt-3">
-                <input
-                  type="text"
-                  placeholder="Nom du domaine personnalisé..."
-                  value={customDomaineInput}
-                  onChange={e => setCustomDomaineInput(e.target.value)}
-                  className={INPUT_CLS}
-                />
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (customDomaineInput.trim()) {
-                      try {
-                        await fetch('/api/domaines-custom', {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${localStorage.getItem('token')}`
-                          },
-                          body: JSON.stringify({ nom: customDomaineInput.trim() })
-                        });
-                        setForm({...form, domaine: customDomaineInput.trim(), equipement_type: 'Autre'});
-                        setCustomDomaineInput('');
-                        setShowCustomDomaineInput(false);
-                        await loadCustomDomaines();
-                      } catch (err) { console.error("Erreur création domaine", err); }
-                    }
-                  }}
-                  className="px-3 py-2 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer whitespace-nowrap"
-                >
-                  Ajouter
-                </button>
-              </div>
-            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
