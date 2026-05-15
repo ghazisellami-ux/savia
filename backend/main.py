@@ -1275,6 +1275,22 @@ def post_type_intervention_custom(payload: dict = Body(...), user: dict = Depend
     return {"ok": True}
 
 
+@app.get("/api/domaines-custom")
+def get_domaines_custom(user: dict = Depends(_verify_token)):
+    from db_engine import lire_domaines_custom
+    return lire_domaines_custom()
+
+
+@app.post("/api/domaines-custom")
+def post_domaine_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    from db_engine import ajouter_domaine_custom
+    nom = payload.get("nom", "").strip()
+    if not nom:
+        raise HTTPException(400, "Nom requis")
+    ajouter_domaine_custom(nom)
+    return {"ok": True}
+
+
 # ==========================================
 # DOCUMENTS TECHNIQUES
 # ==========================================

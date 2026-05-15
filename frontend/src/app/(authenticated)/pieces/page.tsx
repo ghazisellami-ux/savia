@@ -6,7 +6,7 @@ import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Spar
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
   Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
-import { pieces, interventions, ai, notifications as notifApi, piecesDemandees, equipements } from '@/lib/api';
+import { pieces, interventions, ai, notifications as notifApi, piecesDemandees } from '@/lib/api';
 
 interface Piece {
   id: number;
@@ -59,9 +59,9 @@ export default function PiecesPage() {
   const [editTypeFilter, setEditTypeFilter] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
-  const [customParts, setCustomParts] = useState<string[]>([]);
-  const [showCustomPartInput, setShowCustomPartInput] = useState(false);
-  const [customPartInput, setCustomPartInput] = useState('');
+  const [customDomaines, setCustomDomaines] = useState<string[]>([]);
+  const [showCustomDomaineInput, setShowCustomDomaineInput] = useState(false);
+  const [customDomaineInput, setCustomDomaineInput] = useState('');
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -100,28 +100,19 @@ export default function PiecesPage() {
   }, []);
   useEffect(() => { loadDemandes(); }, [loadDemandes]);
 
-  // Charger les pièces personnalisées depuis les équipements
-  const loadCustomParts = useCallback(async () => {
+  // Charger les domaines personnalisés
+  const loadCustomDomaines = useCallback(async () => {
     try {
-      const equipRes = await equipements.list();
-      const parts = new Set<string>();
-      (equipRes as any[]).forEach((eq: any) => {
-        // Extraire les pièces personnalisées des notes/localisation
-        const notes = (eq.Notes || eq.notes || '').trim();
-        if (notes && notes.length > 0) {
-          // Chercher les pièces mentionnées (format: "Pièce: XXX" ou simplement du texte)
-          const lines = notes.split('\n').filter((l: string) => l.trim().length > 0);
-          lines.forEach((line: string) => {
-            if (line.toLowerCase().includes('pièce') || line.toLowerCase().includes('piece')) {
-              parts.add(line.trim());
-            }
-          });
-        }
+      const res = await fetch('/api/domaines-custom', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      setCustomParts(Array.from(parts).sort());
+      if (res.ok) {
+        const data = await res.json();
+        setCustomDomaines(data.map((d: any) => d.nom || d).sort());
+      }
     } catch { /* silencieux */ }
   }, []);
-  useEffect(() => { loadCustomParts(); }, [loadCustomParts]);
+  useEffect(() => { loadCustomDomaines(); }, [loadCustomDomaines]);
 
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
@@ -1001,7 +992,58 @@ export default function PiecesPage() {
                       : 'bg-savia-surface-hover text-savia-text border-savia-border hover:border-savia-accent/50'
                   }`}>{d}</button>
               ))}
+              {/* Domaines personnalisés */}
+              {customDomaines.map(d => (
+                <button key={d} type="button"
+                  onClick={() => setForm({...form, domaine: d, equipement_type: 'Autre', est_annexe: false})}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                    form.domaine === d
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                      : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                  }`}>{d}</button>
+              ))}
+              {/* Bouton pour ajouter un nouveau domaine */}
+              <button type="button"
+                onClick={() => setShowCustomDomaineInput(!showCustomDomaineInput)}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border border-dashed border-savia-accent/40 hover:border-savia-accent text-savia-accent hover:bg-savia-accent/5">
+                + Autre
+              </button>
             </div>
+            {showCustomDomaineInput && (
+              <div className="flex gap-2 mt-3">
+                <input
+                  type="text"
+                  placeholder="Nom du domaine personnalisé..."
+                  value={customDomaineInput}
+                  onChange={e => setCustomDomaineInput(e.target.value)}
+                  className={INPUT_CLS}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (customDomaineInput.trim()) {
+                      try {
+                        await fetch('/api/domaines-custom', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('token')}`
+                          },
+                          body: JSON.stringify({ nom: customDomaineInput.trim() })
+                        });
+                        setForm({...form, domaine: customDomaineInput.trim(), equipement_type: 'Autre'});
+                        setCustomDomaineInput('');
+                        setShowCustomDomaineInput(false);
+                        await loadCustomDomaines();
+                      } catch (err) { console.error("Erreur création domaine", err); }
+                    }
+                  }}
+                  className="px-3 py-2 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer whitespace-nowrap"
+                >
+                  Ajouter
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1028,57 +1070,6 @@ export default function PiecesPage() {
                 </label>
               </div>
             )}
-            
-            {/* Pièces personnalisées (Autre) */}
-            {customParts.length > 0 && (
-              <div className="md:col-span-2">
-                <label className="block text-sm text-savia-text-muted mb-2">Pièces personnalisées enregistrées</label>
-                <div className="space-y-2">
-                  {customParts.map((part, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setForm({...form, designation: part, equipement_type: 'Autre'})}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm bg-savia-surface-hover border border-savia-border hover:border-savia-accent/50 hover:bg-savia-accent/5 transition-all cursor-pointer text-savia-text"
-                    >
-                      <span className="font-semibold">{part}</span>
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setShowCustomPartInput(!showCustomPartInput)}
-                    className="w-full px-3 py-2 rounded-lg text-sm bg-savia-surface-hover border border-dashed border-savia-accent/40 hover:border-savia-accent text-savia-accent font-semibold transition-all cursor-pointer"
-                  >
-                    + Ajouter une nouvelle pièce personnalisée
-                  </button>
-                  {showCustomPartInput && (
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Nom de la pièce..."
-                        value={customPartInput}
-                        onChange={e => setCustomPartInput(e.target.value)}
-                        className={INPUT_CLS}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (customPartInput.trim()) {
-                            setForm({...form, designation: customPartInput.trim(), equipement_type: 'Autre'});
-                            setCustomPartInput('');
-                            setShowCustomPartInput(false);
-                          }
-                        }}
-                        className="px-3 py-2 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer"
-                      >
-                        Utiliser
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
             <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>

@@ -709,6 +709,32 @@ def init_db():
             )
             """)
 
+        # Table Domaines Personnalisés (Médical)
+        if USE_PG:
+            try:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS domaines_custom (
+                        id SERIAL PRIMARY KEY,
+                        nom TEXT UNIQUE NOT NULL,
+                        date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn._conn.commit()
+            except Exception:
+                try:
+                    conn._conn.rollback()
+                except Exception:
+                    pass
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS domaines_custom (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT UNIQUE NOT NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
         if USE_PG:
             try:
@@ -1295,6 +1321,25 @@ def ajouter_type_intervention_custom(nom):
             conn.execute(f"INSERT INTO types_intervention_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
         else:
             conn.execute(f"INSERT OR IGNORE INTO types_intervention_custom (nom) VALUES ({ph})", (nom.strip(),))
+    return True
+
+
+def lire_domaines_custom():
+    """Retourne la liste des domaines médicaux personnalisés."""
+    with get_db() as conn:
+        ph = "%s" if USE_PG else "?"
+        rows = conn.execute("SELECT id, nom FROM domaines_custom ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_domaine_custom(nom):
+    """Ajoute un domaine médical personnalisé. Ignore si déjà existant."""
+    ph = "%s" if USE_PG else "?"
+    with get_db() as conn:
+        if USE_PG:
+            conn.execute(f"INSERT INTO domaines_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
+        else:
+            conn.execute(f"INSERT OR IGNORE INTO domaines_custom (nom) VALUES ({ph})", (nom.strip(),))
     return True
 
 
