@@ -101,25 +101,25 @@ export default function PiecesPage() {
   // Charger les domaines personnalisés depuis les équipements
   const loadCustomDomaines = useCallback(async () => {
     try {
-      // Récupérer tous les équipements
-      const equipRes = await fetch('/api/equipements', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      // Utiliser l'API client pour récupérer les équipements
+      const equipData = await fetch('/api/equipements').then(r => r.json());
+      const domaines = new Set<string>();
+      
+      // Vérifier si c'est un tableau ou un objet avec une clé data
+      const equipArray = Array.isArray(equipData) ? equipData : (equipData?.data || equipData?.equipements || []);
+      
+      // Extraire les domaines personnalisés (ceux qui ne sont pas dans ALL_DOMAINES)
+      (equipArray as any[]).forEach((eq: any) => {
+        const domaine = eq.Domaine || eq.domaine;
+        if (domaine && !ALL_DOMAINES.includes(domaine)) {
+          domaines.add(domaine);
+        }
       });
-      if (equipRes.ok) {
-        const equipData = await equipRes.json();
-        const domaines = new Set<string>();
-        
-        // Extraire les domaines personnalisés (ceux qui ne sont pas dans ALL_DOMAINES)
-        (equipData as any[]).forEach((eq: any) => {
-          const domaine = eq.Domaine || eq.domaine;
-          if (domaine && !ALL_DOMAINES.includes(domaine)) {
-            domaines.add(domaine);
-          }
-        });
-        
-        setCustomDomaines(Array.from(domaines).sort());
-      }
-    } catch { /* silencieux */ }
+      
+      setCustomDomaines(Array.from(domaines).sort());
+    } catch (err) {
+      console.error("Erreur chargement domaines personnalisés:", err);
+    }
   }, []);
   useEffect(() => { loadCustomDomaines(); }, [loadCustomDomaines]);
 
