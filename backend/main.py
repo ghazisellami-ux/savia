@@ -4084,15 +4084,30 @@ def create_client(body: dict, user: dict = Depends(_verify_token)):
 
 @app.post("/api/clients/import-excel")
 async def import_clients_excel(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
-    """Import clients from an Excel file with auto-detection of columns."""
+    """Import clients from an Excel or CSV file with auto-detection of columns."""
     import io
     try:
         content = await file.read()
-        # Read Excel with pandas + openpyxl
+        
+        # Determine file type
+        filename = file.filename.lower()
+        is_csv = filename.endswith('.csv')
+        
+        # Read file
         try:
-            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
-        except Exception:
-            df = pd.read_excel(io.BytesIO(content))
+            if is_csv:
+                # For CSV files, use StringIO
+                text_content = content.decode('utf-8')
+                df = pd.read_csv(io.StringIO(text_content))
+            else:
+                # For Excel files
+                try:
+                    df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+                except Exception:
+                    df = pd.read_excel(io.BytesIO(content))
+        except Exception as e:
+            logger.error(f"File read error: {e}")
+            return {"ok": False, "error": f"Erreur lecture fichier: {str(e)}", "imported": 0, "skipped": 0}
 
         if df.empty:
             return {"ok": False, "error": "Le fichier est vide", "imported": 0, "skipped": 0}

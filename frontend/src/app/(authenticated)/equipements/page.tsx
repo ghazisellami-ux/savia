@@ -1236,7 +1236,7 @@ export default function EquipementsPage() {
           {/* Excel Import */}
           {!isLecteur && (
             <div className="flex items-center gap-3 flex-wrap">
-              <input type="file" ref={excelFileRef} accept=".xlsx,.xls" className="hidden" onChange={handleExcelImport} />
+              <input type="file" ref={excelFileRef} accept=".xlsx,.xls,.csv" className="hidden" onChange={handleExcelImport} />
               <button onClick={() => excelFileRef.current?.click()} disabled={importingExcel}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all text-sm font-medium cursor-pointer">
                 {importingExcel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
