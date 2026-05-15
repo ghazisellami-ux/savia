@@ -1084,7 +1084,7 @@ def get_dashboard_kpis(
             clients_from_eq = set(df_eq["Client"].dropna().unique())
         
         # Also count imported clients
-        df_clients = lire_clients()
+        df_clients = db_lire_clients()
         clients_from_import = set()
         if not df_clients.empty and "nom" in df_clients.columns:
             clients_from_import = set(df_clients["nom"].dropna().unique())
