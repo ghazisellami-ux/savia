@@ -628,10 +628,13 @@ export default function EquipementsPage() {
   const maintenance = totalEquip - operationnel;
   const avgHealth = totalEquip > 0 ? Math.round(data.reduce((a, b) => a + b.healthScore, 0) / totalEquip) : 0;
   const totalClients = useMemo(() => {
-    // Count unique clients from equipements
-    const uniqueClients = new Set(data.map(e => e.client).filter(Boolean));
-    return uniqueClients.size;
-  }, [data]);
+    // Count unique clients from both equipements and imported clients
+    const clientsFromEquip = new Set(data.map(e => e.client).filter(Boolean));
+    const clientsFromList = new Set(clientsList.map(c => c.nom).filter(Boolean));
+    // Combine both sets
+    const allClients = new Set([...clientsFromEquip, ...clientsFromList]);
+    return allClients.size;
+  }, [data, clientsList]);
 
   if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
 
