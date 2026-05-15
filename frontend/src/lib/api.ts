@@ -351,5 +351,10 @@ export const sla = {
   },
 };
 
+// --- Settings ---
+export const settings = {
+  get: () => request<Record<string, string>>('/api/settings'),
+};
+
 export { ApiError };
-export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention };
+export default { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, settings };
