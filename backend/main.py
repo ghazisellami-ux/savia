@@ -6022,7 +6022,8 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
             # Service cost = Total intervention cost - Labor cost - Parts cost
             cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
 
-            cout_total = float(cout_interv) + float(cout_pieces) + cout_mo
+            # Total cost = Service cost + Labor cost + Parts cost (no double-counting)
+            cout_total = cout_service + cout_mo + float(cout_pieces)
             marge = float(revenu) - cout_total
             marge_pct = round((marge / float(revenu) * 100), 1) if float(revenu) > 0 else 0.0
 
