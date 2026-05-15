@@ -1077,9 +1077,21 @@ def get_dashboard_kpis(
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
         # Count unique clients
+        # Count unique clients from both equipment and imported clients
         nb_clients = 0
+        clients_from_eq = set()
         if not df_eq.empty and "Client" in df_eq.columns:
-            nb_clients = df_eq["Client"].nunique()
+            clients_from_eq = set(df_eq["Client"].dropna().unique())
+        
+        # Also count imported clients
+        df_clients = db_lire_clients()
+        clients_from_import = set()
+        if not df_clients.empty and "nom" in df_clients.columns:
+            clients_from_import = set(df_clients["nom"].dropna().unique())
+        
+        # Combine both sets
+        all_clients = clients_from_eq.union(clients_from_import)
+        nb_clients = len(all_clients)
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
