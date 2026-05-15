@@ -773,21 +773,51 @@ export default function EquipementsPage() {
                         
                         {/* Custom domains as buttons */}
                         {customDomaines.length > 0 && customDomaines.map(d => (
-                          <button key={d} type="button"
-                            onClick={() => {
-                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre' });
-                              setCustomDomaineMode(false);
-                              setCustomDomaineValue('');
-                            }}
-                            className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border ${
-                              form.Domaine === d
-                                ? 'bg-purple-600 text-white border-purple-600 shadow-md'
-                                : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
-                            }`}
-                          >
-                            <div className="scale-125">🏥</div>
-                            <span className="text-xs text-center leading-tight">{d}</span>
-                          </button>
+                          <div key={d} className="relative group">
+                            <button type="button"
+                              onClick={() => {
+                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre' });
+                                setCustomDomaineMode(false);
+                                setCustomDomaineValue('');
+                              }}
+                              className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border w-full ${
+                                form.Domaine === d
+                                  ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                                  : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                              }`}
+                            >
+                              <div className="scale-125"><Stethoscope className="w-4 h-4" /></div>
+                              <span className="text-xs text-center leading-tight">{d}</span>
+                            </button>
+                            {/* Delete button on hover */}
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (confirm(`Êtes-vous sûr de vouloir supprimer le domaine "${d}" ?`)) {
+                                  try {
+                                    await fetch(`/api/domaines-custom/${encodeURIComponent(d)}`, {
+                                      method: 'DELETE',
+                                      headers: { 'Content-Type': 'application/json' }
+                                    });
+                                    // Reload custom domains
+                                    await loadCustomDomaines();
+                                    // If the deleted domain was selected, reset to "Autre"
+                                    if (form.Domaine === d) {
+                                      setForm({ ...form, Domaine: 'Autre', Type: 'Autre', EstAnnexe: false });
+                                      setCustomDomaineMode(true);
+                                    }
+                                  } catch (err) {
+                                    console.error("Erreur suppression domaine:", err);
+                                  }
+                                }
+                              }}
+                              className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
+                              title="Supprimer ce domaine"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         ))}
                       </div>
                       

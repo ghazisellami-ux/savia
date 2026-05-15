@@ -1291,6 +1291,15 @@ def post_domaine_custom(payload: dict = Body(...), user: dict = Depends(_verify_
     return {"ok": True}
 
 
+@app.delete("/api/domaines-custom/{nom}")
+def delete_domaine_custom(nom: str, user: dict = Depends(_verify_token)):
+    from db_engine import supprimer_domaine_custom
+    if not nom.strip():
+        raise HTTPException(400, "Nom requis")
+    supprimer_domaine_custom(nom)
+    return {"ok": True}
+
+
 # ==========================================
 # DOCUMENTS TECHNIQUES
 # ==========================================

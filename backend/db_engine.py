@@ -1343,6 +1343,16 @@ def ajouter_domaine_custom(nom):
     return True
 
 
+def supprimer_domaine_custom(nom):
+    """Supprime un domaine médical personnalisé et ses types associés."""
+    with get_db() as conn:
+        # Supprimer les types d'équipement associés au domaine
+        conn.execute("DELETE FROM types_equipement_custom WHERE domaine = ?", (nom.strip(),))
+        # Supprimer le domaine
+        conn.execute("DELETE FROM domaines_custom WHERE nom = ?", (nom.strip(),))
+    return True
+
+
 def lire_equipement_par_id(equip_id):
     """Lit un équipement par son ID."""
     with get_db() as conn:
