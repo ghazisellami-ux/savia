@@ -766,15 +766,33 @@ export default function EquipementsPage() {
                           <label className="block text-xs font-semibold text-purple-400 uppercase tracking-wider mb-2">
                             Domaine personnalisé
                           </label>
-                          <input 
-                            type="text"
-                            placeholder="Ex: Cardiologie, Dermatologie, Ophtalmologie..."
-                            value={customDomaineValue}
-                            onChange={e => setCustomDomaineValue(e.target.value)}
-                            className={INPUT_CLS}
-                          />
+                          <div className="flex gap-2">
+                            <input 
+                              type="text"
+                              placeholder="Ex: Cardiologie, Dermatologie, Ophtalmologie..."
+                              value={customDomaineValue}
+                              onChange={e => setCustomDomaineValue(e.target.value)}
+                              className={INPUT_CLS}
+                            />
+                            <button type="button" onClick={async () => {
+                              if (customDomaineValue.trim()) {
+                                try {
+                                  await fetch('/api/domaines-custom', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ nom: customDomaineValue.trim() })
+                                  });
+                                  await loadCustomTypes();
+                                } catch (err) {
+                                  console.error("Erreur sauvegarde domaine:", err);
+                                }
+                              }
+                            }} className="px-3 py-2 rounded-lg bg-purple-600/20 text-purple-400 text-xs whitespace-nowrap hover:bg-purple-600/30 cursor-pointer font-bold">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                           <p className="text-xs text-purple-400/70 mt-2">
-                            Entrez le nom du domaine médical personnalisé. Il sera disponible dans la page Pièces de Rechange.
+                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer.
                           </p>
                         </div>
                       )}
@@ -830,11 +848,14 @@ export default function EquipementsPage() {
                                 domKey = customDomaineValue.trim();
                               }
                               
-                              await typesEquipApi.create(customTypeValue.trim(), domKey);
+                              const typeValue = customTypeValue.trim();
+                              await typesEquipApi.create(typeValue, domKey);
                               await loadCustomTypes();
-                              setForm({ ...form, Type: customTypeValue.trim() });
+                              // Keep the type in the form and exit custom mode
+                              setForm({ ...form, Type: typeValue });
+                              setCustomTypeMode(false);
+                              setCustomTypeValue('');
                             }
-                            setCustomTypeMode(false); setCustomTypeValue('');
                           }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
                             <Save className="w-3.5 h-3.5" />
                           </button>
