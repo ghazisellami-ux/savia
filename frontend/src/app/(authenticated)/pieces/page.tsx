@@ -123,6 +123,13 @@ export default function PiecesPage() {
   }, []);
   useEffect(() => { loadCustomDomaines(); }, [loadCustomDomaines]);
 
+  // Recharger les domaines quand le modal s'ouvre
+  useEffect(() => {
+    if (showAddModal) {
+      loadCustomDomaines();
+    }
+  }, [showAddModal, loadCustomDomaines]);
+
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
     try {
@@ -986,7 +993,7 @@ export default function PiecesPage() {
       )}
 
       {/* Add Modal */}
-      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="➕ Nouvelle Pièce" size="lg">
+      <Modal isOpen={showAddModal} onClose={() => { setShowAddModal(false); setShowCustomDomaineInput(false); }} title="➕ Nouvelle Pièce" size="lg">
         <div className="space-y-4">
           {/* Domaine médical */}
           <div>
