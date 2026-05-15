@@ -6,7 +6,7 @@ import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
-  ChevronDown, Check, Download, MapPin
+  ChevronDown, Check, Download, MapPin, Stethoscope
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
@@ -109,7 +109,11 @@ export default function PlanningPage() {
   // Filtrage en cascade : domaine → client → équipement
   const equipsForDomaine = useMemo(() => {
     if (!form.domaine) return equipsAll;
-    return equipsAll.filter(e => !e.domaine || e.domaine === form.domaine);
+    // Match domain case-insensitively and handle empty domains
+    return equipsAll.filter(e => {
+      if (!e.domaine) return false; // Only include equipment with a domain
+      return e.domaine.toLowerCase() === form.domaine.toLowerCase();
+    });
   }, [equipsAll, form.domaine]);
 
   const clientsForDomaine = useMemo(() => {
@@ -592,7 +596,7 @@ export default function PlanningPage() {
                       : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
                   }`}
                 >
-                  <div className="scale-110">🏥</div>
+                  <div className="scale-110"><Stethoscope className="w-4 h-4" /></div>
                   <span className="text-center leading-tight">{d}</span>
                 </button>
               ))}
