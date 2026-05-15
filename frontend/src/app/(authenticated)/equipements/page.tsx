@@ -210,6 +210,7 @@ export default function EquipementsPage() {
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
   const [customDomaineMode, setCustomDomaineMode] = useState(false);
   const [customDomaineValue, setCustomDomaineValue] = useState('');
+  const [customDomaines, setCustomDomaines] = useState<string[]>([]);
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
@@ -345,9 +346,13 @@ export default function EquipementsPage() {
       // Load custom domains and their types
       try {
         const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
-        const customDomaines = Array.isArray(customDomainesRes) ? customDomainesRes : [];
+        const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
         
-        for (const domaine of customDomaines) {
+        // Extract domain names and set them
+        const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
+        setCustomDomaines(domaineNames);
+        
+        for (const domaine of customDomainesList) {
           const domaineName = domaine.nom || domaine;
           try {
             const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
@@ -756,6 +761,25 @@ export default function EquipementsPage() {
                             <span className="text-xs text-center leading-tight">
                               {d === 'POC / Soins Intensifs' ? (<><span className="hidden md:inline">POC / Soins</span><span className="md:hidden">POC</span></>) : d}
                             </span>
+                          </button>
+                        ))}
+                        
+                        {/* Custom domains as buttons */}
+                        {customDomaines.length > 0 && customDomaines.map(d => (
+                          <button key={d} type="button"
+                            onClick={() => {
+                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre' });
+                              setCustomDomaineMode(false);
+                              setCustomDomaineValue('');
+                            }}
+                            className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border ${
+                              form.Domaine === d
+                                ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                                : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                            }`}
+                          >
+                            <div className="scale-125">🏥</div>
+                            <span className="text-xs text-center leading-tight">{d}</span>
                           </button>
                         ))}
                       </div>
