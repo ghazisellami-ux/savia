@@ -356,6 +356,13 @@ export const settings = {
   get: () => request<Record<string, string>>('/api/settings'),
 };
 
+// --- Custom Domains ---
+export const domaines_custom = {
+  list: () => request<Array<Record<string, unknown>>>('/api/domaines-custom'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/domaines-custom', { method: 'POST', body: { nom } }),
+  delete: (id: number) => request<{ ok: boolean }>(`/api/domaines-custom/${id}`, { method: 'DELETE' }),
+};
+
 export { ApiError };
 
 // Default export for backward compatibility
