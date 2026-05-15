@@ -627,6 +627,11 @@ export default function EquipementsPage() {
   const operationnel = data.filter(e => e.statut.toLowerCase().includes('actif') || e.statut.toLowerCase().includes('opérationnel')).length;
   const maintenance = totalEquip - operationnel;
   const avgHealth = totalEquip > 0 ? Math.round(data.reduce((a, b) => a + b.healthScore, 0) / totalEquip) : 0;
+  const totalClients = useMemo(() => {
+    // Count unique clients from equipements
+    const uniqueClients = new Set(data.map(e => e.client).filter(Boolean));
+    return uniqueClients.size;
+  }, [data]);
 
   if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
 
@@ -641,8 +646,9 @@ export default function EquipementsPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
+          { label: 'Total Clients',     value: totalClients,    color: 'text-purple-400',   icon: <Building2 className="w-5 h-5" /> },
           { label: 'Total Équipements', value: totalEquip,      color: 'text-savia-accent', icon: <Server className="w-5 h-5" /> },
           { label: 'Opérationnels',     value: operationnel,    color: 'text-green-400',    icon: <CheckCircle2 className="w-5 h-5" /> },
           { label: 'En arrêt/Panne',   value: maintenance,     color: 'text-red-400',      icon: <AlertTriangle className="w-5 h-5" /> },
