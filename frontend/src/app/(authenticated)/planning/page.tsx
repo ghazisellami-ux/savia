@@ -12,6 +12,9 @@ import { planning, equipements, clients as clientsApi, techniciens as techApi } 
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
+// Import domaines API
+import { domaines_custom } from '@/lib/api';
+
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
 
 // ─── Domaines médicaux ────────────────────────────────────────────────
@@ -82,6 +85,7 @@ export default function PlanningPage() {
   const [clientsList, setClientsList] = useState<string[]>([]);
   const [equipsAll, setEquipsAll] = useState<{nom: string; client: string; domaine: string}[]>([]);
   const [techsList, setTechsList] = useState<string[]>([]);
+  const [domainesCustom, setDomainesCustom] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
@@ -120,11 +124,12 @@ export default function PlanningPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [planRes, eqRes, clRes, techRes] = await Promise.all([
+      const [planRes, eqRes, clRes, techRes, domainesRes] = await Promise.all([
         planning.list(),
         equipements.list().catch(() => []),
         clientsApi.list().catch(() => []),
         techApi.list().catch(() => []),
+        domaines_custom.list().catch(() => []),
       ]);
 
       const mapped = (planRes as any[]).map((item: any) => ({
@@ -148,6 +153,10 @@ export default function PlanningPage() {
         domaine: e.domaine || e.Domaine || 'Radiologie',
       })).filter(e => e.nom);
       setEquipsAll(equipsFlat);
+
+      // Load custom domains
+      const customDomainNames = (domainesRes as any[]).map((d: any) => d.nom || d.name || '').filter(Boolean);
+      setDomainesCustom(customDomainNames);
 
       const uniqueClients = [...new Set([
         ...(clRes as any[]).map((c: any) => c.nom || c.Nom || c.client || c.Client || ''),
@@ -557,6 +566,7 @@ export default function PlanningPage() {
               <Scan className="w-3.5 h-3.5 text-savia-accent" /> Domaine médical *
             </label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {/* Default domains */}
               {DOMAINES_MEDICAUX.map(d => (
                 <button key={d} type="button"
                   onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
@@ -570,6 +580,20 @@ export default function PlanningPage() {
                   <span className="text-center leading-tight">
                     {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d}
                   </span>
+                </button>
+              ))}
+              {/* Custom domains */}
+              {domainesCustom.map(d => (
+                <button key={d} type="button"
+                  onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
+                  className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
+                    form.domaine === d
+                      ? 'bg-purple-600/40 border-purple-400/70 text-white'
+                      : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+                  }`}
+                >
+                  <div className="scale-110">🏥</div>
+                  <span className="text-center leading-tight">{d}</span>
                 </button>
               ))}
             </div>
