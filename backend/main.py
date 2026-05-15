@@ -6014,7 +6014,13 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 taux = float(taux_str)
             except (ValueError, TypeError) as e:
                 raise HTTPException(400, f"Erreur: {str(e)}")
+            
+            # Calculate labor cost from duration
             cout_mo = float((duree_totale / 60.0) * taux)
+            
+            # cout_interv already includes labor + parts, so we need to extract the service cost
+            # Service cost = Total intervention cost - Labor cost - Parts cost
+            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
 
             cout_total = float(cout_interv) + float(cout_pieces) + cout_mo
             marge = float(revenu) - cout_total
@@ -6026,7 +6032,7 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 "client": cl,
                 "nb_equipements": int(nb_equip),
                 "revenu_contrats": round(float(revenu), 0),
-                "cout_interventions": round(float(cout_interv), 0),
+                "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
                 "cout_main_oeuvre": round(float(cout_mo), 0),
                 "cout_total": round(float(cout_total), 0),
@@ -6105,7 +6111,9 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
                 nb_preventives = nb_interv - nb_correctives
 
             cout_mo = (duree / 60.0) * taux
-            tco_total = float(cout_interv) + float(cout_pieces) + cout_mo
+            # Extract service cost (intervention cost - labor - parts)
+            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
+            tco_total = float(cout_service) + float(cout_pieces) + cout_mo
 
             # Installation age (days)
             age_jours = 0
@@ -6129,7 +6137,7 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
                 "nb_interventions": int(nb_interv),
                 "nb_correctives": int(nb_correctives),
                 "nb_preventives": int(nb_preventives),
-                "cout_interventions": round(float(cout_interv), 0),
+                "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
                 "cout_main_oeuvre": round(float(cout_mo), 0),
                 "tco_total": round(float(tco_total), 0),
