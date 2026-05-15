@@ -117,9 +117,9 @@ export default function PlanningPage() {
   }, [equipsAll, form.domaine]);
 
   const clientsForDomaine = useMemo(() => {
-    const names = equipsForDomaine.map(e => e.client).filter(Boolean);
-    return [...new Set(names)].sort();
-  }, [equipsForDomaine]);
+    // Show all clients from the API, not just those with equipment in the selected domain
+    return clientsList;
+  }, [clientsList]);
 
   const filteredEquips = useMemo(() => {
     if (!form.client) return equipsForDomaine.map(e => e.nom);
