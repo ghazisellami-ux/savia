@@ -109,9 +109,9 @@ export default function PlanningPage() {
   // Filtrage en cascade : domaine → client → équipement
   const equipsForDomaine = useMemo(() => {
     if (!form.domaine) return equipsAll;
-    // Match domain case-insensitively and handle empty domains
+    // Match domain case-insensitively and only include equipment with matching domain
     return equipsAll.filter(e => {
-      if (!e.domaine) return false; // Only include equipment with a domain
+      if (!e.domaine) return false; // Exclude equipment without a domain
       return e.domaine.toLowerCase() === form.domaine.toLowerCase();
     });
   }, [equipsAll, form.domaine]);
@@ -154,7 +154,7 @@ export default function PlanningPage() {
       const equipsFlat = (eqRes as any[]).map((e: any) => ({
         nom: e.Nom || e.nom || '',
         client: e.Client || e.client || '',
-        domaine: e.domaine || e.Domaine || 'Radiologie',
+        domaine: e.domaine || e.Domaine || '', // Don't default to Radiologie - keep empty if not set
       })).filter(e => e.nom);
       setEquipsAll(equipsFlat);
 
