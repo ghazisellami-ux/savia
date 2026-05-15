@@ -101,22 +101,30 @@ export default function PiecesPage() {
   // Charger les domaines personnalisés depuis les équipements
   const loadCustomDomaines = useCallback(async () => {
     try {
+      console.log("Chargement des domaines personnalisés...");
       // Utiliser l'API client pour récupérer les équipements
       const equipData = await fetch('/api/equipements').then(r => r.json());
+      console.log("Données équipements reçues:", equipData);
+      
       const domaines = new Set<string>();
       
       // Vérifier si c'est un tableau ou un objet avec une clé data
       const equipArray = Array.isArray(equipData) ? equipData : (equipData?.data || equipData?.equipements || []);
+      console.log("Tableau équipements:", equipArray);
       
       // Extraire les domaines personnalisés (ceux qui ne sont pas dans ALL_DOMAINES)
       (equipArray as any[]).forEach((eq: any) => {
         const domaine = eq.Domaine || eq.domaine;
+        console.log("Équipement:", eq.Nom || eq.nom, "Domaine:", domaine);
         if (domaine && !ALL_DOMAINES.includes(domaine)) {
+          console.log("Domaine personnalisé trouvé:", domaine);
           domaines.add(domaine);
         }
       });
       
-      setCustomDomaines(Array.from(domaines).sort());
+      const domainesArray = Array.from(domaines).sort();
+      console.log("Domaines personnalisés finaux:", domainesArray);
+      setCustomDomaines(domainesArray);
     } catch (err) {
       console.error("Erreur chargement domaines personnalisés:", err);
     }
@@ -126,6 +134,7 @@ export default function PiecesPage() {
   // Recharger les domaines quand le modal s'ouvre
   useEffect(() => {
     if (showAddModal) {
+      console.log("Modal ouvert, rechargement des domaines");
       loadCustomDomaines();
     }
   }, [showAddModal, loadCustomDomaines]);
