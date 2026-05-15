@@ -954,13 +954,7 @@ export default function SavPage() {
       {/* ===== TAB 2: CHARGE FINANCIÈRE ===== */}
       {activeTab === 2 && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="glass rounded-xl p-6 text-center border border-red-500/20">
-              <div className="flex justify-center mb-2"><Wrench className="w-6 h-6 text-red-400" /></div>
-              <div className="text-sm text-red-400 font-bold uppercase tracking-wider mb-2">Coût Service</div>
-              <div className="text-4xl font-black text-red-400">{coutService.toLocaleString('fr')} TND</div>
-              <div className="text-xs text-savia-text-muted mt-2">Interventions techniques</div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="glass rounded-xl p-6 text-center border border-purple-500/20">
               <div className="flex justify-center mb-2"><Package className="w-6 h-6 text-purple-400" /></div>
               <div className="text-sm text-purple-400 font-bold uppercase tracking-wider mb-2">Coût Pièces</div>
@@ -976,7 +970,7 @@ export default function SavPage() {
             <div className="glass rounded-xl p-6 text-center border border-cyan-500/20">
               <div className="flex justify-center mb-2"><TrendingUp className="w-6 h-6 text-cyan-400" /></div>
               <div className="text-sm text-cyan-400 font-bold uppercase tracking-wider mb-2">Coût Total</div>
-              <div className="text-4xl font-black text-cyan-400">{(coutService + coutPieces + coutMainOeuvre).toLocaleString('fr')} TND</div>
+              <div className="text-4xl font-black text-cyan-400">{(coutPieces + coutMainOeuvre).toLocaleString('fr')} TND</div>
               <div className="text-xs text-savia-text-muted mt-2">Dépenses totales maintenance</div>
             </div>
           </div>
