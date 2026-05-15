@@ -335,6 +335,25 @@ export default function EquipementsPage() {
         const res = await typesEquipApi.list(d);
         results[d] = res.map(t => t.nom);
       }
+      
+      // Load custom domains and their types
+      try {
+        const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+        const customDomaines = Array.isArray(customDomainesRes) ? customDomainesRes : [];
+        
+        for (const domaine of customDomaines) {
+          const domaineName = domaine.nom || domaine;
+          try {
+            const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
+            results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
+          } catch {
+            results[domaineName] = [];
+          }
+        }
+      } catch (err) {
+        console.error("Erreur chargement domaines personnalisés:", err);
+      }
+      
       setCustomTypesForDomain(results);
       // Keep legacy state for backward compat
       setCustomAnnexeTypes(results['__annexe__'] || []);
@@ -476,6 +495,17 @@ export default function EquipementsPage() {
       // If "Autre" domain is selected and custom domain is provided, use it
       if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
         payload.Domaine = customDomaineValue.trim();
+        
+        // Save the custom domain to the database
+        try {
+          await fetch('/api/domaines-custom', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nom: customDomaineValue.trim() })
+          });
+        } catch (err) {
+          console.error("Erreur sauvegarde domaine personnalisé:", err);
+        }
       }
       
       if (docFiles.length > 0) payload.DocumentTechnique = docFiles.map(f => f.name).join(', ');
@@ -786,7 +816,14 @@ export default function EquipementsPage() {
                             onChange={e => setCustomTypeValue(e.target.value)} />
                           <button type="button" onClick={async () => {
                             if (customTypeValue.trim()) {
-                              const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                              // Determine the domain key for saving the type
+                              let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                              
+                              // If it's a custom domain, use the custom domain name
+                              if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                domKey = customDomaineValue.trim();
+                              }
+                              
                               await typesEquipApi.create(customTypeValue.trim(), domKey);
                               await loadCustomTypes();
                               setForm({ ...form, Type: customTypeValue.trim() });

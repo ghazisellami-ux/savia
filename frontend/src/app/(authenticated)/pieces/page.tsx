@@ -99,26 +99,14 @@ export default function PiecesPage() {
   }, []);
   useEffect(() => { loadDemandes(); }, [loadDemandes]);
 
-  // Charger les domaines personnalisés depuis les équipements
+  // Charger les domaines personnalisés depuis la base de données
   const loadCustomDomaines = useCallback(async () => {
     try {
-      // Récupérer les équipements
-      const equipData = await fetch('/api/equipements').then(r => r.json());
+      // Récupérer les domaines personnalisés depuis la table domaines_custom
+      const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+      const customDomaines = Array.isArray(customDomainesRes) ? customDomainesRes : [];
       
-      const domaines = new Set<string>();
-      
-      // Vérifier si c'est un tableau ou un objet avec une clé data
-      const equipArray = Array.isArray(equipData) ? equipData : (equipData?.data || equipData?.equipements || []);
-      
-      // Extraire les domaines personnalisés (ceux qui ne sont pas dans ALL_DOMAINES)
-      (equipArray as any[]).forEach((eq: any) => {
-        const domaine = eq.Domaine || eq.domaine;
-        if (domaine && !ALL_DOMAINES.includes(domaine) && domaine !== 'Autre') {
-          domaines.add(domaine);
-        }
-      });
-      
-      const domainesArray = Array.from(domaines).sort();
+      const domainesArray = customDomaines.map((d: any) => d.nom || d).sort();
       setCustomDomaines(domainesArray);
     } catch (err) {
       console.error("Erreur chargement domaines personnalisés:", err);
