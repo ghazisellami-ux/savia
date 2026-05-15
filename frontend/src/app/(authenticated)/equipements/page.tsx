@@ -208,6 +208,9 @@ export default function EquipementsPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
+  const [customDomaineMode, setCustomDomaineMode] = useState(false);
+  const [customDomaineValue, setCustomDomaineValue] = useState('');
+  const [customDomaines, setCustomDomaines] = useState<string[]>([]);
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
@@ -216,11 +219,17 @@ export default function EquipementsPage() {
     const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
     const customList = customTypesForDomain[domKey] || [];
     let base: string[];
+    
     if (form.Domaine === 'Radiologie' && form.EstAnnexe) {
       base = [...TYPES_ANNEXES_RADIOLOGIE];
+    } else if (TYPES_PAR_DOMAINE[form.Domaine]) {
+      // Standard domain
+      base = [...TYPES_PAR_DOMAINE[form.Domaine]];
     } else {
-      base = [...(TYPES_PAR_DOMAINE[form.Domaine] || TYPES_PAR_DOMAINE['Radiologie'])];
+      // Custom domain - use only custom types
+      base = [...customList];
     }
+    
     // Merge custom types (avoid duplicates)
     for (const ct of customList) {
       if (!base.includes(ct)) base.push(ct);
@@ -325,6 +334,19 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadCustomDomaines = useCallback(async () => {
+    try {
+      const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+      const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
+      const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
+      setCustomDomaines(domaineNames);
+      return domaineNames;
+    } catch (err) {
+      console.error("Erreur chargement domaines personnalisés:", err);
+      return [];
+    }
+  }, []);
+
   const loadCustomTypes = useCallback(async () => {
     try {
       const allDomaines = [...DOMAINES, '__annexe__'];
@@ -333,11 +355,28 @@ export default function EquipementsPage() {
         const res = await typesEquipApi.list(d);
         results[d] = res.map(t => t.nom);
       }
+      
+      // Load custom domains and their types
+      try {
+        const customDomainesList = await loadCustomDomaines();
+        
+        for (const domaineName of customDomainesList) {
+          try {
+            const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
+            results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
+          } catch {
+            results[domaineName] = [];
+          }
+        }
+      } catch (err) {
+        console.error("Erreur chargement domaines personnalisés:", err);
+      }
+      
       setCustomTypesForDomain(results);
       // Keep legacy state for backward compat
       setCustomAnnexeTypes(results['__annexe__'] || []);
     } catch { /* ignore */ }
-  }, []);
+  }, [loadCustomDomaines]);
 
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
@@ -435,6 +474,17 @@ export default function EquipementsPage() {
       GarantieDuree: eq.garantieDuree || 0,
       Service: eq.service || '',
     });
+    
+    // If domaine is custom (not in DOMAINES), set custom domain mode
+    const isCustomDomaine = eq.domaine && !DOMAINES.includes(eq.domaine as Domaine);
+    if (isCustomDomaine) {
+      setCustomDomaineMode(true);
+      setCustomDomaineValue(eq.domaine);
+    } else {
+      setCustomDomaineMode(false);
+      setCustomDomaineValue('');
+    }
+    
     // If fabricant not in list, enable custom mode
     if (eq.marque && !fabricantsList.includes(eq.marque)) {
       setCustomFabricant(true);
@@ -445,7 +495,7 @@ export default function EquipementsPage() {
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
-  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); };
+  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); };
 
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -459,6 +509,23 @@ export default function EquipementsPage() {
     setIsSaving(true);
     try {
       const payload: any = { ...form };
+      
+      // If "Autre" domain is selected and custom domain is provided, use it
+      if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+        payload.Domaine = customDomaineValue.trim();
+        
+        // Save the custom domain to the database
+        try {
+          await fetch('/api/domaines-custom', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nom: customDomaineValue.trim() })
+          });
+        } catch (err) {
+          console.error("Erreur sauvegarde domaine personnalisé:", err);
+        }
+      }
+      
       if (docFiles.length > 0) payload.DocumentTechnique = docFiles.map(f => f.name).join(', ');
 
       let targetEquipId: number | null = null;
@@ -482,6 +549,7 @@ export default function EquipementsPage() {
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
       setCustomTypeMode(false); setCustomTypeValue('');
+      setCustomDomaineMode(false); setCustomDomaineValue('');
       // Auto-save fabricant if new
       if (form.Fabricant.trim() && !fabricantsList.includes(form.Fabricant.trim())) {
         try { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); } catch {}
@@ -683,7 +751,15 @@ export default function EquipementsPage() {
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         {DOMAINES.map(d => (
                           <button key={d} type="button"
-                            onClick={() => setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] })}
+                            onClick={() => {
+                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] });
+                              if (d === 'Autre') {
+                                setCustomDomaineMode(true);
+                              } else {
+                                setCustomDomaineMode(false);
+                                setCustomDomaineValue('');
+                              }
+                            }}
                             className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border ${
                               form.Domaine === d ? DOMAINE_ACTIVE[d] : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
                             }`}
@@ -694,7 +770,102 @@ export default function EquipementsPage() {
                             </span>
                           </button>
                         ))}
+                        
+                        {/* Custom domains as buttons */}
+                        {customDomaines.length > 0 && customDomaines.map(d => (
+                          <div key={d} className="relative group">
+                            <button type="button"
+                              onClick={() => {
+                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre' });
+                                setCustomDomaineMode(false);
+                                setCustomDomaineValue('');
+                              }}
+                              className={`flex flex-col items-center gap-2 py-4 px-2 rounded-xl text-sm font-semibold transition-all cursor-pointer border w-full ${
+                                form.Domaine === d
+                                  ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                                  : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                              }`}
+                            >
+                              <div className="scale-125"><Stethoscope className="w-4 h-4" /></div>
+                              <span className="text-xs text-center leading-tight">{d}</span>
+                            </button>
+                            {/* Delete button on hover */}
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (confirm(`Êtes-vous sûr de vouloir supprimer le domaine "${d}" ?`)) {
+                                  try {
+                                    await fetch(`/api/domaines-custom/${encodeURIComponent(d)}`, {
+                                      method: 'DELETE',
+                                      headers: { 'Content-Type': 'application/json' }
+                                    });
+                                    // Reload custom domains
+                                    await loadCustomDomaines();
+                                    // If the deleted domain was selected, reset to "Autre"
+                                    if (form.Domaine === d) {
+                                      setForm({ ...form, Domaine: 'Autre', Type: 'Autre', EstAnnexe: false });
+                                      setCustomDomaineMode(true);
+                                    }
+                                  } catch (err) {
+                                    console.error("Erreur suppression domaine:", err);
+                                  }
+                                }
+                              }}
+                              className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
+                              title="Supprimer ce domaine"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
+                      
+                      {/* Custom domain input when "Autre" is selected */}
+                      {form.Domaine === 'Autre' && (
+                        <div className="mt-4 p-4 rounded-xl bg-purple-500/10 border border-purple-500/30">
+                          <label className="block text-xs font-semibold text-purple-400 uppercase tracking-wider mb-2">
+                            Domaine personnalisé
+                          </label>
+                          <div className="flex gap-2">
+                            <input 
+                              type="text"
+                              placeholder="Ex: Cardiologie, Dermatologie, Ophtalmologie..."
+                              value={customDomaineValue}
+                              onChange={e => setCustomDomaineValue(e.target.value)}
+                              className={INPUT_CLS}
+                            />
+                            <button type="button" onClick={async () => {
+                              if (customDomaineValue.trim()) {
+                                try {
+                                  const domaineName = customDomaineValue.trim();
+                                  await fetch('/api/domaines-custom', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ nom: domaineName })
+                                  });
+                                  // Reload custom domains to get the new domain
+                                  const updatedDomaines = await loadCustomDomaines();
+                                  // Load types for all domains
+                                  await loadCustomTypes();
+                                  // Select the newly created domain
+                                  setForm({ ...form, Domaine: domaineName, Type: 'Autre', EstAnnexe: false });
+                                  // Clear the input
+                                  setCustomDomaineValue('');
+                                  setCustomDomaineMode(false);
+                                } catch (err) {
+                                  console.error("Erreur sauvegarde domaine:", err);
+                                }
+                              }
+                            }} className="px-3 py-2 rounded-lg bg-purple-600/20 text-purple-400 text-xs whitespace-nowrap hover:bg-purple-600/30 cursor-pointer font-bold">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-purple-400/70 mt-2">
+                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer.
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Annexe checkbox — uniquement Radiologie */}
@@ -739,12 +910,25 @@ export default function EquipementsPage() {
                             onChange={e => setCustomTypeValue(e.target.value)} />
                           <button type="button" onClick={async () => {
                             if (customTypeValue.trim()) {
-                              const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
-                              await typesEquipApi.create(customTypeValue.trim(), domKey);
+                              // Determine the domain key for saving the type
+                              let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                              
+                              // If it's a custom domain, use the custom domain name
+                              if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                domKey = customDomaineValue.trim();
+                              } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                // If it's a custom domain (not in TYPES_PAR_DOMAINE), use it directly
+                                domKey = form.Domaine;
+                              }
+                              
+                              const typeValue = customTypeValue.trim();
+                              await typesEquipApi.create(typeValue, domKey);
                               await loadCustomTypes();
-                              setForm({ ...form, Type: customTypeValue.trim() });
+                              // Keep the type in the form and exit custom mode
+                              setForm({ ...form, Type: typeValue });
+                              setCustomTypeMode(false);
+                              setCustomTypeValue('');
                             }
-                            setCustomTypeMode(false); setCustomTypeValue('');
                           }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
                             <Save className="w-3.5 h-3.5" />
                           </button>
