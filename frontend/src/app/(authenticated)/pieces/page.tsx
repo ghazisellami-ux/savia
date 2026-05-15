@@ -60,6 +60,7 @@ export default function PiecesPage() {
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
+  const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -123,15 +124,47 @@ export default function PiecesPage() {
       console.error("Erreur chargement domaines personnalisés:", err);
     }
   }, []);
+
+  // Charger les types d'équipement personnalisés pour chaque domaine
+  const loadCustomTypes = useCallback(async () => {
+    try {
+      const results: Record<string, string[]> = {};
+      
+      // Charger les types pour chaque domaine personnalisé
+      for (const domaine of customDomaines) {
+        try {
+          const res = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`).then(r => r.json());
+          results[domaine] = Array.isArray(res) ? res.map((t: any) => t.nom || t) : [];
+        } catch {
+          results[domaine] = [];
+        }
+      }
+      
+      setCustomTypesForDomain(results);
+    } catch (err) {
+      console.error("Erreur chargement types personnalisés:", err);
+    }
+  }, [customDomaines]);
   useEffect(() => { loadCustomDomaines(); }, [loadCustomDomaines]);
+
+  // Charger les types personnalisés quand les domaines personnalisés changent
+  useEffect(() => { loadCustomTypes(); }, [loadCustomTypes]);
 
   // Recharger les domaines quand le modal s'ouvre
   useEffect(() => {
     if (showAddModal) {
-      console.log("Modal ouvert, rechargement des domaines");
       loadCustomDomaines();
     }
   }, [showAddModal, loadCustomDomaines]);
+
+  // Obtenir les types d'équipement disponibles pour le domaine sélectionné
+  const getAvailableTypes = useCallback(() => {
+    if (DOMAINES_TYPES[form.domaine]) {
+      return DOMAINES_TYPES[form.domaine];
+    }
+    // Si c'est un domaine personnalisé, retourner les types personnalisés
+    return customTypesForDomain[form.domaine] || ['Autre'];
+  }, [form.domaine, customTypesForDomain]);
 
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
@@ -1015,15 +1048,18 @@ export default function PiecesPage() {
               {customDomaines.length > 0 && (
                 <>
                   <div className="w-full h-px bg-savia-border my-1" />
-                  {customDomaines.map(d => (
-                    <button key={d} type="button"
-                      onClick={() => setForm({...form, domaine: d, equipement_type: 'Autre', est_annexe: false})}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                        form.domaine === d
-                          ? 'bg-purple-600 text-white border-purple-600 shadow-md'
-                          : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
-                      }`}>{d}</button>
-                    ))}
+                  {customDomaines.map(d => {
+                    const firstType = (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre';
+                    return (
+                      <button key={d} type="button"
+                        onClick={() => setForm({...form, domaine: d, equipement_type: firstType, est_annexe: false})}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                          form.domaine === d
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                            : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                        }`}>{d}</button>
+                    );
+                  })}
                 </>
               )}
             </div>
@@ -1034,7 +1070,7 @@ export default function PiecesPage() {
               <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement</label>
               <select className={INPUT_CLS} value={form.equipement_type}
                 onChange={e => setForm({...form, equipement_type: e.target.value})}>
-                {(DOMAINES_TYPES[form.domaine] || TYPES_EQUIPEMENTS).map(t => <option key={t}>{t}</option>)}
+                {getAvailableTypes().map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
             {form.domaine === 'Radiologie' && (
@@ -1086,6 +1122,24 @@ export default function PiecesPage() {
                       : 'bg-savia-surface-hover text-savia-text border-savia-border hover:border-savia-accent/50'
                   }`}>{d}</button>
               ))}
+              {/* Domaines personnalisés */}
+              {customDomaines.length > 0 && (
+                <>
+                  <div className="w-full h-px bg-savia-border my-1" />
+                  {customDomaines.map(d => {
+                    const firstType = (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre';
+                    return (
+                      <button key={d} type="button"
+                        onClick={() => setForm({...form, domaine: d, equipement_type: firstType, est_annexe: false})}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                          form.domaine === d
+                            ? 'bg-purple-600 text-white border-purple-600 shadow-md'
+                            : 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:border-purple-500/60'
+                        }`}>{d}</button>
+                    );
+                  })}
+                </>
+              )}
             </div>
           </div>
 
@@ -1094,7 +1148,7 @@ export default function PiecesPage() {
               <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement</label>
               <select className={INPUT_CLS} value={form.equipement_type}
                 onChange={e => setForm({...form, equipement_type: e.target.value})}>
-                {(DOMAINES_TYPES[form.domaine] || TYPES_EQUIPEMENTS).map(t => <option key={t}>{t}</option>)}
+                {getAvailableTypes().map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
             {form.domaine === 'Radiologie' && (
