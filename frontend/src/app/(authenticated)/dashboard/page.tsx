@@ -25,6 +25,7 @@ interface KpiData {
   mttr: number;
   cout_total: number;
   nb_interventions: number;
+  nb_clients: number;
 }
 
 interface HealthScore {
@@ -107,7 +108,7 @@ export default function DashboardPage() {
 
   // --- Data state ---
   const [kpis, setKpis] = useState<KpiData>({
-    nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0
+    nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0, nb_clients: 0
   });
   const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
   const [allInterventions, setAllInterventions] = useState<any[]>([]);
@@ -366,14 +367,23 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs Row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className={`grid gap-4 ${canSeeCosts ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 lg:grid-cols-7'}`}>
+        <KpiCard icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
         <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
         <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
         <KpiCard icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
-        <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
-        <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
+        {!canSeeCosts && (
+          <>
+            <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
+            <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
+          </>
+        )}
         {canSeeCosts && (
-          <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
+          <>
+            <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
+            <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
+            <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
+          </>
         )}
       </div>
 

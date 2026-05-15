@@ -1076,6 +1076,11 @@ def get_dashboard_kpis(
         if nb_interventions > 0 and nb_eq > 0:
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
+        # Count unique clients
+        nb_clients = 0
+        if not df_eq.empty and "Client" in df_eq.columns:
+            nb_clients = df_eq["Client"].nunique()
+
         return {
             "nb_equipements": nb_eq,
             "nb_critiques": nb_critiques,
@@ -1084,6 +1089,7 @@ def get_dashboard_kpis(
             "mttr": mttr,
             "cout_total": round(cout_total, 2),
             "nb_interventions": nb_interventions,
+            "nb_clients": nb_clients,
         }
     except Exception as e:
         logger.error(f"Dashboard KPIs error: {e}")
