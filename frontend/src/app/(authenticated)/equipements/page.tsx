@@ -218,11 +218,17 @@ export default function EquipementsPage() {
     const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
     const customList = customTypesForDomain[domKey] || [];
     let base: string[];
+    
     if (form.Domaine === 'Radiologie' && form.EstAnnexe) {
       base = [...TYPES_ANNEXES_RADIOLOGIE];
+    } else if (TYPES_PAR_DOMAINE[form.Domaine]) {
+      // Standard domain
+      base = [...TYPES_PAR_DOMAINE[form.Domaine]];
     } else {
-      base = [...(TYPES_PAR_DOMAINE[form.Domaine] || TYPES_PAR_DOMAINE['Radiologie'])];
+      // Custom domain - use only custom types
+      base = [...customList];
     }
+    
     // Merge custom types (avoid duplicates)
     for (const ct of customList) {
       if (!base.includes(ct)) base.push(ct);
