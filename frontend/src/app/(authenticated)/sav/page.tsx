@@ -283,9 +283,18 @@ export default function SavPage() {
       const nb_correctives = allInterv.filter(i => i.type.toLowerCase().includes('correct')).length;
       const nb_preventives = allInterv.filter(i => i.type.toLowerCase().includes('ventive')).length;
       const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
+      
+      // Calculate costs correctly (avoid double counting)
+      // cout field already includes labor + parts, so we need to extract the service cost
       const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
       const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
       const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
+      
+      // Service cost = Total intervention cost - Parts cost
+      // (Labor is already included in cout)
+      const totalCoutService = Math.max(0, totalCoutInterv - totalCoutPieces);
+      const totalCoutMO = totalCoutInterv - totalCoutService; // Labor cost extracted from total
+      
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
       const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
@@ -334,9 +343,9 @@ export default function SavPage() {
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
-        cout_interventions: totalCoutInterv, cout_pieces: totalCoutPieces,
-        cout_total: totalCoutInterv + totalCoutPieces,
-        cout_moyen: nb_total > 0 ? Math.round((totalCoutInterv + totalCoutPieces) / nb_total) : 0,
+        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMO,
+        cout_total: totalCoutInterv,
+        cout_moyen: nb_total > 0 ? Math.round(totalCoutInterv / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
