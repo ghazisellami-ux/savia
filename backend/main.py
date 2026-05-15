@@ -1081,6 +1081,22 @@ def get_dashboard_kpis(
         if not df_eq.empty and "Client" in df_eq.columns:
             nb_clients = df_eq["Client"].nunique()
 
+        # Calculate resolution rate (% of closed interventions)
+        taux_resolution = 0.0
+        if nb_interventions > 0 and not df_int.empty:
+            # Check for status column (could be "Statut", "statut", "status", etc.)
+            status_col = None
+            for col in ["Statut", "statut", "status", "Status"]:
+                if col in df_int.columns:
+                    status_col = col
+                    break
+            
+            if status_col:
+                # Count closed/resolved interventions
+                closed_statuses = {"clôturée", "cloturee", "closed", "resolved", "terminée", "terminee", "complétée", "completee"}
+                nb_closed = len(df_int[df_int[status_col].astype(str).str.lower().str.strip().isin(closed_statuses)])
+                taux_resolution = round((nb_closed / nb_interventions) * 100, 1) if nb_interventions > 0 else 0
+
         return {
             "nb_equipements": nb_eq,
             "nb_critiques": nb_critiques,
@@ -1090,6 +1106,7 @@ def get_dashboard_kpis(
             "cout_total": round(cout_total, 2),
             "nb_interventions": nb_interventions,
             "nb_clients": nb_clients,
+            "taux_resolution": taux_resolution,
         }
     except Exception as e:
         logger.error(f"Dashboard KPIs error: {e}")
