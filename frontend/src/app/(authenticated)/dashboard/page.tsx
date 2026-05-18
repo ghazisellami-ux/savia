@@ -152,9 +152,9 @@ export default function DashboardPage() {
     allClients.forEach((c: any) => {
       if (c.region) regions.add(c.region);
     });
-    // Also get from equipments
+    // Also get from equipments (use uppercase Region)
     allEquipments.forEach((e: any) => {
-      if (e.region) regions.add(e.region);
+      if (e.Region) regions.add(e.Region);
     });
     return Array.from(regions).sort();
   }, [allClients, allEquipments]);
@@ -167,10 +167,10 @@ export default function DashboardPage() {
         if (c.ville) villes.add(c.ville);
       }
     });
-    // Also get from equipments
+    // Also get from equipments (use uppercase Ville)
     allEquipments.forEach((e: any) => {
-      if (!selectedRegion || e.region === selectedRegion) {
-        if (e.ville) villes.add(e.ville);
+      if (!selectedRegion || e.Region === selectedRegion) {
+        if (e.Ville) villes.add(e.Ville);
       }
     });
     return Array.from(villes).sort();
