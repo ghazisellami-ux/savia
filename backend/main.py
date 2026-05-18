@@ -1326,7 +1326,7 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
 def sync_region_ville():
     """Sync region and ville from clients to equipements based on client name. Admin operation."""
     try:
-        from db_engine import _trigger_backup
+        from db_engine import _trigger_backup, USE_PG
         
         df_clients = db_lire_clients()
         df_eq = lire_equipements()
