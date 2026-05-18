@@ -1024,20 +1024,22 @@ def get_dashboard_kpis(
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+        df_clients = db_lire_clients()  # Get ALL clients from clients table
         
         # Debug logging
         logger.info(f"KPI filters: client={client}, region={region}, ville={ville}, equipment_type={equipment_type}")
         logger.info(f"Initial equipements count: {len(df_eq)}")
         logger.info(f"Initial interventions count: {len(df_int)}")
+        logger.info(f"Total clients in database: {len(df_clients)}")
 
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
 
-        # IMPORTANT: Count unique clients BEFORE applying region/ville/type filters
-        # This ensures nb_clients shows all clients, not just those with equipment in the filtered region/ville/type
+        # IMPORTANT: Count unique clients from ALL clients table (not just equipements)
+        # This ensures we show all clients, even those without equipment
         nb_clients_all = 0
-        if not df_eq.empty and "Client" in df_eq.columns:
-            nb_clients_all = len(df_eq["Client"].dropna().unique())
+        if not df_clients.empty and "nom" in df_clients.columns:
+            nb_clients_all = len(df_clients["nom"].dropna().unique())
 
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
@@ -1117,17 +1119,16 @@ def get_dashboard_kpis(
         if nb_interventions > 0 and nb_eq > 0:
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
-        # Count unique clients from FILTERED equipment
-        # If region/ville/type filters are applied, count only clients with equipment in those filters
-        # Otherwise use the total count from before filtering
+        # Count unique clients
+        # If NO filters applied: show ALL clients from clients table (66)
+        # If filters applied: show only clients with equipment matching those filters
         nb_clients = 0
-        if not df_eq.empty and "Client" in df_eq.columns:
-            nb_clients = len(df_eq["Client"].dropna().unique())
-        elif region or ville or equipment_type:
-            # If filters were applied but no equipment matches, show 0
-            nb_clients = 0
+        if region or ville or equipment_type or effective_client:
+            # Filters applied: count clients from filtered equipements only
+            if not df_eq.empty and "Client" in df_eq.columns:
+                nb_clients = len(df_eq["Client"].dropna().unique())
         else:
-            # No filters applied, use total count
+            # No filters applied: show ALL clients from clients table
             nb_clients = nb_clients_all
 
         # Calculate resolution rate (% of closed interventions)
