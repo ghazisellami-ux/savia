@@ -906,37 +906,69 @@ export default function EquipementsPage() {
                         {form.EstAnnexe ? 'Type d\'équipement annexe *' : 'Type d\'équipement *'}
                       </label>
                       {customTypeMode ? (
-                        <div className="flex gap-2">
-                          <input className={INPUT_CLS} placeholder="Saisir le type..." value={customTypeValue}
-                            onChange={e => setCustomTypeValue(e.target.value)} />
-                          <button type="button" onClick={async () => {
-                            if (customTypeValue.trim()) {
-                              // Determine the domain key for saving the type
-                              let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
-                              
-                              // If it's a custom domain, use the custom domain name
-                              if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
-                                domKey = customDomaineValue.trim();
-                              } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
-                                // If it's a custom domain (not in TYPES_PAR_DOMAINE), use it directly
-                                domKey = form.Domaine;
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <input 
+                              className={INPUT_CLS} 
+                              placeholder="Saisir le type..." 
+                              value={customTypeValue}
+                              onChange={e => setCustomTypeValue(e.target.value)}
+                              onKeyPress={e => {
+                                if (e.key === 'Enter' && customTypeValue.trim()) {
+                                  e.preventDefault();
+                                  // Trigger save
+                                  const btn = (e.target as HTMLInputElement).parentElement?.querySelector('button');
+                                  if (btn) btn.click();
+                                }
+                              }}
+                            />
+                            <button type="button" onClick={async () => {
+                              if (customTypeValue.trim()) {
+                                // Determine the domain key for saving the type
+                                let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                
+                                // If we're in "Autre" mode and have a custom domain value, use it
+                                if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                  domKey = customDomaineValue.trim();
+                                } 
+                                // If the current domain is not in the standard list, it's a custom domain
+                                else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                  domKey = form.Domaine;
+                                }
+                                
+                                const typeValue = customTypeValue.trim();
+                                try {
+                                  await typesEquipApi.create(typeValue, domKey);
+                                  await loadCustomTypes();
+                                  // Keep the type in the form and exit custom mode
+                                  setForm({ ...form, Type: typeValue });
+                                  setCustomTypeMode(false);
+                                  setCustomTypeValue('');
+                                } catch (err) {
+                                  console.error("Erreur sauvegarde type:", err);
+                                  alert("Erreur lors de la sauvegarde du type. Vérifiez la console.");
+                                }
                               }
-                              
-                              const typeValue = customTypeValue.trim();
-                              await typesEquipApi.create(typeValue, domKey);
-                              await loadCustomTypes();
-                              // Keep the type in the form and exit custom mode
-                              setForm({ ...form, Type: typeValue });
+                            }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                            <button type="button" onClick={() => {
                               setCustomTypeMode(false);
                               setCustomTypeValue('');
-                            }
-                          }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
-                            <Save className="w-3.5 h-3.5" />
-                          </button>
+                            }} className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-savia-accent/70">
+                            💡 Entrez le nom du type et appuyez sur Entrée ou cliquez sur Enregistrer.
+                          </p>
                         </div>
                       ) : (
                         <select className={INPUT_CLS} value={form.Type} onChange={e => {
-                          if (e.target.value === '__autre_type__') { setCustomTypeMode(true); }
+                          if (e.target.value === '__autre_type__') { 
+                            setCustomTypeMode(true);
+                            setCustomTypeValue('');
+                          }
                           else setForm({ ...form, Type: e.target.value });
                         }}>
                           {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
