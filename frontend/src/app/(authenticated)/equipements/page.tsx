@@ -351,16 +351,25 @@ export default function EquipementsPage() {
     try {
       const allDomaines = [...DOMAINES, '__annexe__'];
       const results: Record<string, string[]> = {};
+      
+      // Load types for standard domains
       for (const d of allDomaines) {
-        const res = await typesEquipApi.list(d);
-        results[d] = res.map(t => t.nom);
+        try {
+          const res = await typesEquipApi.list(d);
+          results[d] = res.map(t => t.nom);
+        } catch {
+          results[d] = [];
+        }
       }
       
       // Load custom domains and their types
       try {
-        const customDomainesList = await loadCustomDomaines();
+        const customDomainesList = await domaines_custom.list();
+        const domaineNames = Array.isArray(customDomainesList) 
+          ? customDomainesList.map((d: any) => d.nom || d).sort()
+          : [];
         
-        for (const domaineName of customDomainesList) {
+        for (const domaineName of domaineNames) {
           try {
             const typesRes = await typesEquipApi.list(domaineName);
             results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
@@ -375,8 +384,10 @@ export default function EquipementsPage() {
       setCustomTypesForDomain(results);
       // Keep legacy state for backward compat
       setCustomAnnexeTypes(results['__annexe__'] || []);
-    } catch { /* ignore */ }
-  }, [loadCustomDomaines]);
+    } catch (err) {
+      console.error("Erreur chargement types:", err);
+    }
+  }, []);
 
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
