@@ -1348,30 +1348,51 @@ def sync_region_ville():
         
         # Update equipements with region/ville from clients
         updated = 0
+        unmatched = 0
         with get_db() as conn:
             for _, row in df_eq.iterrows():
                 client_name = str(row.get("Client", "")).strip()
+                equip_id = row.get("id")
+                
+                # Try exact match first
                 if client_name and client_name.lower() in client_map:
                     client_info = client_map[client_name.lower()]
-                    equip_id = row.get("id")
+                    region = client_info["region"]
+                    ville = client_info["ville"]
+                    matched = True
+                else:
+                    # Try fuzzy match: check if any client name contains this equipment's client name
+                    matched = False
+                    for client_key, client_info in client_map.items():
+                        if client_name.lower() in client_key or client_key in client_name.lower():
+                            region = client_info["region"]
+                            ville = client_info["ville"]
+                            matched = True
+                            break
                     
-                    if USE_PG:
-                        cur = conn._conn.cursor()
-                        cur.execute(
-                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
-                            (client_info["region"], client_info["ville"], equip_id)
-                        )
-                        conn._conn.commit()
-                    else:
-                        conn.execute(
-                            "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
-                            (client_info["region"], client_info["ville"], equip_id)
-                        )
-                    updated += 1
+                    if not matched:
+                        # No match found, keep current region/ville
+                        unmatched += 1
+                        continue
+                
+                # Update the equipement
+                if USE_PG:
+                    cur = conn._conn.cursor()
+                    cur.execute(
+                        "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                        (region, ville, equip_id)
+                    )
+                    conn._conn.commit()
+                else:
+                    conn.execute(
+                        "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
+                        (region, ville, equip_id)
+                    )
+                updated += 1
         
-        logger.info(f"Synced {updated} equipements")
+        logger.info(f"Synced {updated} equipements, {unmatched} unmatched")
         _trigger_backup()
-        return {"ok": True, "updated": updated}
+        return {"ok": True, "updated": updated, "unmatched": unmatched}
     except Exception as e:
         logger.error(f"Sync region/ville error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
