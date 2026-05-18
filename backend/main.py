@@ -1046,17 +1046,31 @@ def get_dashboard_kpis(
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
             logger.info(f"After client filter: {len(df_eq)} equipements")
 
-        # Filter equipements by region (use renamed column "Region")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if region and not df_eq.empty and "Region" in df_eq.columns:
-            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
-            logger.info(f"After region filter: {len(df_eq)} equipements")
+        # Filter equipements by region (join with clients table to get region)
+        if region and not df_eq.empty and not df_clients.empty:
+            # Get clients in this region
+            clients_in_region = df_clients[
+                df_clients["region"].notna() & 
+                (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+            ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+                logger.info(f"After region filter (via clients): {len(df_eq)} equipements from {len(clients_in_region)} clients")
 
-        # Filter equipements by ville (use renamed column "Ville")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if ville and not df_eq.empty and "Ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
-            logger.info(f"After ville filter: {len(df_eq)} equipements")
+        # Filter equipements by ville (join with clients table to get ville)
+        if ville and not df_eq.empty and not df_clients.empty:
+            # Get clients in this ville
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+                logger.info(f"After ville filter (via clients): {len(df_eq)} equipements from {len(clients_in_ville)} clients")
 
         # Filter equipements by equipment type
         # Add .str.strip() to handle whitespace and .notna() to handle NULL values
