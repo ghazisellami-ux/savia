@@ -401,7 +401,15 @@ export default function EquipementsPage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); loadFabricants(); loadCustomTypes(); }, [loadData, loadFabricants, loadCustomTypes]);
+  useEffect(() => { 
+    const init = async () => {
+      await loadData();
+      await loadFabricants();
+      await loadCustomDomaines();
+      await loadCustomTypes();
+    };
+    init();
+  }, []);
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
 
   // Load clients
