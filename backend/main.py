@@ -1344,6 +1344,8 @@ def sync_region_ville():
                     "ville": str(row.get("ville", "")).strip(),
                 }
         
+        logger.info(f"Client map: {len(client_map)} clients")
+        
         # Update equipements with region/ville from clients
         updated = 0
         with get_db() as conn:
@@ -1352,12 +1354,22 @@ def sync_region_ville():
                 if client_name and client_name.lower() in client_map:
                     client_info = client_map[client_name.lower()]
                     equip_id = row.get("id")
-                    conn.execute(
-                        "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
-                        (client_info["region"], client_info["ville"], equip_id)
-                    )
+                    
+                    if USE_PG:
+                        cur = conn._conn.cursor()
+                        cur.execute(
+                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                            (client_info["region"], client_info["ville"], equip_id)
+                        )
+                        conn._conn.commit()
+                    else:
+                        conn.execute(
+                            "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
+                            (client_info["region"], client_info["ville"], equip_id)
+                        )
                     updated += 1
         
+        logger.info(f"Synced {updated} equipements")
         _trigger_backup()
         return {"ok": True, "updated": updated}
     except Exception as e:
