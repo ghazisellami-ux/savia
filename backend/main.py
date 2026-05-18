@@ -1033,24 +1033,33 @@ def get_dashboard_kpis(
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
 
+        # IMPORTANT: Count unique clients BEFORE applying region/ville/type filters
+        # This ensures nb_clients shows all clients, not just those with equipment in the filtered region/ville/type
+        nb_clients_all = 0
+        if not df_eq.empty and "Client" in df_eq.columns:
+            nb_clients_all = len(df_eq["Client"].dropna().unique())
+
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
             logger.info(f"After client filter: {len(df_eq)} equipements")
 
         # Filter equipements by region (use renamed column "Region")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if region and not df_eq.empty and "Region" in df_eq.columns:
-            df_eq = df_eq[df_eq["Region"].astype(str).str.lower() == region.lower()]
+            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
             logger.info(f"After region filter: {len(df_eq)} equipements")
 
         # Filter equipements by ville (use renamed column "Ville")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if ville and not df_eq.empty and "Ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["Ville"].astype(str).str.lower() == ville.lower()]
+            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
             logger.info(f"After ville filter: {len(df_eq)} equipements")
 
         # Filter equipements by equipment type
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
-            df_eq = df_eq[df_eq["Type"].astype(str).str.lower() == equipment_type.lower()]
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
             logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
@@ -1108,11 +1117,18 @@ def get_dashboard_kpis(
         if nb_interventions > 0 and nb_eq > 0:
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
-        # Count unique clients
-        # Count unique clients from FILTERED equipment only
+        # Count unique clients from FILTERED equipment
+        # If region/ville/type filters are applied, count only clients with equipment in those filters
+        # Otherwise use the total count from before filtering
         nb_clients = 0
         if not df_eq.empty and "Client" in df_eq.columns:
             nb_clients = len(df_eq["Client"].dropna().unique())
+        elif region or ville or equipment_type:
+            # If filters were applied but no equipment matches, show 0
+            nb_clients = 0
+        else:
+            # No filters applied, use total count
+            nb_clients = nb_clients_all
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
@@ -1169,16 +1185,19 @@ def get_health_scores(
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
         # Filter equipements by region (use renamed column "Region")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if region and not df_eq.empty and "Region" in df_eq.columns:
-            df_eq = df_eq[df_eq["Region"].astype(str).str.lower() == region.lower()]
+            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
 
         # Filter equipements by ville (use renamed column "Ville")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if ville and not df_eq.empty and "Ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["Ville"].astype(str).str.lower() == ville.lower()]
+            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
 
         # Filter equipements by equipment type
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
-            df_eq = df_eq[df_eq["Type"].astype(str).str.lower() == equipment_type.lower()]
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
