@@ -846,11 +846,14 @@ export default function EquipementsPage() {
                                   const updatedDomaines = await loadCustomDomaines();
                                   // Load types for all domains
                                   await loadCustomTypes();
-                                  // Select the newly created domain
-                                  setForm({ ...form, Domaine: domaineName, Type: 'Autre', EstAnnexe: false });
-                                  // Clear the input
+                                  // Select the newly created domain and enable custom type mode
+                                  setForm({ ...form, Domaine: domaineName, Type: '', EstAnnexe: false });
+                                  // Clear the domain input and enable type input
                                   setCustomDomaineValue('');
                                   setCustomDomaineMode(false);
+                                  // Automatically enable custom type mode so user can add a type
+                                  setCustomTypeMode(true);
+                                  setCustomTypeValue('');
                                 } catch (err) {
                                   console.error("Erreur sauvegarde domaine:", err);
                                 }
@@ -860,7 +863,7 @@ export default function EquipementsPage() {
                             </button>
                           </div>
                           <p className="text-xs text-purple-400/70 mt-2">
-                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer.
+                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer. Vous pourrez ensuite ajouter les types d'équipement pour ce domaine.
                           </p>
                         </div>
                       )}
@@ -943,6 +946,11 @@ export default function EquipementsPage() {
                       {form.EstAnnexe && !customTypeMode && (
                         <p className="text-xs text-amber-400/70 mt-1.5 pl-1">
                           ⚠️ Pensez à indiquer l&apos;équipement principal dans les Notes ci-dessous.
+                        </p>
+                      )}
+                      {!form.EstAnnexe && form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine] && !customTypeMode && (
+                        <p className="text-xs text-cyan-400/70 mt-1.5 pl-1">
+                          💡 Domaine personnalisé détecté. Cliquez sur "+ Autre (saisie manuelle)" pour ajouter un type.
                         </p>
                       )}
                     </div>
