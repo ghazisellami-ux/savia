@@ -366,7 +366,7 @@ export const settings = {
 export const domaines_custom = {
   list: () => request<Array<Record<string, unknown>>>('/api/domaines-custom'),
   create: (nom: string) => request<{ ok: boolean }>('/api/domaines-custom', { method: 'POST', body: { nom } }),
-  delete: (id: number) => request<{ ok: boolean }>(`/api/domaines-custom/${id}`, { method: 'DELETE' }),
+  delete: (nom: string) => request<{ ok: boolean }>(`/api/domaines-custom/${encodeURIComponent(nom)}`, { method: 'DELETE' }),
 };
 
 export { ApiError };

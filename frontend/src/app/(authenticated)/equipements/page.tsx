@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
@@ -336,7 +336,7 @@ export default function EquipementsPage() {
 
   const loadCustomDomaines = useCallback(async () => {
     try {
-      const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+      const customDomainesRes = await domaines_custom.list();
       const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
       const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
       setCustomDomaines(domaineNames);
@@ -362,7 +362,7 @@ export default function EquipementsPage() {
         
         for (const domaineName of customDomainesList) {
           try {
-            const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
+            const typesRes = await typesEquipApi.list(domaineName);
             results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
           } catch {
             results[domaineName] = [];
@@ -516,11 +516,7 @@ export default function EquipementsPage() {
         
         // Save the custom domain to the database
         try {
-          await fetch('/api/domaines-custom', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nom: customDomaineValue.trim() })
-          });
+          await domaines_custom.create(customDomaineValue.trim());
         } catch (err) {
           console.error("Erreur sauvegarde domaine personnalisé:", err);
         }
@@ -805,10 +801,7 @@ export default function EquipementsPage() {
                                 e.stopPropagation();
                                 if (confirm(`Êtes-vous sûr de vouloir supprimer le domaine "${d}" ?`)) {
                                   try {
-                                    await fetch(`/api/domaines-custom/${encodeURIComponent(d)}`, {
-                                      method: 'DELETE',
-                                      headers: { 'Content-Type': 'application/json' }
-                                    });
+                                    await domaines_custom.delete(d);
                                     // Reload custom domains
                                     await loadCustomDomaines();
                                     // If the deleted domain was selected, reset to "Autre"
@@ -848,11 +841,7 @@ export default function EquipementsPage() {
                               if (customDomaineValue.trim()) {
                                 try {
                                   const domaineName = customDomaineValue.trim();
-                                  await fetch('/api/domaines-custom', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ nom: domaineName })
-                                  });
+                                  await domaines_custom.create(domaineName);
                                   // Reload custom domains to get the new domain
                                   const updatedDomaines = await loadCustomDomaines();
                                   // Load types for all domains
