@@ -1032,19 +1032,17 @@ def get_dashboard_kpis(
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
-        # Filter equipements by region
-        if region and not df_eq.empty and "region" in df_eq.columns:
-            df_eq = df_eq[df_eq["region"].astype(str).str.lower() == region.lower()]
+        # Filter equipements by region (use renamed column "Region")
+        if region and not df_eq.empty and "Region" in df_eq.columns:
+            df_eq = df_eq[df_eq["Region"].astype(str).str.lower() == region.lower()]
 
-        # Filter equipements by ville
-        if ville and not df_eq.empty and "ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["ville"].astype(str).str.lower() == ville.lower()]
+        # Filter equipements by ville (use renamed column "Ville")
+        if ville and not df_eq.empty and "Ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["Ville"].astype(str).str.lower() == ville.lower()]
 
         # Filter equipements by equipment type
-        if equipment_type and not df_eq.empty:
-            type_col = "Type" if "Type" in df_eq.columns else ("type" if "type" in df_eq.columns else None)
-            if type_col:
-                df_eq = df_eq[df_eq[type_col].astype(str).str.lower() == equipment_type.lower()]
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].astype(str).str.lower() == equipment_type.lower()]
 
         # Filter interventions by client (via matching machines)
         if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
@@ -1169,19 +1167,17 @@ def get_health_scores(
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
-        # Filter equipements by region
-        if region and not df_eq.empty and "region" in df_eq.columns:
-            df_eq = df_eq[df_eq["region"].astype(str).str.lower() == region.lower()]
+        # Filter equipements by region (use renamed column "Region")
+        if region and not df_eq.empty and "Region" in df_eq.columns:
+            df_eq = df_eq[df_eq["Region"].astype(str).str.lower() == region.lower()]
 
-        # Filter equipements by ville
-        if ville and not df_eq.empty and "ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["ville"].astype(str).str.lower() == ville.lower()]
+        # Filter equipements by ville (use renamed column "Ville")
+        if ville and not df_eq.empty and "Ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["Ville"].astype(str).str.lower() == ville.lower()]
 
         # Filter equipements by equipment type
-        if equipment_type and not df_eq.empty:
-            type_col = "Type" if "Type" in df_eq.columns else ("type" if "type" in df_eq.columns else None)
-            if type_col:
-                df_eq = df_eq[df_eq[type_col].astype(str).str.lower() == equipment_type.lower()]
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].astype(str).str.lower() == equipment_type.lower()]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
@@ -1304,6 +1300,47 @@ def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_to
 def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
     supprimer_equipement(equip_id)
     return {"ok": True}
+
+
+@app.post("/api/equipements/sync-region-ville")
+def sync_region_ville(user: dict = Depends(_verify_token)):
+    """Sync region and ville from clients to equipements based on client name."""
+    try:
+        df_clients = db_lire_clients()
+        df_eq = lire_equipements()
+        
+        if df_clients.empty or df_eq.empty:
+            return {"ok": True, "updated": 0}
+        
+        # Create a mapping of client name -> (region, ville)
+        client_map = {}
+        for _, row in df_clients.iterrows():
+            nom = str(row.get("nom", "")).strip()
+            if nom:
+                client_map[nom.lower()] = {
+                    "region": str(row.get("region", "")).strip(),
+                    "ville": str(row.get("ville", "")).strip(),
+                }
+        
+        # Update equipements with region/ville from clients
+        updated = 0
+        with get_db() as conn:
+            for _, row in df_eq.iterrows():
+                client_name = str(row.get("Client", "")).strip()
+                if client_name and client_name.lower() in client_map:
+                    client_info = client_map[client_name.lower()]
+                    equip_id = row.get("id")
+                    conn.execute(
+                        "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
+                        (client_info["region"], client_info["ville"], equip_id)
+                    )
+                    updated += 1
+        
+        _trigger_backup()
+        return {"ok": True, "updated": updated}
+    except Exception as e:
+        logger.error(f"Sync region/ville error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/fabricants")
