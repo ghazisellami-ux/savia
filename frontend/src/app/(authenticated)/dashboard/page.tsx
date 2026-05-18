@@ -14,7 +14,7 @@ import {
 import dynamic from 'next/dynamic';
 const ApexChart = dynamic(() => import('react-apexcharts'), { ssr: false });
 import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
-import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite } from 'lucide-react';
+import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite, MapPin, Server } from 'lucide-react';
 
 // --- Types ---
 interface KpiData {
@@ -102,6 +102,9 @@ export default function DashboardPage() {
   const isLecteur = user?.role === 'Lecteur';
   const canSeeCosts = useCanSeeCosts();
   const [selectedClient, setSelectedClient] = useState(user?.role === 'Lecteur' ? (user?.client || '') : '');
+  const [selectedRegion, setSelectedRegion] = useState('');
+  const [selectedVille, setSelectedVille] = useState('');
+  const [selectedEquipType, setSelectedEquipType] = useState('');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
@@ -127,6 +130,33 @@ export default function DashboardPage() {
       setClientList(names);
     }).catch(() => {});
   }, []);
+
+  // --- Derived filter lists ---
+  const regionList = useMemo(() => {
+    const regions = new Set<string>();
+    healthScores.forEach((h: any) => {
+      if (h.region) regions.add(h.region);
+    });
+    return Array.from(regions).sort();
+  }, [healthScores]);
+
+  const villeList = useMemo(() => {
+    const villes = new Set<string>();
+    healthScores.forEach((h: any) => {
+      if (!selectedRegion || h.region === selectedRegion) {
+        if (h.ville) villes.add(h.ville);
+      }
+    });
+    return Array.from(villes).sort();
+  }, [healthScores, selectedRegion]);
+
+  const equipTypeList = useMemo(() => {
+    const types = new Set<string>();
+    healthScores.forEach((h: any) => {
+      if (h.type) types.add(h.type);
+    });
+    return Array.from(types).sort();
+  }, [healthScores]);
 
   // --- Load data when filters change ---
   const loadData = useCallback(async () => {
@@ -156,6 +186,25 @@ export default function DashboardPage() {
           filtered = filtered.filter((i: any) => clientMachines.includes(i.machine));
         }
       }
+      
+      // Filter by region, ville, and equipment type
+      if (selectedRegion || selectedVille || selectedEquipType) {
+        const validMachines = healthData
+          .filter((h: any) => {
+            if (selectedRegion && h.region !== selectedRegion) return false;
+            if (selectedVille && h.ville !== selectedVille) return false;
+            if (selectedEquipType && h.type !== selectedEquipType) return false;
+            return true;
+          })
+          .map((h: any) => h.machine);
+        
+        if (validMachines.length > 0) {
+          filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
+        } else {
+          filtered = [];
+        }
+      }
+      
       // Date filter
       filtered = filtered.filter((i: any) => {
         const d = i.date?.substring(0, 10);
@@ -171,7 +220,7 @@ export default function DashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [dateRange, selectedClient]);
+  }, [dateRange, selectedClient, selectedRegion, selectedVille, selectedEquipType]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -270,23 +319,69 @@ export default function DashboardPage() {
 
       {/* ===== FILTER BAR ===== */}
       <div className="glass rounded-xl p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
           {/* Client Filter — masqué pour Lecteur (données auto-filtrées) */}
           {!isLecteur && (
             <div>
               <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-                <Building2 className="w-3.5 h-3.5" /> Filtrer par client
+                <Building2 className="w-3.5 h-3.5" /> Client
               </label>
               <select
                 value={selectedClient}
                 onChange={e => setSelectedClient(e.target.value)}
                 className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
               >
-                <option value="">Tous les clients</option>
+                <option value="">Tous</option>
                 {clientList.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
+
+          {/* Region Filter */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <MapPin className="w-3.5 h-3.5" /> Région
+            </label>
+            <select
+              value={selectedRegion}
+              onChange={e => { setSelectedRegion(e.target.value); setSelectedVille(''); }}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              <option value="">Tous</option>
+              {regionList.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+
+          {/* Ville Filter */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <MapPin className="w-3.5 h-3.5" /> Ville
+            </label>
+            <select
+              value={selectedVille}
+              onChange={e => setSelectedVille(e.target.value)}
+              disabled={!selectedRegion}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none disabled:opacity-50"
+            >
+              <option value="">Tous</option>
+              {villeList.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+
+          {/* Equipment Type Filter */}
+          <div>
+            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
+              <Server className="w-3.5 h-3.5" /> Type Équip.
+            </label>
+            <select
+              value={selectedEquipType}
+              onChange={e => setSelectedEquipType(e.target.value)}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
+            >
+              <option value="">Tous</option>
+              {equipTypeList.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
 
           {/* Period Mode Toggle */}
           <div>
