@@ -193,6 +193,9 @@ export default function DashboardPage() {
         date_end: dateRange.date_end,
       };
       if (selectedClient) params.client = selectedClient;
+      if (selectedRegion) params.region = selectedRegion;
+      if (selectedVille) params.ville = selectedVille;
+      if (selectedEquipType) params.equipment_type = selectedEquipType;
 
       const [kpiData, healthData, intervData] = await Promise.all([
         dashboard.kpis(params),
@@ -200,51 +203,18 @@ export default function DashboardPage() {
         interventionsApi.list(),
       ]);
       
-      // Filter health data by region, ville, and equipment type
-      let filteredHealthData = healthData;
-      if (selectedRegion || selectedVille || selectedEquipType) {
-        filteredHealthData = healthData.filter((h: any) => {
-          if (selectedRegion && h.region !== selectedRegion) return false;
-          if (selectedVille && h.ville !== selectedVille) return false;
-          if (selectedEquipType && h.type !== selectedEquipType) return false;
-          return true;
-        });
-      }
-      
-      // Recalculate KPIs based on filtered health data
-      const filteredKpis = {
-        ...kpiData,
-        nb_equipements: filteredHealthData.length,
-        nb_critiques: filteredHealthData.filter((h: any) => h.score < 40).length,
-        disponibilite: filteredHealthData.length > 0 
-          ? Math.round(filteredHealthData.filter((h: any) => h.score >= 40).length / filteredHealthData.length * 100)
-          : 100,
-      };
-      
-      setKpis(filteredKpis as any);
-      setHealthScores(filteredHealthData);
+      setKpis(kpiData as any);
+      setHealthScores(healthData);
       setAllInterventions(intervData || []);
 
       // Filter interventions for timeline display
       let filtered = (intervData || []);
-      if (selectedClient) {
-        // We need to filter by machines belonging to client - use health scores which already have client
-        const clientMachines = filteredHealthData.map((h: any) => h.machine);
-        if (clientMachines.length > 0) {
-          filtered = filtered.filter((i: any) => clientMachines.includes(i.machine));
-        }
-      }
+      const validMachines = healthData.map((h: any) => h.machine);
       
-      // Filter by region, ville, and equipment type
-      if (selectedRegion || selectedVille || selectedEquipType) {
-        const validMachines = filteredHealthData
-          .map((h: any) => h.machine);
-        
-        if (validMachines.length > 0) {
-          filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
-        } else {
-          filtered = [];
-        }
+      if (validMachines.length > 0) {
+        filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
+      } else {
+        filtered = [];
       }
       
       // Date filter

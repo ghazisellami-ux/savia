@@ -1013,11 +1013,14 @@ def _get_client_filter(user: dict) -> Optional[str]:
 @app.get("/api/dashboard/kpis")
 def get_dashboard_kpis(
     client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    """Compute real KPIs from the database, optionally filtered by client and date range."""
+    """Compute real KPIs from the database, optionally filtered by client, region, ville, equipment type, and date range."""
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
@@ -1029,10 +1032,29 @@ def get_dashboard_kpis(
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
+        # Filter equipements by region
+        if region and not df_eq.empty and "region" in df_eq.columns:
+            df_eq = df_eq[df_eq["region"].astype(str).str.lower() == region.lower()]
+
+        # Filter equipements by ville
+        if ville and not df_eq.empty and "ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["ville"].astype(str).str.lower() == ville.lower()]
+
+        # Filter equipements by equipment type
+        if equipment_type and not df_eq.empty:
+            type_col = "Type" if "Type" in df_eq.columns else ("type" if "type" in df_eq.columns else None)
+            if type_col:
+                df_eq = df_eq[df_eq[type_col].astype(str).str.lower() == equipment_type.lower()]
+
         # Filter interventions by client (via matching machines)
         if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
             machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
             df_int = df_int[df_int["machine"].isin(machines_client)]
+
+        # Filter interventions by region/ville/type (via matching machines)
+        if (region or ville or equipment_type) and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
+            machines_filtered = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
+            df_int = df_int[df_int["machine"].isin(machines_filtered)]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
@@ -1128,6 +1150,9 @@ def get_dashboard_kpis(
 @app.get("/api/dashboard/health-scores")
 def get_health_scores(
     client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
     user: dict = Depends(_verify_token),
@@ -1143,6 +1168,20 @@ def get_health_scores(
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+
+        # Filter equipements by region
+        if region and not df_eq.empty and "region" in df_eq.columns:
+            df_eq = df_eq[df_eq["region"].astype(str).str.lower() == region.lower()]
+
+        # Filter equipements by ville
+        if ville and not df_eq.empty and "ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["ville"].astype(str).str.lower() == ville.lower()]
+
+        # Filter equipements by equipment type
+        if equipment_type and not df_eq.empty:
+            type_col = "Type" if "Type" in df_eq.columns else ("type" if "type" in df_eq.columns else None)
+            if type_col:
+                df_eq = df_eq[df_eq[type_col].astype(str).str.lower() == equipment_type.lower()]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
