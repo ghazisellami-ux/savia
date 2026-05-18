@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
@@ -336,7 +336,7 @@ export default function EquipementsPage() {
 
   const loadCustomDomaines = useCallback(async () => {
     try {
-      const customDomainesRes = await fetch('/api/domaines-custom').then(r => r.json());
+      const customDomainesRes = await domaines_custom.list();
       const customDomainesList = Array.isArray(customDomainesRes) ? customDomainesRes : [];
       const domaineNames = customDomainesList.map((d: any) => d.nom || d).sort();
       setCustomDomaines(domaineNames);
@@ -351,18 +351,27 @@ export default function EquipementsPage() {
     try {
       const allDomaines = [...DOMAINES, '__annexe__'];
       const results: Record<string, string[]> = {};
+      
+      // Load types for standard domains
       for (const d of allDomaines) {
-        const res = await typesEquipApi.list(d);
-        results[d] = res.map(t => t.nom);
+        try {
+          const res = await typesEquipApi.list(d);
+          results[d] = res.map(t => t.nom);
+        } catch {
+          results[d] = [];
+        }
       }
       
       // Load custom domains and their types
       try {
-        const customDomainesList = await loadCustomDomaines();
+        const customDomainesList = await domaines_custom.list();
+        const domaineNames = Array.isArray(customDomainesList) 
+          ? customDomainesList.map((d: any) => d.nom || d).sort()
+          : [];
         
-        for (const domaineName of customDomainesList) {
+        for (const domaineName of domaineNames) {
           try {
-            const typesRes = await fetch(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaineName)}`).then(r => r.json());
+            const typesRes = await typesEquipApi.list(domaineName);
             results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
           } catch {
             results[domaineName] = [];
@@ -375,8 +384,10 @@ export default function EquipementsPage() {
       setCustomTypesForDomain(results);
       // Keep legacy state for backward compat
       setCustomAnnexeTypes(results['__annexe__'] || []);
-    } catch { /* ignore */ }
-  }, [loadCustomDomaines]);
+    } catch (err) {
+      console.error("Erreur chargement types:", err);
+    }
+  }, []);
 
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
@@ -516,11 +527,7 @@ export default function EquipementsPage() {
         
         // Save the custom domain to the database
         try {
-          await fetch('/api/domaines-custom', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nom: customDomaineValue.trim() })
-          });
+          await domaines_custom.create(customDomaineValue.trim());
         } catch (err) {
           console.error("Erreur sauvegarde domaine personnalisé:", err);
         }
@@ -805,10 +812,7 @@ export default function EquipementsPage() {
                                 e.stopPropagation();
                                 if (confirm(`Êtes-vous sûr de vouloir supprimer le domaine "${d}" ?`)) {
                                   try {
-                                    await fetch(`/api/domaines-custom/${encodeURIComponent(d)}`, {
-                                      method: 'DELETE',
-                                      headers: { 'Content-Type': 'application/json' }
-                                    });
+                                    await domaines_custom.delete(d);
                                     // Reload custom domains
                                     await loadCustomDomaines();
                                     // If the deleted domain was selected, reset to "Autre"
@@ -848,20 +852,19 @@ export default function EquipementsPage() {
                               if (customDomaineValue.trim()) {
                                 try {
                                   const domaineName = customDomaineValue.trim();
-                                  await fetch('/api/domaines-custom', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ nom: domaineName })
-                                  });
+                                  await domaines_custom.create(domaineName);
                                   // Reload custom domains to get the new domain
                                   const updatedDomaines = await loadCustomDomaines();
                                   // Load types for all domains
                                   await loadCustomTypes();
-                                  // Select the newly created domain
-                                  setForm({ ...form, Domaine: domaineName, Type: 'Autre', EstAnnexe: false });
-                                  // Clear the input
+                                  // Select the newly created domain and enable custom type mode
+                                  setForm({ ...form, Domaine: domaineName, Type: '', EstAnnexe: false });
+                                  // Clear the domain input and enable type input
                                   setCustomDomaineValue('');
                                   setCustomDomaineMode(false);
+                                  // Automatically enable custom type mode so user can add a type
+                                  setCustomTypeMode(true);
+                                  setCustomTypeValue('');
                                 } catch (err) {
                                   console.error("Erreur sauvegarde domaine:", err);
                                 }
@@ -871,7 +874,7 @@ export default function EquipementsPage() {
                             </button>
                           </div>
                           <p className="text-xs text-purple-400/70 mt-2">
-                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer.
+                            Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer. Vous pourrez ensuite ajouter les types d'équipement pour ce domaine.
                           </p>
                         </div>
                       )}
@@ -914,37 +917,89 @@ export default function EquipementsPage() {
                         {form.EstAnnexe ? 'Type d\'équipement annexe *' : 'Type d\'équipement *'}
                       </label>
                       {customTypeMode ? (
-                        <div className="flex gap-2">
-                          <input className={INPUT_CLS} placeholder="Saisir le type..." value={customTypeValue}
-                            onChange={e => setCustomTypeValue(e.target.value)} />
-                          <button type="button" onClick={async () => {
-                            if (customTypeValue.trim()) {
-                              // Determine the domain key for saving the type
-                              let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
-                              
-                              // If it's a custom domain, use the custom domain name
-                              if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
-                                domKey = customDomaineValue.trim();
-                              } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
-                                // If it's a custom domain (not in TYPES_PAR_DOMAINE), use it directly
-                                domKey = form.Domaine;
-                              }
-                              
-                              const typeValue = customTypeValue.trim();
-                              await typesEquipApi.create(typeValue, domKey);
-                              await loadCustomTypes();
-                              // Keep the type in the form and exit custom mode
-                              setForm({ ...form, Type: typeValue });
-                              setCustomTypeMode(false);
-                              setCustomTypeValue('');
-                            }
-                          }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
-                            <Save className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <input 
+                              className={INPUT_CLS} 
+                              placeholder="Saisir le type..." 
+                              value={customTypeValue}
+                              onChange={e => setCustomTypeValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter' && customTypeValue.trim()) {
+                                  e.preventDefault();
+                                  // Save type synchronously
+                                  const saveType = async () => {
+                                    let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                    if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                      domKey = customDomaineValue.trim();
+                                    } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                      domKey = form.Domaine;
+                                    }
+                                    const typeValue = customTypeValue.trim();
+                                    try {
+                                      await typesEquipApi.create(typeValue, domKey);
+                                      await loadCustomTypes();
+                                      setForm({ ...form, Type: typeValue });
+                                      setCustomTypeMode(false);
+                                      setCustomTypeValue('');
+                                    } catch (err) {
+                                      console.error("Erreur sauvegarde type:", err);
+                                    }
+                                  };
+                                  saveType();
+                                }
+                              }}
+                              autoFocus
+                            />
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                if (!customTypeValue.trim()) return;
+                                const saveType = async () => {
+                                  let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                  if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                    domKey = customDomaineValue.trim();
+                                  } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                    domKey = form.Domaine;
+                                  }
+                                  const typeValue = customTypeValue.trim();
+                                  try {
+                                    await typesEquipApi.create(typeValue, domKey);
+                                    await loadCustomTypes();
+                                    setForm({ ...form, Type: typeValue });
+                                    setCustomTypeMode(false);
+                                    setCustomTypeValue('');
+                                  } catch (err) {
+                                    console.error("Erreur sauvegarde type:", err);
+                                  }
+                                };
+                                saveType();
+                              }} 
+                              className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                setCustomTypeMode(false);
+                                setCustomTypeValue('');
+                              }} 
+                              className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-savia-accent/70">
+                            💡 Entrez le nom du type et appuyez sur Entrée ou cliquez sur Enregistrer.
+                          </p>
                         </div>
                       ) : (
                         <select className={INPUT_CLS} value={form.Type} onChange={e => {
-                          if (e.target.value === '__autre_type__') { setCustomTypeMode(true); }
+                          if (e.target.value === '__autre_type__') { 
+                            setCustomTypeMode(true);
+                            setCustomTypeValue('');
+                          }
                           else setForm({ ...form, Type: e.target.value });
                         }}>
                           {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
@@ -954,6 +1009,11 @@ export default function EquipementsPage() {
                       {form.EstAnnexe && !customTypeMode && (
                         <p className="text-xs text-amber-400/70 mt-1.5 pl-1">
                           ⚠️ Pensez à indiquer l&apos;équipement principal dans les Notes ci-dessous.
+                        </p>
+                      )}
+                      {!form.EstAnnexe && form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine] && !customTypeMode && (
+                        <p className="text-xs text-cyan-400/70 mt-1.5 pl-1">
+                          💡 Domaine personnalisé détecté. Cliquez sur "+ Autre (saisie manuelle)" pour ajouter un type.
                         </p>
                       )}
                     </div>
