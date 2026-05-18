@@ -1335,67 +1335,84 @@ def sync_region_ville():
         if df_clients.empty or df_eq.empty:
             return {"ok": True, "updated": 0}
         
-        # Create a mapping of client name -> (region, ville)
-        client_map = {}
-        for _, row in df_clients.iterrows():
-            nom = str(row.get("nom", "")).strip()
-            if nom:
-                client_map[nom.lower()] = {
-                    "region": str(row.get("region", "")).strip(),
-                    "ville": str(row.get("ville", "")).strip(),
-                }
+        logger.info(f"Starting sync: {len(df_clients)} clients, {len(df_eq)} equipements")
         
-        logger.info(f"Client map: {len(client_map)} clients")
-        
-        # Update equipements with region/ville from clients
-        updated = 0
-        unmatched = 0
+        # Use SQL UPDATE with JOIN to sync region/ville from clients to equipements
         with get_db() as conn:
-            for _, row in df_eq.iterrows():
-                client_name = str(row.get("Client", "")).strip()
-                equip_id = row.get("id")
+            if USE_PG:
+                # PostgreSQL: Use UPDATE with JOIN
+                cur = conn._conn.cursor()
                 
-                # Try exact match first
-                if client_name and client_name.lower() in client_map:
-                    client_info = client_map[client_name.lower()]
-                    region = client_info["region"]
-                    ville = client_info["ville"]
-                    matched = True
-                else:
-                    # Try fuzzy match: check if any client name contains this equipment's client name
-                    matched = False
-                    for client_key, client_info in client_map.items():
-                        if client_name.lower() in client_key or client_key in client_name.lower():
-                            region = client_info["region"]
-                            ville = client_info["ville"]
-                            matched = True
+                # Update equipements where client name matches exactly
+                cur.execute("""
+                    UPDATE equipements e
+                    SET region = c.region, ville = c.ville
+                    FROM clients c
+                    WHERE LOWER(e.client) = LOWER(c.nom)
+                """)
+                exact_matches = cur.rowcount
+                conn._conn.commit()
+                
+                logger.info(f"Exact matches: {exact_matches}")
+                
+                # For remaining equipements, try fuzzy matching
+                # Get equipements that still have region='Nord' but don't have exact client match
+                cur.execute("""
+                    SELECT e.id, e.client
+                    FROM equipements e
+                    LEFT JOIN clients c ON LOWER(e.client) = LOWER(c.nom)
+                    WHERE c.id IS NULL
+                """)
+                unmatched_equips = cur.fetchall()
+                logger.info(f"Unmatched equipements: {len(unmatched_equips)}")
+                
+                # Try fuzzy matching for unmatched equipements
+                fuzzy_matches = 0
+                for equip_id, equip_client in unmatched_equips:
+                    # Find best match in clients table
+                    best_match = None
+                    best_score = 0
+                    
+                    for _, client_row in df_clients.iterrows():
+                        client_nom = str(client_row.get("nom", "")).lower()
+                        equip_client_lower = str(equip_client).lower()
+                        
+                        # Simple fuzzy match: check if one contains the other
+                        if equip_client_lower in client_nom or client_nom in equip_client_lower:
+                            best_match = client_row
                             break
                     
-                    if not matched:
-                        # No match found, keep current region/ville
-                        unmatched += 1
-                        continue
+                    if best_match is not None:
+                        region = str(best_match.get("region", "")).strip()
+                        ville = str(best_match.get("ville", "")).strip()
+                        
+                        cur.execute(
+                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                            (region, ville, equip_id)
+                        )
+                        fuzzy_matches += 1
                 
-                # Update the equipement
-                if USE_PG:
-                    cur = conn._conn.cursor()
-                    cur.execute(
-                        "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
-                        (region, ville, equip_id)
-                    )
-                    conn._conn.commit()
-                else:
-                    conn.execute(
-                        "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
-                        (region, ville, equip_id)
-                    )
-                updated += 1
+                conn._conn.commit()
+                logger.info(f"Fuzzy matches: {fuzzy_matches}")
+                
+                total_updated = exact_matches + fuzzy_matches
+            else:
+                # SQLite: Use UPDATE with JOIN
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE equipements
+                    SET region = (SELECT region FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1),
+                        ville = (SELECT ville FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1)
+                    WHERE client IN (SELECT nom FROM clients)
+                """)
+                total_updated = cur.rowcount
+                conn.commit()
         
-        logger.info(f"Synced {updated} equipements, {unmatched} unmatched")
+        logger.info(f"Sync completed: {total_updated} equipements updated")
         _trigger_backup()
-        return {"ok": True, "updated": updated, "unmatched": unmatched}
+        return {"ok": True, "updated": total_updated}
     except Exception as e:
-        logger.error(f"Sync region/ville error: {e}")
+        logger.error(f"Sync region/ville error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
