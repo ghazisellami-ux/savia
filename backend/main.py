@@ -1071,8 +1071,8 @@ def get_dashboard_kpis(
             logger.info(f"After client intervention filter: {len(df_int)} interventions")
 
         # Filter interventions by region/ville/type (via matching machines)
-        if (region or ville or equipment_type) and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
-            machines_filtered = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
+        if (region or ville or equipment_type) and not df_int.empty and "machine" in df_int.columns:
+            machines_filtered = df_eq["Nom"].tolist() if (not df_eq.empty and "Nom" in df_eq.columns) else []
             df_int = df_int[df_int["machine"].isin(machines_filtered)]
             logger.info(f"After region/ville/type intervention filter: {len(df_int)} interventions")
 
