@@ -1297,14 +1297,27 @@ def ajouter_fabricant(nom):
 def lire_types_equipement_custom(domaine=""):
     """Retourne la liste des types d'équipement personnalisés pour un domaine."""
     with get_db() as conn:
-        rows = conn.execute("SELECT id, nom, domaine FROM types_equipement_custom WHERE domaine = ? ORDER BY nom", (domaine,)).fetchall()
+        ph = "%s" if USE_PG else "?"
+        rows = conn.execute(
+            f"SELECT id, nom, domaine FROM types_equipement_custom WHERE domaine = {ph} ORDER BY nom",
+            (domaine,)
+        ).fetchall()
         return [dict(r) for r in rows]
 
 
 def ajouter_type_equipement_custom(nom, domaine=""):
     """Ajoute un type d'équipement personnalisé. Ignore si déjà existant pour ce domaine."""
     with get_db() as conn:
-        conn.execute("INSERT OR IGNORE INTO types_equipement_custom (nom, domaine) VALUES (?, ?)", (nom.strip(), domaine))
+        if USE_PG:
+            conn.execute(
+                "INSERT INTO types_equipement_custom (nom, domaine) VALUES (%s, %s) ON CONFLICT (nom, domaine) DO NOTHING",
+                (nom.strip(), domaine)
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO types_equipement_custom (nom, domaine) VALUES (?, ?)",
+                (nom.strip(), domaine)
+            )
     return True
 
 
