@@ -1024,6 +1024,11 @@ def get_dashboard_kpis(
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+        
+        # Debug logging
+        logger.info(f"KPI filters: client={client}, region={region}, ville={ville}, equipment_type={equipment_type}")
+        logger.info(f"Initial equipements count: {len(df_eq)}")
+        logger.info(f"Initial interventions count: {len(df_int)}")
 
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
@@ -1031,28 +1036,34 @@ def get_dashboard_kpis(
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+            logger.info(f"After client filter: {len(df_eq)} equipements")
 
         # Filter equipements by region (use renamed column "Region")
         if region and not df_eq.empty and "Region" in df_eq.columns:
             df_eq = df_eq[df_eq["Region"].astype(str).str.lower() == region.lower()]
+            logger.info(f"After region filter: {len(df_eq)} equipements")
 
         # Filter equipements by ville (use renamed column "Ville")
         if ville and not df_eq.empty and "Ville" in df_eq.columns:
             df_eq = df_eq[df_eq["Ville"].astype(str).str.lower() == ville.lower()]
+            logger.info(f"After ville filter: {len(df_eq)} equipements")
 
         # Filter equipements by equipment type
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].astype(str).str.lower() == equipment_type.lower()]
+            logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
         if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
             machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
             df_int = df_int[df_int["machine"].isin(machines_client)]
+            logger.info(f"After client intervention filter: {len(df_int)} interventions")
 
         # Filter interventions by region/ville/type (via matching machines)
         if (region or ville or equipment_type) and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
             machines_filtered = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
             df_int = df_int[df_int["machine"].isin(machines_filtered)]
+            logger.info(f"After region/ville/type intervention filter: {len(df_int)} interventions")
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
@@ -1061,6 +1072,7 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] >= pd.to_datetime(date_start)]
             if date_end:
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
+            logger.info(f"After date filter: {len(df_int)} interventions")
 
         nb_eq = len(df_eq) if not df_eq.empty else 0
         nb_critiques = 0
@@ -1097,21 +1109,10 @@ def get_dashboard_kpis(
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
         # Count unique clients
-        # Count unique clients from both equipment and imported clients
+        # Count unique clients from FILTERED equipment only
         nb_clients = 0
-        clients_from_eq = set()
         if not df_eq.empty and "Client" in df_eq.columns:
-            clients_from_eq = set(df_eq["Client"].dropna().unique())
-        
-        # Also count imported clients
-        df_clients = db_lire_clients()
-        clients_from_import = set()
-        if not df_clients.empty and "nom" in df_clients.columns:
-            clients_from_import = set(df_clients["nom"].dropna().unique())
-        
-        # Combine both sets
-        all_clients = clients_from_eq.union(clients_from_import)
-        nb_clients = len(all_clients)
+            nb_clients = len(df_eq["Client"].dropna().unique())
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
