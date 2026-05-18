@@ -1013,26 +1013,68 @@ def _get_client_filter(user: dict) -> Optional[str]:
 @app.get("/api/dashboard/kpis")
 def get_dashboard_kpis(
     client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    """Compute real KPIs from the database, optionally filtered by client and date range."""
+    """Compute real KPIs from the database, optionally filtered by client, region, ville, equipment type, and date range."""
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+        df_clients = db_lire_clients()  # Get ALL clients from clients table
+        
+        # Debug logging
+        logger.info(f"KPI filters: client={client}, region={region}, ville={ville}, equipment_type={equipment_type}")
+        logger.info(f"Initial equipements count: {len(df_eq)}")
+        logger.info(f"Initial interventions count: {len(df_int)}")
+        logger.info(f"Total clients in database: {len(df_clients)}")
 
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
 
+        # IMPORTANT: Count unique clients from ALL clients table (not just equipements)
+        # This ensures we show all clients, even those without equipment
+        nb_clients_all = 0
+        if not df_clients.empty and "nom" in df_clients.columns:
+            nb_clients_all = len(df_clients["nom"].dropna().unique())
+
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+            logger.info(f"After client filter: {len(df_eq)} equipements")
+
+        # Filter equipements by region (use renamed column "Region")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if region and not df_eq.empty and "Region" in df_eq.columns:
+            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
+            logger.info(f"After region filter: {len(df_eq)} equipements")
+
+        # Filter equipements by ville (use renamed column "Ville")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if ville and not df_eq.empty and "Ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
+            logger.info(f"After ville filter: {len(df_eq)} equipements")
+
+        # Filter equipements by equipment type
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+            logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
         if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
             machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
             df_int = df_int[df_int["machine"].isin(machines_client)]
+            logger.info(f"After client intervention filter: {len(df_int)} interventions")
+
+        # Filter interventions by region/ville/type (via matching machines)
+        if (region or ville or equipment_type) and not df_int.empty and "machine" in df_int.columns:
+            machines_filtered = df_eq["Nom"].tolist() if (not df_eq.empty and "Nom" in df_eq.columns) else []
+            df_int = df_int[df_int["machine"].isin(machines_filtered)]
+            logger.info(f"After region/ville/type intervention filter: {len(df_int)} interventions")
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
@@ -1041,6 +1083,7 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] >= pd.to_datetime(date_start)]
             if date_end:
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
+            logger.info(f"After date filter: {len(df_int)} interventions")
 
         nb_eq = len(df_eq) if not df_eq.empty else 0
         nb_critiques = 0
@@ -1077,21 +1120,16 @@ def get_dashboard_kpis(
             mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
 
         # Count unique clients
-        # Count unique clients from both equipment and imported clients
+        # If NO filters applied: show ALL clients from clients table (66)
+        # If filters applied: show only clients with equipment matching those filters
         nb_clients = 0
-        clients_from_eq = set()
-        if not df_eq.empty and "Client" in df_eq.columns:
-            clients_from_eq = set(df_eq["Client"].dropna().unique())
-        
-        # Also count imported clients
-        df_clients = db_lire_clients()
-        clients_from_import = set()
-        if not df_clients.empty and "nom" in df_clients.columns:
-            clients_from_import = set(df_clients["nom"].dropna().unique())
-        
-        # Combine both sets
-        all_clients = clients_from_eq.union(clients_from_import)
-        nb_clients = len(all_clients)
+        if region or ville or equipment_type or effective_client:
+            # Filters applied: count clients from filtered equipements only
+            if not df_eq.empty and "Client" in df_eq.columns:
+                nb_clients = len(df_eq["Client"].dropna().unique())
+        else:
+            # No filters applied: show ALL clients from clients table
+            nb_clients = nb_clients_all
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
@@ -1128,6 +1166,9 @@ def get_dashboard_kpis(
 @app.get("/api/dashboard/health-scores")
 def get_health_scores(
     client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
     date_start: Optional[str] = None,
     date_end: Optional[str] = None,
     user: dict = Depends(_verify_token),
@@ -1143,6 +1184,21 @@ def get_health_scores(
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+
+        # Filter equipements by region (use renamed column "Region")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if region and not df_eq.empty and "Region" in df_eq.columns:
+            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
+
+        # Filter equipements by ville (use renamed column "Ville")
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if ville and not df_eq.empty and "Ville" in df_eq.columns:
+            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
+
+        # Filter equipements by equipment type
+        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
 
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
@@ -1265,6 +1321,99 @@ def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_to
 def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
     supprimer_equipement(equip_id)
     return {"ok": True}
+
+
+@app.post("/api/equipements/sync-region-ville")
+def sync_region_ville():
+    """Sync region and ville from clients to equipements based on client name. Admin operation."""
+    try:
+        from db_engine import _trigger_backup, USE_PG
+        
+        df_clients = db_lire_clients()
+        df_eq = lire_equipements()
+        
+        if df_clients.empty or df_eq.empty:
+            return {"ok": True, "updated": 0}
+        
+        logger.info(f"Starting sync: {len(df_clients)} clients, {len(df_eq)} equipements")
+        
+        # Use SQL UPDATE with JOIN to sync region/ville from clients to equipements
+        with get_db() as conn:
+            if USE_PG:
+                # PostgreSQL: Use UPDATE with JOIN
+                cur = conn._conn.cursor()
+                
+                # Update equipements where client name matches exactly
+                cur.execute("""
+                    UPDATE equipements e
+                    SET region = c.region, ville = c.ville
+                    FROM clients c
+                    WHERE LOWER(e.client) = LOWER(c.nom)
+                """)
+                exact_matches = cur.rowcount
+                conn._conn.commit()
+                
+                logger.info(f"Exact matches: {exact_matches}")
+                
+                # For remaining equipements, try fuzzy matching
+                # Get equipements that still have region='Nord' but don't have exact client match
+                cur.execute("""
+                    SELECT e.id, e.client
+                    FROM equipements e
+                    LEFT JOIN clients c ON LOWER(e.client) = LOWER(c.nom)
+                    WHERE c.id IS NULL
+                """)
+                unmatched_equips = cur.fetchall()
+                logger.info(f"Unmatched equipements: {len(unmatched_equips)}")
+                
+                # Try fuzzy matching for unmatched equipements
+                fuzzy_matches = 0
+                for equip_id, equip_client in unmatched_equips:
+                    # Find best match in clients table
+                    best_match = None
+                    best_score = 0
+                    
+                    for _, client_row in df_clients.iterrows():
+                        client_nom = str(client_row.get("nom", "")).lower()
+                        equip_client_lower = str(equip_client).lower()
+                        
+                        # Simple fuzzy match: check if one contains the other
+                        if equip_client_lower in client_nom or client_nom in equip_client_lower:
+                            best_match = client_row
+                            break
+                    
+                    if best_match is not None:
+                        region = str(best_match.get("region", "")).strip()
+                        ville = str(best_match.get("ville", "")).strip()
+                        
+                        cur.execute(
+                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                            (region, ville, equip_id)
+                        )
+                        fuzzy_matches += 1
+                
+                conn._conn.commit()
+                logger.info(f"Fuzzy matches: {fuzzy_matches}")
+                
+                total_updated = exact_matches + fuzzy_matches
+            else:
+                # SQLite: Use UPDATE with JOIN
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE equipements
+                    SET region = (SELECT region FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1),
+                        ville = (SELECT ville FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1)
+                    WHERE client IN (SELECT nom FROM clients)
+                """)
+                total_updated = cur.rowcount
+                conn.commit()
+        
+        logger.info(f"Sync completed: {total_updated} equipements updated")
+        _trigger_backup()
+        return {"ok": True, "updated": total_updated}
+    except Exception as e:
+        logger.error(f"Sync region/ville error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/fabricants")

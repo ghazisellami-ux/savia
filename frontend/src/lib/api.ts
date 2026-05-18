@@ -68,17 +68,23 @@ export const auth = {
 
 // --- Dashboard ---
 export const dashboard = {
-  kpis: (params?: { date_start?: string; date_end?: string; client?: string }) => {
+  kpis: (params?: { date_start?: string; date_end?: string; client?: string; region?: string; ville?: string; equipment_type?: string }) => {
     const p = new URLSearchParams();
     if (params?.client) p.set('client', params.client);
+    if (params?.region) p.set('region', params.region);
+    if (params?.ville) p.set('ville', params.ville);
+    if (params?.equipment_type) p.set('equipment_type', params.equipment_type);
     if (params?.date_start) p.set('date_start', params.date_start);
     if (params?.date_end) p.set('date_end', params.date_end);
     const qs = p.toString();
     return request<Record<string, number>>(`/api/dashboard/kpis${qs ? '?' + qs : ''}`);
   },
-  healthScores: (params?: { client?: string; date_start?: string; date_end?: string }) => {
+  healthScores: (params?: { client?: string; region?: string; ville?: string; equipment_type?: string; date_start?: string; date_end?: string }) => {
     const p = new URLSearchParams();
     if (params?.client) p.set('client', params.client);
+    if (params?.region) p.set('region', params.region);
+    if (params?.ville) p.set('ville', params.ville);
+    if (params?.equipment_type) p.set('equipment_type', params.equipment_type);
     if (params?.date_start) p.set('date_start', params.date_start);
     if (params?.date_end) p.set('date_end', params.date_end);
     const qs = p.toString();

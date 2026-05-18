@@ -614,6 +614,7 @@ def init_db():
         _safe_add_column("equipements", "longitude", "REAL", "NULL")
         _safe_add_column("equipements", "adresse")
         _safe_add_column("equipements", "ville")
+        _safe_add_column("equipements", "region")
 
         # Client enrichment columns
         _safe_add_column("clients", "code_client")
@@ -1165,7 +1166,7 @@ def lire_equipements():
                 "date_installation": "DateInstallation",
                 "derniere_maintenance": "DernieresMaintenance",
                 "statut": "Statut", "notes": "Notes",
-                "client": "Client", "ville": "Ville",
+                "client": "Client", "ville": "Ville", "region": "Region",
             }
             df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
             if "Client" in df.columns:
@@ -1198,8 +1199,8 @@ def ajouter_equipement(equipement_dict):
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
-                                     domaine, est_annexe, garantie_debut, garantie_duree, ville, service)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     domaine, est_annexe, garantie_debut, garantie_duree, ville, region, service)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
@@ -1208,7 +1209,7 @@ def ajouter_equipement(equipement_dict):
                 document_technique=excluded.document_technique,
                 domaine=excluded.domaine, est_annexe=excluded.est_annexe,
                 garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree,
-                ville=excluded.ville, service=excluded.service
+                ville=excluded.ville, region=excluded.region, service=excluded.service
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -1227,6 +1228,7 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
             equipement_dict.get("Ville", ""),
+            equipement_dict.get("Region", ""),
             equipement_dict.get("Service", ""),
         ))
     _trigger_backup()
@@ -1250,7 +1252,7 @@ def modifier_equipement(equip_id, equipement_dict):
                 date_installation = ?, derniere_maintenance = ?, statut = ?,
                 notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
                 domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?,
-                ville = ?, service = ?
+                ville = ?, region = ?, service = ?
             WHERE id = ?
         """, (
             equipement_dict.get("Nom", ""),
@@ -1270,6 +1272,7 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("GarantieDebut", ""),
             int(equipement_dict.get("GarantieDuree", 0) or 0),
             equipement_dict.get("Ville", ""),
+            equipement_dict.get("Region", ""),
             equipement_dict.get("Service", ""),
             equip_id,
         ))
