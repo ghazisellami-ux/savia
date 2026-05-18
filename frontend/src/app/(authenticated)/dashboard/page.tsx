@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import dynamic from 'next/dynamic';
 const ApexChart = dynamic(() => import('react-apexcharts'), { ssr: false });
-import { dashboard, interventions as interventionsApi, clients as clientsApi } from '@/lib/api';
+import { dashboard, interventions as interventionsApi, clients as clientsApi, equipements } from '@/lib/api';
 import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Clock, Building2, Calendar, Filter, Activity, Heart, Target, TrendingUp, Trophy, Cpu, CircleAlert, CircleCheck, Timer, Wrench, DollarSign, BarChart3, Crosshair, User, Satellite, MapPin, Server } from 'lucide-react';
 
 // --- Types ---
@@ -123,6 +123,20 @@ export default function DashboardPage() {
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
 
+  // --- Load clients and equipments for filter options ---
+  const [allClients, setAllClients] = useState<any[]>([]);
+  const [allEquipments, setAllEquipments] = useState<any[]>([]);
+
+  useEffect(() => {
+    Promise.all([
+      clientsApi.list().catch(() => []),
+      equipements.list().catch(() => [])
+    ]).then(([clients, equips]) => {
+      setAllClients(clients || []);
+      setAllEquipments(equips || []);
+    });
+  }, []);
+
   // --- Load clients once ---
   useEffect(() => {
     clientsApi.list().then((res: any[]) => {
@@ -134,29 +148,41 @@ export default function DashboardPage() {
   // --- Derived filter lists ---
   const regionList = useMemo(() => {
     const regions = new Set<string>();
-    healthScores.forEach((h: any) => {
-      if (h.region) regions.add(h.region);
+    // Get regions from clients
+    allClients.forEach((c: any) => {
+      if (c.region) regions.add(c.region);
+    });
+    // Also get from equipments
+    allEquipments.forEach((e: any) => {
+      if (e.region) regions.add(e.region);
     });
     return Array.from(regions).sort();
-  }, [healthScores]);
+  }, [allClients, allEquipments]);
 
   const villeList = useMemo(() => {
     const villes = new Set<string>();
-    healthScores.forEach((h: any) => {
-      if (!selectedRegion || h.region === selectedRegion) {
-        if (h.ville) villes.add(h.ville);
+    // Get villes from clients
+    allClients.forEach((c: any) => {
+      if (!selectedRegion || c.region === selectedRegion) {
+        if (c.ville) villes.add(c.ville);
+      }
+    });
+    // Also get from equipments
+    allEquipments.forEach((e: any) => {
+      if (!selectedRegion || e.region === selectedRegion) {
+        if (e.ville) villes.add(e.ville);
       }
     });
     return Array.from(villes).sort();
-  }, [healthScores, selectedRegion]);
+  }, [allClients, allEquipments, selectedRegion]);
 
   const equipTypeList = useMemo(() => {
     const types = new Set<string>();
-    healthScores.forEach((h: any) => {
-      if (h.type) types.add(h.type);
+    allEquipments.forEach((e: any) => {
+      if (e.Type || e.type) types.add(e.Type || e.type);
     });
     return Array.from(types).sort();
-  }, [healthScores]);
+  }, [allEquipments]);
 
   // --- Load data when filters change ---
   const loadData = useCallback(async () => {
