@@ -913,49 +913,69 @@ export default function EquipementsPage() {
                               placeholder="Saisir le type..." 
                               value={customTypeValue}
                               onChange={e => setCustomTypeValue(e.target.value)}
-                              onKeyPress={e => {
+                              onKeyDown={e => {
                                 if (e.key === 'Enter' && customTypeValue.trim()) {
                                   e.preventDefault();
-                                  // Trigger save
-                                  const btn = (e.target as HTMLInputElement).parentElement?.querySelector('button');
-                                  if (btn) btn.click();
+                                  // Save type synchronously
+                                  const saveType = async () => {
+                                    let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                    if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                      domKey = customDomaineValue.trim();
+                                    } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                      domKey = form.Domaine;
+                                    }
+                                    const typeValue = customTypeValue.trim();
+                                    try {
+                                      await typesEquipApi.create(typeValue, domKey);
+                                      await loadCustomTypes();
+                                      setForm({ ...form, Type: typeValue });
+                                      setCustomTypeMode(false);
+                                      setCustomTypeValue('');
+                                    } catch (err) {
+                                      console.error("Erreur sauvegarde type:", err);
+                                    }
+                                  };
+                                  saveType();
                                 }
                               }}
+                              autoFocus
                             />
-                            <button type="button" onClick={async () => {
-                              if (customTypeValue.trim()) {
-                                // Determine the domain key for saving the type
-                                let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
-                                
-                                // If we're in "Autre" mode and have a custom domain value, use it
-                                if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
-                                  domKey = customDomaineValue.trim();
-                                } 
-                                // If the current domain is not in the standard list, it's a custom domain
-                                else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
-                                  domKey = form.Domaine;
-                                }
-                                
-                                const typeValue = customTypeValue.trim();
-                                try {
-                                  await typesEquipApi.create(typeValue, domKey);
-                                  await loadCustomTypes();
-                                  // Keep the type in the form and exit custom mode
-                                  setForm({ ...form, Type: typeValue });
-                                  setCustomTypeMode(false);
-                                  setCustomTypeValue('');
-                                } catch (err) {
-                                  console.error("Erreur sauvegarde type:", err);
-                                  alert("Erreur lors de la sauvegarde du type. Vérifiez la console.");
-                                }
-                              }
-                            }} className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer">
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                if (!customTypeValue.trim()) return;
+                                const saveType = async () => {
+                                  let domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                  if (form.Domaine === 'Autre' && customDomaineValue.trim()) {
+                                    domKey = customDomaineValue.trim();
+                                  } else if (form.Domaine !== 'Autre' && !TYPES_PAR_DOMAINE[form.Domaine]) {
+                                    domKey = form.Domaine;
+                                  }
+                                  const typeValue = customTypeValue.trim();
+                                  try {
+                                    await typesEquipApi.create(typeValue, domKey);
+                                    await loadCustomTypes();
+                                    setForm({ ...form, Type: typeValue });
+                                    setCustomTypeMode(false);
+                                    setCustomTypeValue('');
+                                  } catch (err) {
+                                    console.error("Erreur sauvegarde type:", err);
+                                  }
+                                };
+                                saveType();
+                              }} 
+                              className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 cursor-pointer"
+                            >
                               <Save className="w-3.5 h-3.5" />
                             </button>
-                            <button type="button" onClick={() => {
-                              setCustomTypeMode(false);
-                              setCustomTypeValue('');
-                            }} className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer">
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                setCustomTypeMode(false);
+                                setCustomTypeValue('');
+                              }} 
+                              className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer"
+                            >
                               <X className="w-3.5 h-3.5" />
                             </button>
                           </div>
