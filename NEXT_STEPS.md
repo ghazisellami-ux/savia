@@ -20,52 +20,19 @@
 
 ## 🚀 Actions à Effectuer sur app.dms.savia.tn
 
-### Étape 1: Accéder à Coolify UI
+### Étape 1: Redéployer le Code Corrigé
 
-```
-https://app.dms.savia.tn:3000 (ou le port Coolify)
-```
+1. Aller dans Coolify UI
+2. Aller dans l'application **Backend**
+3. Cliquer sur **Redeploy** ou **Deploy**
+4. Attendre que le déploiement soit terminé
 
-### Étape 2: Supprimer et Recréer PostgreSQL
+**Pourquoi?** Le code contient maintenant:
+- ✅ Suppression de la contrainte CHECK sur les rôles
+- ✅ Validation Python pour les rôles (plus flexible)
+- ✅ Configuration Docker-compose simplifiée
 
-1. **Supprimer** la base de données PostgreSQL existante
-   - Aller dans **Databases** → **PostgreSQL**
-   - Cliquer sur **Delete**
-   - Confirmer
-
-2. **Recréer** la base de données
-   - Aller dans **Databases** → **Add Database**
-   - Sélectionner **PostgreSQL**
-   - Configurer:
-     - Database Name: `savia`
-     - Username: `savia_user`
-     - Password: `<strong_password>` (générer une nouvelle)
-   - Cliquer sur **Create**
-
-### Étape 3: Mettre à Jour les Variables d'Environnement
-
-Dans Coolify, pour l'application **Backend**, ajouter/mettre à jour:
-
-```
-POSTGRES_DB=savia
-POSTGRES_USER=savia_user
-POSTGRES_PASSWORD=<password_from_step_2>
-DATABASE_URL=postgresql://savia_user:<password_from_step_2>@postgres:5432/savia
-JWT_SECRET=<generate_new_secret>
-MASTER_KEY=<generate_new_secret>
-ACCESS_CODE=<generate_new_secret>
-PORT=8001
-BACKEND_URL=https://app.dms.savia.tn
-NEXT_PUBLIC_API_URL=https://app.dms.savia.tn/api
-```
-
-### Étape 4: Redéployer
-
-1. Aller dans l'application **Backend**
-2. Cliquer sur **Redeploy** ou **Deploy**
-3. Attendre que le déploiement soit terminé
-
-### Étape 5: Vérifier
+### Étape 2: Vérifier le Déploiement
 
 ```bash
 # SSH sur le serveur
@@ -81,7 +48,7 @@ docker compose logs -f backend
 curl http://localhost:8001/docs
 ```
 
-### Étape 6: Tester l'Application
+### Étape 3: Tester l'Application
 
 1. Ouvrir https://app.dms.savia.tn
 2. Se connecter avec les credentials admin
@@ -89,7 +56,7 @@ curl http://localhost:8001/docs
    - ✅ Ajouter un équipement
    - ✅ Ajouter un domaine personnalisé
    - ✅ Changer de région dans le dashboard
-   - ✅ Créer un compte manager
+   - ✅ **Créer un compte manager** (cette fonctionnalité est maintenant corrigée)
 
 ## 📝 Fichiers Importants
 
