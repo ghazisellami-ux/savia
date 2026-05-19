@@ -1,0 +1,124 @@
+# ==========================================
+# 🐳 Docker Compose — SAVIA Platform (Coolify Optimized)
+# ==========================================
+# This is an optimized version for Coolify deployment
+# Usage:
+#   1. Copy this file to docker-compose.yml in Coolify
+#   2. Set environment variables in Coolify UI
+#   3. Deploy
+
+version: '3.8'
+
+services:
+  # ── PostgreSQL Database ─────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: savia_postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - savia-network
+
+  # ── FastAPI Backend ─────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: savia_backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+    environment:
+      PORT: ${PORT:-8001}
+      JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-savia-logs}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_API_KEYS: ${GOOGLE_API_KEYS}
+      MASTER_KEY: ${MASTER_KEY}
+      ACCESS_CODE: ${ACCESS_CODE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/docs" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
+
+  # ── Next.js Admin Frontend ──────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runner
+    container_name: savia_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
+
+  # ── SAVIA Site — PWA Techniciens ────────
+  pwa-site:
+    build:
+      context: ./pwa-site
+      dockerfile: Dockerfile
+    container_name: savia_pwa
+    ports:
+      - "3001:3001"
+    environment:
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3001" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  savia-network:
+    driver: bridge
