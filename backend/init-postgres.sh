@@ -15,6 +15,7 @@ POSTGRES_DB="${POSTGRES_DB:-savia}"
 echo "📋 Configuration:"
 echo "  - POSTGRES_USER: $POSTGRES_USER"
 echo "  - POSTGRES_DB: $POSTGRES_DB"
+echo "  - POSTGRES_PASSWORD: (set)"
 echo ""
 
 # Wait for PostgreSQL to be ready
@@ -34,7 +35,7 @@ if psql -h postgres -U postgres -tc "SELECT 1 FROM pg_roles WHERE rolname='postg
     echo "✅ postgres role already exists"
     # Update password to ensure it matches
     echo "🔄 Updating postgres password..."
-    psql -h postgres -U postgres -c "ALTER ROLE postgres WITH PASSWORD 'postgres';" 2>/dev/null || true
+    psql -h postgres -U postgres -c "ALTER ROLE postgres WITH ENCRYPTED PASSWORD 'postgres';" 2>/dev/null || true
 else
     echo "⚠️  postgres role does not exist, creating it..."
     psql -h postgres -U postgres -c "CREATE ROLE postgres WITH SUPERUSER CREATEDB CREATEROLE LOGIN ENCRYPTED PASSWORD 'postgres';" 2>/dev/null || true
@@ -42,12 +43,12 @@ else
 fi
 
 # Check if savia_user role exists
-echo "🔍 Checking if savia_user role exists..."
+echo "🔍 Checking if $POSTGRES_USER role exists..."
 if psql -h postgres -U postgres -tc "SELECT 1 FROM pg_roles WHERE rolname='$POSTGRES_USER'" 2>/dev/null | grep -q 1; then
     echo "✅ $POSTGRES_USER role already exists"
     # Update password to ensure it matches
     echo "🔄 Updating $POSTGRES_USER password..."
-    psql -h postgres -U postgres -c "ALTER ROLE $POSTGRES_USER WITH PASSWORD '$POSTGRES_PASSWORD';" 2>/dev/null || true
+    psql -h postgres -U postgres -c "ALTER ROLE $POSTGRES_USER WITH ENCRYPTED PASSWORD '$POSTGRES_PASSWORD';" 2>/dev/null || true
 else
     echo "⚠️  $POSTGRES_USER role does not exist, creating it..."
     psql -h postgres -U postgres -c "CREATE ROLE $POSTGRES_USER WITH LOGIN ENCRYPTED PASSWORD '$POSTGRES_PASSWORD';" 2>/dev/null || true
@@ -67,6 +68,8 @@ fi
 # Grant privileges
 echo "🔐 Granting privileges..."
 psql -h postgres -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE $POSTGRES_DB TO $POSTGRES_USER;" 2>/dev/null || true
+psql -h postgres -U postgres -d $POSTGRES_DB -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $POSTGRES_USER;" 2>/dev/null || true
+psql -h postgres -U postgres -d $POSTGRES_DB -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $POSTGRES_USER;" 2>/dev/null || true
 
 echo ""
 echo "✅ PostgreSQL initialization completed!"
