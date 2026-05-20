@@ -1,37 +1,4 @@
-# ==========================================
-# 🐳 Docker Compose — SAVIA Platform
-# ==========================================
-# Usage:
-#   1. cp .env.example .env && nano .env
-#   2. docker compose up -d --build
-#   3. docker compose logs -f
-#
-# Services:
-#   - postgres  : Base de données PostgreSQL
-#   - minio     : Stockage objet S3-compatible
-#   - backend   : API FastAPI (Python)
-#   - frontend  : Interface admin Next.js
-#   - pwa-site  : PWA Techniciens terrain
-
 services:
-  # ── PostgreSQL Database ─────────────────
-  postgres:
-    image: postgres:16-alpine
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # ── MinIO (S3-compatible Object Storage) ─
   minio:
     image: minio/minio:latest
