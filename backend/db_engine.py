@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 from datetime import datetime
 from contextlib import contextmanager
+from urllib.parse import quote
 from config import BASE_DIR
 
 # --- Configuration du Logging (Audit Trail - Pillier 3) ---
@@ -15,7 +16,23 @@ logging.basicConfig(
 logger = logging.getLogger("db_engine")
 
 DB_PATH = os.path.join(BASE_DIR, "sic_radiologie.db")
+
+# Construct DATABASE_URL from environment variables with proper URL encoding
+# This handles special characters in passwords correctly
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    # Try to construct from individual environment variables
+    pg_user = os.environ.get("POSTGRES_USER", "")
+    pg_password = os.environ.get("POSTGRES_PASSWORD", "")
+    pg_host = os.environ.get("POSTGRES_HOST", "localhost")
+    pg_port = os.environ.get("POSTGRES_PORT", "5432")
+    pg_db = os.environ.get("POSTGRES_DB", "")
+    
+    if pg_user and pg_password and pg_db:
+        # URL-encode the password to handle special characters
+        encoded_password = quote(pg_password, safe='')
+        DATABASE_URL = f"postgresql://{pg_user}:{encoded_password}@{pg_host}:{pg_port}/{pg_db}"
+        logger.info(f"Constructed DATABASE_URL from environment variables: postgresql://{pg_user}:***@{pg_host}:{pg_port}/{pg_db}")
 
 # Détecter le mode (Dual-Mode - Pillier 1)
 USE_PG = bool(DATABASE_URL)
