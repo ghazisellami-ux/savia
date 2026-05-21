@@ -409,7 +409,7 @@ def init_db():
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             nom_complet TEXT DEFAULT '',
-            role TEXT DEFAULT 'Lecteur',
+            role TEXT DEFAULT 'Technicien' CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager')),
             client TEXT DEFAULT '',
             email TEXT DEFAULT '',
             actif INTEGER DEFAULT 1,
