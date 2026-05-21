@@ -1,8 +1,11 @@
 # ==========================================
-# 🐳 Docker Compose — SAVIA Platform
+# 🐳 Docker Compose — SAVIA Platform (Coolify Optimized)
 # ==========================================
-# This is the main docker-compose file used by Coolify
-# Location: /docker-compose.yml (root of project)
+# This is an optimized version for Coolify deployment
+# Usage:
+#   1. Copy this file to docker-compose.yml in Coolify
+#   2. Set environment variables in Coolify UI
+#   3. Deploy
 
 version: '3.8'
 

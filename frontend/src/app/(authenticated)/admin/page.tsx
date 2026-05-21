@@ -149,7 +149,9 @@ const emptyTech = () => ({
 
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
-  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings'>('users');
+  // Les non-admins commencent directement sur l'onglet Paramètres
+  const defaultTab = currentUser?.username === 'admin' ? 'users' : 'settings';
+  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings'>(defaultTab);
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>(DEFAULT_PROFILES);
@@ -443,11 +445,13 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="flex gap-1 border-b border-savia-border">
         {[
-          { id: 'users',    label: 'Utilisateurs',       icon: <Users className="w-4 h-4" /> },
-          { id: 'profiles', label: 'Profils & Permissions', icon: <Shield className="w-4 h-4" /> },
-          { id: 'techs',    label: 'Techniciens',         icon: <Wrench className="w-4 h-4" /> },
-          { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" /> },
-        ].map(t => (
+          { id: 'users',    label: 'Utilisateurs',       icon: <Users className="w-4 h-4" />, adminOnly: false },
+          { id: 'profiles', label: 'Profils & Permissions', icon: <Shield className="w-4 h-4" />, adminOnly: true },
+          { id: 'techs',    label: 'Techniciens',         icon: <Wrench className="w-4 h-4" />, adminOnly: false },
+          { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" />, adminOnly: false },
+        ]
+          .filter(t => !t.adminOnly || currentUser?.username === 'admin')
+          .map(t => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer border-b-2 ${tab === t.id ? 'border-savia-accent text-savia-accent bg-savia-accent/5' : 'border-transparent text-savia-text-muted hover:text-savia-text'}`}>
             {t.icon} {t.label}

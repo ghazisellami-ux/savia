@@ -4073,11 +4073,17 @@ def get_users(user: dict = Depends(_verify_token)):
 
 @app.post("/api/admin/users")
 def create_user(body: dict, user: dict = Depends(_verify_token)):
+    # Validate role
+    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager']
+    role = body.get("role", "Lecteur")
+    if role not in valid_roles:
+        return {"error": f"Invalid role. Must be one of: {', '.join(valid_roles)}"}, 400
+    
     hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     with get_db() as conn:
         conn.execute(
             "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-            (body["username"], hashed, body.get("nom_complet", ""), body.get("role", "Lecteur"), body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
+            (body["username"], hashed, body.get("nom_complet", ""), role, body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
         )
     return {"ok": True}
 
