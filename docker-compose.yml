@@ -1,23 +1,39 @@
+# ==========================================
+# 🐳 Docker Compose — SAVIA Platform
+# ==========================================
+# This is the main docker-compose file used by Coolify
+# Location: /docker-compose.yml (root of project)
+
+version: '3.8'
+
 services:
-  # ── MinIO (S3-compatible Object Storage) ─
-  minio:
-    image: minio/minio:latest
+  # ── PostgreSQL Database ─────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: savia_postgres
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "5432:5432"
     volumes:
-      - minio_data:/data
+      - pgdata:/var/lib/postgresql/data
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data --console-address ":9001"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - savia-network
 
   # ── FastAPI Backend ─────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: savia_backend
     ports:
       - "8001:8001"
     volumes:
@@ -25,10 +41,17 @@ services:
     environment:
       PORT: ${PORT:-8001}
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: ${DATABASE_URL}
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # PostgreSQL connection - use individual variables for better compatibility
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      # Fallback DATABASE_URL if needed (will be constructed by backend if not provided)
+      DATABASE_URL: ${DATABASE_URL:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-savia-logs}
       S3_REGION: ${S3_REGION:-us-east-1}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
@@ -36,9 +59,16 @@ services:
       MASTER_KEY: ${MASTER_KEY}
       ACCESS_CODE: ${ACCESS_CODE}
     depends_on:
-      minio:
-        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/docs" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
 
   # ── Next.js Admin Frontend ──────────────
   frontend:
@@ -46,22 +76,32 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: runner
+    container_name: savia_frontend
     ports:
       - "3000:3000"
     environment:
       BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
     depends_on:
       - backend
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
 
   # ── SAVIA Site — PWA Techniciens ────────
   pwa-site:
     build:
       context: ./pwa-site
       dockerfile: Dockerfile
+    container_name: savia_pwa
     ports:
       - "3001:3001"
     environment:
@@ -71,7 +111,18 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3001" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - savia-network
 
 volumes:
   pgdata:
-  minio_data:
+    driver: local
+
+networks:
+  savia-network:
+    driver: bridge
