@@ -528,17 +528,18 @@ export default function AdminPage() {
               </div>
             }>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                {ALL_PAGES
-                  .filter(page => profile.id === 'admin' || page.key !== 'settings')
-                  .map(page => {
+                {ALL_PAGES.map(page => {
                   const checked = profile.pages.includes(page.key);
                   const Icon = page.icon;
                   const isAdminProfile = profile.id === 'admin';
                   const isCurrentUserAdmin = currentUser?.username === 'admin';
+                  const isAdminOnlyPage = page.key === 'admin';
                   const canToggle = !isAdminProfile || isCurrentUserAdmin;
+                  const isDisabled = isAdminOnlyPage && !isAdminProfile;
+                  
                   return (
-                    <label key={page.key} onClick={() => canToggle && togglePage(profile.id, page.key)}
-                      className={`flex items-center gap-2 p-2.5 rounded-lg transition-all border ${!canToggle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${checked ? `${profile.bg} ${profile.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
+                    <label key={page.key} onClick={() => canToggle && !isDisabled && togglePage(profile.id, page.key)}
+                      className={`flex items-center gap-2 p-2.5 rounded-lg transition-all border ${isDisabled || !canToggle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${checked ? `${profile.bg} ${profile.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
                       <div className={`w-4 h-4 rounded shrink-0 flex items-center justify-center border transition-all ${checked ? `${profile.couleur.replace('text-', 'bg-').replace('-400', '-500')} border-transparent` : 'border-savia-border'}`}>
                         {checked && <span className="text-white text-xs font-black">✓</span>}
                       </div>
