@@ -738,7 +738,7 @@ export default function AdminPage() {
               <div>
                 <label className={LABEL}>Profil *</label>
                 <div className="grid grid-cols-1 gap-2">
-                  {profiles.map(p => (
+                  {profiles.filter(p => p.id !== 'admin').map(p => (
                     <label key={p.id} onClick={() => setUserForm(f => ({ ...f, profileId: p.id }))}
                       className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer border transition-all ${userForm.profileId === p.id ? `${p.bg} ${p.border}` : 'border-savia-border hover:bg-savia-surface-hover'}`}>
                       <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${userForm.profileId === p.id ? p.couleur.replace('text-', 'border-') : 'border-savia-border'}`}>
