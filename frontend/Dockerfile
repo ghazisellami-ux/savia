@@ -1,20 +1,17 @@
 # ==========================================
 # 🎨 Dockerfile — SAVIA Next.js Frontend
 # ==========================================
-# Multi-stage: dev & production séparés
-#
-# Usage:
-#   Production : docker build --target runner -t savia-frontend .
-#   Dev        : docker build --target dev -t savia-frontend-dev .
 
 # ── Stage 1: Dependencies ─────────────────
 FROM node:20-alpine AS deps
+# Ajout de libc6-compat indispensable pour Next.js sur Alpine Linux
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# On force l'installation de TOUTES les dépendances (y compris devDeps)
+RUN npm ci --include=dev
 
 # ── Stage 2: Development ──────────────────
-# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 FROM deps AS dev
 WORKDIR /app
 COPY . .
@@ -26,10 +23,14 @@ CMD ["npm", "run", "dev"]
 FROM deps AS builder
 WORKDIR /app
 COPY . .
-# BACKEND_URL is used by next.config.ts rewrites at build time
+
+# On récupère les arguments de build passés par Coolify
 ARG BACKEND_URL=http://backend:8001
 ENV BACKEND_URL=${BACKEND_URL}
-ENV NEXT_PUBLIC_API_URL=
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
 RUN npm run build
 
 # ── Stage 4: Production Runner ────────────
@@ -38,8 +39,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy built assets from builder
+# Récupération des assets optimisés
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
