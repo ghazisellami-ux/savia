@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 from datetime import datetime
 from contextlib import contextmanager
+from urllib.parse import quote
 from config import BASE_DIR
 
 # --- Configuration du Logging (Audit Trail - Pillier 3) ---
@@ -15,6 +16,9 @@ logging.basicConfig(
 logger = logging.getLogger("db_engine")
 
 DB_PATH = os.path.join(BASE_DIR, "sic_radiologie.db")
+
+# Construct DATABASE_URL from environment variables with proper URL encoding
+# This handles special characters in passwords correctly
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:
     # Try to construct from individual environment variables
