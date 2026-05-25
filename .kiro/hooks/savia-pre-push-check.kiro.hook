@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "SAVIA Pre-Push Deployment Check",
+  "description": "Automatically run quick diagnostics before pushing code to ensure deployment readiness",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before pushing code, run a quick deployment health check. Execute: python diagnose_deployment.py. Report any critical issues that would prevent deployment. If all checks pass, confirm the code is ready to push."
+  }
+}

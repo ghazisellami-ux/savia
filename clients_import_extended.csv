@@ -1,4 +1,4 @@
-nom,code_client,matricule_fiscale,ville,region,contact,telephone,adresse,type_client
+²nom,code_client,matricule_fiscale,ville,region,contact,telephone,adresse,type_client
 Hôpital Central Tunis,HC-001,1234567890,Tunis,Nord,Dr. Ahmed Ben Ali,+216 71 123 456,123 Avenue de la Liberté - Tunis,Privé
 Clinique Sousse,CS-002,0987654321,Sousse,Centre,Dr. Fatima Karray,+216 73 234 567,456 Rue de la Paix - Sousse,Privé
 Laboratoire Sfax,LS-003,1122334455,Sfax,Centre,Mr. Mohamed Jebali,+216 74 345 678,789 Boulevard Habib Bourguiba - Sfax,Privé

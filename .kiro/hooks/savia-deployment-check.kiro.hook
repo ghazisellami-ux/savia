@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "SAVIA Deployment Health Check",
+  "description": "Automatically run deployment diagnostics when files are edited to catch issues early",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      ".env",
+      "docker-compose.yml",
+      "backend/main.py",
+      "backend/db_engine.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A critical deployment configuration file was just edited. Run the deployment diagnostic to check for issues: python diagnose_deployment.py. If there are any errors, explain what needs to be fixed and suggest corrections."
+  }
+}
