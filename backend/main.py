@@ -93,11 +93,16 @@ JWT_SECRET = os.getenv("JWT_SECRET", "sic-terrain-secret-2026")
 JWT_EXPIRY_HOURS = 72
 security = HTTPBearer(auto_error=False)
 
+IS_PRODUCTION = os.getenv("NODE_ENV") == "production"
+
 # ---- App ----
 app = FastAPI(
     title="SAVIA API",
     description="Backend API for SAVIA — Superviseur Intelligent Clinique",
     version="2.0.0",
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json"
 )
 
 app.add_middleware(
