@@ -1,0 +1,65 @@
+[
+  {
+    "name": "SAVIA Deployment Health Check",
+    "version": "1.0.0",
+    "description": "Automatically run deployment diagnostics when critical files are edited",
+    "when": {
+      "type": "fileEdited",
+      "patterns": [".env", "docker-compose.yml", "backend/main.py", "backend/db_engine.py"]
+    },
+    "then": {
+      "type": "askAgent",
+      "prompt": "A critical deployment configuration file was just edited. Run the deployment diagnostic to check for issues: python diagnose_deployment.py. If there are any errors, explain what needs to be fixed and suggest corrections."
+    }
+  },
+  {
+    "name": "SAVIA Script Validation",
+    "version": "1.0.0",
+    "description": "Automatically verify deployment scripts before they are used",
+    "when": {
+      "type": "fileEdited",
+      "patterns": ["deploy_standardized.sh", "quick_fix.sh", "diagnose_deployment.py"]
+    },
+    "then": {
+      "type": "askAgent",
+      "prompt": "A deployment script was just edited. Verify the script syntax and logic are correct. Check for: 1) Proper error handling, 2) Correct variable usage, 3) Safe command execution, 4) Proper logging. If there are any issues, suggest fixes."
+    }
+  },
+  {
+    "name": "SAVIA Pre-Push Deployment Check",
+    "version": "1.0.0",
+    "description": "Automatically run quick diagnostics before pushing code",
+    "when": {
+      "type": "promptSubmit"
+    },
+    "then": {
+      "type": "askAgent",
+      "prompt": "Before pushing code, run a quick deployment health check. Execute: python diagnose_deployment.py. Report any critical issues that would prevent deployment. If all checks pass, confirm the code is ready to push."
+    }
+  },
+  {
+    "name": "SAVIA Monitoring Status Check",
+    "version": "1.0.0",
+    "description": "Check monitoring daemon status after deployment",
+    "when": {
+      "type": "postTaskExecution"
+    },
+    "then": {
+      "type": "askAgent",
+      "prompt": "Deployment task completed. Verify monitoring is running: ./monitoring_daemon.sh status. If monitoring is not running, start it: ./monitoring_daemon.sh start. Report the monitoring status."
+    }
+  },
+  {
+    "name": "SAVIA API Test on Save",
+    "version": "1.0.0",
+    "description": "Test API endpoints when backend code is modified",
+    "when": {
+      "type": "fileEdited",
+      "patterns": ["backend/main.py"]
+    },
+    "then": {
+      "type": "askAgent",
+      "prompt": "Backend code was modified. Test the equipment creation endpoint: curl -X POST http://localhost:8001/api/equipements -H 'Content-Type: application/json' -d '{\"Nom\":\"TEST\",\"Type\":\"Scanner CT\",\"Domaine\":\"Radiologie\",\"Fabricant\":\"Test\",\"Modele\":\"Test\",\"NumSerie\":\"TEST\",\"Client\":\"Centre Principal\",\"Statut\":\"Opérationnel\",\"DateInstallation\":\"2024-01-01\",\"DernieresMaintenance\":\"2024-01-01\"}'. Report if the endpoint is working correctly."
+    }
+  }
+]
