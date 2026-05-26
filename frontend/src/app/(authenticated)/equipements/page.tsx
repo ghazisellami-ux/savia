@@ -1487,11 +1487,13 @@ export default function EquipementsPage() {
               <option value="Nord">🔵 Nord</option>
               <option value="Centre">🟢 Centre</option>
               <option value="Sud">🟠 Sud</option>
+              <option value="International">🌍 International</option>
             </select>
             <select value={clientVilleFilter} onChange={e => setClientVilleFilter(e.target.value)}
-              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm"
+              disabled={clientRegionFilter === 'International'}>
               <option value="">Toutes villes</option>
-              {[...new Set(clientsList.filter(c => !clientRegionFilter || c.region === clientRegionFilter).map(c => c.ville).filter(Boolean))].sort().map(v =>
+              {clientRegionFilter !== 'International' && [...new Set(clientsList.filter(c => !clientRegionFilter || c.region === clientRegionFilter).map(c => c.ville).filter(Boolean))].sort().map(v =>
                 <option key={v} value={v}>📍 {v}</option>
               )}
             </select>
@@ -1505,7 +1507,11 @@ export default function EquipementsPage() {
               {clientsList.filter(c => {
                 if (clientSearch && !c.nom.toLowerCase().includes(clientSearch.toLowerCase())) return false;
                 if (clientTypeFilter && c.type_client !== clientTypeFilter) return false;
-                if (clientRegionFilter && c.region !== clientRegionFilter) return false;
+                if (clientRegionFilter === 'International') {
+                  if (!c.international) return false;
+                } else if (clientRegionFilter && c.region !== clientRegionFilter) {
+                  return false;
+                }
                 if (clientVilleFilter && c.ville !== clientVilleFilter) return false;
                 return true;
               }).map(c => (
