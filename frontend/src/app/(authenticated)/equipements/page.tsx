@@ -207,17 +207,18 @@ export default function EquipementsPage() {
   const [customAnnexeTypes, setCustomAnnexeTypes] = useState<string[]>([]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
-  const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
+  const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, Array<{ id: number; nom: string }>>>({});
   const [customDomaineMode, setCustomDomaineMode] = useState(false);
   const [customDomaineValue, setCustomDomaineValue] = useState('');
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
+  const [typeToDelete, setTypeToDelete] = useState<{ id: number; nom: string; domaine: string } | null>(null);
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
   // Types list based on domain + annexe state + custom types
   const availableTypes = useMemo(() => {
     const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
-    const customList = customTypesForDomain[domKey] || [];
+    const customList = (customTypesForDomain[domKey] || []).map(t => t.nom);
     let base: string[];
     
     if (form.Domaine === 'Radiologie' && form.EstAnnexe) {
@@ -350,13 +351,13 @@ export default function EquipementsPage() {
   const loadCustomTypes = useCallback(async () => {
     try {
       const allDomaines = [...DOMAINES, '__annexe__'];
-      const results: Record<string, string[]> = {};
+      const results: Record<string, Array<{ id: number; nom: string }>> = {};
       
       // Load types for standard domains
       for (const d of allDomaines) {
         try {
           const res = await typesEquipApi.list(d);
-          results[d] = res.map(t => t.nom);
+          results[d] = Array.isArray(res) ? res.map((t: any) => ({ id: t.id || 0, nom: t.nom || t })) : [];
         } catch {
           results[d] = [];
         }
@@ -372,7 +373,7 @@ export default function EquipementsPage() {
         for (const domaineName of domaineNames) {
           try {
             const typesRes = await typesEquipApi.list(domaineName);
-            results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => t.nom || t) : [];
+            results[domaineName] = Array.isArray(typesRes) ? typesRes.map((t: any) => ({ id: t.id || 0, nom: t.nom || t })) : [];
           } catch {
             results[domaineName] = [];
           }
@@ -383,7 +384,7 @@ export default function EquipementsPage() {
       
       setCustomTypesForDomain(results);
       // Keep legacy state for backward compat
-      setCustomAnnexeTypes(results['__annexe__'] || []);
+      setCustomAnnexeTypes((results['__annexe__'] || []).map(t => t.nom));
     } catch (err) {
       console.error("Erreur chargement types:", err);
     }
@@ -522,6 +523,16 @@ export default function EquipementsPage() {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+  const handleDeleteType = async (typeId: number) => {
+    try {
+      await typesEquipApi.delete(typeId);
+      await loadCustomTypes();
+      setTypeToDelete(null);
+    } catch (err) {
+      console.error("Erreur suppression type:", err);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.Nom.trim() || !form.Client.trim()) return;
@@ -800,7 +811,8 @@ export default function EquipementsPage() {
                           <div key={d} className="relative group">
                             <button type="button"
                               onClick={() => {
-                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: (customTypesForDomain[d] && customTypesForDomain[d].length > 0) ? customTypesForDomain[d][0] : 'Autre' });
+                                const firstType = customTypesForDomain[d] && customTypesForDomain[d].length > 0 ? customTypesForDomain[d][0].nom : 'Autre';
+                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: firstType });
                                 setCustomDomaineMode(false);
                                 setCustomDomaineValue('');
                               }}
@@ -1003,16 +1015,45 @@ export default function EquipementsPage() {
                           </p>
                         </div>
                       ) : (
-                        <select className={INPUT_CLS} value={form.Type} onChange={e => {
-                          if (e.target.value === '__autre_type__') { 
-                            setCustomTypeMode(true);
-                            setCustomTypeValue('');
-                          }
-                          else setForm({ ...form, Type: e.target.value });
-                        }}>
-                          {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                          <option value="__autre_type__">+ Autre (saisie manuelle)</option>
-                        </select>
+                        <div className="space-y-2">
+                          <select className={INPUT_CLS} value={form.Type} onChange={e => {
+                            if (e.target.value === '__autre_type__') { 
+                              setCustomTypeMode(true);
+                              setCustomTypeValue('');
+                            }
+                            else setForm({ ...form, Type: e.target.value });
+                          }}>
+                            {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                            <option value="__autre_type__">+ Autre (saisie manuelle)</option>
+                          </select>
+                          {/* Delete type buttons */}
+                          {availableTypes.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {availableTypes.map(typeItem => {
+                                // Find the type object with id from customTypesForDomain
+                                const domKey = form.EstAnnexe ? '__annexe__' : form.Domaine;
+                                const typeObj = customTypesForDomain[domKey]?.find((t: any) => t.nom === typeItem || t === typeItem);
+                                const typeId = typeObj?.id;
+                                
+                                // Only show delete button for custom types (those with id)
+                                if (!typeId) return null;
+                                
+                                return (
+                                  <button
+                                    key={`delete-${typeItem}`}
+                                    type="button"
+                                    onClick={() => setTypeToDelete({ id: typeId, nom: typeItem, domaine: domKey })}
+                                    className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-all cursor-pointer"
+                                    title={`Supprimer le type "${typeItem}"`}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    {typeItem}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       )}
                       {form.EstAnnexe && !customTypeMode && (
                         <p className="text-xs text-amber-400/70 mt-1.5 pl-1">
@@ -1695,6 +1736,26 @@ export default function EquipementsPage() {
               <button onClick={() => setConfirmDeleteClient(null)}
                 className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">Annuler</button>
               <button onClick={() => executeDeleteClient(confirmDeleteClient)}
+                className="px-4 py-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold cursor-pointer transition-colors">Supprimer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Type Confirmation Modal */}
+      {typeToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-savia-surface border border-savia-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-lg font-bold text-red-400 mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5" /> Supprimer le type d'équipement
+            </h3>
+            <p className="text-savia-text-muted text-sm mb-4">
+              Voulez-vous supprimer le type <strong className="text-savia-text">"{typeToDelete.nom}"</strong> ? Cette action est irréversible.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setTypeToDelete(null)}
+                className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">Annuler</button>
+              <button onClick={() => handleDeleteType(typeToDelete.id)}
                 className="px-4 py-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold cursor-pointer transition-colors">Supprimer</button>
             </div>
           </div>

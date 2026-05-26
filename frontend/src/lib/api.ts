@@ -266,6 +266,7 @@ export const fabricants = {
 export const typesEquipement = {
   list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
   create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
+  delete: (id: number) => request<{ ok: boolean }>(`/api/types-equipement-custom/${id}`, { method: 'DELETE' }),
 };
 
 export const typesIntervention = {
