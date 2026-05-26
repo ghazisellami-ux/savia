@@ -47,6 +47,28 @@ from db_engine import (
 
 logger = logging.getLogger("savia-api")
 
+# ── Helper function to get technician full name from username ─────────
+def _get_technician_fullname(username: str) -> str:
+    """
+    Converts a username to technician full name (nom + prenom).
+    If not found, returns the username as fallback.
+    """
+    if not username:
+        return ""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                (username,)
+            ).fetchone()
+            if row:
+                nom = row.get("nom", "").strip()
+                prenom = row.get("prenom", "").strip()
+                return f"{prenom} {nom}".strip() if prenom else nom
+    except Exception as e:
+        logger.debug(f"Failed to get technician name for {username}: {e}")
+    return username  # Fallback to username if not found
+
 # ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
 def _ensure_dejavu_font():
     import shutil
@@ -1250,18 +1272,30 @@ def get_health_scores(
         if not df_sav.empty and "type_intervention" in df_sav.columns:
             df_sav = df_sav[~df_sav["type_intervention"].str.lower().isin(TRACABILITE)]
 
+        # Get current date for recent intervention calculation
+        import datetime as _dt
+        today = _dt.date.today()
+        thirty_days_ago = today - _dt.timedelta(days=30)
+
         seen_keys = set()
         for _, eq in df_eq.iterrows():
             nom = eq.get("Nom", "")
             client_val = str(eq.get("Client", "") or "")
+            statut = str(eq.get("Statut", "")).lower()
             dedup_key = (nom.lower(), client_val.lower())
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
 
             pannes = 0
+            recent_interventions = 0
             if not df_sav.empty and "machine" in df_sav.columns:
                 pannes = len(df_sav[df_sav["machine"] == nom])
+                # Count interventions in last 30 days
+                df_machine = df_sav[df_sav["machine"] == nom]
+                if not df_machine.empty and "date" in df_machine.columns:
+                    df_machine_recent = df_machine[df_machine["date"] >= pd.Timestamp(thirty_days_ago)]
+                    recent_interventions = len(df_machine_recent)
 
             # Rate-based scoring: pannes per month
             panne_rate = pannes / period_months if period_months > 0 else pannes
@@ -1281,6 +1315,21 @@ def get_health_scores(
                 score = 18
             else:
                 score = 10
+
+            # Apply penalties for critical status and recent interventions
+            # If equipment is in critical status, apply significant penalty
+            if statut in ["critique", "hors service", "en panne"]:
+                score = min(score, 35)  # Cap score at 35 for critical equipment
+                if recent_interventions >= 2:
+                    score = min(score, 20)  # Further reduce if multiple recent interventions
+                elif recent_interventions >= 1:
+                    score = min(score, 25)  # Reduce if at least one recent intervention
+
+            # If equipment has multiple recent interventions (last 30 days), flag as at-risk
+            elif recent_interventions >= 3:
+                score = min(score, 40)  # Flag as at-risk if 3+ interventions in 30 days
+            elif recent_interventions >= 2:
+                score = min(score, 50)  # Moderate risk if 2 interventions in 30 days
 
             tendance = "stable"
             if panne_rate > 1.0:
@@ -1596,6 +1645,11 @@ def get_interventions(
 
 @app.post("/api/interventions")
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
+    # Convert technicien username to full name (nom + prenom)
+    technicien_username = body.get("technicien", "")
+    if technicien_username:
+        body["technicien"] = _get_technician_fullname(technicien_username)
+    
     ajouter_intervention(body)
     # Notification Telegram au bot technique
     try:
@@ -1721,6 +1775,9 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     ).fetchone()
                 if row:
                     d = dict(row)
+                    # Convert technicien username to full name
+                    if d.get('technicien'):
+                        d['technicien'] = _get_technician_fullname(d['technicien'])
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
                     notes_raw = str(d.get('notes', '') or '')
                     # Extraire client depuis notes [Client]
@@ -1823,6 +1880,9 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             if row:
                 machine = row["machine"] or ""
                 technicien = row["technicien"] or ""
+                # Convert technicien username to full name
+                if technicien:
+                    technicien = _get_technician_fullname(technicien)
                 # Extraire client depuis notes [Client]
                 notes = str(row.get("notes") or "")
                 client = notes[1:notes.index("]")] if notes.startswith("[") and "]" in notes else ""
@@ -2120,6 +2180,9 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
     technicien_assigne = body.get("technicien_assigne") or ""
+    # Convert technicien username to full name
+    if technicien_assigne:
+        technicien_assigne = _get_technician_fullname(technicien_assigne)
     # Si technicien assigné dès la création → statut "Assignée"
     statut = body.get("statut") or ("Assignée" if technicien_assigne else "En attente")
 
@@ -2206,6 +2269,9 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     from db_engine import get_db
     nouveau_statut      = body.get("statut") or "En cours"
     technicien_assigne  = body.get("technicien_assigne") or ""
+    # Convert technicien username to full name
+    if technicien_assigne:
+        technicien_assigne = _get_technician_fullname(technicien_assigne)
     notes_traitement    = body.get("notes_traitement") or ""
 
     # Récupérer les données de la demande AVANT mise à jour pour le message
@@ -2814,9 +2880,11 @@ def delete_conformite(conformite_id: int, user: dict = Depends(_verify_token)):
 def get_planning(
     machine: Optional[str] = None,
     statut: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    df = lire_planning(machine=machine, statut=statut)
+    df = lire_planning(machine=machine, statut=statut, region=region, ville=ville)
     # Pour Lecteur : filtrer par les machines de son client
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -2834,6 +2902,9 @@ def get_planning(
 
 @app.post("/api/planning")
 def create_planning(body: dict, user: dict = Depends(_verify_token)):
+    # Convert technicien_assigne username to full name
+    if body.get("technicien_assigne"):
+        body["technicien_assigne"] = _get_technician_fullname(body["technicien_assigne"])
     ajouter_planning(body)
     return {"ok": True}
 
