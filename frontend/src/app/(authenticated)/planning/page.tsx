@@ -266,12 +266,9 @@ export default function PlanningPage() {
     return dt.getMonth() === currentMonth && dt.getFullYear() === currentYear;
   });
   const overdueCount = data.filter(d => {
-    const dt = new Date(d.date_planifiee);
-    // Maintenance is overdue only from day J+1 onwards (not on day J itself)
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    return dt < tomorrow && d.statut !== 'Réalisée' && d.statut !== 'Annulée' && d.statut !== 'En cours';
+    const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+    // Only count as overdue if automatic status is "En retard"
+    return automaticStatus === 'En retard';
   }).length;
 
   const handleSave = async () => {
@@ -338,7 +335,7 @@ export default function PlanningPage() {
         {[
           { label: 'Total planifié', value: data.length, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
           { label: 'Ce mois', value: monthEvents.length, color: 'text-blue-400', icon: <Calendar className="w-5 h-5" /> },
-          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
+          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée' || d.statut === 'Terminée').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
           <div key={kpi.label} className="glass rounded-xl p-4 text-center">
