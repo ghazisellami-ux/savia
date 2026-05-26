@@ -1494,6 +1494,27 @@ def lire_interventions(machine=None):
         df["statut"] = df["statut"].apply(
             lambda s: "Cloturee" if "tur" in str(s).lower() else str(s)
         )
+    # Convert technicien username to full name (nom + prenom) if it looks like a username
+    if not df.empty and "technicien" in df.columns:
+        def convert_technicien(tech_str):
+            if not tech_str or not isinstance(tech_str, str):
+                return tech_str
+            # Try to get full name from techniciens table
+            try:
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                        (tech_str,)
+                    ).fetchone()
+                    if row:
+                        nom = row.get("nom", "").strip() if hasattr(row, 'get') else (row[0] or "").strip()
+                        prenom = row.get("prenom", "").strip() if hasattr(row, 'get') else (row[1] or "").strip()
+                        return f"{prenom} {nom}".strip() if prenom else nom
+            except Exception:
+                pass
+            return tech_str
+        
+        df["technicien"] = df["technicien"].apply(convert_technicien)
     return df
 
 
@@ -1535,8 +1556,8 @@ def ajouter_intervention(intervention_dict):
 # FONCTIONS CRUD — PLANNING MAINTENANCE
 # ==========================================
 
-def lire_planning(machine=None, statut=None):
-    """Lit le planning de maintenance."""
+def lire_planning(machine=None, statut=None, region=None, ville=None):
+    """Lit le planning de maintenance avec filtres optionnels."""
     query = "SELECT * FROM planning_maintenance WHERE 1=1"
     params = []
     if machine:
@@ -1548,7 +1569,67 @@ def lire_planning(machine=None, statut=None):
     query += " ORDER BY date_prevue ASC"
 
     with get_db() as conn:
-        return read_sql(query, conn, params=params)
+        df = read_sql(query, conn, params=params)
+    
+    # Apply region and ville filters if provided
+    if (region or ville) and not df.empty:
+        # Get clients with their region/ville info
+        with get_db() as conn:
+            clients_df = read_sql(
+                "SELECT nom, region, ville FROM clients WHERE 1=1",
+                conn
+            )
+        
+        if not clients_df.empty:
+            # Create a mapping of client name to region/ville
+            client_info = {}
+            for _, row in clients_df.iterrows():
+                client_name = str(row.get('nom', '')).lower()
+                client_info[client_name] = {
+                    'region': str(row.get('region', '')).lower(),
+                    'ville': str(row.get('ville', '')).lower()
+                }
+            
+            # Filter planning by region/ville
+            def matches_filters(client_name):
+                if not client_name:
+                    return False
+                client_lower = str(client_name).lower()
+                info = client_info.get(client_lower, {})
+                
+                if region and region.lower() != 'tous':
+                    if info.get('region', '').lower() != region.lower():
+                        return False
+                if ville and ville.lower() != 'tous':
+                    if info.get('ville', '').lower() != ville.lower():
+                        return False
+                return True
+            
+            if 'client' in df.columns:
+                df = df[df['client'].apply(matches_filters)]
+    
+    # Convert technicien_assigne username to full name
+    if not df.empty and "technicien_assigne" in df.columns:
+        def convert_technicien(tech_str):
+            if not tech_str or not isinstance(tech_str, str):
+                return tech_str
+            try:
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                        (tech_str,)
+                    ).fetchone()
+                    if row:
+                        nom = row.get("nom", "").strip() if hasattr(row, 'get') else (row[0] or "").strip()
+                        prenom = row.get("prenom", "").strip() if hasattr(row, 'get') else (row[1] or "").strip()
+                        return f"{prenom} {nom}".strip() if prenom else nom
+            except Exception:
+                pass
+            return tech_str
+        
+        df["technicien_assigne"] = df["technicien_assigne"].apply(convert_technicien)
+    
+    return df
 
 
 def ajouter_planning(planning_dict):

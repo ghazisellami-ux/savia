@@ -45,6 +45,40 @@ const getStatutColor = (statut: string, isOverdue: boolean) => {
   if (isOverdue) return STATUT_COLORS['En retard'];
   return STATUT_COLORS[statut] || { cell: 'bg-blue-500/20 border-blue-500 text-blue-300', badge: 'bg-blue-500/15 text-blue-400', dot: 'bg-blue-400' };
 };
+
+// Helper function to calculate automatic status based on date and stored status
+const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string => {
+  if (!datePlanifiee) return storedStatus;
+  
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  const plannedDate = new Date(datePlanifiee);
+  plannedDate.setHours(0, 0, 0, 0);
+  
+  // If already completed/terminated, keep that status
+  if (storedStatus === 'Réalisée' || storedStatus === 'Terminée' || storedStatus === 'Annulée') {
+    return storedStatus;
+  }
+  
+  // If planned date is in the future (> today), it's "Planifiée"
+  if (plannedDate > today) {
+    return 'Planifiée';
+  }
+  
+  // If planned date is today, it's "En cours"
+  if (plannedDate.getTime() === today.getTime()) {
+    return 'En cours';
+  }
+  
+  // If planned date is in the past (< today), it's "En retard"
+  if (plannedDate < today) {
+    return 'En retard';
+  }
+  
+  return storedStatus;
+};
+
 const RECURRENCES = ['Aucune', 'Hebdomadaire', 'Mensuelle', 'Trimestrielle', 'Semestrielle', 'Annuelle'];
 const TYPES_MAINTENANCE = ['Préventive', 'Corrective', 'Calibration', 'Inspection', 'Qualification', 'Mise à jour logiciel'];
 
@@ -106,6 +140,13 @@ export default function PlanningPage() {
   const [filterVille,   setFilterVille]   = useState('Tous');
   const [clientsFullData, setClientsFullData] = useState<any[]>([]);
 
+  // Combine default domains with custom domains
+  const allDomaines = useMemo(() => {
+    const defaults = Array.from(DOMAINES_MEDICAUX);
+    const combined = [...new Set([...defaults, ...domainesCustom])];
+    return combined;
+  }, [domainesCustom]);
+
   // Filtrage en cascade : domaine → client → équipement
   const equipsForDomaine = useMemo(() => {
     if (!form.domaine) return equipsAll;
@@ -117,9 +158,16 @@ export default function PlanningPage() {
   }, [equipsAll, form.domaine]);
 
   const clientsForDomaine = useMemo(() => {
-    // Show all clients from the API, not just those with equipment in the selected domain
-    return clientsList;
-  }, [clientsList]);
+    // Filter clients to show only those with equipment in the selected domain
+    if (!form.domaine) return clientsList;
+    
+    // Get unique clients that have equipment in the selected domain
+    const clientsWithEquipInDomain = new Set(
+      equipsForDomaine.map(e => e.client).filter(Boolean)
+    );
+    
+    return Array.from(clientsWithEquipInDomain).sort();
+  }, [equipsForDomaine, form.domaine, clientsList]);
 
   const filteredEquips = useMemo(() => {
     if (!form.client) return equipsForDomaine.map(e => e.nom);
@@ -219,7 +267,11 @@ export default function PlanningPage() {
   });
   const overdueCount = data.filter(d => {
     const dt = new Date(d.date_planifiee);
-    return dt < now && d.statut !== 'Réalisée' && d.statut !== 'Annulée';
+    // Maintenance is overdue only from day J+1 onwards (not on day J itself)
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    return dt < tomorrow && d.statut !== 'Réalisée' && d.statut !== 'Annulée' && d.statut !== 'En cours';
   }).length;
 
   const handleSave = async () => {
@@ -353,11 +405,11 @@ export default function PlanningPage() {
                 <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-savia-text' : 'text-slate-600'}`}>{cell.day}</div>
                 <div className="space-y-0.5">
                   {events.slice(0, 3).map((ev, j) => {
-                    const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                    const colors = getStatutColor(ev.statut, isOverdue);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const colors = getStatutColor(automaticStatus, false);
                     return (
                       <div key={j} className={`text-[10px] leading-tight px-1 py-0.5 rounded border-l-2 truncate ${colors.cell}`}
-                        title={`[${isOverdue ? 'En retard' : ev.statut}] ${ev.machine} — ${ev.technicien}`}>
+                        title={`[${automaticStatus}] ${ev.machine} — ${ev.technicien}`}>
                         {ev.machine.substring(0, 14)}
                       </div>
                     );
@@ -419,10 +471,8 @@ export default function PlanningPage() {
           .filter(d => filterTech   === 'Tous' || d.technicien === filterTech)
           .filter(d => {
             if (filterStatut === 'Tous') return true;
-            const hasDate = !!d.date_planifiee;
-            const isOverdue = hasDate && new Date(d.date_planifiee) < now && d.statut !== 'Réalisée' && d.statut !== 'Terminée' && d.statut !== 'Annulée';
-            if (filterStatut === 'En retard') return isOverdue;
-            return d.statut === filterStatut && !isOverdue;
+            const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+            return automaticStatus === filterStatut;
           });
         const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
         return (
@@ -526,8 +576,9 @@ export default function PlanningPage() {
                   })
                   .map(ev => {
                     const hasDate = !!ev.date_planifiee;
-                    const isOverdue = hasDate && new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                    const colors = getStatutColor(ev.statut, isOverdue);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const colors = getStatutColor(automaticStatus, false);
+                    const isOverdue = automaticStatus === 'En retard';
                     return (
                       <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
                         <td className="py-2 px-3 text-xs font-mono whitespace-nowrap">
@@ -540,7 +591,7 @@ export default function PlanningPage() {
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—'}</td>
                         <td className="py-2 px-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>
-                            {isOverdue ? 'En retard' : ev.statut}
+                            {automaticStatus}
                           </span>
                         </td>
                       </tr>
@@ -570,34 +621,20 @@ export default function PlanningPage() {
               <Scan className="w-3.5 h-3.5 text-savia-accent" /> Domaine médical *
             </label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {/* Default domains */}
-              {DOMAINES_MEDICAUX.map(d => (
+              {/* All domains (default + custom) */}
+              {allDomaines.map(d => (
                 <button key={d} type="button"
                   onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
                   className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
                     form.domaine === d
-                      ? DOMAINE_ACTIVE_CLS[d]
+                      ? DOMAINE_ACTIVE_CLS[d] || 'bg-indigo-600/40 border-indigo-400/70 text-white'
                       : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
                   }`}
                 >
-                  <div className="scale-110">{DOMAINE_ICONS_MAP[d]}</div>
+                  <div className="scale-110">{DOMAINE_ICONS_MAP[d] || <Server className="w-4 h-4" />}</div>
                   <span className="text-center leading-tight">
-                    {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d}
+                    {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d.length > 12 ? d.substring(0, 12) + '...' : d}
                   </span>
-                </button>
-              ))}
-              {/* Custom domains */}
-              {domainesCustom.map(d => (
-                <button key={d} type="button"
-                  onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
-                  className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
-                    form.domaine === d
-                      ? 'bg-purple-600/40 border-purple-400/70 text-white'
-                      : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
-                  }`}
-                >
-                  <div className="scale-110"><Stethoscope className="w-4 h-4" /></div>
-                  <span className="text-center leading-tight">{d}</span>
                 </button>
               ))}
             </div>
@@ -793,9 +830,8 @@ export default function PlanningPage() {
             {/* Events */}
             <div className="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
               {dayDetailEvents.map((ev, i) => {
-                const isPast = new Date(ev.date_planifiee) < now;
-                const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                const colors = getStatutColor(ev.statut, isOverdue);
+                const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                const colors = getStatutColor(automaticStatus, false);
                 return (
                   <div key={i} className={`rounded-xl border border-savia-border border-l-4 p-4 space-y-2 bg-savia-surface-hover/40 ${colors.dot.replace('bg-', 'border-l-').replace('bg-savia', 'border-l-savia')}`}
                     style={{ borderLeftColor: colors.dot === 'bg-blue-400' ? '#60a5fa' : colors.dot === 'bg-yellow-400' ? '#facc15' : colors.dot === 'bg-green-400' ? '#4ade80' : '#f87171' }}>
@@ -805,7 +841,7 @@ export default function PlanningPage() {
                         <Server className="w-4 h-4 flex-shrink-0 text-savia-text-muted" /> {ev.machine}
                       </span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${colors.badge}`}>
-                        {isOverdue ? 'En retard' : ev.statut}
+                        {automaticStatus}
                       </span>
                     </div>
 
