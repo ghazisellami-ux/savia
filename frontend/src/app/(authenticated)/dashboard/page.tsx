@@ -6,6 +6,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
+import { useDashboardFilters } from '@/lib/use-dashboard-filters';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -96,6 +97,7 @@ function getLast6Months(month: number, year: number) {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { filterOptions, isLoadingFilters, getVillesForRegion, getClientsForRegion, getEquipmentTypesForFilters } = useDashboardFilters();
 
   // --- Filter state ---
   const now = new Date();
@@ -108,7 +110,11 @@ export default function DashboardPage() {
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
-  const [clientList, setClientList] = useState<string[]>([]);
+
+  // --- Dynamic villes and clients for current region ---
+  const [villesForRegion, setVillesForRegion] = useState<string[]>([]);
+  const [clientsForRegion, setClientsForRegion] = useState<string[]>([]);
+  const [equipmentTypesForFilters, setEquipmentTypesForFilters] = useState<string[]>([]);
 
   // --- Data state ---
   const [kpis, setKpis] = useState<KpiData>({
@@ -120,121 +126,182 @@ export default function DashboardPage() {
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // --- Charger les villes quand la région change ---
+  useEffect(() => {
+    if (selectedRegion) {
+      getVillesForRegion(selectedRegion).then(villes => {
+        setVillesForRegion(villes);
+      });
+      setSelectedVille(''); // Reset ville when region changes
+    } else {
+      setVillesForRegion([]);
+      setSelectedVille('');
+    }
+  }, [selectedRegion, getVillesForRegion]);
+
+  // --- Charger les clients quand la région change ---
+  useEffect(() => {
+    if (selectedRegion) {
+      getClientsForRegion(selectedRegion).then(clients => {
+        setClientsForRegion(clients);
+      });
+    } else {
+      setClientsForRegion(filterOptions.clients);
+    }
+  }, [selectedRegion, getClientsForRegion, filterOptions.clients]);
+
+  // --- Charger les types d'équipement filtrés quand les filtres changent ---
+  useEffect(() => {
+    getEquipmentTypesForFilters(selectedClient, selectedRegion, selectedVille).then(types => {
+      setEquipmentTypesForFilters(types);
+      // Reset selectedEquipType si le type sélectionné n'est plus disponible
+      if (selectedEquipType && !types.includes(selectedEquipType)) {
+        setSelectedEquipType('');
+      }
+    });
+  }, [selectedClient, selectedRegion, selectedVille, getEquipmentTypesForFilters]);
+
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
 
-  // --- Load clients and equipments for filter options ---
-  const [allClients, setAllClients] = useState<any[]>([]);
-  const [allEquipments, setAllEquipments] = useState<any[]>([]);
+  // --- Cache for full unfiltered data (loaded once per date range) ---
+  const [fullData, setFullData] = useState<{
+    kpis: any;
+    healthScores: any;
+    interventions: any;
+  } | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
+  // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
-    Promise.all([
-      clientsApi.list().catch(() => []),
-      equipements.list().catch(() => [])
-    ]).then(([clients, equips]) => {
-      setAllClients(clients || []);
-      setAllEquipments(equips || []);
-    });
-  }, []);
+    const loadFullData = async () => {
+      setIsInitialLoading(true);
+      try {
+        const [kpiData, healthData, intervData] = await Promise.all([
+          dashboard.kpis({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
+          dashboard.healthScores({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
+          interventionsApi.list(),
+        ]);
+        setFullData({
+          kpis: kpiData,
+          healthScores: healthData,
+          interventions: intervData || [],
+        });
+      } catch (err) {
+        console.error("Failed to load full dashboard data", err);
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+    loadFullData();
+  }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi]);
 
-  // --- Load clients once ---
+  // --- Filter data when filters change ---
   useEffect(() => {
-    clientsApi.list().then((res: any[]) => {
-      const names = res.map((c: any) => c.nom || c.Nom || '').filter(Boolean);
-      setClientList(names);
-    }).catch(() => {});
-  }, []);
+    if (!fullData) return;
 
-  // --- Derived filter lists ---
-  const regionList = useMemo(() => {
-    const regions = new Set<string>();
-    // Get regions from clients
-    allClients.forEach((c: any) => {
-      if (c.region) regions.add(c.region);
-    });
-    // Also get from equipments (use uppercase Region)
-    allEquipments.forEach((e: any) => {
-      if (e.Region) regions.add(e.Region);
-    });
-    return Array.from(regions).sort();
-  }, [allClients, allEquipments]);
+    // If only client filter is applied, filter client-side (instant)
+    if (selectedClient && !selectedRegion && !selectedVille && !selectedEquipType) {
+      setIsLoading(true);
+      try {
+        // Filter health scores by client
+        const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
 
-  const villeList = useMemo(() => {
-    const villes = new Set<string>();
-    // Get villes from clients
-    allClients.forEach((c: any) => {
-      if (!selectedRegion || c.region === selectedRegion) {
-        if (c.ville) villes.add(c.ville);
+        // Compute KPIs from filtered health data
+        const nb_eq = filteredHealth.length;
+        const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
+        const disponibilite = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
+
+        setKpis({
+          ...fullData.kpis,
+          nb_equipements: nb_eq,
+          nb_critiques: nb_critiques,
+          disponibilite: disponibilite,
+        });
+        setHealthScores(filteredHealth);
+
+        // Filter interventions
+        const validMachines = filteredHealth.map((h: any) => h.machine);
+        let filteredInterv = fullData.interventions;
+        if (validMachines.length > 0) {
+          filteredInterv = filteredInterv.filter((i: any) => validMachines.includes(i.machine));
+        } else {
+          filteredInterv = [];
+        }
+
+        setAllInterventions(filteredInterv);
+        setRecentInterv(
+          filteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } catch (err) {
+        console.error("Failed to filter data", err);
+      } finally {
+        setIsLoading(false);
       }
-    });
-    // Also get from equipments (use uppercase Ville)
-    allEquipments.forEach((e: any) => {
-      if (!selectedRegion || e.Region === selectedRegion) {
-        if (e.Ville) villes.add(e.Ville);
-      }
-    });
-    return Array.from(villes).sort();
-  }, [allClients, allEquipments, selectedRegion]);
-
-  const equipTypeList = useMemo(() => {
-    const types = new Set<string>();
-    allEquipments.forEach((e: any) => {
-      if (e.Type || e.type) types.add(e.Type || e.type);
-    });
-    return Array.from(types).sort();
-  }, [allEquipments]);
-
-  // --- Load data when filters change ---
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params: any = {
-        date_start: dateRange.date_start,
-        date_end: dateRange.date_end,
-      };
-      if (selectedClient) params.client = selectedClient;
-      if (selectedRegion) params.region = selectedRegion;
-      if (selectedVille) params.ville = selectedVille;
-      if (selectedEquipType) params.equipment_type = selectedEquipType;
-
-      const [kpiData, healthData, intervData] = await Promise.all([
-        dashboard.kpis(params),
-        dashboard.healthScores(params),
-        interventionsApi.list(),
-      ]);
-      
-      setKpis(kpiData as any);
-      setHealthScores(healthData);
-      setAllInterventions(intervData || []);
-
-      // Filter interventions for timeline display
-      let filtered = (intervData || []);
-      const validMachines = healthData.map((h: any) => h.machine);
-      
-      if (validMachines.length > 0) {
-        filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
-      } else {
-        filtered = [];
-      }
-      
-      // Date filter
-      filtered = filtered.filter((i: any) => {
-        const d = i.date?.substring(0, 10);
-        if (!d) return false;
-        return d >= dateRange.date_start && d <= dateRange.date_end;
-      });
-
-      setRecentInterv(
-        filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
-      );
-    } catch (err) {
-      console.error("Failed to load dashboard data", err);
-    } finally {
-      setIsLoading(false);
+      return;
     }
-  }, [dateRange, selectedClient, selectedRegion, selectedVille, selectedEquipType]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+    // If no filters or complex filters (region/ville/type), use full data or call API
+    if (!selectedClient && !selectedRegion && !selectedVille && !selectedEquipType) {
+      // No filters - use full data
+      setIsLoading(true);
+      try {
+        setKpis(fullData.kpis);
+        setHealthScores(fullData.healthScores);
+        setAllInterventions(fullData.interventions);
+        setRecentInterv(
+          fullData.interventions.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // Complex filters (region/ville/type or combination) - call API
+    setIsLoading(true);
+    const loadFilteredData = async () => {
+      try {
+        const params: any = {
+          date_start: dateRange.date_start,
+          date_end: dateRange.date_end,
+        };
+        if (selectedClient) params.client = selectedClient;
+        if (selectedRegion) params.region = selectedRegion;
+        if (selectedVille) params.ville = selectedVille;
+        if (selectedEquipType) params.equipment_type = selectedEquipType;
+
+        const [kpiData, healthData, intervData] = await Promise.all([
+          dashboard.kpis(params),
+          dashboard.healthScores(params),
+          interventionsApi.list(),
+        ]);
+
+        setKpis(kpiData as any);
+        setHealthScores(healthData);
+        setAllInterventions(intervData || []);
+
+        // Filter interventions for timeline display
+        let filtered = (intervData || []);
+        const validMachines = healthData.map((h: any) => h.machine);
+
+        if (validMachines.length > 0) {
+          filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
+        } else {
+          filtered = [];
+        }
+
+        setRecentInterv(
+          filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } catch (err) {
+        console.error("Failed to load filtered data", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadFilteredData();
+  }, [selectedClient, selectedRegion, selectedVille, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
 
   // --- Computed values ---
   const scoreGlobal = useMemo(() => {
@@ -306,7 +373,7 @@ export default function DashboardPage() {
   // Available years
   const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
 
-  if (isLoading) {
+  if (isLoadingFilters) {
     return (
       <div className="flex justify-center items-center h-64">
         <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
@@ -330,7 +397,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ===== FILTER BAR ===== */}
-      <div className="glass rounded-xl p-4 space-y-4">
+      <div className={`glass rounded-xl p-4 space-y-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
           {/* Client Filter — masqué pour Lecteur (données auto-filtrées) */}
           {!isLecteur && (
@@ -343,8 +410,8 @@ export default function DashboardPage() {
                 onChange={e => setSelectedClient(e.target.value)}
                 className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
               >
-                <option value="">Tous</option>
-                {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="">Tous les clients</option>
+                {(selectedRegion ? clientsForRegion : filterOptions.clients).map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
@@ -359,8 +426,8 @@ export default function DashboardPage() {
               onChange={e => { setSelectedRegion(e.target.value); setSelectedVille(''); }}
               className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
             >
-              <option value="">Tous</option>
-              {regionList.map(r => <option key={r} value={r}>{r}</option>)}
+              <option value="">Toutes les régions</option>
+              {filterOptions.regions.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
 
@@ -372,11 +439,15 @@ export default function DashboardPage() {
             <select
               value={selectedVille}
               onChange={e => setSelectedVille(e.target.value)}
-              disabled={!selectedRegion}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none disabled:opacity-50"
+              disabled={!selectedRegion || villesForRegion.length === 0}
+              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <option value="">Tous</option>
-              {villeList.map(v => <option key={v} value={v}>{v}</option>)}
+              <option value="">Toutes les villes</option>
+              {villesForRegion && villesForRegion.length > 0 ? (
+                villesForRegion.map(v => <option key={v} value={v}>{v}</option>)
+              ) : (
+                <option disabled>Aucune ville disponible</option>
+              )}
             </select>
           </div>
 
@@ -390,8 +461,12 @@ export default function DashboardPage() {
               onChange={e => setSelectedEquipType(e.target.value)}
               className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
             >
-              <option value="">Tous</option>
-              {equipTypeList.map(t => <option key={t} value={t}>{t}</option>)}
+              <option value="">Tous les types</option>
+              {equipmentTypesForFilters && equipmentTypesForFilters.length > 0 ? (
+                equipmentTypesForFilters.map(t => <option key={t} value={t}>{t}</option>)
+              ) : (
+                <option disabled>Aucun type disponible</option>
+              )}
             </select>
           </div>
 
@@ -458,8 +533,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Period Summary */}
-        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20 flex-wrap">
           <Filter className="w-4 h-4 text-savia-accent" />
+          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-savia-accent" />}
           <span className="text-sm font-semibold text-savia-accent">
             Période : {dateRange.label}
           </span>
@@ -468,14 +544,29 @@ export default function DashboardPage() {
           </span>
           {selectedClient && (
             <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              {selectedClient}
+              Client: {selectedClient}
+            </span>
+          )}
+          {selectedRegion && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              Région: {selectedRegion}
+            </span>
+          )}
+          {selectedVille && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-green-500/10 text-green-400 border border-green-500/20">
+              Ville: {selectedVille}
+            </span>
+          )}
+          {selectedEquipType && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20">
+              Type: {selectedEquipType}
             </span>
           )}
         </div>
       </div>
 
       {/* KPIs Row - Top 4 */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
         <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
         <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
@@ -483,7 +574,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs Row - Bottom 4 */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.nb_interventions)} label="Interventions" />
         <KpiCard icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux Résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="% interventions clôturées" />
         <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />

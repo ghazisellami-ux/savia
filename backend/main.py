@@ -1075,11 +1075,18 @@ def get_dashboard_kpis(
 
         # Filter equipements by region (join with clients table to get region)
         if region and not df_eq.empty and not df_clients.empty:
-            # Get clients in this region
-            clients_in_region = df_clients[
-                df_clients["region"].notna() & 
-                (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
-            ]["nom"].tolist() if "region" in df_clients.columns else []
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
             
             # Filter equipements by these clients
             if clients_in_region and "Client" in df_eq.columns:
@@ -1218,6 +1225,7 @@ def get_health_scores(
     try:
         df_eq = lire_equipements()
         df_int = lire_interventions()
+        df_clients = db_lire_clients()  # Get clients table for region/ville filtering
 
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
@@ -1226,18 +1234,38 @@ def get_health_scores(
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
-        # Filter equipements by region (use renamed column "Region")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if region and not df_eq.empty and "Region" in df_eq.columns:
-            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
+        # Filter equipements by region (join with clients table to get region)
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
 
-        # Filter equipements by ville (use renamed column "Ville")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if ville and not df_eq.empty and "Ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
+        # Filter equipements by ville (join with clients table to get ville)
+        if ville and not df_eq.empty and not df_clients.empty:
+            # Get clients in this ville
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
 
         # Filter equipements by equipment type
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
 
@@ -2880,11 +2908,9 @@ def delete_conformite(conformite_id: int, user: dict = Depends(_verify_token)):
 def get_planning(
     machine: Optional[str] = None,
     statut: Optional[str] = None,
-    region: Optional[str] = None,
-    ville: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    df = lire_planning(machine=machine, statut=statut, region=region, ville=ville)
+    df = lire_planning(machine=machine, statut=statut)
     # Pour Lecteur : filtrer par les machines de son client
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -2902,9 +2928,6 @@ def get_planning(
 
 @app.post("/api/planning")
 def create_planning(body: dict, user: dict = Depends(_verify_token)):
-    # Convert technicien_assigne username to full name
-    if body.get("technicien_assigne"):
-        body["technicien_assigne"] = _get_technician_fullname(body["technicien_assigne"])
     ajouter_planning(body)
     return {"ok": True}
 
@@ -4353,6 +4376,207 @@ def get_clients(user: dict = Depends(_verify_token)):
             result.append(client_data)
 
     return result
+
+
+@app.get("/api/dashboard/equipment-types")
+def get_dashboard_equipment_types(
+    client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Get equipment types filtered by client, region, and ville."""
+    try:
+        df_eq = lire_equipements()
+        df_clients = db_lire_clients()
+        equipment_types = set()
+        
+        # Pour Lecteur : forcer le filtre par son client
+        effective_client = _get_client_filter(user) or client
+
+        # Filter equipements by client
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+
+        # Filter equipements by region (join with clients table to get region)
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+
+        # Filter equipements by ville (join with clients table to get ville)
+        if ville and not df_eq.empty and not df_clients.empty:
+            # Get clients in this ville
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+
+        # Extract equipment types from filtered equipements
+        if not df_eq.empty and "Type" in df_eq.columns:
+            equipment_types.update(
+                df_eq["Type"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+                .tolist()
+            )
+        
+        # Return sorted list
+        return sorted([t for t in equipment_types if t])
+    except Exception as e:
+        logger.error(f"Failed to get equipment types: {e}")
+        return []
+
+
+@app.get("/api/dashboard/regions")
+def get_dashboard_regions(user: dict = Depends(_verify_token)):
+    """Get all existing regions from clients table - ONLY the 4 main regions."""
+    try:
+        df_clients = db_lire_clients()
+        regions = set()
+        
+        # List of valid regions
+        VALID_REGIONS = {"sud", "centre", "nord"}
+        
+        if not df_clients.empty:
+            # Add regular regions - ONLY if they match the 4 valid regions
+            if "region" in df_clients.columns:
+                client_regions = df_clients["region"].dropna().astype(str).str.strip().str.lower().unique().tolist()
+                for r in client_regions:
+                    if r in VALID_REGIONS:
+                        regions.add(r.capitalize())  # Capitalize: sud → Sud
+            
+            # Add International if any client has international=True
+            if "international" in df_clients.columns:
+                if (df_clients["international"].astype(bool)).any():
+                    regions.add("International")
+        
+        # Return sorted list - ONLY the 4 main regions
+        return sorted(list(regions))
+    except Exception as e:
+        logger.error(f"Failed to get regions: {e}")
+        return []
+
+
+@app.get("/api/dashboard/villes")
+def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_verify_token)):
+    """Get all existing villes, optionally filtered by region."""
+    try:
+        df_clients = db_lire_clients()
+        villes = set()
+        
+        if not df_clients.empty and region:
+            # IMPORTANT: Only return villes when a region is specified
+            # Filter by region
+            if region.lower() == "international":
+                # Get villes from international clients
+                if "international" in df_clients.columns and "ville" in df_clients.columns:
+                    international_clients = df_clients[
+                        df_clients["international"].astype(bool) == True
+                    ]
+                    villes.update(
+                        international_clients["ville"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .unique()
+                        .tolist()
+                    )
+            else:
+                # Get villes from clients in this region
+                if "region" in df_clients.columns and "ville" in df_clients.columns:
+                    region_clients = df_clients[
+                        df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip()
+                    ]
+                    villes.update(
+                        region_clients["ville"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .unique()
+                        .tolist()
+                    )
+        
+        # Return sorted list - ONLY villes, no regions
+        return sorted([v for v in villes if v and v.lower() not in ["sud", "centre", "nord", "international"]])
+    except Exception as e:
+        logger.error(f"Failed to get villes: {e}")
+        return []
+
+
+@app.get("/api/dashboard/clients-by-region")
+def get_clients_by_region(region: Optional[str] = None, user: dict = Depends(_verify_token)):
+    """Get all clients, optionally filtered by region."""
+    try:
+        df_clients = db_lire_clients()
+        clients = set()
+        
+        if not df_clients.empty and "nom" in df_clients.columns:
+            if region:
+                # Filter by region
+                if region.lower() == "international":
+                    # Get international clients
+                    if "international" in df_clients.columns:
+                        international_clients = df_clients[
+                            df_clients["international"].astype(bool) == True
+                        ]
+                        clients.update(
+                            international_clients["nom"]
+                            .dropna()
+                            .astype(str)
+                            .str.strip()
+                            .unique()
+                            .tolist()
+                        )
+                else:
+                    # Get clients in this region
+                    if "region" in df_clients.columns:
+                        region_clients = df_clients[
+                            df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip()
+                        ]
+                        clients.update(
+                            region_clients["nom"]
+                            .dropna()
+                            .astype(str)
+                            .str.strip()
+                            .unique()
+                            .tolist()
+                        )
+            else:
+                # Get all clients
+                clients.update(
+                    df_clients["nom"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                    .tolist()
+                )
+        
+        # Return sorted list
+        return sorted([c for c in clients if c])
+    except Exception as e:
+        logger.error(f"Failed to get clients by region: {e}")
+        return []
 
 
 @app.post("/api/clients")
