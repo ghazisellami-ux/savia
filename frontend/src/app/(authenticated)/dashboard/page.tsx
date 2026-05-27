@@ -345,6 +345,20 @@ export default function DashboardPage() {
     let totalWithErrorType = 0;
 
     allInterventions.forEach((interv: any) => {
+      // Check if intervention is within date range
+      // Use date_cloture for closed interventions, date for others
+      const dateToCheck = (interv.statut || '').toLowerCase().includes('clotur') 
+        ? (interv.date_cloture || interv.date)
+        : interv.date;
+      
+      if (dateToCheck) {
+        const d = dateToCheck.substring(0, 10);
+        if (d < dateRange.date_start || d > dateRange.date_end) {
+          return; // Skip if outside date range
+        }
+      }
+
+      // Get error type from type_erreur field
       const errorType = (interv.type_erreur || '').trim();
       if (errorType) {
         errorTypeCount[errorType] = (errorTypeCount[errorType] || 0) + 1;
@@ -365,7 +379,7 @@ export default function DashboardPage() {
         color: ERROR_TYPE_COLORS[name] || '#64748b',
       }))
       .sort((a, b) => b.value - a.value); // Sort by percentage descending
-  }, [allInterventions]);
+  }, [allInterventions, dateRange]);
 
   // Gauge data for RadialBarChart
   const gaugeData = [{ name: 'Santé', value: scoreGlobal, fill: scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444' }];
