@@ -1794,6 +1794,14 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
 
+            # --- Update type_erreur if provided ---
+            if body.get("type_erreur"):
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE interventions SET type_erreur = %s WHERE id = %s",
+                        (body.get("type_erreur"), intervention_id)
+                    )
+
             # --- Telegram notification clôture ---
             try:
                 with get_db() as conn:
