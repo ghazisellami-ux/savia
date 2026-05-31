@@ -5010,8 +5010,13 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         if data.kpis:
             box_w, box_h, margin_ = 64, 16, 5
             kpi_y = pdf.get_y()
+            # Centrer les KPIs au milieu de la page
+            num_kpis = len(data.kpis[:4])
+            total_width = num_kpis * box_w + (num_kpis - 1) * margin_
+            start_x = (pdf.w - total_width) / 2  # Centrer horizontalement
+            
             for i, kpi in enumerate(data.kpis[:4]):
-                kx = 10 + i * (box_w + margin_)
+                kx = start_x + i * (box_w + margin_)
                 color = kpi.get("color", [15, 118, 110])
                 # Support both hex string "#RRGGBB" and [r,g,b] list
                 if isinstance(color, str) and color.startswith("#") and len(color) >= 7:
