@@ -548,6 +548,25 @@ def init_db():
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_logs_uploaded_content_hash ON logs_uploaded(content_hash);
         """)
+        
+        # Indexes pour la table equipements (améliore les performances de filtrage)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_equipements_client ON equipements(client);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_equipements_type ON equipements(type);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_equipements_statut ON equipements(statut);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_equipements_nom ON equipements(nom);
+        """)
+        
+        # Indexes pour la table interventions (améliore les JOINs)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_interventions_machine ON interventions(machine);
+        """)
 
         # --- Migrations pour bases existantes (Pillier 3: Logging des migrations) ---
         def _run_migration(sql, description):
@@ -1188,7 +1207,14 @@ def lire_equipements():
     """
     try:
         with get_db() as conn:
-            df = read_sql("SELECT * FROM equipements ORDER BY client, nom", conn)
+            # Select only necessary columns to reduce data transfer and processing
+            df = read_sql("""
+                SELECT id, nom, type, fabricant, modele, num_serie, 
+                       date_installation, derniere_maintenance, statut, notes, 
+                       client, domaine, est_annexe, garantie_debut, garantie_duree
+                FROM equipements 
+                ORDER BY client, nom
+            """, conn)
         if not df.empty:
             rename_map = {
                 "nom": "Nom", "type": "Type", "fabricant": "Fabricant",
@@ -1201,7 +1227,9 @@ def lire_equipements():
             df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
             if "Client" in df.columns:
                 df["Client"] = df["Client"].fillna("Centre Principal")
-            df = _fix_df_text(df)
+            # Only fix text on columns that are likely to have encoding issues
+            text_columns = ["Nom", "Type", "Fabricant", "Modele", "Notes", "Client"]
+            df = _fix_df_text(df, columns=text_columns)
         return df
     except Exception as e:
         logger.error(f"Erreur lire_equipements: {e}")

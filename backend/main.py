@@ -4425,48 +4425,81 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
 
 @app.get("/api/clients")
 def get_clients(user: dict = Depends(_verify_token)):
-    """List clients from the dedicated clients table, enriched with equipment stats."""
-    df_clients = db_lire_clients()
-    df_eq = lire_equipements()
-    df_int = lire_interventions()
-
-    result = []
-    if not df_clients.empty:
-        for _, row in df_clients.iterrows():
-            client_name = row.get("nom", "")
-            client_data = {
-                "id": row.get("id"),
-                "nom": client_name,
-                "code_client": row.get("code_client", ""),
-                "matricule_fiscale": row.get("matricule_fiscale", ""),
-                "ville": row.get("ville", ""),
-                "region": row.get("region", ""),
-                "contact": row.get("contact", ""),
-                "telephone": row.get("telephone", ""),
-                "adresse": row.get("adresse", ""),
-                "type_client": row.get("type_client", ""),
-                "international": bool(row.get("international", False)),
-            }
-            # Enrich with equipment stats
-            nb_eq = 0
-            score = 100
-            nb_int = 0
-            if not df_eq.empty and "Client" in df_eq.columns:
-                eq_client = df_eq[df_eq["Client"] == client_name]
-                nb_eq = len(eq_client)
-                if nb_eq > 0:
-                    nb_hs = len(eq_client[eq_client["Statut"].isin(["Hors Service", "Critique"])]) if "Statut" in eq_client.columns else 0
-                    score = max(0, round(((nb_eq - nb_hs) / nb_eq) * 100))
-                    if not df_int.empty and "machine" in df_int.columns:
-                        machines = eq_client["Nom"].tolist() if "Nom" in eq_client.columns else []
-                        nb_int = len(df_int[df_int["machine"].isin(machines)])
-
-            client_data["nb_equipements"] = nb_eq
-            client_data["nb_interventions"] = nb_int
-            client_data["score_sante"] = score
-            result.append(client_data)
-
-    return result
+    """List clients from the dedicated clients table, enriched with equipment stats using SQL aggregates."""
+    try:
+        with get_db() as conn:
+            # Get all clients from clients table
+            df_clients = read_sql("SELECT * FROM clients ORDER BY nom", conn)
+            
+            if df_clients.empty:
+                return []
+            
+            # Get equipment stats by client (using exact string match, case-insensitive)
+            eq_stats_query = """
+            SELECT 
+                client,
+                COUNT(*) as nb_eq,
+                SUM(CASE WHEN statut IN ('Hors Service', 'Critique') THEN 1 ELSE 0 END) as nb_hs
+            FROM equipements
+            WHERE client IS NOT NULL AND client != ''
+            GROUP BY client
+            """
+            df_eq_stats = read_sql(eq_stats_query, conn)
+            
+            # Get intervention stats by client
+            int_stats_query = """
+            SELECT 
+                e.client,
+                COUNT(DISTINCT i.id) as nb_int
+            FROM interventions i
+            JOIN equipements e ON e.nom = i.machine
+            WHERE e.client IS NOT NULL AND e.client != ''
+            GROUP BY e.client
+            """
+            df_int_stats = read_sql(int_stats_query, conn)
+            
+            # Build result with enriched data
+            result = []
+            for _, row in df_clients.iterrows():
+                client_name = row.get("nom", "")
+                
+                # Find stats for this client (case-insensitive match)
+                eq_stat = None
+                if not df_eq_stats.empty:
+                    eq_stat = df_eq_stats[df_eq_stats["client"].str.lower() == client_name.lower()].iloc[0] if len(df_eq_stats[df_eq_stats["client"].str.lower() == client_name.lower()]) > 0 else None
+                
+                int_stat = None
+                if not df_int_stats.empty:
+                    int_stat = df_int_stats[df_int_stats["client"].str.lower() == client_name.lower()].iloc[0] if len(df_int_stats[df_int_stats["client"].str.lower() == client_name.lower()]) > 0 else None
+                
+                # Calculate health score
+                nb_eq = int(eq_stat.get("nb_eq", 0)) if eq_stat is not None else 0
+                nb_hs = int(eq_stat.get("nb_hs", 0)) if eq_stat is not None else 0
+                score_sante = max(0, round(((nb_eq - nb_hs) / nb_eq * 100))) if nb_eq > 0 else 100
+                
+                nb_int = int(int_stat.get("nb_int", 0)) if int_stat is not None else 0
+                
+                result.append({
+                    "id": row.get("id"),
+                    "nom": client_name,
+                    "code_client": row.get("code_client", ""),
+                    "matricule_fiscale": row.get("matricule_fiscale", ""),
+                    "ville": row.get("ville", ""),
+                    "region": row.get("region", ""),
+                    "contact": row.get("contact", ""),
+                    "telephone": row.get("telephone", ""),
+                    "adresse": row.get("adresse", ""),
+                    "type_client": row.get("type_client", ""),
+                    "international": bool(row.get("international", False)),
+                    "nb_equipements": nb_eq,
+                    "nb_interventions": nb_int,
+                    "score_sante": score_sante,
+                })
+            
+            return result
+    except Exception as e:
+        logger.error(f"Erreur get_clients: {e}")
+        return []
 
 
 @app.get("/api/dashboard/equipment-types")
