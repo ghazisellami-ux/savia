@@ -181,7 +181,24 @@ export default function SupervisionPage() {
       }
     }
     loadData();
-    loadLogHistory();
+    
+    // Charger les logs en arrière-plan après un délai court (non-bloquant)
+    const logTimer = setTimeout(() => {
+      loadLogHistory();
+    }, 100);
+
+    // Recharger les logs quand la page devient visible (après navigation)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadLogHistory();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      clearTimeout(logTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
 
@@ -475,7 +492,7 @@ export default function SupervisionPage() {
       // Save log to backend database (relative URL via Nginx proxy)
       try {
         const token = localStorage.getItem('savia_token');
-        await fetch(`/api/logs/upload`, {
+        const saveRes = await fetch(`/api/logs/upload`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
           body: JSON.stringify({
@@ -487,10 +504,20 @@ export default function SupervisionPage() {
             parsed_errors: parsedErrors, // store parsed errors in DB permanently
           }),
         });
-        // Refresh history after save
-        loadLogHistory();
+        if (saveRes.ok) {
+          const saveData = await saveRes.json();
+          console.log('Log saved successfully:', saveData);
+          // Refresh history after successful save
+          await loadLogHistory();
+          setImportSuccess(`✓ ${lines.length} lignes parsées — ${errCount} erreur(s) détectée(s) dont ${critCount} critique(s) — Enregistré`);
+        } else {
+          const errorData = await saveRes.json().catch(() => ({}));
+          console.warn('Log save failed:', saveRes.status, errorData);
+          setImportSuccess(`✗ Erreur lors de l'enregistrement: ${errorData.detail || saveRes.statusText}`);
+        }
       } catch (saveErr) {
         console.warn('Log save to DB failed (non-blocking):', saveErr);
+        setImportSuccess(`✗ Erreur réseau: ${saveErr}`);
       }
       // Reset file input
       const fileInput = document.getElementById('log-file-input') as HTMLInputElement;

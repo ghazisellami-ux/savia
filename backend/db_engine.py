@@ -533,8 +533,20 @@ def init_db():
             nb_errors INTEGER DEFAULT 0,
             nb_critiques INTEGER DEFAULT 0,
             uploaded_by TEXT DEFAULT 'system',
+            parsed_errors TEXT DEFAULT NULL,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        """)
+        
+        # Ajouter les indexes pour améliorer les performances
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_uploaded_equipement ON logs_uploaded(equipement);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_uploaded_uploaded_at ON logs_uploaded(uploaded_at DESC);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_uploaded_content_hash ON logs_uploaded(content_hash);
         """)
 
         # --- Migrations pour bases existantes (Pillier 3: Logging des migrations) ---
@@ -556,6 +568,7 @@ def init_db():
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
         _run_migration("ALTER TABLE pieces_rechange ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur pieces_rechange")
         _run_migration("ALTER TABLE pieces_rechange ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur pieces_rechange")
+        _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         try:
