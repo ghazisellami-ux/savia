@@ -2544,20 +2544,41 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                 ref = p.get('ref') or p.get('reference') or ''
                 qty = int(p.get('qty') or p.get('quantite') or 0)
                 prix = float(p.get('prix_unitaire', 0) or 0)
-                if qty > 0:
-                    print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}")
+                designation = p.get('designation', ref)
+                fournisseur = p.get('fournisseur', '')
+                
+                if qty > 0 and ref:
+                    print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}, designation={designation}")
+                    
+                    # Chercher la pièce dans la base de données pour obtenir les infos complètes
+                    piece_row = conn.execute(
+                        "SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = %s LIMIT 1",
+                        (ref,)
+                    ).fetchone()
+                    
+                    if piece_row:
+                        # Utiliser les infos de la base de données
+                        prix = float(piece_row.get('prix_unitaire', 0) or prix or 0)
+                        designation = piece_row.get('designation', designation)
+                        fournisseur = piece_row.get('fournisseur', fournisseur)
+                    
+                    # Déduire le stock
                     conn.execute("""
                         UPDATE pieces_rechange
                         SET stock_actuel = stock_actuel - %s
                         WHERE reference = %s
                     """, (qty, ref))
+                    
                     cout_piece = prix * qty
                     total_cout_pieces += cout_piece
-                    synthese_pieces.append(f"{p.get('designation', ref)} (x{qty} @ {prix:.0f})")
+                    
+                    # Format: Désignation | Ref: XXX | Fournisseur: YYY | Qty: Z (sans prix)
+                    piece_line = f"{designation} | Ref: {ref} | Fournisseur: {fournisseur} | Qty: {qty}"
+                    synthese_pieces.append(piece_line)
         else:
             print(f"[CLOTURE] Aucune pièce à déduire (pieces_a_deduire={pieces_a_deduire})")
 
-        pieces_str = ", ".join(synthese_pieces)
+        pieces_str = "\n".join(synthese_pieces)
 
         # Calculer le coût (taux_horaire × durée)
         duree_val = duree_minutes if duree_minutes is not None else 0
@@ -2574,14 +2595,14 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         # 2. Mettre à jour l'intervention (date = date de clôture)
         date_cloture = datetime.now().isoformat()
         if pieces_str:
-            # Utiliser COALESCE pour éviter le problème NULL || text = NULL en PostgreSQL
+            # Remplacer pieces_utilisees (pas concaténer) avec le nouveau format
             conn.execute("""
                 UPDATE interventions
                 SET statut='Cloturee', probleme=%s, cause=%s, solution=%s,
-                    pieces_utilisees=COALESCE(pieces_utilisees, '') || %s, duree_minutes=%s,
+                    pieces_utilisees=%s, duree_minutes=%s,
                     cout_pieces=%s, cout=%s, date=%s, date_cloture=%s
                 WHERE id=%s
-            """, (probleme, cause, solution, f" | {pieces_str}", duree_val, total_cout_pieces, cout_total, date_cloture, date_cloture, intervention_id))
+            """, (probleme, cause, solution, pieces_str, duree_val, total_cout_pieces, cout_total, date_cloture, date_cloture, intervention_id))
         else:
             conn.execute("""
                 UPDATE interventions
