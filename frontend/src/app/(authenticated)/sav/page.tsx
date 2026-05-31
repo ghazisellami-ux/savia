@@ -412,7 +412,6 @@ export default function SavPage() {
           { label: 'Interventions', val: String(pdfFiltered.length), color: '#01B4BC' },
           { label: 'Clôturées',      val: String(cloturees),         color: '#5FA55A' },
           { label: 'Taux résolution', val: tauxRes + '%',               color: '#FA8925' },
-          { label: 'Coût total (TND)', val: coutT.toLocaleString('fr'), color: '#5FA55A' },
         ],
         tables: [{
           title: 'Détail des interventions',
