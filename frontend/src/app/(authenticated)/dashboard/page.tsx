@@ -97,23 +97,19 @@ function getLast6Months(month: number, year: number) {
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const { filterOptions, isLoadingFilters, getVillesForRegion, getClientsForRegion, getEquipmentTypesForFilters } = useDashboardFilters();
+  const { filterOptions, isLoadingFilters, getEquipmentTypesForFilters } = useDashboardFilters();
 
   // --- Filter state ---
   const now = new Date();
   const isLecteur = user?.role === 'Lecteur';
   const canSeeCosts = useCanSeeCosts();
   const [selectedClient, setSelectedClient] = useState(user?.role === 'Lecteur' ? (user?.client || '') : '');
-  const [selectedRegion, setSelectedRegion] = useState('');
-  const [selectedVille, setSelectedVille] = useState('');
   const [selectedEquipType, setSelectedEquipType] = useState('');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
 
-  // --- Dynamic villes and clients for current region ---
-  const [villesForRegion, setVillesForRegion] = useState<string[]>([]);
-  const [clientsForRegion, setClientsForRegion] = useState<string[]>([]);
+  // --- Dynamic equipment types for current client ---
   const [equipmentTypesForFilters, setEquipmentTypesForFilters] = useState<string[]>([]);
 
   // --- Data state ---
@@ -126,40 +122,16 @@ export default function DashboardPage() {
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // --- Charger les villes quand la région change ---
+  // --- Charger les types d'équipement filtrés quand le client change ---
   useEffect(() => {
-    if (selectedRegion) {
-      getVillesForRegion(selectedRegion).then(villes => {
-        setVillesForRegion(villes);
-      });
-      setSelectedVille(''); // Reset ville when region changes
-    } else {
-      setVillesForRegion([]);
-      setSelectedVille('');
-    }
-  }, [selectedRegion, getVillesForRegion]);
-
-  // --- Charger les clients quand la région change ---
-  useEffect(() => {
-    if (selectedRegion) {
-      getClientsForRegion(selectedRegion).then(clients => {
-        setClientsForRegion(clients);
-      });
-    } else {
-      setClientsForRegion(filterOptions.clients);
-    }
-  }, [selectedRegion, getClientsForRegion, filterOptions.clients]);
-
-  // --- Charger les types d'équipement filtrés quand les filtres changent ---
-  useEffect(() => {
-    getEquipmentTypesForFilters(selectedClient, selectedRegion, selectedVille).then(types => {
+    getEquipmentTypesForFilters(selectedClient, undefined, undefined).then(types => {
       setEquipmentTypesForFilters(types);
       // Reset selectedEquipType si le type sélectionné n'est plus disponible
       if (selectedEquipType && !types.includes(selectedEquipType)) {
         setSelectedEquipType('');
       }
     });
-  }, [selectedClient, selectedRegion, selectedVille, getEquipmentTypesForFilters]);
+  }, [selectedClient, getEquipmentTypesForFilters]);
 
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
@@ -172,55 +144,78 @@ export default function DashboardPage() {
   } | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
+  // --- Load cached KPI data on mount ---
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem('dashboard_kpi_cache');
+      if (cached) {
+        const data = JSON.parse(cached);
+        setFullData(data);
+        setIsInitialLoading(false);
+      }
+    } catch (err) {
+      console.error("Failed to load cached KPI data", err);
+    }
+  }, []);
+
   // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
     const loadFullData = async () => {
-      setIsInitialLoading(true);
+      // Don't show loading if we have cached data
+      if (!fullData) {
+        setIsInitialLoading(true);
+      }
+      
       try {
-        const [kpiData, healthData, intervData] = await Promise.all([
+        // Load KPIs and health scores first (fast)
+        const [kpiData, healthData] = await Promise.all([
           dashboard.kpis({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
           dashboard.healthScores({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
-          interventionsApi.list(),
         ]);
-        setFullData({
+        
+        const newData = {
           kpis: kpiData,
           healthScores: healthData,
-          interventions: intervData || [],
-        });
+          interventions: [],
+        };
+        
+        // Cache the data
+        localStorage.setItem('dashboard_kpi_cache', JSON.stringify(newData));
+        
+        // Set data immediately with empty interventions
+        setFullData(newData);
+        setIsInitialLoading(false);
+        
+        // Load interventions in background (can be slow)
+        try {
+          const intervData = await interventionsApi.list();
+          setFullData(prev => prev ? {
+            ...prev,
+            interventions: intervData || [],
+          } : null);
+        } catch (err) {
+          console.error("Failed to load interventions", err);
+        }
       } catch (err) {
-        console.error("Failed to load full dashboard data", err);
-      } finally {
+        console.error("Failed to load KPIs and health scores", err);
         setIsInitialLoading(false);
       }
     };
     loadFullData();
   }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi]);
 
-  // --- Filter data when filters change ---
+  // --- Filter cached data when filters change (instant update) ---
   useEffect(() => {
     if (!fullData) return;
 
     // If only client filter is applied, filter client-side (instant)
-    if (selectedClient && !selectedRegion && !selectedVille && !selectedEquipType) {
+    if (selectedClient && !selectedEquipType) {
       setIsLoading(true);
       try {
         // Filter health scores by client
         const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
 
-        // Compute KPIs from filtered health data
-        const nb_eq = filteredHealth.length;
-        const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
-        const disponibilite = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
-
-        setKpis({
-          ...fullData.kpis,
-          nb_equipements: nb_eq,
-          nb_critiques: nb_critiques,
-          disponibilite: disponibilite,
-        });
-        setHealthScores(filteredHealth);
-
-        // Filter interventions
+        // Filter interventions by client machines
         const validMachines = filteredHealth.map((h: any) => h.machine);
         let filteredInterv = fullData.interventions;
         if (validMachines.length > 0) {
@@ -229,6 +224,50 @@ export default function DashboardPage() {
           filteredInterv = [];
         }
 
+        // Compute ALL KPIs from filtered data
+        const nb_eq = filteredHealth.length;
+        const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
+        const disponibilite = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
+        const nb_interventions = filteredInterv.length;
+        const nb_cloturees = filteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
+        const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 100) : 0;
+
+        // Calculate MTBF and MTTR from filtered interventions
+        let mtbf = 0, mttr = 0;
+        if (filteredInterv.length > 0) {
+          const durations = filteredInterv
+            .filter((i: any) => i.duree_intervention)
+            .map((i: any) => parseFloat(i.duree_intervention) || 0);
+          if (durations.length > 0) {
+            mttr = durations.reduce((a: number, b: number) => a + b, 0) / durations.length;
+          }
+          // MTBF = average time between failures (simplified: total days / number of interventions)
+          if (filteredInterv.length > 1) {
+            const dates = filteredInterv
+              .map((i: any) => new Date(i.date).getTime())
+              .sort((a: number, b: number) => a - b);
+            const daysBetween = [];
+            for (let i = 1; i < dates.length; i++) {
+              daysBetween.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+            }
+            if (daysBetween.length > 0) {
+              mtbf = daysBetween.reduce((a: number, b: number) => a + b, 0) / daysBetween.length * 24; // convert to hours
+            }
+          }
+        }
+
+        setKpis({
+          nb_equipements: nb_eq,
+          nb_critiques: nb_critiques,
+          disponibilite: disponibilite,
+          mtbf: mtbf,
+          mttr: mttr,
+          cout_total: 0, // Can't calculate from client-side data
+          nb_interventions: nb_interventions,
+          nb_clients: 1, // Only 1 client selected
+          taux_resolution: taux_resolution,
+        });
+        setHealthScores(filteredHealth);
         setAllInterventions(filteredInterv);
         setRecentInterv(
           filteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
@@ -241,8 +280,8 @@ export default function DashboardPage() {
       return;
     }
 
-    // If no filters or complex filters (region/ville/type), use full data or call API
-    if (!selectedClient && !selectedRegion && !selectedVille && !selectedEquipType) {
+    // If no filters or equipment type filter, use full data or call API
+    if (!selectedClient && !selectedEquipType) {
       // No filters - use full data
       setIsLoading(true);
       try {
@@ -258,7 +297,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // Complex filters (region/ville/type or combination) - call API
+    // Equipment type filter - call API
     setIsLoading(true);
     const loadFilteredData = async () => {
       try {
@@ -267,8 +306,6 @@ export default function DashboardPage() {
           date_end: dateRange.date_end,
         };
         if (selectedClient) params.client = selectedClient;
-        if (selectedRegion) params.region = selectedRegion;
-        if (selectedVille) params.ville = selectedVille;
         if (selectedEquipType) params.equipment_type = selectedEquipType;
 
         const [kpiData, healthData, intervData] = await Promise.all([
@@ -301,7 +338,7 @@ export default function DashboardPage() {
       }
     };
     loadFilteredData();
-  }, [selectedClient, selectedRegion, selectedVille, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
+  }, [selectedClient, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
 
   // --- Computed values ---
   const scoreGlobal = useMemo(() => {
@@ -412,7 +449,7 @@ export default function DashboardPage() {
 
       {/* ===== FILTER BAR ===== */}
       <div className={`glass rounded-xl p-4 space-y-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
           {/* Client Filter — masqué pour Lecteur (données auto-filtrées) */}
           {!isLecteur && (
             <div>
@@ -425,45 +462,10 @@ export default function DashboardPage() {
                 className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
               >
                 <option value="">Tous les clients</option>
-                {(selectedRegion ? clientsForRegion : filterOptions.clients).map(c => <option key={c} value={c}>{c}</option>)}
+                {filterOptions.clients.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
-
-          {/* Region Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-              <MapPin className="w-3.5 h-3.5" /> Région
-            </label>
-            <select
-              value={selectedRegion}
-              onChange={e => { setSelectedRegion(e.target.value); setSelectedVille(''); }}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
-            >
-              <option value="">Toutes les régions</option>
-              {filterOptions.regions.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-
-          {/* Ville Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-              <MapPin className="w-3.5 h-3.5" /> Ville
-            </label>
-            <select
-              value={selectedVille}
-              onChange={e => setSelectedVille(e.target.value)}
-              disabled={!selectedRegion || villesForRegion.length === 0}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <option value="">Toutes les villes</option>
-              {villesForRegion && villesForRegion.length > 0 ? (
-                villesForRegion.map(v => <option key={v} value={v}>{v}</option>)
-              ) : (
-                <option disabled>Aucune ville disponible</option>
-              )}
-            </select>
-          </div>
 
           {/* Equipment Type Filter */}
           <div>
@@ -559,16 +561,6 @@ export default function DashboardPage() {
           {selectedClient && (
             <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
               Client: {selectedClient}
-            </span>
-          )}
-          {selectedRegion && (
-            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20">
-              Région: {selectedRegion}
-            </span>
-          )}
-          {selectedVille && (
-            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-green-500/10 text-green-400 border border-green-500/20">
-              Ville: {selectedVille}
             </span>
           )}
           {selectedEquipType && (

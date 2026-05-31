@@ -196,7 +196,7 @@ export default function EquipementsPage() {
     Nom: '', Type: 'Scanner CT', Domaine: 'Radiologie' as string, EstAnnexe: false,
     Fabricant: '', Modele: '', NumSerie: '',
     Client: '', MatriculeFiscale: '', Notes: '', Statut: 'Opérationnel',
-    Ville: '', Service: '',
+    Ville: '', Region: '', Service: '',
     GarantieDebut: '', GarantieDuree: 0,
     DateInstallation: new Date().toISOString().split('T')[0],
     DernieresMaintenance: new Date().toISOString().split('T')[0],
@@ -753,6 +753,7 @@ export default function EquipementsPage() {
                               Client: e.target.value,
                               MatriculeFiscale: selected?.matricule_fiscale || form.MatriculeFiscale,
                               Ville: selected?.ville || form.Ville,
+                              Region: selected?.region || form.Region,
                             });
                           }}>
                             <option value="">— Sélectionner un client —</option>
