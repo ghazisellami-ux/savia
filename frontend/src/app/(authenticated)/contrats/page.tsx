@@ -110,9 +110,6 @@ export default function ContratsPage() {
     if (statut.includes('expiré')) {
       return 'Expiré';
     }
-    if (statut.includes('en attente')) {
-      return 'En attente';
-    }
     
     return 'Actif';
   };
@@ -393,7 +390,6 @@ export default function ContratsPage() {
             <option value="actif">Actif</option>
             <option value="suspendu">Suspendu</option>
             <option value="expiré">Expiré</option>
-            <option value="en attente">En attente</option>
           </select>
           {filterStatut && (
             <button onClick={() => setFilterStatut('')}
@@ -639,7 +635,7 @@ export default function ContratsPage() {
                   <div>
                     <label className={LABEL}>Statut</label>
                     <select className={INPUT} value={form.statut} onChange={e => set('statut', e.target.value)}>
-                      {['Actif', 'Suspendu', 'Expiré', 'En attente'].map(s => <option key={s} value={s}>{s}</option>)}
+                      {['Actif', 'Suspendu', 'Expiré'].map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </div>
                   <div>
