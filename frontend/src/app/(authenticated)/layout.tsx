@@ -6,7 +6,6 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import Sidebar from '@/components/layout/sidebar';
-import AiChatbot from '@/components/AiChatbot';
 import { clsx } from 'clsx';
 
 const SIDEBAR_COLLAPSED_KEY = 'savia_sidebar_collapsed';
@@ -65,7 +64,6 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       >
         {children}
       </main>
-      <AiChatbot />
     </div>
   );
 }
