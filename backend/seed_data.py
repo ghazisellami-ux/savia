@@ -43,7 +43,7 @@ MEDICAL_DOMAINS = [
 ]
 
 EQUIPMENT_TYPES_BY_DOMAIN = {
-    "Radiologie": ["Radiographe", "Scanner", "IRM", "Échographe", "Mammographe", "Fluoroscope"],
+    "Radiologie": ["Radiographe", "Scanner", "IRM", "Échographe", "Mammographie", "Fluoroscope"],
     "Cardiologie": ["ECG", "Défibrillateur", "Moniteur cardiaque", "Échographe cardiaque", "Holter"],
     "Laboratoire": ["Analyseur hématologie", "Analyseur chimie", "Centrifugeuse", "Microscope", "Incubateur"],
     "Chirurgie": ["Bistouri électrique", "Aspirateur", "Moniteur anesthésie", "Lampe scialytique", "Table opératoire"],
@@ -379,6 +379,11 @@ def seed_pieces(conn, count=100):
     logger.info(f"📦 Création de {count} pièces de rechange...")
     
     pieces = []
+    # Flatten all equipment types from all domains
+    all_equipment_types = []
+    for domain_types in EQUIPMENT_TYPES_BY_DOMAIN.values():
+        all_equipment_types.extend(domain_types)
+    
     for i, (ref, designation, prix) in enumerate(SPARE_PARTS_GENERIC * (count // len(SPARE_PARTS_GENERIC) + 1)):
         if i >= count:
             break
@@ -386,7 +391,7 @@ def seed_pieces(conn, count=100):
         piece = {
             'reference': f"{ref}_{i:03d}",
             'designation': f"{designation} (Var. {i})",
-            'equipement_type': random.choice(list(EQUIPMENT_TYPES_BY_DOMAIN.values())[0]),
+            'equipement_type': random.choice(all_equipment_types),
             'stock_actuel': random.randint(0, 50),
             'stock_minimum': random.randint(2, 10),
             'fournisseur': random.choice(MANUFACTURERS),

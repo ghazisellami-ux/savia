@@ -45,18 +45,16 @@ function coreWords(s: string): string[] {
   return s.toLowerCase().replace(/[()\-_/]/g, ' ').split(/\s+/).filter(w => w.length > 1);
 }
 
-// Vérifie si le type de pièce correspond à la machine de l'intervention
-// Machine format: "Type Fabricant" (ex: "IRM GE", "Arceau Chirurgical Hologic")
-// Piece equipement_type: "Type (détail)" (ex: "IRM", "Arceau Chirurgical (C-Arm)")
-function matchesMachine(machineName: string, pieceType: string): boolean {
-  if (!machineName || !pieceType) return false;
-  const machineWords = coreWords(machineName);
-  // Remove parenthesized parts from piece type (e.g. "(C-Arm)", "(CBCT)", "(DR)")
-  const pieceClean = pieceType.replace(/\([^)]*\)/g, '').trim();
-  const pieceCore = coreWords(pieceClean);
-  if (pieceCore.length === 0) return false;
-  const matchCount = pieceCore.filter(pw => machineWords.some(mw => mw.includes(pw) || pw.includes(mw))).length;
-  return matchCount >= pieceCore.length;
+// Vérifie si le type de pièce correspond à l'équipement de l'intervention
+// Compare directement les types d'équipement
+function matchesMachine(machineEquipmentType: string, pieceEquipmentType: string): boolean {
+  if (!machineEquipmentType || !pieceEquipmentType) return false;
+  
+  // Direct comparison of equipment types
+  const mt = machineEquipmentType.toLowerCase().trim();
+  const pt = pieceEquipmentType.toLowerCase().trim();
+  
+  return mt === pt;
 }
 
 export default function InterventionDetailPage() {
@@ -66,6 +64,7 @@ export default function InterventionDetailPage() {
 
   const [intervention, setIntervention] = useState<any>(null);
   const [allPieces, setAllPieces]       = useState<any[]>([]);
+  const [allEquipements, setAllEquipements] = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState('');
@@ -95,16 +94,21 @@ export default function InterventionDetailPage() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [all, pieces] = await Promise.all([
+      const [all, pieces, equipements] = await Promise.all([
         api.interventions.list(),
         api.pieces.list(),
+        api.equipements.list(),
       ]);
+
+      console.log('Loaded equipements:', equipements);
+      console.log('Loaded pieces:', pieces);
 
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
 
       setIntervention(found);
-      setAllPieces(pieces as any[]);
+      setAllPieces(Array.isArray(pieces) ? pieces : []);
+      setAllEquipements(Array.isArray(equipements) ? equipements : []);
       setForm({
         statut:           found.statut || 'En cours',
         probleme:         found.probleme || '',
@@ -126,11 +130,30 @@ export default function InterventionDetailPage() {
   };
 
   // Filtrer les pièces : l'equipement_type de la pièce doit correspondre
-  // au nom de la machine de l'intervention (matching intelligent multi-mots)
+  // au type d'équipement de l'équipement de l'intervention
   const filteredPieces = useMemo(() => {
-    if (!intervention?.machine || allPieces.length === 0) return [];
-    return allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''));
-  }, [allPieces, intervention]);
+    if (!intervention?.machine || !allPieces || !allEquipements) {
+      return [];
+    }
+    
+    // Find the equipment for this intervention
+    const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
+    if (!equipment) {
+      return [];
+    }
+    
+    // Get the equipment type - API returns "Type" (capitalized)
+    const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
+    if (!equipmentType) {
+      return [];
+    }
+    
+    // Filter pieces by matching equipment type
+    return allPieces.filter(p => {
+      const pieceType = (p.equipement_type || '').toLowerCase().trim();
+      return equipmentType === pieceType;
+    });
+  }, [allPieces, allEquipements, intervention?.machine]);
 
   const handleQty = (pieceId: number, qty: number) => {
     setPiecesQty(prev => {
@@ -219,16 +242,31 @@ export default function InterventionDetailPage() {
 
   // Pour la section "en attente de pièce", filtrer d'abord par type d'équipement puis par recherche
   const searchedPieces = useMemo(() => {
-    const base = intervention?.machine
-      ? allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''))
-      : allPieces;
+    let base: any[] = [];
+    
+    if (intervention?.machine && allEquipements && allPieces) {
+      // Find the equipment for this intervention
+      const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
+      if (equipment) {
+        // Get the equipment type
+        const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
+        if (equipmentType) {
+          // Filter pieces by matching equipment type
+          base = allPieces.filter(p => {
+            const pieceType = (p.equipement_type || '').toLowerCase().trim();
+            return equipmentType === pieceType;
+          });
+        }
+      }
+    }
+    
     if (!searchRupture) return base;
     const q = searchRupture.toLowerCase();
     return base.filter(p =>
       (p.designation || p.nom || '').toLowerCase().includes(q)
       || (p.reference || '').toLowerCase().includes(q)
     );
-  }, [allPieces, intervention, searchRupture]);
+  }, [allPieces, allEquipements, intervention?.machine, searchRupture]);
 
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
