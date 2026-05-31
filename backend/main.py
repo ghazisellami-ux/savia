@@ -557,6 +557,17 @@ def check_sla_alerts():
     - 🔴 Bot Manager : alerte quand une intervention dépasse le SLA du contrat
     """
     from datetime import datetime as _dt
+    
+    def _format_hours(hours: float) -> str:
+        """Format hours as 'X jours Y heures' or just 'X heures'"""
+        if hours < 24:
+            return f"{round(hours)}h"
+        days = int(hours // 24)
+        remaining_hours = int(hours % 24)
+        if remaining_hours == 0:
+            return f"{days}j"
+        return f"{days}j {remaining_hours}h"
+    
     try:
         df_contrats = lire_contrats()
         df_interv = lire_interventions()
@@ -646,7 +657,7 @@ def check_sla_alerts():
             lines = '\n'.join(
                 f"  🔴 <b>#{b['id']}</b> — {b['machine']}"
                 f"\n    👤 {b['client']} | 👷 {b['technicien'] or 'Non assigné'}"
-                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {round(b['elapsed_h'] - b['sla_h'], 1)}h</b>"
+                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {_format_hours(b['elapsed_h'] - b['sla_h'])}</b>"
                 for b in sorted(breached_items, key=lambda x: -x['pct'])
             )
             msg = (
