@@ -6729,6 +6729,7 @@ def map_sites(user: dict = Depends(_verify_token)):
     try:
         df_equip = lire_equipements()
         df_interv = lire_interventions()
+        df_plan = lire_planning()  # ← Load ONCE before the loop
 
         sites = {}
         if df_equip.empty:
@@ -6791,7 +6792,6 @@ def map_sites(user: dict = Depends(_verify_token)):
             # Next planned maintenance
             prochaine_maintenance = None
             try:
-                df_plan = lire_planning()
                 if not df_plan.empty and "machine" in df_plan.columns:
                     today = datetime.now().strftime("%Y-%m-%d")
                     planned = df_plan[(df_plan["machine"].isin(machines)) & 
@@ -6808,8 +6808,8 @@ def map_sites(user: dict = Depends(_verify_token)):
 
             result.append({
                 **site,
-                "latitude": lat,
-                "longitude": lng,
+                "latitude": float(lat) if lat and lat == lat else None,  # Check for NaN
+                "longitude": float(lng) if lng and lng == lng else None,  # Check for NaN
                 "ville": assigned_ville,
                 "equipements": site["equipements"][:20],  # Limit for performance
                 "score_sante": score,
