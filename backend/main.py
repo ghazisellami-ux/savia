@@ -4803,22 +4803,6 @@ except ImportError:
     s3_storage = None
 
 
-@app.get("/api/logs")
-def api_list_logs(machine: Optional[str] = None, user=Depends(_verify_token)):
-    """List all logs from S3, optionally filtered by machine name."""
-    if not s3_storage or not s3_storage.S3_AVAILABLE:
-        s3_storage and s3_storage._init_s3()
-    if not s3_storage or not s3_storage.S3_AVAILABLE:
-        return []
-
-    prefix = "logs/"
-    if machine:
-        # Search across all date folders for this machine
-        all_files = s3_storage.list_files(prefix)
-        return [f for f in all_files if f"/{machine.replace(' ', '_')}/" in f["key"] or machine.replace(' ', '_') in f["key"]]
-    return s3_storage.list_files(prefix)
-
-
 @app.delete("/api/logs")
 def api_delete_log(key: str = Query(..., description="S3 key of the log to delete"), user=Depends(_verify_token)):
     """Delete a specific log file from S3 by its key."""
