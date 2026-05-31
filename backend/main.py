@@ -1787,11 +1787,24 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
-        # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref'
+        # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref' ou 'reference'
         raw_pieces = body.get("pieces_a_deduire") or []
         if not isinstance(raw_pieces, list):
             raw_pieces = []
-        pieces_valides = [p for p in raw_pieces if isinstance(p, dict) and p.get("ref")]
+        # Accepter 'ref' ou 'reference', 'qty' ou 'quantite'
+        pieces_valides = []
+        for p in raw_pieces:
+            if isinstance(p, dict):
+                ref = p.get("ref") or p.get("reference")
+                if ref:
+                    pieces_valides.append({
+                        'ref': ref,
+                        'reference': ref,
+                        'qty': p.get("qty") or p.get("quantite") or 0,
+                        'quantite': p.get("qty") or p.get("quantite") or 0,
+                        'designation': p.get("designation", ""),
+                        'prix_unitaire': p.get("prix_unitaire", 0),
+                    })
 
         try:
             ok, msg = cloturer_intervention(
@@ -5660,12 +5673,22 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
 
         pieces = str(interv.get("pieces_utilisees", "") or "").strip()
         if pieces:
-            pdf.set_font("Helvetica", "", 8.5)
-            pdf.multi_cell(W, 5, _sanitize(pieces[:600]))
+            pdf.set_font("Helvetica", "", 7.5)
+            # Afficher chaque pièce sur une ligne
+            pieces_lines = pieces.split('\n')
+            for piece_line in pieces_lines:
+                if piece_line.strip():
+                    # Vérifier s'il y a assez d'espace, sinon ajouter une page
+                    if pdf.get_y() + 8 > pdf.h - 20:
+                        pdf.add_page()
+                        pdf.set_y(pdf.get_y() + 10)
+                    # Utiliser multi_cell pour permettre le wrapping du texte
+                    pdf.multi_cell(0, 4, _sanitize(piece_line.strip()), new_x="LMARGIN", new_y="NEXT")
         else:
             pdf.set_font("Helvetica", "I", 8.5)
             pdf.set_text_color(150, 160, 170)
             pdf.cell(W, 5, "Aucune piece utilisee")
+            pdf.ln(5)
             pdf.set_text_color(30, 40, 60)
 
         # ── SECTION: SIGNATURES ──
