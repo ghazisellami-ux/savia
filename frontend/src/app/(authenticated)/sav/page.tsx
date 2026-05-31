@@ -82,6 +82,10 @@ export default function SavPage() {
   const [data, setData] = useState<Intervention[]>([]);
   const [techniciens, setTechniciens] = useState<{nom: string, prenom: string}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const PAGE_SIZE = 200;
   const [showAddModal, setShowAddModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<Intervention | null>(null);
@@ -150,14 +154,23 @@ export default function SavPage() {
     return Array.from(years).sort((a, b) => b - a);
   }, [data]);
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
+  const loadData = useCallback(async (pageOffset: number = 0, append: boolean = false) => {
+    if (pageOffset === 0) setIsLoading(true);
+    else setIsLoadingMore(true);
+    
     try {
       const [res, techRes] = await Promise.all([
-        interventions.list(),
-        techApi.list().catch(() => [])
+        interventions.list().then((allInterventions: any[]) => {
+          // Simulate pagination on frontend (since backend returns all)
+          return allInterventions.slice(pageOffset, pageOffset + PAGE_SIZE);
+        }),
+        pageOffset === 0 ? techApi.list().catch(() => []) : Promise.resolve([])
       ]);
-      setTechniciens(techRes as any);
+      
+      if (pageOffset === 0) {
+        setTechniciens(techRes as any);
+      }
+      
       const normalizeStatut = (s: string): string => {
         if (!s) return 'En cours';
         const low = s.toLowerCase();
@@ -167,13 +180,14 @@ export default function SavPage() {
         if (low.includes('planif')) return 'Planifiee';
         return s;
       };
+      
       const mapped = res.map((item: any) => ({
         id: Number(item.id || 0),
         date: item.date || 'N/A',
         machine: item.machine || '',
         client: item.client || '',
         type: item.type_intervention || 'Corrective',
-        technicien: item.technicien || 'Non assign\u00e9',
+        technicien: item.technicien || 'Non assigné',
         duree: Math.round((item.duree_minutes || 0) / 60),
         duree_minutes: item.duree_minutes || 0,
         deplacement: Math.round((item.duree_deplacement || 0) / 60 * 10) / 10,
@@ -189,27 +203,68 @@ export default function SavPage() {
         coutPieces: item.cout_pieces || 0,
         cout: item.cout || 0,
       }));
-      setData(mapped);
+      
+      if (append) {
+        setData(prev => [...prev, ...mapped]);
+      } else {
+        setData(mapped);
+      }
+      
+      // Check if there are more items to load
+      setHasMore(res.length === PAGE_SIZE);
+      setOffset(pageOffset + PAGE_SIZE);
     } catch (err) {
       console.error("Failed to fetch interventions", err);
     } finally {
-      setIsLoading(false);
+      if (pageOffset === 0) setIsLoading(false);
+      else setIsLoadingMore(false);
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(0, false); }, [loadData]);
+
+  // Infinite scroll: load more when user scrolls near bottom
+  useEffect(() => {
+    const handleScroll = () => {
+      // Check if user scrolled to bottom (within 500px)
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+        if (hasMore && !isLoadingMore && !isLoading) {
+          loadData(offset, true);
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [offset, hasMore, isLoadingMore, isLoading, loadData]);
 
   useEffect(() => {
-    interventions.listFiches().then(setFiches).catch(() => {});
-    interventions.listFacturation().then(setFacturationData).catch(() => {});
-    // Charger toutes les pièces pour le sélecteur rupture
-    import('@/lib/api').then(({ pieces: piecesApi }) => {
-      piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
-    });
-    // Charger équipements + contrats pour la fiche PDF
-    equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
-    clientsApi.list().then((res: any) => setClientsData(res || [])).catch(() => {});
-    contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
+    // Load non-critical data in background with delays
+    // These are not needed for initial page render
+    const timers = [
+      setTimeout(() => {
+        interventions.listFiches().then(setFiches).catch(() => {});
+      }, 300),
+      setTimeout(() => {
+        interventions.listFacturation().then(setFacturationData).catch(() => {});
+      }, 400),
+      setTimeout(() => {
+        import('@/lib/api').then(({ pieces: piecesApi }) => {
+          piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
+        });
+      }, 500),
+      setTimeout(() => {
+        equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
+      }, 600),
+      setTimeout(() => {
+        clientsApi.list().then((res: any) => setClientsData(res || [])).catch(() => {});
+      }, 700),
+      setTimeout(() => {
+        contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
+      }, 800),
+    ];
+    
+    return () => timers.forEach(t => clearTimeout(t));
   }, []);
 
 
@@ -867,6 +922,20 @@ export default function SavPage() {
                 </tbody>
               </table>
             </div>
+            
+            {/* Loading indicator for infinite scroll */}
+            {isLoadingMore && (
+              <div className="flex justify-center items-center py-6">
+                <Loader2 className="w-5 h-5 animate-spin text-savia-accent mr-2" />
+                <span className="text-sm text-savia-text-muted">Chargement de plus d'interventions...</span>
+              </div>
+            )}
+            
+            {!hasMore && data.length > 0 && (
+              <div className="text-center py-4 text-sm text-savia-text-dim">
+                Toutes les interventions ont été chargées
+              </div>
+            )}
           </div>
         </>
       )}

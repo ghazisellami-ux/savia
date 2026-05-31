@@ -567,6 +567,9 @@ def init_db():
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_interventions_machine ON interventions(machine);
         """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_interventions_date ON interventions(date DESC);
+        """)
 
         # --- Migrations pour bases existantes (Pillier 3: Logging des migrations) ---
         def _run_migration(sql, description):
@@ -1498,13 +1501,12 @@ def lire_tous_documents_techniques():
 # ==========================================
 
 def lire_interventions(machine=None):
-    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via sous-requête.
+    """Lit les interventions, optionnellement filtrées par machine. Inclut le client via JOIN.
     Note: fiche_photo_data (BYTEA) est exclu intentionnellement pour éviter les erreurs de sérialisation JSON.
     Utiliser GET /api/interventions/{id}/fiche pour télécharger la photo."""
     with get_db() as conn:
-        # Sous-requête LIMIT 1 au lieu de LEFT JOIN → évite la multiplication des lignes
-        # quand le même nom de machine existe chez plusieurs clients.
-        # fiche_photo_data exclu car type memoryview non sérialisable JSON.
+        # Use JOIN instead of subquery to avoid N+1 pattern
+        # Select only necessary columns to reduce data transfer
         base_query = """
             SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
                    i.description, i.probleme, i.cause, i.solution,
@@ -1515,10 +1517,9 @@ def lire_interventions(machine=None):
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
-                   (SELECT e.client FROM equipements e
-                    WHERE LOWER(e.nom) = LOWER(i.machine)
-                    LIMIT 1) AS client
+                   COALESCE(e.client, '') AS client
             FROM interventions i
+            LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
         """
         if machine:
             df = read_sql(
@@ -1526,20 +1527,35 @@ def lire_interventions(machine=None):
                 conn, params=(machine,))
         else:
             df = read_sql(base_query + " ORDER BY i.date DESC", conn)
-    df = _fix_df_text(df)
+    
+    # Only apply text fixes to text columns that need it
+    text_columns = ["machine", "description", "probleme", "cause", "solution", "notes", "client"]
+    if not df.empty:
+        df = _fix_df_text(df, columns=text_columns)
+    
     # Fill remaining NaN with empty string
     if "client" in df.columns:
         df["client"] = df["client"].fillna("")
+    
     # Normaliser le statut
     if not df.empty and "statut" in df.columns:
         df["statut"] = df["statut"].apply(
             lambda s: "Cloturee" if "tur" in str(s).lower() else str(s)
         )
+    
     # Convert technicien username to full name (nom + prenom) if it looks like a username
+    # BUT: Cache the lookups to avoid N+1 queries
     if not df.empty and "technicien" in df.columns:
+        tech_cache = {}
+        
         def convert_technicien(tech_str):
             if not tech_str or not isinstance(tech_str, str):
                 return tech_str
+            
+            # Check cache first
+            if tech_str in tech_cache:
+                return tech_cache[tech_str]
+            
             # Try to get full name from techniciens table
             try:
                 with get_db() as conn:
@@ -1550,12 +1566,17 @@ def lire_interventions(machine=None):
                     if row:
                         nom = row.get("nom", "").strip() if hasattr(row, 'get') else (row[0] or "").strip()
                         prenom = row.get("prenom", "").strip() if hasattr(row, 'get') else (row[1] or "").strip()
-                        return f"{prenom} {nom}".strip() if prenom else nom
+                        result = f"{prenom} {nom}".strip() if prenom else nom
+                        tech_cache[tech_str] = result
+                        return result
             except Exception:
                 pass
+            
+            tech_cache[tech_str] = tech_str
             return tech_str
         
         df["technicien"] = df["technicien"].apply(convert_technicien)
+    
     return df
 
 

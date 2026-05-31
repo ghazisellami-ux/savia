@@ -1660,9 +1660,12 @@ def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
 def get_interventions(
     machine: Optional[str] = None,
     technicien: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 200,
     user: dict = Depends(_verify_token),
 ):
     df = lire_interventions(machine=machine)
+    
     # Si le user est un Technicien → filtrer automatiquement ses interventions
     if user.get("role") == "Technicien" and not df.empty:
         user_nom_complet = (user.get("nom") or "").strip()
@@ -1681,6 +1684,7 @@ def get_interventions(
         df = df[df["technicien"].astype(str).apply(
             lambda t: all(w in t.lower() for w in words)
         )]
+    
     # Filtrage par client pour Lecteur
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -1691,6 +1695,14 @@ def get_interventions(
             )
             if "machine" in df.columns:
                 df = df[df["machine"].isin(machines_client)]
+    
+    # Apply pagination (offset + limit)
+    if not df.empty:
+        total = len(df)
+        df = df.iloc[offset:offset + limit]
+    else:
+        total = 0
+    
     return _df_to_records(df)
 
 
