@@ -1234,8 +1234,18 @@ def get_health_scores(
 ):
     """Compute health scores per equipment based on intervention history."""
     try:
+        # Load data efficiently with selective columns
         df_eq = lire_equipements()
-        df_int = lire_interventions()
+        
+        # Load only necessary intervention columns for scoring
+        with get_db() as conn:
+            int_query = """
+            SELECT i.machine, i.type_intervention, i.date, i.statut
+            FROM interventions i
+            ORDER BY i.date DESC
+            """
+            df_int = read_sql(int_query, conn)
+        
         df_clients = db_lire_clients()  # Get clients table for region/ville filtering
 
         # Pour Lecteur : forcer le filtre par son client
@@ -1329,9 +1339,10 @@ def get_health_scores(
             pannes = 0
             recent_interventions = 0
             if not df_sav.empty and "machine" in df_sav.columns:
-                pannes = len(df_sav[df_sav["machine"] == nom])
+                # Case-insensitive matching for machine names
+                pannes = len(df_sav[df_sav["machine"].str.lower() == nom.lower()])
                 # Count interventions in last 30 days
-                df_machine = df_sav[df_sav["machine"] == nom]
+                df_machine = df_sav[df_sav["machine"].str.lower() == nom.lower()]
                 if not df_machine.empty and "date" in df_machine.columns:
                     df_machine_recent = df_machine[df_machine["date"] >= pd.Timestamp(thirty_days_ago)]
                     recent_interventions = len(df_machine_recent)
@@ -1386,6 +1397,7 @@ def get_health_scores(
 
         return sorted(scores, key=lambda x: x["score"])
     except Exception as e:
+        logger.error(f"Erreur get_health_scores: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
