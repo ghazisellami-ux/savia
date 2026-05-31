@@ -2194,6 +2194,38 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
     return {"ok": True, "validation": nouveau_statut}
 
 
+@app.delete("/api/interventions/{intervention_id}/fiche")
+def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Supprime la photo de fiche d'une intervention (Manager/Admin uniquement).
+    Impossible si la fiche est validée."""
+    # Vérifier les permissions
+    user_role = user.get("role", "").strip()
+    if user_role not in {"Admin", "Manager"}:
+        raise HTTPException(status_code=403, detail="Seuls les Managers et Admins peuvent supprimer une fiche")
+    
+    with get_db() as conn:
+        # Vérifier le statut de validation
+        row = conn.execute(
+            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = %s",
+            (intervention_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        
+        statut_validation = (row["fiche_validation"] or "En attente").strip()
+        if statut_validation == "Validée":
+            raise HTTPException(status_code=403, detail="Impossible de supprimer une fiche validée")
+        
+        # Supprimer la fiche
+        conn.execute(
+            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = %s",
+            (intervention_id,)
+        )
+    
+    logger.info(f"Fiche #{intervention_id} supprimée par {user.get('nom', '?')} ({user_role})")
+    return {"ok": True, "message": "Fiche supprimée avec succès"}
+
+
 # ==========================================
 # DEMANDES D'INTERVENTION
 # ==========================================
