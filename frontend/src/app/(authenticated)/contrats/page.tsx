@@ -55,6 +55,7 @@ export default function ContratsPage() {
   const { user } = useAuth();
   const canEdit = user?.role === 'Admin' || user?.role === 'Manager';
   const [search, setSearch] = useState('');
+  const [filterStatut, setFilterStatut] = useState('');
   const [data, setData] = useState<Contrat[]>([]);
   const [equips, setEquips] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
@@ -92,6 +93,29 @@ export default function ContratsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Helper function to determine actual status
+  const getActualStatus = (c: Contrat) => {
+    const fin = new Date(c.date_fin + 'T23:59:59');
+    const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+    
+    if (daysLeft < 0) {
+      return 'Expiré';
+    }
+    
+    const statut = (c.statut || 'Actif').toLowerCase();
+    if (statut.includes('suspendu')) {
+      return 'Suspendu';
+    }
+    if (statut.includes('expiré')) {
+      return 'Expiré';
+    }
+    if (statut.includes('en attente')) {
+      return 'En attente';
+    }
+    
+    return 'Actif';
+  };
 
   // Derived lists
   const clientsList = clients.map((c: any) => c.nom).sort();
@@ -194,19 +218,55 @@ export default function ContratsPage() {
     pieces_selectionnees: f.pieces_selectionnees.map(s => s.ref === ref ? { ...s, quota: Math.max(1, quota) } : s),
   }));
 
-  const filtered = data.filter(c =>
-    !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
-    c.id.toLowerCase().includes(search.toLowerCase()) ||
-    (c.type_contrat || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = data.filter(c => {
+    const matchSearch = !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
+      c.id.toLowerCase().includes(search.toLowerCase()) ||
+      (c.type_contrat || '').toLowerCase().includes(search.toLowerCase());
+    
+    // Determine actual status
+    const actualStatus = getActualStatus(c);
+    
+    const matchStatut = !filterStatut || actualStatus.toLowerCase() === filterStatut.toLowerCase();
+    return matchSearch && matchStatut;
+  });
 
-  const actifs = data.filter(c => (c.statut || '').toLowerCase().includes('actif')).length;
-  const expires = data.filter(c => {
-    const fin = new Date(c.date_fin);
-    const diff = (fin.getTime() - Date.now()) / 86400000;
-    return diff >= 0 && diff <= 60;
+  const actifs = data.filter(c => getActualStatus(c) === 'Actif').length;
+  const suspendus = data.filter(c => getActualStatus(c) === 'Suspendu').length;
+  const expires = data.filter(c => getActualStatus(c) === 'Expiré').length;
+  const expiringIn60 = data.filter(c => {
+    const fin = new Date(c.date_fin + 'T23:59:59');
+    const diff = Math.floor((fin.getTime() - Date.now()) / 86400000);
+    return diff >= 0 && diff <= 60 && getActualStatus(c) === 'Actif';
   }).length;
-  const totalRevenu = data.reduce((a, b) => a + (b.montant || 0), 0);
+  
+  // Calculate prorata revenue for current year (2026)
+  const currentYear = new Date().getFullYear();
+  const yearStart = new Date(currentYear, 0, 1);
+  const yearEnd = new Date(currentYear, 11, 31);
+  const daysInYear = 365;
+  
+  const totalRevenu = data.reduce((total, c) => {
+    const montant = c.montant || 0;
+    if (montant === 0) return total;
+    
+    const debut = new Date(c.date_debut);
+    const fin = new Date(c.date_fin);
+    
+    // Calculate overlap between contract and current year
+    const overlapStart = new Date(Math.max(debut.getTime(), yearStart.getTime()));
+    const overlapEnd = new Date(Math.min(fin.getTime(), yearEnd.getTime()));
+    
+    // If no overlap, return 0
+    if (overlapStart > overlapEnd) return total;
+    
+    // Calculate days of overlap
+    const daysOverlap = (overlapEnd.getTime() - overlapStart.getTime()) / 86400000 + 1; // +1 to include both start and end days
+    
+    // Calculate prorata revenue
+    const prorataRevenu = montant * (daysOverlap / daysInYear);
+    
+    return total + prorataRevenu;
+  }, 0);
 
   if (isLoading) return (
     <div className="flex justify-center items-center h-64">
@@ -256,27 +316,38 @@ export default function ContratsPage() {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPIs - All in one row */}
+      <div className="grid grid-cols-2 md:grid-cols-12 gap-2">
         {[
-          { label: 'Total contrats', value: data.length, color: 'text-savia-accent', icon: <FileText className="w-5 h-5" /> },
-          { label: 'Actifs', value: actifs, color: 'text-green-400', icon: <CheckCircle2 className="w-5 h-5" /> },
-          { label: 'Expirent dans 60j', value: expires, color: 'text-yellow-400', icon: <AlertTriangle className="w-5 h-5" /> },
-          { label: 'Revenu annuel', value: `${(totalRevenu / 1000).toFixed(0)}K TND`, color: 'text-savia-accent', icon: <DollarSign className="w-5 h-5" /> },
+          { label: 'Total contrats', value: data.length, color: 'text-savia-accent', icon: <FileText className="w-4 h-4" />, span: false },
+          { label: 'Actifs', value: actifs, color: 'text-green-400', icon: <CheckCircle2 className="w-4 h-4" />, span: false },
+          { label: 'Suspendus', value: suspendus, color: 'text-orange-400', icon: <AlertTriangle className="w-4 h-4" />, span: false },
+          { label: 'Expiré', value: expires, color: 'text-red-500', icon: <AlertTriangle className="w-4 h-4" />, span: false },
+          { label: 'Expire dans 60j', value: expiringIn60, color: 'text-yellow-400', icon: <Clock className="w-4 h-4" />, span: false },
         ].map(k => (
-          <div key={k.label} className="glass rounded-xl p-4 text-center">
+          <div key={k.label} className={`glass rounded-xl p-2.5 text-center md:col-span-2`}>
             <div className={`${k.color} mx-auto mb-1 flex justify-center`}>{k.icon}</div>
             <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
-            <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
+            <div className="text-xs text-savia-text-muted mt-0.5">{k.label}</div>
           </div>
         ))}
+        
+        {/* Revenu annuel - larger card (2 columns) */}
+        <div className="glass rounded-xl p-4 text-center md:col-span-2">
+          <div className="text-savia-accent mx-auto mb-2 flex justify-center">
+            <DollarSign className="w-6 h-6" />
+          </div>
+          <div className="text-2xl font-black text-savia-accent">{(totalRevenu / 1000).toFixed(0)}K TND</div>
+          <div className="text-sm text-savia-text-muted mt-2">Revenu annuel</div>
+        </div>
       </div>
 
       {/* ===== BANNER : contrats expirant dans 30j ===== */}
       {(() => {
         const expiring30 = data.filter(c => {
-          const diff = (new Date(c.date_fin).getTime() - Date.now()) / 86400000;
-          return diff >= 0 && diff <= 30 && (c.statut || '').toLowerCase() === 'actif';
+          const fin = new Date(c.date_fin + 'T23:59:59');
+          const diff = Math.floor((fin.getTime() - Date.now()) / 86400000);
+          return diff >= 0 && diff <= 30 && getActualStatus(c) === 'Actif';
         });
         if (expiring30.length === 0) return null;
         return (
@@ -289,7 +360,8 @@ export default function ContratsPage() {
             </div>
             <div className="space-y-1 pl-7">
               {expiring30.map(c => {
-                const daysLeft = Math.round((new Date(c.date_fin).getTime() - Date.now()) / 86400000);
+                const fin = new Date(c.date_fin + 'T23:59:59');
+                const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
                 return (
                   <div key={c.id} className="flex items-center gap-2 text-sm text-amber-700">
                     <span className="font-mono text-xs bg-amber-100 px-1.5 py-0.5 rounded">#{c.id}</span>
@@ -305,12 +377,31 @@ export default function ContratsPage() {
         );
       })()}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
-        <input type="text" placeholder="Rechercher par client, type, référence..." value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim outline-none" />
+      {/* Search & Filters */}
+      <div className="flex gap-3 flex-col md:flex-row">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+          <input type="text" placeholder="Rechercher par client, type, référence..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim outline-none" />
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          <label className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Filtre statut :</label>
+          <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)}
+            className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm font-semibold">
+            <option value="">Tous les statuts</option>
+            <option value="actif">Actif</option>
+            <option value="suspendu">Suspendu</option>
+            <option value="expiré">Expiré</option>
+            <option value="en attente">En attente</option>
+          </select>
+          {filterStatut && (
+            <button onClick={() => setFilterStatut('')}
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer border border-savia-border">
+              <X className="w-3.5 h-3.5" /> Réinitialiser
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Contract list */}
@@ -322,10 +413,28 @@ export default function ContratsPage() {
           </div>
         )}
         {filtered.map(c => {
-          const fin = new Date(c.date_fin);
-          const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
-          const isExpiring = daysLeft >= 0 && daysLeft <= 60;
-          const isExpired = daysLeft < 0;
+          const fin = new Date(c.date_fin + 'T23:59:59'); // Add time to ensure full day
+          const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+          const actualStatus = getActualStatus(c);
+          const isExpired = actualStatus === 'Expiré';
+          const isSuspendu = actualStatus === 'Suspendu';
+          const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
+          
+          // Determine badge color and text
+          let badgeClass = 'bg-green-500/10 text-green-400';
+          let badgeText = actualStatus;
+          
+          if (isExpired) {
+            badgeClass = 'bg-red-500/10 text-red-500';
+            badgeText = 'Expiré';
+          } else if (isSuspendu) {
+            badgeClass = 'bg-orange-500/10 text-orange-400';
+            badgeText = 'Suspendu';
+          } else if (isExpiring) {
+            badgeClass = 'bg-yellow-500/10 text-yellow-400';
+            badgeText = `Expire dans ${daysLeft}j`;
+          }
+          
           return (
             <div key={c.id} className="glass rounded-xl p-4 hover:border-savia-accent/30 transition-all">
               <div className="flex items-start justify-between mb-2">
@@ -344,12 +453,8 @@ export default function ContratsPage() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${
-                    isExpired ? 'bg-red-500/10 text-red-400' :
-                    isExpiring ? 'bg-yellow-500/10 text-yellow-400' :
-                    'bg-green-500/10 text-green-400'
-                  }`}>
-                    {isExpired ? 'Expiré' : isExpiring ? `Expire dans ${daysLeft}j` : c.statut}
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${badgeClass}`}>
+                    {badgeText}
                   </span>
                 </div>
               </div>
@@ -388,11 +493,27 @@ export default function ContratsPage() {
       {/* ============== DETAIL MODAL ============== */}
       {selectedContrat && (() => {
         const c = selectedContrat;
-        const fin = new Date(c.date_fin);
-        const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
-        const isExpired = daysLeft < 0;
-        const isExpiring = daysLeft >= 0 && daysLeft <= 60;
-        const statutLabel = isExpired ? 'Expiré' : isExpiring ? `Expire dans ${daysLeft}j` : c.statut;
+        const actualStatus = getActualStatus(c);
+        const fin = new Date(c.date_fin + 'T23:59:59');
+        const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+        const isExpired = actualStatus === 'Expiré';
+        const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
+        const isSuspendu = actualStatus === 'Suspendu';
+        
+        let statutLabel = actualStatus;
+        let badgeClass = 'bg-green-500/15 text-green-400';
+        
+        if (isExpired) {
+          statutLabel = 'Expiré';
+          badgeClass = 'bg-red-500/15 text-red-400';
+        } else if (isSuspendu) {
+          statutLabel = 'Suspendu';
+          badgeClass = 'bg-orange-500/15 text-orange-400';
+        } else if (isExpiring) {
+          statutLabel = `Expire dans ${daysLeft}j`;
+          badgeClass = 'bg-yellow-500/15 text-yellow-400';
+        }
+        
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedContrat(null)}>
             <div className="glass rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -421,7 +542,7 @@ export default function ContratsPage() {
               <div className="p-5 space-y-5">
                 {/* Status badge */}
                 <div className="flex items-center gap-3">
-                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${isExpired ? 'bg-red-500/15 text-red-400' : isExpiring ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'}`}>{statutLabel}</span>
+                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${badgeClass}`}>{statutLabel}</span>
                   {c.montant > 0 && <span className="text-savia-text-muted text-sm">{c.montant.toLocaleString('fr')} TND / an</span>}
                 </div>
                 {/* Grid info */}
