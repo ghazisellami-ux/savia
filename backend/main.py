@@ -2068,6 +2068,33 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     return {"ok": True}
 
 
+@app.delete("/api/interventions/{intervention_id}")
+def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Supprime une intervention (Admin/Manager uniquement)."""
+    # Vérifier les permissions
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(status_code=403, detail="Seuls les Admin/Manager peuvent supprimer une intervention")
+    
+    try:
+        with get_db() as conn:
+            # Vérifier que l'intervention existe
+            row = conn.execute(
+                "SELECT id FROM interventions WHERE id = %s",
+                (intervention_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Supprimer l'intervention
+            conn.execute("DELETE FROM interventions WHERE id = %s", (intervention_id,))
+            
+        return {"ok": True, "message": f"Intervention #{intervention_id} supprimée"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur suppression intervention #{intervention_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la suppression: {str(e)}")
+
 
 @app.post("/api/interventions/{intervention_id}/fiche")
 async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
