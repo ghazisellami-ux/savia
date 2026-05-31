@@ -48,7 +48,7 @@ TYPES_EQUIPEMENTS = [
     "Radiographie Numérique (DR)",
     "Table Télécommandée",
     "Échographe",
-    "Mammographe",
+    "Mammographie",
     "Panoramique Dentaire",
     "Cone Beam (CBCT)",
     "Arceau Chirurgical (C-Arm)",
