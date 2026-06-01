@@ -48,6 +48,14 @@ const BOTS: BotConfig[] = [
   },
 ];
 
+interface NotificationSchedule {
+  bot_key: string;
+  enabled: number;
+  hour: number;
+  minute: number;
+  days_of_week: string;
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const router = useRouter();
@@ -57,6 +65,11 @@ export default function SettingsPage() {
     Object.fromEntries(BOTS.map(b => [b.key, { token: '', chatId: '' }]))
   );
   const [showTokens, setShowTokens] = useState<Record<string, boolean>>({});
+
+  /* ─── Notification schedules state ─── */
+  const [schedules, setSchedules] = useState<Record<string, NotificationSchedule>>(
+    Object.fromEntries(BOTS.map(b => [b.key, { bot_key: b.key, enabled: 1, hour: 8, minute: 30, days_of_week: '1,2,3,4,5,6,7' }]))
+  );
 
   const [geminiKey, setGeminiKey] = useState('');
   const [tauxHoraire, setTauxHoraire] = useState('');
@@ -78,6 +91,8 @@ export default function SettingsPage() {
   // Load settings
   useEffect(() => {
     const jwtToken = localStorage.getItem('savia_token') || '';
+    
+    // Load bot settings
     fetch('/api/settings', {
       headers: jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {},
     })
@@ -96,39 +111,128 @@ export default function SettingsPage() {
         setTauxHoraire(data.taux_horaire_technicien || '');
         setOrgName(data.nom_organisation || 'SIC Radiologie');
       })
-      .catch(() => {});
+      .catch(err => {
+        console.error('Failed to load bot settings:', err);
+      });
+
+    // Load notification schedules
+    fetch('/api/notification-schedules', {
+      headers: jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {},
+    })
+      .then(r => {
+        if (!r.ok) {
+          console.error('Failed to load notification schedules:', r.status);
+          return null;
+        }
+        return r.json();
+      })
+      .then(data => {
+        if (!data || !data.schedules) {
+          console.warn('No schedules data received');
+          return;
+        }
+        const newSchedules: Record<string, NotificationSchedule> = {};
+        data.schedules.forEach((schedule: NotificationSchedule) => {
+          newSchedules[schedule.bot_key] = schedule;
+        });
+        console.info('Loaded schedules:', newSchedules);
+        setSchedules(newSchedules);
+      })
+      .catch(err => {
+        console.error('Failed to load notification schedules:', err);
+      });
   }, []);
 
   const setBot = (key: string, field: 'token' | 'chatId', value: string) => {
     setBots(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
   };
 
+  const setSchedule = (botKey: string, field: keyof NotificationSchedule, value: any) => {
+    setSchedules(prev => ({
+      ...prev,
+      [botKey]: { ...prev[botKey], [field]: value }
+    }));
+  };
+
+  const setScheduleDaysOfWeek = (botKey: string, dayIndex: number, checked: boolean) => {
+    const schedule = schedules[botKey];
+    const daysArray = schedule.days_of_week.split(',').map(d => parseInt(d));
+    
+    if (checked) {
+      if (!daysArray.includes(dayIndex)) {
+        daysArray.push(dayIndex);
+      }
+    } else {
+      const idx = daysArray.indexOf(dayIndex);
+      if (idx > -1) {
+        daysArray.splice(idx, 1);
+      }
+    }
+    
+    daysArray.sort((a, b) => a - b);
+    setSchedule(botKey, 'days_of_week', daysArray.join(','));
+  };
+
+  const isDaySelected = (botKey: string, dayIndex: number): boolean => {
+    const schedule = schedules[botKey];
+    return schedule.days_of_week.split(',').map(d => parseInt(d)).includes(dayIndex);
+  };
+
   const handleSave = async () => {
     setSaveErr(''); setSaved(false); setSaving(true);
     const jwtToken = localStorage.getItem('savia_token') || '';
     try {
-      const payload: Record<string, string> = {
-        gemini_api_key: geminiKey,
-        taux_horaire_technicien: tauxHoraire,
-        nom_organisation: orgName,
-      };
+      // Save bot settings
+      const botPayload: Record<string, string> = {};
       BOTS.forEach(b => {
-        payload[`${b.key}_token`] = bots[b.key]?.token || '';
-        payload[`${b.key}_chat_id`] = bots[b.key]?.chatId || '';
+        botPayload[`${b.key}_token`] = bots[b.key]?.token || '';
+        botPayload[`${b.key}_chat_id`] = bots[b.key]?.chatId || '';
       });
-      const res = await fetch('/api/settings', {
+      botPayload.gemini_api_key = geminiKey;
+      botPayload.taux_horaire_technicien = tauxHoraire;
+      botPayload.nom_organisation = orgName;
+
+      const botRes = await fetch('/api/settings', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(botPayload),
       });
-      if (res.ok) {
+
+      if (!botRes.ok) {
+        setSaveErr(`Erreur serveur (${botRes.status})`);
+        setSaving(false);
+        return;
+      }
+
+      // Save notification schedules
+      const schedulePayload: Record<string, any> = {};
+      BOTS.forEach(b => {
+        const schedule = schedules[b.key];
+        schedulePayload[b.key] = {
+          enabled: schedule.enabled,
+          hour: schedule.hour,
+          minute: schedule.minute,
+          days_of_week: schedule.days_of_week,
+        };
+      });
+
+      const scheduleRes = await fetch('/api/notification-schedules', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
+        },
+        body: JSON.stringify(schedulePayload),
+      });
+
+      if (scheduleRes.ok) {
         setSaved(true);
         setTimeout(() => setSaved(false), 4000);
       } else {
-        setSaveErr(`Erreur serveur (${res.status})`);
+        setSaveErr(`Erreur sauvegarde horaires (${scheduleRes.status})`);
       }
     } catch (e: any) {
       setSaveErr(`Impossible de joindre l'API : ${e.message}`);
@@ -288,6 +392,101 @@ export default function SettingsPage() {
           <p><span className="text-savia-accent font-bold">1.</span> Telegram → cherchez <strong>@BotFather</strong> → <code>/newbot</code> → copiez le token</p>
           <p><span className="text-savia-accent font-bold">2.</span> Envoyez <code>/start</code> à votre bot pour activer le chat</p>
           <p><span className="text-savia-accent font-bold">3.</span> Entrez le Token ci-dessus. Le Chat ID est optionnel si vous utilisez le bot en direct</p>
+        </div>
+      </div>
+
+      {/* ━━━━ NOTIFICATION SCHEDULES ━━━━ */}
+      <div className={CARD}>
+        <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
+          <Settings className="w-6 h-6 text-savia-accent" />
+          <div>
+            <h2 className="font-bold text-base text-savia-text">Horaires de Notification</h2>
+            <p className="text-xs text-savia-text-muted">Configurez quand chaque bot envoie les notifications</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {BOTS.map(bot => {
+            const schedule = schedules[bot.key];
+            if (!schedule) {
+              // Afficher un placeholder si le schedule n'est pas chargé
+              return (
+                <div key={`schedule-${bot.key}`} className="rounded-lg border border-savia-border/50 p-4 space-y-3 bg-savia-bg/30 opacity-50">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${bot.color} bg-current/10`}>
+                      {bot.icon}
+                    </div>
+                    <h3 className="text-sm font-bold text-savia-text">{bot.label}</h3>
+                    <span className="ml-auto text-xs text-savia-text-muted">Chargement...</span>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div key={`schedule-${bot.key}`} className="rounded-lg border border-savia-border/50 p-4 space-y-3 bg-savia-bg/30">
+                <div className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${bot.color} bg-current/10`}>
+                    {bot.icon}
+                  </div>
+                  <h3 className="text-sm font-bold text-savia-text">{bot.label}</h3>
+                  <label className="ml-auto flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={schedule.enabled === 1}
+                      onChange={e => setSchedule(bot.key, 'enabled', e.target.checked ? 1 : 0)}
+                      className="w-4 h-4 rounded" 
+                    />
+                    <span className="text-xs font-semibold text-savia-text-muted">Activé</span>
+                  </label>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={LABEL}>Heure</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="23" 
+                      className={INPUT + ' text-sm'} 
+                      placeholder="8" 
+                      value={schedule.hour}
+                      onChange={e => setSchedule(bot.key, 'hour', parseInt(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Minute</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="59" 
+                      className={INPUT + ' text-sm'} 
+                      placeholder="30" 
+                      value={schedule.minute}
+                      onChange={e => setSchedule(bot.key, 'minute', parseInt(e.target.value) || 0)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className={LABEL}>Jours de la semaine</label>
+                  <div className="grid grid-cols-7 gap-2">
+                    {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((day, i) => (
+                      <label key={day} className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={isDaySelected(bot.key, i + 1)}
+                          onChange={e => setScheduleDaysOfWeek(bot.key, i + 1, e.target.checked)}
+                          className="w-4 h-4 rounded" 
+                        />
+                        <span className="text-xs font-semibold text-savia-text-muted">{day}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
