@@ -43,6 +43,7 @@ from db_engine import (
     lire_fabricants, ajouter_fabricant,
     lire_types_equipement_custom, ajouter_type_equipement_custom,
     lire_types_intervention_custom, ajouter_type_intervention_custom,
+    lire_notification_schedules, sauvegarder_notification_schedules_batch,
 )
 
 logger = logging.getLogger("savia-api")
@@ -759,70 +760,120 @@ def _start_garantie_daemon():
         except Exception as e:
             logger.error(f"Failed to mark notification run: {e}")
 
+    def _get_notification_schedule(bot_key: str) -> dict:
+        """Récupère l'horaire de notification pour un bot depuis la base de données."""
+        try:
+            schedule = lire_notification_schedules()
+            for s in schedule:
+                if s.get('bot_key') == bot_key:
+                    return s
+        except Exception as e:
+            logger.debug(f"Failed to get notification schedule for {bot_key}: {e}")
+        
+        # Fallback: horaire par défaut (8h30, tous les jours)
+        return {
+            'bot_key': bot_key,
+            'enabled': 1,
+            'hour': 8,
+            'minute': 30,
+            'days_of_week': '1,2,3,4,5,6,7'
+        }
+
+    def _should_send_notifications_today(schedule: dict) -> bool:
+        """Vérifie si les notifications doivent être envoyées aujourd'hui selon l'horaire."""
+        if schedule.get('enabled') != 1:
+            return False
+        
+        # Vérifier le jour de la semaine (1=Lundi, 7=Dimanche)
+        import datetime as _dt
+        today_weekday = _dt.date.today().isoweekday()  # 1=Monday, 7=Sunday
+        days_str = schedule.get('days_of_week', '1,2,3,4,5,6,7')
+        days_list = [int(d.strip()) for d in days_str.split(',') if d.strip().isdigit()]
+        
+        return today_weekday in days_list
+
     def _run():
         import datetime as _dt
         time.sleep(30)
+        last_run_date = None
+        
         while True:
-            # Les notifications Telegram ne doivent partir qu'une fois par jour
-            if _already_ran_today():
-                logger.info("Notifications daemon: déjà exécuté aujourd'hui, skip (prochain cycle dans 1h)")
-                time.sleep(3600)  # Re-vérifier dans 1h (au cas où minuit passe)
-                continue
+            try:
+                # Récupérer l'horaire de notification depuis la base de données
+                schedule = _get_notification_schedule('telegram')
+                target_hour = schedule.get('hour', 8)
+                target_minute = schedule.get('minute', 30)
 
-            # ── Attendre 8h30 (heure Tunisie UTC+1) avant d'envoyer ──
-            try:
-                from zoneinfo import ZoneInfo
-                tz = ZoneInfo("Africa/Tunis")
-            except Exception:
-                tz = _dt.timezone(_dt.timedelta(hours=1))
-            now_local = _dt.datetime.now(tz)
-            target_hour, target_minute = 8, 30
-            if now_local.hour < target_hour or (now_local.hour == target_hour and now_local.minute < target_minute):
-                target = now_local.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
-                wait_seconds = (target - now_local).total_seconds()
-                logger.info(f"Notifications daemon: en attente jusqu'à 08:30 ({int(wait_seconds)}s)")
-                time.sleep(max(wait_seconds, 0))
+                # Obtenir l'heure actuelle (heure Tunisie UTC+1)
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo("Africa/Tunis")
+                except Exception:
+                    tz = _dt.timezone(_dt.timedelta(hours=1))
+                
+                now_local = _dt.datetime.now(tz)
+                today = now_local.date()
 
-            # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
-            try:
-                sync_planning_to_interventions()
-            except Exception as e:
-                logger.error(f"Planning sync daemon error: {e}")
+                # Vérifier si c'est l'heure d'envoyer les notifications
+                is_target_time = (now_local.hour == target_hour and now_local.minute >= target_minute and now_local.minute < target_minute + 1)
+                
+                # Vérifier si c'est un jour configuré
+                should_send_today = _should_send_notifications_today(schedule)
+                
+                # Vérifier si on a déjà envoyé aujourd'hui
+                already_sent_today = (last_run_date == today)
 
-            try:
-                check_garantie_expiry()
-            except Exception as e:
-                logger.error(f"Garantie daemon error: {e}")
-            try:
-                check_contrat_expiry()
-            except Exception as e:
-                logger.error(f"Contrat daemon error: {e}")
-            try:
-                check_planning_reminder()
-            except Exception as e:
-                logger.error(f"Planning reminder daemon error: {e}")
-            try:
-                check_stock_alerts()
-            except Exception as e:
-                logger.error(f"Stock alerts daemon error: {e}")
-            try:
-                check_facturation_reminders()
-            except Exception as e:
-                logger.error(f"Facturation reminders daemon error: {e}")
-            try:
-                check_sla_alerts()
-            except Exception as e:
-                logger.error(f"SLA alerts daemon error: {e}")
-            try:
-                check_planning_retard()
-            except Exception as e:
-                logger.error(f"Planning retard daemon error: {e}")
+                if is_target_time and should_send_today and not already_sent_today:
+                    logger.info(f"Notifications daemon: déclenchement à {now_local.hour:02d}:{now_local.minute:02d}")
+                    
+                    # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
+                    try:
+                        sync_planning_to_interventions()
+                    except Exception as e:
+                        logger.error(f"Planning sync daemon error: {e}")
 
-            _mark_ran_today()
-            logger.info("Notifications daemon: cycle terminé, prochain dans 1h")
-            time.sleep(3600)  # Vérifier toutes les heures (mais skip si déjà fait aujourd'hui)
+                    try:
+                        check_garantie_expiry()
+                    except Exception as e:
+                        logger.error(f"Garantie daemon error: {e}")
+                    try:
+                        check_contrat_expiry()
+                    except Exception as e:
+                        logger.error(f"Contrat daemon error: {e}")
+                    try:
+                        check_planning_reminder()
+                    except Exception as e:
+                        logger.error(f"Planning reminder daemon error: {e}")
+                    try:
+                        check_stock_alerts()
+                    except Exception as e:
+                        logger.error(f"Stock alerts daemon error: {e}")
+                    try:
+                        check_facturation_reminders()
+                    except Exception as e:
+                        logger.error(f"Facturation reminders daemon error: {e}")
+                    try:
+                        check_sla_alerts()
+                    except Exception as e:
+                        logger.error(f"SLA alerts daemon error: {e}")
+                    try:
+                        check_planning_retard()
+                    except Exception as e:
+                        logger.error(f"Planning retard daemon error: {e}")
+
+                    last_run_date = today
+                    _mark_ran_today()
+                    logger.info("Notifications daemon: cycle terminé")
+                
+                # Attendre 30 secondes avant de vérifier à nouveau
+                time.sleep(30)
+                
+            except Exception as e:
+                logger.error(f"Notifications daemon error: {e}")
+                time.sleep(30)
+                
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, 1x/jour)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, horaires configurables)")
 
 
 def check_contrat_expiry():
@@ -4441,6 +4492,50 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
         import traceback
         logger.error(f"Erreur update_settings: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
+
+
+# ==========================================
+# NOTIFICATION SCHEDULES
+# ==========================================
+
+@app.get("/api/notification-schedules")
+def get_notification_schedules(user: dict = Depends(_verify_token)):
+    """Récupère tous les horaires de notification pour les bots Telegram."""
+    try:
+        schedules = lire_notification_schedules()
+        
+        # Si aucun horaire n'existe, initialiser avec les valeurs par défaut
+        if not schedules:
+            default_bots = ['telegram', 'telegram_sav', 'telegram_manager', 'telegram_stock']
+            for bot_key in default_bots:
+                sauvegarder_notification_schedule(bot_key, 1, 8, 30, '1,2,3,4,5,6,7')
+            schedules = lire_notification_schedules()
+        
+        return {"ok": True, "schedules": schedules}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_notification_schedules: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur lecture horaires: {e}")
+
+
+@app.put("/api/notification-schedules")
+def update_notification_schedules(body: dict, user: dict = Depends(_verify_token)):
+    """Sauvegarde les horaires de notification pour les bots Telegram.
+    
+    Body format:
+    {
+        "telegram": {"enabled": 1, "hour": 8, "minute": 30, "days_of_week": "1,2,3,4,5,6,7"},
+        "telegram_sav": {...},
+        ...
+    }
+    """
+    try:
+        sauvegarder_notification_schedules_batch(body)
+        return {"ok": True}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur update_notification_schedules: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde horaires: {e}")
 
 
 # ==========================================

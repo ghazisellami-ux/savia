@@ -536,6 +536,18 @@ def init_db():
             parsed_errors TEXT DEFAULT NULL,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Horaires de notification pour les bots Telegram
+        CREATE TABLE IF NOT EXISTS notification_schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_key TEXT NOT NULL UNIQUE,
+            enabled INTEGER DEFAULT 1,
+            hour INTEGER DEFAULT 8,
+            minute INTEGER DEFAULT 30,
+            days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         
         # Ajouter les indexes pour améliorer les performances
@@ -685,6 +697,24 @@ def init_db():
         # User profile & page permissions (used by admin panel)
         _safe_add_column("utilisateurs", "profil")
         _safe_add_column("utilisateurs", "pages_autorisees")
+
+        # Notification schedules table migration (create if not exists)
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_key TEXT NOT NULL UNIQUE,
+                    enabled INTEGER DEFAULT 1,
+                    hour INTEGER DEFAULT 8,
+                    minute INTEGER DEFAULT 30,
+                    days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            logger.info("Table notification_schedules créée ou déjà existante")
+        except Exception as e:
+            logger.debug(f"Erreur lors de la création de notification_schedules: {e}")
 
         # Technicien enrichment columns
         _safe_add_column("techniciens", "niveau_competence")
@@ -2911,3 +2941,91 @@ def supprimer_demande_intervention(demande_id):
 
 
 # Note: verifier_et_migrer_schema() est appelé via init_db() dans _one_time_init() de app.py
+
+
+# ==========================================
+# Notification Schedules Management
+# ==========================================
+
+def lire_notification_schedules():
+    """Lit tous les horaires de notification pour les bots Telegram."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, bot_key, enabled, hour, minute, days_of_week, created_at, updated_at
+            FROM notification_schedules
+            ORDER BY bot_key
+        """).fetchall()
+        return [dict(row) for row in rows]
+
+
+def lire_notification_schedule(bot_key):
+    """Lit l'horaire de notification pour un bot spécifique."""
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT id, bot_key, enabled, hour, minute, days_of_week, created_at, updated_at
+            FROM notification_schedules
+            WHERE bot_key = ?
+        """, (bot_key,)).fetchone()
+        return dict(row) if row else None
+
+
+def sauvegarder_notification_schedule(bot_key, enabled, hour, minute, days_of_week):
+    """Sauvegarde ou met à jour l'horaire de notification pour un bot."""
+    with get_db() as conn:
+        # Vérifier si le bot existe déjà
+        existing = conn.execute("""
+            SELECT id FROM notification_schedules WHERE bot_key = ?
+        """, (bot_key,)).fetchone()
+        
+        if existing:
+            # Mise à jour
+            conn.execute("""
+                UPDATE notification_schedules
+                SET enabled = ?, hour = ?, minute = ?, days_of_week = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE bot_key = ?
+            """, (enabled, hour, minute, days_of_week, bot_key))
+        else:
+            # Insertion
+            conn.execute("""
+                INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
+                VALUES (?, ?, ?, ?, ?)
+            """, (bot_key, enabled, hour, minute, days_of_week))
+    
+    _trigger_backup()
+    return True
+
+
+def sauvegarder_notification_schedules_batch(schedules):
+    """Sauvegarde plusieurs horaires de notification en une seule opération.
+    
+    Args:
+        schedules: Dict avec bot_key comme clé et dict {enabled, hour, minute, days_of_week} comme valeur
+    """
+    with get_db() as conn:
+        for bot_key, schedule_data in schedules.items():
+            enabled = schedule_data.get('enabled', 1)
+            hour = schedule_data.get('hour', 8)
+            minute = schedule_data.get('minute', 30)
+            days_of_week = schedule_data.get('days_of_week', '1,2,3,4,5,6,7')
+            
+            # Vérifier si le bot existe déjà
+            existing = conn.execute("""
+                SELECT id FROM notification_schedules WHERE bot_key = ?
+            """, (bot_key,)).fetchone()
+            
+            if existing:
+                # Mise à jour
+                conn.execute("""
+                    UPDATE notification_schedules
+                    SET enabled = ?, hour = ?, minute = ?, days_of_week = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE bot_key = ?
+                """, (enabled, hour, minute, days_of_week, bot_key))
+            else:
+                # Insertion
+                conn.execute("""
+                    INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (bot_key, enabled, hour, minute, days_of_week))
+    
+    _trigger_backup()
+    return True
