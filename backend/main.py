@@ -1259,18 +1259,31 @@ def get_dashboard_kpis(
                 if len(durations) > 0:
                     mttr = float(durations.mean())
         
-        # Calculate total cost
+        # Calculate total cost - ONLY from CLOSED interventions
         cout_total = 0.0
         if not df_int.empty:
+            # First filter to only closed interventions
+            status_col = None
+            for col in ["Statut", "statut", "status", "Status"]:
+                if col in df_int.columns:
+                    status_col = col
+                    break
+            
+            if status_col:
+                closed_statuses = {"clôturée", "cloturee", "closed", "resolved", "terminée", "terminee", "complétée", "completee"}
+                df_int_closed = df_int[df_int[status_col].astype(str).str.lower().str.strip().isin(closed_statuses)]
+            else:
+                df_int_closed = df_int
+            
             # Check for cost columns (could be "cout", "cost", "prix", etc.)
             cost_col = None
             for col in ["cout", "cost", "prix", "montant", "Cout"]:
-                if col in df_int.columns:
+                if col in df_int_closed.columns:
                     cost_col = col
                     break
             
-            if cost_col:
-                costs = pd.to_numeric(df_int[cost_col], errors="coerce").dropna()
+            if cost_col and not df_int_closed.empty:
+                costs = pd.to_numeric(df_int_closed[cost_col], errors="coerce").dropna()
                 if len(costs) > 0:
                     cout_total = float(costs.sum())
 
