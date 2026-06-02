@@ -66,13 +66,19 @@ const ERROR_TYPE_COLORS: Record<string, string> = {
 // --- Helpers ---
 function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
   if (mode === 'mensuel') {
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0); // last day of month
+    // Use string formatting to avoid timezone issues with Date objects
+    const monthStr = String(month).padStart(2, '0');
+    const date_start = `${year}-${monthStr}-01`;
+    
+    // Calculate last day of month without timezone conversion
+    const lastDay = new Date(year, month, 0).getDate();
+    const date_end = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+    
     return {
-      date_start: start.toISOString().substring(0, 10),
-      date_end: end.toISOString().substring(0, 10),
-      label: `${String(month).padStart(2, '0')}/${year}`,
-      rangeLabel: `${String(start.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} → ${String(end.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} (${end.getDate()}j)`,
+      date_start,
+      date_end,
+      label: `${monthStr}/${year}`,
+      rangeLabel: `01/${monthStr}/${year} → ${String(lastDay).padStart(2, '0')}/${monthStr}/${year} (${lastDay}j)`,
     };
   } else {
     return {
@@ -121,6 +127,7 @@ export default function DashboardPage() {
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [trendData, setTrendData] = useState<any[]>([]);
 
   // --- Charger les types d'équipement filtrés quand le client change ---
   useEffect(() => {
@@ -146,28 +153,21 @@ export default function DashboardPage() {
 
   // --- Load cached KPI data on mount ---
   useEffect(() => {
-    try {
-      const cached = localStorage.getItem('dashboard_kpi_cache');
-      if (cached) {
-        const data = JSON.parse(cached);
-        setFullData(data);
-        setIsInitialLoading(false);
-      }
-    } catch (err) {
-      console.error("Failed to load cached KPI data", err);
-    }
+    // Note: Cache is removed to ensure fresh data when date range changes
+    // This was causing stale data to be displayed when switching months/years
+    setIsInitialLoading(false);
   }, []);
 
   // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
+    // Clear cache when date range changes to force fresh data
+    localStorage.removeItem('dashboard_kpi_cache');
+    
     const loadFullData = async () => {
-      // Don't show loading if we have cached data
-      if (!fullData) {
-        setIsInitialLoading(true);
-      }
+      setIsInitialLoading(true);
       
       try {
-        // Load KPIs and health scores first (fast)
+        // ALWAYS load with date range parameters, even without filters
         const [kpiData, healthData] = await Promise.all([
           dashboard.kpis({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
           dashboard.healthScores({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
@@ -178,9 +178,6 @@ export default function DashboardPage() {
           healthScores: healthData,
           interventions: [],
         };
-        
-        // Cache the data
-        localStorage.setItem('dashboard_kpi_cache', JSON.stringify(newData));
         
         // Set data immediately with empty interventions
         setFullData(newData);
@@ -269,8 +266,15 @@ export default function DashboardPage() {
         });
         setHealthScores(filteredHealth);
         setAllInterventions(filteredInterv);
+        
+        // Filter interventions by date range for display
+        const dateFilteredInterv = filteredInterv.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+        
         setRecentInterv(
-          filteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+          dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
         );
       } catch (err) {
         console.error("Failed to filter data", err);
@@ -282,14 +286,21 @@ export default function DashboardPage() {
 
     // If no filters or equipment type filter, use full data or call API
     if (!selectedClient && !selectedEquipType) {
-      // No filters - use full data
+      // No filters - use full data but filter by date range
       setIsLoading(true);
       try {
         setKpis(fullData.kpis);
         setHealthScores(fullData.healthScores);
         setAllInterventions(fullData.interventions);
+        
+        // Filter interventions by date range for display
+        const dateFilteredInterv = fullData.interventions.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+        
         setRecentInterv(
-          fullData.interventions.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+          dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
         );
       } finally {
         setIsLoading(false);
@@ -318,7 +329,7 @@ export default function DashboardPage() {
         setHealthScores(healthData);
         setAllInterventions(intervData || []);
 
-        // Filter interventions for timeline display
+        // Filter interventions for timeline display by date range AND by machines
         let filtered = (intervData || []);
         const validMachines = healthData.map((h: any) => h.machine);
 
@@ -327,6 +338,12 @@ export default function DashboardPage() {
         } else {
           filtered = [];
         }
+        
+        // Filter by date range
+        filtered = filtered.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
 
         setRecentInterv(
           filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
@@ -339,6 +356,34 @@ export default function DashboardPage() {
     };
     loadFilteredData();
   }, [selectedClient, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
+
+  // --- Load availability trend data ---
+  useEffect(() => {
+    const loadTrendData = async () => {
+      try {
+        const params: any = {};
+        if (selectedClient) params.client = selectedClient;
+        if (selectedEquipType) params.equipment_type = selectedEquipType;
+        
+        const response = await fetch(`/api/dashboard/availability-trend?${new URLSearchParams(params).toString()}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('savia_token') || ''}`,
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.trend) {
+            setTrendData(data.trend);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load trend data", err);
+      }
+    };
+    
+    loadTrendData();
+  }, [selectedClient, selectedEquipType]);
 
   // --- Computed values ---
   const scoreGlobal = useMemo(() => {
@@ -890,27 +935,29 @@ export default function DashboardPage() {
 
       {/* Disponibilité Trend */}
       <SectionCard title={<span className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-400" /> Tendance Disponibilité (6 mois)</span>}>
-        <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={[
-            { mois: 'Jan', dispo: 97.2 }, { mois: 'Fév', dispo: 96.5 },
-            { mois: 'Mar', dispo: 95.8 }, { mois: 'Avr', dispo: 97.1 },
-            { mois: 'Mai', dispo: 98.0 }, { mois: 'Jun', dispo: 96.8 },
-          ]}>
-            <defs>
-              <linearGradient id="dispoGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
-            <YAxis domain={[94, 100]} stroke={CHART_STYLE.text} fontSize={12} />
-            <Tooltip
-              contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              formatter={(value) => [`${value}%`, 'Disponibilité']}
-            />
-            <Area type="monotone" dataKey="dispo" stroke={CHART_STYLE.accent} fill="url(#dispoGrad)" strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
+        {trendData.length === 0 ? (
+          <div className="h-[200px] flex items-center justify-center text-savia-text-muted">
+            Chargement des données...
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={trendData}>
+              <defs>
+                <linearGradient id="dispoGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+              <YAxis domain={[0, 100]} stroke={CHART_STYLE.text} fontSize={12} />
+              <Tooltip
+                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+                formatter={(value) => [`${value}%`, 'Disponibilité']}
+              />
+              <Area type="monotone" dataKey="dispo" stroke={CHART_STYLE.accent} fill="url(#dispoGrad)" strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </SectionCard>
 
       {/* Footer */}

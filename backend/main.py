@@ -1130,9 +1130,13 @@ def get_dashboard_kpis(
         if not df_clients.empty and "nom" in df_clients.columns:
             nb_clients_all = len(df_clients["nom"].dropna().unique())
 
+        # Create a COPY of df_eq for CURRENT STATUS calculation (not filtered by date)
+        df_eq_for_status = df_eq.copy()
+        
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).str.lower() == effective_client.lower()]
             logger.info(f"After client filter: {len(df_eq)} equipements")
 
         # Filter equipements by region (join with clients table to get region)
@@ -1153,6 +1157,7 @@ def get_dashboard_kpis(
             # Filter equipements by these clients
             if clients_in_region and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_region)]
                 logger.info(f"After region filter (via clients): {len(df_eq)} equipements from {len(clients_in_region)} clients")
 
         # Filter equipements by ville (join with clients table to get ville)
@@ -1166,12 +1171,14 @@ def get_dashboard_kpis(
             # Filter equipements by these clients
             if clients_in_ville and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_ville)]
                 logger.info(f"After ville filter (via clients): {len(df_eq)} equipements from {len(clients_in_ville)} clients")
 
         # Filter equipements by equipment type
         # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Type"].notna() & (df_eq_for_status["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
             logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
@@ -1195,39 +1202,26 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
             logger.info(f"After date filter: {len(df_int)} interventions")
 
-        nb_eq = len(df_eq) if not df_eq.empty else 0
+        nb_eq = len(df_eq_for_status) if not df_eq_for_status.empty else 0
         nb_critiques = 0
-        if not df_eq.empty and "Statut" in df_eq.columns:
-            nb_critiques = len(df_eq[df_eq["Statut"].isin(["Hors Service", "Critique"])])
-
-        nb_interventions = len(df_int) if not df_int.empty else 0
-        cout_total = 0.0
-        mttr = 0.0
-        if not df_int.empty:
-            # Exclure Installation et Formation des KPIs de maintenance
-            TRACABILITE = ['installation', 'formation']
-            df_maint = df_int
-            if "type_intervention" in df_int.columns:
-                df_maint = df_int[~df_int["type_intervention"].str.lower().isin(TRACABILITE)]
-            if "cout" in df_maint.columns:
-                cout_total = float(df_maint["cout"].sum()) if df_maint["cout"].notna().any() else 0
-            if "duree_minutes" in df_maint.columns:
-                durees = df_maint["duree_minutes"].dropna()
-                mttr = round(float(durees.mean()) / 60, 1) if len(durees) > 0 else 0
-
-        # Disponibilité = % équipements opérationnels
         dispo = 100.0
-        statut_col = "Statut" if "Statut" in df_eq.columns else ("statut" if "statut" in df_eq.columns else None)
-        if not df_eq.empty and statut_col:
-            # Exclure tous les équipements non opérationnels (En panne, Hors Service, Critique, etc.)
-            non_op_statuts = {"en panne", "hors service", "critique", "arrêt", "arret"}
-            op = len(df_eq[~df_eq[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
-            dispo = round((op / nb_eq) * 100, 1) if nb_eq > 0 else 100
+        
+        # Alertes Critiques = CURRENT equipment status (not filtered by month)
+        # Shows all equipment currently in critical/down state
+        if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
+            nb_critiques = len(df_eq_for_status[df_eq_for_status["Statut"].isin(["Hors Service", "Critique"])])
 
-        # MTBF approximation
-        mtbf = 720  # default
-        if nb_interventions > 0 and nb_eq > 0:
-            mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
+        # Disponibilité = based on interventions in selected period
+        # Equipment with interventions in the period = had issues = not available
+        # Disponibilité = % of equipment that had NO interventions in the period
+        if not df_int.empty and "machine" in df_int.columns:
+            machines_with_issues = df_int["machine"].unique()
+            equipment_with_issues_count = len(machines_with_issues)
+            available_equipment = nb_eq - equipment_with_issues_count
+            dispo = round((available_equipment / nb_eq) * 100, 1) if nb_eq > 0 else 100.0
+        elif nb_eq > 0:
+            # No interventions in period = all equipment available
+            dispo = 100.0
 
         # Count unique clients
         # If NO filters applied: show ALL clients from clients table (66)
@@ -1240,6 +1234,62 @@ def get_dashboard_kpis(
         else:
             # No filters applied: show ALL clients from clients table
             nb_clients = nb_clients_all
+
+        # Calculate intervention-based KPIs
+        nb_interventions = len(df_int) if not df_int.empty else 0
+        
+        # Calculate MTBF (Mean Time Between Failures) - average days between interventions
+        mtbf = 0.0
+        if nb_interventions > 1 and not df_int.empty and "date" in df_int.columns:
+            df_int_sorted = df_int.sort_values("date")
+            dates = pd.to_datetime(df_int_sorted["date"], errors="coerce").dropna()
+            if len(dates) > 1:
+                time_diffs = dates.diff().dropna()
+                avg_days = time_diffs.dt.total_seconds().mean() / (24 * 3600)  # Convert to days
+                mtbf = avg_days * 24 if avg_days > 0 else 0  # Convert to hours
+        
+        # Calculate MTTR (Mean Time To Repair) - average duration of interventions
+        mttr = 0.0
+        if not df_int.empty:
+            # Check for duration column (could be "duree_intervention", "duree", etc.)
+            duration_col = None
+            for col in ["duree_intervention", "duree", "duration", "Duree"]:
+                if col in df_int.columns:
+                    duration_col = col
+                    break
+            
+            if duration_col:
+                durations = pd.to_numeric(df_int[duration_col], errors="coerce").dropna()
+                if len(durations) > 0:
+                    mttr = float(durations.mean())
+        
+        # Calculate total cost - ONLY from CLOSED interventions
+        cout_total = 0.0
+        if not df_int.empty:
+            # First filter to only closed interventions
+            status_col = None
+            for col in ["Statut", "statut", "status", "Status"]:
+                if col in df_int.columns:
+                    status_col = col
+                    break
+            
+            if status_col:
+                closed_statuses = {"clôturée", "cloturee", "closed", "resolved", "terminée", "terminee", "complétée", "completee"}
+                df_int_closed = df_int[df_int[status_col].astype(str).str.lower().str.strip().isin(closed_statuses)]
+            else:
+                df_int_closed = df_int
+            
+            # Check for cost columns (could be "cout", "cost", "prix", etc.)
+            cost_col = None
+            for col in ["cout", "cost", "prix", "montant", "Cout"]:
+                if col in df_int_closed.columns:
+                    cost_col = col
+                    break
+            
+            if cost_col and not df_int_closed.empty:
+                costs = pd.to_numeric(df_int_closed[cost_col], errors="coerce").dropna()
+                if len(costs) > 0:
+                    cout_total = float(costs.sum())
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
@@ -1261,8 +1311,8 @@ def get_dashboard_kpis(
             "nb_equipements": nb_eq,
             "nb_critiques": nb_critiques,
             "disponibilite": dispo,
-            "mtbf": mtbf,
-            "mttr": mttr,
+            "mtbf": round(mtbf, 1),
+            "mttr": round(mttr, 1),
             "cout_total": round(cout_total, 2),
             "nb_interventions": nb_interventions,
             "nb_clients": nb_clients,
@@ -1398,21 +1448,22 @@ def get_health_scores(
                     df_machine_recent = df_machine[df_machine["date"] >= pd.Timestamp(thirty_days_ago)]
                     recent_interventions = len(df_machine_recent)
 
-            # Rate-based scoring: pannes per month
-            panne_rate = pannes / period_months if period_months > 0 else pannes
-            if panne_rate <= 0:
+            # Score based on absolute number of pannes in the selected period
+            # Do NOT normalize by period duration - use absolute counts
+            # This ensures monthly view shows actual interventions for that month
+            if pannes <= 0:
                 score = 100
-            elif panne_rate <= 0.25:
+            elif pannes <= 1:
                 score = 90
-            elif panne_rate <= 0.5:
+            elif pannes <= 2:
                 score = 78
-            elif panne_rate <= 1.0:
+            elif pannes <= 3:
                 score = 65
-            elif panne_rate <= 2.0:
+            elif pannes <= 5:
                 score = 48
-            elif panne_rate <= 4.0:
+            elif pannes <= 10:
                 score = 30
-            elif panne_rate <= 8.0:
+            elif pannes <= 15:
                 score = 18
             else:
                 score = 10
@@ -1433,9 +1484,9 @@ def get_health_scores(
                 score = min(score, 50)  # Moderate risk if 2 interventions in 30 days
 
             tendance = "stable"
-            if panne_rate > 1.0:
+            if pannes > 3:
                 tendance = "baisse"
-            elif panne_rate == 0:
+            elif pannes == 0:
                 tendance = "hausse"
 
             scores.append({
@@ -4764,6 +4815,128 @@ def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_ver
     except Exception as e:
         logger.error(f"Failed to get villes: {e}")
         return []
+
+
+@app.get("/api/dashboard/availability-trend")
+def get_availability_trend(
+    client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Calculate real availability trend for the last 6 months based on interventions."""
+    try:
+        from datetime import datetime, timedelta
+        import calendar
+        
+        df_eq = lire_equipements()
+        df_int = lire_interventions()
+        df_clients = db_lire_clients()
+        
+        # Apply same filters as KPI endpoint
+        effective_client = _get_client_filter(user) or client
+        
+        # Filter equipements by client
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+        
+        # Filter equipements by region
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+        
+        # Filter equipements by ville
+        if ville and not df_eq.empty and not df_clients.empty:
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+        
+        # Filter equipements by equipment type
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+        
+        nb_eq = len(df_eq) if not df_eq.empty else 0
+        
+        # If no equipment, return default data
+        if nb_eq == 0:
+            today = datetime.now()
+            trend_data = []
+            for i in range(5, -1, -1):
+                month_date = today - timedelta(days=30*i)
+                month_name = calendar.month_name[month_date.month][:3]
+                trend_data.append({"mois": month_name, "dispo": 0})
+            return {"ok": True, "trend": trend_data}
+        
+        # Get all machines for filtered equipements
+        machines = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
+        
+        # Filter interventions by machines
+        if machines and not df_int.empty and "machine" in df_int.columns:
+            df_int = df_int[df_int["machine"].isin(machines)]
+        
+        # Parse dates
+        if not df_int.empty and "date" in df_int.columns:
+            df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
+        
+        # Calculate availability for each month
+        today = datetime.now()
+        trend_data = []
+        
+        for i in range(5, -1, -1):
+            month_date = today - timedelta(days=30*i)
+            month_name = calendar.month_name[month_date.month][:3]
+            month_start = month_date.replace(day=1)
+            month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            
+            # Count interventions in this month
+            if not df_int.empty:
+                month_int = df_int[(df_int["date"] >= month_start) & (df_int["date"] <= month_end)]
+                nb_interventions = len(month_int)
+            else:
+                nb_interventions = 0
+            
+            # Calculate availability: assume 100% if no issues, decrease by 2% per intervention as rough estimate
+            # More sophisticated: count "Terminée" status as available, others as not available
+            availability = 100.0
+            if not df_int.empty and nb_interventions > 0:
+                # Count interventions that are NOT "Terminée" (corrective or in-progress)
+                if "statut" in df_int.columns:
+                    unfinished = len(month_int[month_int["statut"].astype(str).str.lower() != "terminée"])
+                    # Rough estimate: each unfinished intervention reduces availability by 2%
+                    availability = max(0, 100.0 - (unfinished * 2.0))
+                else:
+                    availability = max(0, 100.0 - (nb_interventions * 2.0))
+            
+            trend_data.append({"mois": month_name, "dispo": round(availability, 1)})
+        
+        return {"ok": True, "trend": trend_data}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_availability_trend: {e}\n{traceback.format_exc()}")
+        # Return default trend data on error
+        today = datetime.now()
+        trend_data = []
+        for i in range(5, -1, -1):
+            month_date = today - timedelta(days=30*i)
+            month_name = calendar.month_name[month_date.month][:3]
+            trend_data.append({"mois": month_name, "dispo": 0})
+        return {"ok": True, "trend": trend_data}
 
 
 @app.get("/api/dashboard/clients-by-region")
