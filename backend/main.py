@@ -1211,13 +1211,17 @@ def get_dashboard_kpis(
         if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
             nb_critiques = len(df_eq_for_status[df_eq_for_status["Statut"].isin(["Hors Service", "Critique"])])
 
-        # Disponibilité = % équipements opérationnels (current state, not filtered by month)
-        statut_col = "Statut" if "Statut" in df_eq_for_status.columns else ("statut" if "statut" in df_eq_for_status.columns else None)
-        if not df_eq_for_status.empty and statut_col:
-            # Exclure tous les équipements non opérationnels (En panne, Hors Service, Critique, etc.)
-            non_op_statuts = {"en panne", "hors service", "critique", "arrêt", "arret"}
-            op = len(df_eq_for_status[~df_eq_for_status[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
-            dispo = round((op / nb_eq) * 100, 1) if nb_eq > 0 else 100
+        # Disponibilité = based on interventions in selected period
+        # Equipment with interventions in the period = had issues = not available
+        # Disponibilité = % of equipment that had NO interventions in the period
+        if not df_int.empty and "machine" in df_int.columns:
+            machines_with_issues = df_int["machine"].unique()
+            equipment_with_issues_count = len(machines_with_issues)
+            available_equipment = nb_eq - equipment_with_issues_count
+            dispo = round((available_equipment / nb_eq) * 100, 1) if nb_eq > 0 else 100.0
+        elif nb_eq > 0:
+            # No interventions in period = all equipment available
+            dispo = 100.0
 
         # Count unique clients
         # If NO filters applied: show ALL clients from clients table (66)

@@ -66,13 +66,19 @@ const ERROR_TYPE_COLORS: Record<string, string> = {
 // --- Helpers ---
 function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
   if (mode === 'mensuel') {
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0); // last day of month
+    // Use string formatting to avoid timezone issues with Date objects
+    const monthStr = String(month).padStart(2, '0');
+    const date_start = `${year}-${monthStr}-01`;
+    
+    // Calculate last day of month without timezone conversion
+    const lastDay = new Date(year, month, 0).getDate();
+    const date_end = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+    
     return {
-      date_start: start.toISOString().substring(0, 10),
-      date_end: end.toISOString().substring(0, 10),
-      label: `${String(month).padStart(2, '0')}/${year}`,
-      rangeLabel: `${String(start.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} → ${String(end.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} (${end.getDate()}j)`,
+      date_start,
+      date_end,
+      label: `${monthStr}/${year}`,
+      rangeLabel: `01/${monthStr}/${year} → ${String(lastDay).padStart(2, '0')}/${monthStr}/${year} (${lastDay}j)`,
     };
   } else {
     return {
