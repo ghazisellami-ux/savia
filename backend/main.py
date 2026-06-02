@@ -1130,9 +1130,13 @@ def get_dashboard_kpis(
         if not df_clients.empty and "nom" in df_clients.columns:
             nb_clients_all = len(df_clients["nom"].dropna().unique())
 
+        # Create a COPY of df_eq for CURRENT STATUS calculation (not filtered by date)
+        df_eq_for_status = df_eq.copy()
+        
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).str.lower() == effective_client.lower()]
             logger.info(f"After client filter: {len(df_eq)} equipements")
 
         # Filter equipements by region (join with clients table to get region)
@@ -1153,6 +1157,7 @@ def get_dashboard_kpis(
             # Filter equipements by these clients
             if clients_in_region and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_region)]
                 logger.info(f"After region filter (via clients): {len(df_eq)} equipements from {len(clients_in_region)} clients")
 
         # Filter equipements by ville (join with clients table to get ville)
@@ -1166,12 +1171,14 @@ def get_dashboard_kpis(
             # Filter equipements by these clients
             if clients_in_ville and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_ville)]
                 logger.info(f"After ville filter (via clients): {len(df_eq)} equipements from {len(clients_in_ville)} clients")
 
         # Filter equipements by equipment type
         # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Type"].notna() & (df_eq_for_status["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
             logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
@@ -1195,21 +1202,21 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
             logger.info(f"After date filter: {len(df_int)} interventions")
 
-        nb_eq = len(df_eq) if not df_eq.empty else 0
+        nb_eq = len(df_eq_for_status) if not df_eq_for_status.empty else 0
         nb_critiques = 0
         dispo = 100.0
         
         # Alertes Critiques = CURRENT equipment status (not filtered by month)
         # Shows all equipment currently in critical/down state
-        if not df_eq.empty and "Statut" in df_eq.columns:
-            nb_critiques = len(df_eq[df_eq["Statut"].isin(["Hors Service", "Critique"])])
+        if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
+            nb_critiques = len(df_eq_for_status[df_eq_for_status["Statut"].isin(["Hors Service", "Critique"])])
 
         # Disponibilité = % équipements opérationnels (current state, not filtered by month)
-        statut_col = "Statut" if "Statut" in df_eq.columns else ("statut" if "statut" in df_eq.columns else None)
-        if not df_eq.empty and statut_col:
+        statut_col = "Statut" if "Statut" in df_eq_for_status.columns else ("statut" if "statut" in df_eq_for_status.columns else None)
+        if not df_eq_for_status.empty and statut_col:
             # Exclure tous les équipements non opérationnels (En panne, Hors Service, Critique, etc.)
             non_op_statuts = {"en panne", "hors service", "critique", "arrêt", "arret"}
-            op = len(df_eq[~df_eq[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
+            op = len(df_eq_for_status[~df_eq_for_status[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
             dispo = round((op / nb_eq) * 100, 1) if nb_eq > 0 else 100
 
         # Count unique clients
