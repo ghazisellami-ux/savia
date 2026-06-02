@@ -25,8 +25,8 @@ const TUNISIAN_CITIES = [
 
 const REGIONS: Record<string, string[]> = {
   'Nord': ['Tunis','Ariana','Ben Arous','Manouba','Bizerte','Béja','Jendouba','Kef','Siliana','Nabeul','Zaghouan'],
-  'Centre': ['Sousse','Monastir','Mahdia','Sfax','Kairouan','Kasserine','Sidi Bouzid'],
-  'Sud': ['Gabès','Médenine','Tataouine','Tozeur','Gafsa','Kébili'],
+  'Centre': ['Sousse','Monastir','Mahdia','Kairouan','Kasserine','Sidi Bouzid'],
+  'Sud': ['Gabès','Médenine','Tataouine','Tozeur','Gafsa','Kébili','Sfax'],
 };
 
 interface Equipment {
