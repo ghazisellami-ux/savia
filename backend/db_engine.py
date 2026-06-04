@@ -971,6 +971,21 @@ def init_db():
         except Exception as e:
             logger.debug(f"Migration PII ignorée (Pillar 2): {e}")
 
+        # --- Migration: Update CHECK constraint for utilisateurs.role ---
+        # Add new roles: 'Responsable Technique' and 'Gestionnaire'
+        if USE_PG:
+            try:
+                # Drop old constraint if exists
+                conn.execute("ALTER TABLE utilisateurs DROP CONSTRAINT IF EXISTS utilisateurs_role_check")
+                # Add new constraint with all roles
+                conn.execute("""
+                    ALTER TABLE utilisateurs ADD CONSTRAINT utilisateurs_role_check 
+                    CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire'))
+                """)
+                logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
+            except Exception as e:
+                logger.info(f"Migration ignorée (utilisateurs role check): {e}")
+
 
 # ---- Nettoyage texte double-encodé UTF-8 (à la lecture) ----
 
