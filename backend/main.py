@@ -4390,7 +4390,7 @@ def get_users(user: dict = Depends(_verify_token)):
 @app.post("/api/admin/users")
 def create_user(body: dict, user: dict = Depends(_verify_token)):
     # Validate role
-    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager']
+    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire']
     role = body.get("role", "Lecteur")
     if role not in valid_roles:
         return {"error": f"Invalid role. Must be one of: {', '.join(valid_roles)}"}, 400
@@ -4526,22 +4526,27 @@ def get_settings(user: dict = Depends(_verify_token)):
 
 
 @app.put("/api/settings")
-def update_settings(body: dict, user: dict = Depends(_verify_token)):
+def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token)):
     try:
+        logger.info(f"[UPDATE_SETTINGS] Received body: {body}")
         with get_db() as conn:
             for k, v in body.items():
+                logger.info(f"[UPDATE_SETTINGS] Saving key='{k}', value_type={type(v).__name__}, value_length={len(str(v))}")
                 # Use SQLite-compatible syntax with ? placeholder
+                # Note: PgCursorWrapper translates ? to %s and EXCLUDED handles both SQLite and PostgreSQL
                 conn.execute(
                     """
                     INSERT INTO config_client (cle, valeur) VALUES (?, ?)
-                    ON CONFLICT (cle) DO UPDATE SET valeur = excluded.valeur
+                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
                     """,
                     (k, str(v))
                 )
+                logger.info(f"[UPDATE_SETTINGS] Successfully saved key='{k}'")
+        logger.info(f"[UPDATE_SETTINGS] All settings saved successfully")
         return {"ok": True}
     except Exception as e:
         import traceback
-        logger.error(f"Erreur update_settings: {e}\n{traceback.format_exc()}")
+        logger.error(f"[UPDATE_SETTINGS] Error: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
 
 
