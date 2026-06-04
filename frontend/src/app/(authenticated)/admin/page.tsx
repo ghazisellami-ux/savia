@@ -96,11 +96,17 @@ const DEFAULT_PROFILES: Profile[] = [
 const PROFILE_ROLE_MAP: Record<string, string> = {
   admin: 'Admin',
   manager: 'Manager',
-  resp_technique: 'Technicien',
+  resp_technique: 'Responsable Technique',
   gestionnaire_stock: 'Gestionnaire',
   technicien: 'Technicien',
   lecteur: 'Lecteur',
 };
+
+// Inverse map: role -> profileId for quick lookup
+const ROLE_PROFILE_MAP: Record<string, string> = Object.entries(PROFILE_ROLE_MAP).reduce((acc, [profileId, role]) => {
+  acc[role] = profileId;
+  return acc;
+}, {} as Record<string, string>);
 
 interface Profile {
   id: string;
@@ -213,6 +219,8 @@ export default function AdminPage() {
     try {
       const [usersRes, techsRes, clientsRes] = await Promise.all([admin.users(), techniciens.list(), clients.list()]);
       setClientsList((clientsRes as any[]).map((c: any) => c.nom || c.client || '').filter(Boolean));
+      
+      // Utiliser DEFAULT_PROFILES pour éviter une dépendance circulaire
       setUsers((usersRes as any[]).map((item: any, i: number) => ({
         id: item.id || i + 1,
         username: item.username || '',
@@ -222,8 +230,8 @@ export default function AdminPage() {
         actif: item.actif ?? 1,
         email: item.email || '',
         profileId: item.profil
-          ? (profiles.find(p => p.nom === item.profil)?.id || Object.entries(PROFILE_ROLE_MAP).find(([, r]) => r === item.role)?.[0] || 'lecteur')
-          : (Object.entries(PROFILE_ROLE_MAP).find(([, r]) => r === item.role)?.[0] || 'lecteur'),
+          ? (DEFAULT_PROFILES.find(p => p.nom === item.profil)?.id || ROLE_PROFILE_MAP[item.role] || 'lecteur')
+          : (ROLE_PROFILE_MAP[item.role] || 'lecteur'),
       })));
       setTechs((techsRes as any[]).map((item: any) => ({
         id: item.id || 0,
@@ -244,7 +252,9 @@ export default function AdminPage() {
         const settingsRes = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
+          console.log('[ADMIN] settings data:', settingsData.role_permissions ? 'loaded' : 'empty');
           const dbPerms = JSON.parse(settingsData.role_permissions || '{}');
+          console.log('[ADMIN] parsed permissions keys:', Object.keys(dbPerms));
           if (Object.keys(dbPerms).length > 0) {
             setProfiles(prev => prev.map(p => {
               const role = PROFILE_ROLE_MAP[p.id];
@@ -254,12 +264,15 @@ export default function AdminPage() {
               const authorizedPages = Object.entries(permsForRole)
                 .filter(([, v]) => v === true)
                 .map(([k]) => k);
+              console.log(`[ADMIN] ${p.nom} (${role}): ${authorizedPages.length} pages authorized`);
               return { ...p, pages: authorizedPages };
             }));
           }
         }
-      } catch { /* silencieux */ }
-    } catch (err) { console.error(err); }
+      } catch (e) { 
+        console.error('[ADMIN] Failed to load role_permissions:', e);
+      }
+    } catch (err) { console.error('[ADMIN] load error:', err); }
     finally { setIsLoading(false); }
   }, []);
 
