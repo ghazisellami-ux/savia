@@ -96,7 +96,7 @@ export const dashboard = {
 
 // --- Interventions ---
 export const interventions = {
-  list: (params?: { machine?: string; technicien?: string }) => {
+  list: (params?: { machine?: string; technicien?: string; offset?: number; limit?: number }) => {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return request<Array<Record<string, unknown>>>(`/api/interventions?${qs}`);
   },

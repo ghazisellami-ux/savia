@@ -11,7 +11,7 @@ import {
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2, Package
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings, dashboard } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
@@ -53,6 +53,7 @@ const MONTHS = [
 
 export default function SavPage() {
   const { user } = useAuth();
+  console.log('[SAV] Component rendering, user role:', user?.role);
   const isTechnicien = user?.role === 'Technicien';
   const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
 
@@ -116,6 +117,7 @@ export default function SavPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
   const [tauxHoraire, setTauxHoraire] = useState<number>(0);
+  const [totalInterventionsInDB, setTotalInterventionsInDB] = useState<number>(0);
 
   // Load custom types from database on mount
   useEffect(() => {
@@ -134,6 +136,20 @@ export default function SavPage() {
       .catch((err) => {
         console.error('Failed to fetch hourly rate:', err);
         setTauxHoraire(0);
+      });
+  }, []);
+
+  // Fetch total intervention count from dashboard KPIs
+  useEffect(() => {
+    dashboard.kpis()
+      .then((kpis: any) => {
+        const total = kpis.nb_interventions || 0;
+        setTotalInterventionsInDB(total);
+        console.log('[SAV] Total interventions in DB:', total);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch total interventions:', err);
+        setTotalInterventionsInDB(0);
       });
   }, []);
 
@@ -159,13 +175,13 @@ export default function SavPage() {
     else setIsLoadingMore(true);
     
     try {
+      console.log(`[SAV] loadData called: offset=${pageOffset}, append=${append}, PAGE_SIZE=${PAGE_SIZE}`);
       const [res, techRes] = await Promise.all([
-        interventions.list().then((allInterventions: any[]) => {
-          // Simulate pagination on frontend (since backend returns all)
-          return allInterventions.slice(pageOffset, pageOffset + PAGE_SIZE);
-        }),
+        interventions.list({ offset: pageOffset, limit: PAGE_SIZE }),
         pageOffset === 0 ? techApi.list().catch(() => []) : Promise.resolve([])
       ]);
+      
+      console.log(`[SAV] API Response: ${res.length} items returned`);
       
       if (pageOffset === 0) {
         setTechniciens(techRes as any);
@@ -211,8 +227,11 @@ export default function SavPage() {
       }
       
       // Check if there are more items to load
-      setHasMore(res.length === PAGE_SIZE);
+      const hasMoreData = res.length === PAGE_SIZE;
+      console.log(`[SAV] Setting hasMore=${hasMoreData} (res.length=${res.length}, PAGE_SIZE=${PAGE_SIZE})`);
+      setHasMore(hasMoreData);
       setOffset(pageOffset + PAGE_SIZE);
+      console.log(`[SAV] Loaded page at offset ${pageOffset}: ${res.length} items, hasMore=${hasMoreData}, new offset=${pageOffset + PAGE_SIZE}`);
     } catch (err) {
       console.error("Failed to fetch interventions", err);
     } finally {
@@ -226,9 +245,10 @@ export default function SavPage() {
   // Infinite scroll: load more when user scrolls near bottom
   useEffect(() => {
     const handleScroll = () => {
-      // Check if user scrolled to bottom (within 500px)
+      // Check window scroll
       if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
         if (hasMore && !isLoadingMore && !isLoading) {
+          console.log(`[SAV] Window scroll triggered load at offset ${offset}`);
           loadData(offset, true);
         }
       }
@@ -559,8 +579,10 @@ export default function SavPage() {
     });
   }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
-  // ===== KPI CALCULATIONS (based on filtered data) =====
-  const totalInterv = filtered.length;
+  // ===== KPI CALCULATIONS =====
+  // Use totalInterventionsInDB for TOTAL count (from database)
+  // Use filtered for ratios and filtered calculations
+  const totalInterv = totalInterventionsInDB > 0 ? totalInterventionsInDB : filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
   const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
@@ -824,12 +846,17 @@ export default function SavPage() {
           </div>
 
           <div className="glass rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center gap-2">
-              <ClipboardList className="w-4 h-4 text-savia-accent" />
-              <span className="font-semibold text-sm">{filtered.length} intervention{filtered.length > 1 ? 's' : ''}</span>
+            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center gap-2 justify-between">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-4 h-4 text-savia-accent" />
+                <span className="font-semibold text-sm">{filtered.length} intervention{filtered.length > 1 ? 's' : ''}</span>
+              </div>
+              <div className="text-xs text-savia-text-muted">
+                Chargées: {data.length} | hasMore: {hasMore ? 'oui' : 'non'} | offset: {offset}
+              </div>
             </div>
-            {/* Table with max 5 visible rows + scroll */}
-            <div className="overflow-x-auto max-h-[310px] overflow-y-auto">
+            {/* Table with infinite scroll */}
+            <div className="overflow-x-auto overflow-y-auto" id="interventions-container">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-savia-surface-hover/80 backdrop-blur-sm">
                   <tr className="border-b border-savia-border">

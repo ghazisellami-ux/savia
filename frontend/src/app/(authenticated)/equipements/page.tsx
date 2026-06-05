@@ -238,10 +238,34 @@ export default function EquipementsPage() {
     return base;
   }, [form.Domaine, form.EstAnnexe, customTypesForDomain]);
 
-  const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicTypes = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))], [data]);
   const dynamicDomaines = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.domaine).filter(Boolean)))], [data]);
-  const dynamicStatuts = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.statut).filter(Boolean)))], [data]);
+  
+  // Filter types based on selected domain
+  const dynamicTypes = useMemo(() => {
+    if (filterDomaine === 'Tous') {
+      return ['Tous', ...Array.from(new Set(data.map(d => d.type).filter(Boolean)))];
+    }
+    const typesInDomain = data
+      .filter(d => d.domaine === filterDomaine)
+      .map(d => d.type)
+      .filter(Boolean);
+    return ['Tous', ...Array.from(new Set(typesInDomain))];
+  }, [data, filterDomaine]);
+
+  // Filter clients based on selected domain
+  const dynamicClients = useMemo(() => {
+    if (filterDomaine === 'Tous') {
+      return ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))];
+    }
+    const clientsInDomain = data
+      .filter(d => d.domaine === filterDomaine)
+      .map(d => d.client)
+      .filter(Boolean);
+    return ['Tous', ...Array.from(new Set(clientsInDomain))];
+  }, [data, filterDomaine]);
+
+  // Fixed status options (matching form options)
+  const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'Hors Service', 'En atelier'], []);
 
   const matriculeClientMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -1289,7 +1313,12 @@ export default function EquipementsPage() {
                 onChange={e => setSearch(e.target.value)}
                 className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
-            <select value={filterDomaine} onChange={e => setFilterDomaine(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+            <select value={filterDomaine} onChange={e => {
+              setFilterDomaine(e.target.value);
+              // Reset type and client filters when domain changes
+              setFilterType('Tous');
+              setFilterClient('Tous');
+            }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicDomaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
             </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
