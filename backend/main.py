@@ -300,7 +300,7 @@ def sync_planning_to_interventions():
                 """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
                           pm.type_maintenance
                    FROM planning_maintenance pm
-                   WHERE pm.date_prevue = %s
+                   WHERE pm.date_prevue = ?
                      AND pm.statut = 'Planifiée'
                      AND NOT EXISTS (
                          SELECT 1 FROM interventions i
@@ -324,20 +324,20 @@ def sync_planning_to_interventions():
                     """INSERT INTO interventions
                        (date, machine, technicien, type_intervention, description,
                         statut, priorite, notes, planning_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (today_str, machine, technicien, 'Préventive', description,
                      'En cours', 'Moyenne', notes, pm_id)
                 )
                 # Récupérer l'ID de l'intervention créée
                 new_id_row = conn.execute(
-                    "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                    "SELECT id FROM interventions WHERE planning_id = ? ORDER BY id DESC LIMIT 1",
                     (pm_id,)
                 ).fetchone()
                 new_id = new_id_row['id'] if new_id_row else '?'
 
                 # Mettre à jour le statut du planning
                 conn.execute(
-                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
+                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = ?",
                     (pm_id,)
                 )
 
@@ -488,7 +488,7 @@ def check_facturation_reminders():
                     'type': 'premier',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = ?", (int_id,))
 
             # Rappel SAV : J+8 (2 jours avant deadline)
             elif jours_depuis >= 8 and rappel_level < 2:
@@ -499,7 +499,7 @@ def check_facturation_reminders():
                     'type': 'urgent',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = ?", (int_id,))
 
             # Bot Manager : > 10 jours sans facturation
             if jours_depuis > 10 and rappel_level < 3:
@@ -509,7 +509,7 @@ def check_facturation_reminders():
                     'jours_retard': jours_depuis - 10,
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = ?", (int_id,))
 
         # Envoyer notifications SAV
         if sav_alerts:
@@ -740,7 +740,7 @@ def _start_garantie_daemon():
         from datetime import date
         try:
             with get_db() as conn:
-                row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (LOCK_KEY,)).fetchone()
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = ?", (LOCK_KEY,)).fetchone()
                 if row:
                     return dict(row)['valeur'] == str(date.today())
             return False
@@ -753,7 +753,7 @@ def _start_garantie_daemon():
         try:
             with get_db() as conn:
                 conn.execute(
-                    """INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
+                    """INSERT INTO config_client (cle, valeur) VALUES (?, ?)
                        ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
                     (LOCK_KEY, str(date.today()))
                 )
@@ -954,7 +954,7 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     try:
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
+                "SELECT cle, valeur FROM config_client WHERE cle = ANY(?)",
                 ([token_key, chat_key],)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}
@@ -1002,7 +1002,7 @@ def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security))
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT client FROM utilisateurs WHERE username = %s",
+                        "SELECT client FROM utilisateurs WHERE username = ?",
                         (payload.get("sub", ""),)
                     ).fetchone()
                     if row and row["client"]:
@@ -1052,7 +1052,7 @@ def root():
 def login(body: LoginRequest):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
+            "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
             (body.username,)
         ).fetchone()
 
@@ -1608,7 +1608,7 @@ def sync_region_ville():
                         ville = str(best_match.get("ville", "")).strip()
                         
                         cur.execute(
-                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                            "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
                             (region, ville, equip_id)
                         )
                         fuzzy_matches += 1
@@ -1948,7 +1948,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             if body.get("type_erreur"):
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE interventions SET type_erreur = %s WHERE id = %s",
+                        "UPDATE interventions SET type_erreur = ? WHERE id = ?",
                         (body.get("type_erreur"), intervention_id)
                     )
 
@@ -1956,7 +1956,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = %s",
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
                         (intervention_id,)
                     ).fetchone()
                 if row:
@@ -1972,7 +1972,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     if not client_name:
                         try:
                             eq_row = conn.execute(
-                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = %s LIMIT 1",
+                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = ? LIMIT 1",
                                 (d.get('machine', ''),)
                             ).fetchone()
                             if eq_row:
@@ -2019,8 +2019,8 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     conn.execute(
                         """UPDATE demandes_intervention
                            SET statut = 'Résolue',
-                               date_traitement = %s
-                         WHERE intervention_id = %s
+                               date_traitement = ?
+                         WHERE intervention_id = ?
                            AND statut != 'Résolue'""",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), intervention_id)
                     )
@@ -2032,7 +2032,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             try:
                 with get_db() as conn:
                     prow = conn.execute(
-                        "SELECT planning_id FROM interventions WHERE id = %s",
+                        "SELECT planning_id FROM interventions WHERE id = ?",
                         (intervention_id,)
                     ).fetchone()
                     if prow and prow['planning_id']:
@@ -2040,8 +2040,8 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                         conn.execute(
                             """UPDATE planning_maintenance
                                SET statut = 'Réalisée',
-                                   date_realisee = %s
-                             WHERE id = %s AND statut != 'Réalisée'""",
+                                   date_realisee = ?
+                             WHERE id = ? AND statut != 'Réalisée'""",
                             (datetime.now().strftime("%Y-%m-%d"), pm_id)
                         )
                         logger.info(f"Planning #{pm_id} marqué Réalisée (intervention #{intervention_id} clôturée)")
@@ -2060,7 +2060,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         try:
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = %s",
+                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = ?",
                     (intervention_id,)
                 ).fetchone()
             if row:
@@ -2077,7 +2077,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     try:
                         with get_db() as conn2:
                             eq_row = conn2.execute(
-                                'SELECT client FROM equipements WHERE nom = %s LIMIT 1',
+                                'SELECT client FROM equipements WHERE nom = ? LIMIT 1',
                                 (machine,)
                             ).fetchone()
                             if eq_row:
@@ -2185,12 +2185,12 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
               "duree_minutes", "duree_deplacement", "description", "notes", "type_erreur", "priorite",
               "fiche_validation"]:
         if f in body:
-            fields.append(f"{f} = %s")
+            fields.append(f"{f} = ?")
             params.append(body[f])
     if fields:
         params.append(intervention_id)
         with get_db() as conn:
-            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = %s", params)
+            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
     return {"ok": True}
 
 
@@ -2205,14 +2205,14 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
         with get_db() as conn:
             # Vérifier que l'intervention existe
             row = conn.execute(
-                "SELECT id FROM interventions WHERE id = %s",
+                "SELECT id FROM interventions WHERE id = ?",
                 (intervention_id,)
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Intervention non trouvée")
             
             # Supprimer l'intervention
-            conn.execute("DELETE FROM interventions WHERE id = %s", (intervention_id,))
+            conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
             
         return {"ok": True, "message": f"Intervention #{intervention_id} supprimée"}
     except HTTPException:
@@ -2235,7 +2235,7 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
             (file.filename, binary_data, intervention_id)
         )
     logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
@@ -2262,7 +2262,7 @@ async def upload_photo_alias(intervention_id: int,
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
             (upload.filename, binary_data, intervention_id)
         )
     logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
@@ -2282,7 +2282,7 @@ def download_fiche(intervention_id: int, token: Optional[str] = Query(None), use
     with get_db() as conn:
         try:
             row = conn.execute(
-                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
+                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = ?",
                 (intervention_id,)
             ).fetchone()
         except Exception:
@@ -2344,7 +2344,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
     with get_db() as conn:
         # Vérifier le statut actuel
         row = conn.execute(
-            "SELECT fiche_validation FROM interventions WHERE id = %s",
+            "SELECT fiche_validation FROM interventions WHERE id = ?",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -2353,7 +2353,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
         if statut_actuel == "Validée":
             raise HTTPException(status_code=403, detail="Fiche déjà validée — aucune modification possible")
         conn.execute(
-            "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_validation = ? WHERE id = ?",
             (nouveau_statut, intervention_id)
         )
     logger.info(f"Fiche #{intervention_id}: validation mise à jour → '{nouveau_statut}' par {user.get('nom', '?')}")
@@ -2372,7 +2372,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
     with get_db() as conn:
         # Vérifier le statut de validation
         row = conn.execute(
-            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = %s",
+            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = ?",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -2384,7 +2384,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         
         # Supprimer la fiche
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = %s",
+            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = ?",
             (intervention_id,)
         )
     
@@ -2437,7 +2437,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
               (date_demande, demandeur, client, equipement, urgence,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence,
@@ -2481,7 +2481,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                     INSERT INTO interventions
                       (date, machine, technicien, type_intervention, description,
                        probleme, code_erreur, statut, priorite, notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     today,
                     equipement,
@@ -2499,7 +2499,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                 ).fetchone()
                 if new_interv:
                     conn.execute(
-                        "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
+                        "UPDATE demandes_intervention SET intervention_id = ? WHERE id = ?",
                         (new_interv["id"], demande_id)
                     )
                     logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
@@ -2523,16 +2523,16 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     demande_info = {}
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
+            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = ?",
             (demande_id,)
         ).fetchone()
         if row:
             demande_info = dict(row)
         conn.execute("""
             UPDATE demandes_intervention
-            SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
+            SET statut = ?, technicien_assigne = ?, notes_traitement = ?,
                 date_traitement = CURRENT_TIMESTAMP
-            WHERE id = %s
+            WHERE id = ?
         """, (nouveau_statut, technicien_assigne, notes_traitement, demande_id))
 
     # --- Notification Telegram (tous les changements de statut) ---
@@ -2583,7 +2583,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
             with get_db() as conn:
                 # Vérifier si une intervention existe déjà pour cette demande
                 existing = conn.execute(
-                    "SELECT intervention_id FROM demandes_intervention WHERE id = %s",
+                    "SELECT intervention_id FROM demandes_intervention WHERE id = ?",
                     (demande_id,)
                 ).fetchone()
                 already_linked = existing and existing["intervention_id"]
@@ -2598,7 +2598,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         INSERT INTO interventions
                           (date, machine, technicien, type_intervention, description,
                            probleme, code_erreur, statut, priorite, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         today,
                         equipement,
@@ -2617,7 +2617,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     ).fetchone()
                     if new_interv:
                         conn.execute(
-                            "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
+                            "UPDATE demandes_intervention SET intervention_id = ? WHERE id = ?",
                             (new_interv["id"], demande_id)
                         )
                         logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
@@ -2625,7 +2625,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     # Intervention déjà liée → mettre à jour technicien + statut (ex: réassignation après refus)
                     interv_id = existing["intervention_id"]
                     conn.execute(
-                        "UPDATE interventions SET technicien = %s, statut = %s WHERE id = %s",
+                        "UPDATE interventions SET technicien = ?, statut = ? WHERE id = ?",
                         (technicien_assigne, "Assignée", interv_id)
                     )
                     logger.info(f"Intervention #{interv_id} réassignée à {technicien_assigne} (demande #{demande_id})")
@@ -2642,14 +2642,14 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
     from db_engine import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
+            "SELECT id, machine, technicien, statut FROM interventions WHERE id = ?",
             (intervention_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
 
         conn.execute(
-            "UPDATE interventions SET statut = %s WHERE id = %s",
+            "UPDATE interventions SET statut = ? WHERE id = ?",
             ("En cours", intervention_id)
         )
 
@@ -2678,7 +2678,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         row = conn.execute(
             """SELECT id, machine, technicien, statut, notes,
                       (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
-               FROM interventions WHERE id = %s""",
+               FROM interventions WHERE id = ?""",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -2690,7 +2690,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
         # Mark intervention back to "En attente" and clear technician
         conn.execute(
-            "UPDATE interventions SET statut = %s, technicien = %s, notes = COALESCE(notes, '') || %s WHERE id = %s",
+            "UPDATE interventions SET statut = ?, technicien = ?, notes = COALESCE(notes, '') || ? WHERE id = ?",
             ("En attente", "", f"\n[REFUS par {tech_name}] {raison}", intervention_id)
         )
 
@@ -2698,8 +2698,8 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         conn.execute("""
             UPDATE demandes_intervention
             SET statut = 'En attente', technicien_assigne = '',
-                notes_traitement = COALESCE(notes_traitement, '') || %s
-            WHERE intervention_id = %s
+                notes_traitement = COALESCE(notes_traitement, '') || ?
+            WHERE intervention_id = ?
         """, (f"\n[REFUS par {tech_name}] {raison}", intervention_id))
 
     # Send Telegram notification
@@ -2939,7 +2939,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
     try:
         with get_db() as conn:
             old = conn.execute(
-                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = %s",
+                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = ?",
                 (piece_id,)
             ).fetchone()
         stock_avant = int(old["stock_actuel"]) if old else None
@@ -3323,7 +3323,7 @@ def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verif
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = %s",
+            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = ?",
             (intervention_id,)
         )
     return {"ok": True}
@@ -3491,13 +3491,13 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
 
                 # Insert or update codes_erreurs
                 conn.execute(
-                    "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
+                    "INSERT INTO codes_erreurs (code, message, type) VALUES (?, ?, ?) "
                     "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
                     (code, msg, typ)
                 )
                 # Insert or update solutions
                 conn.execute(
-                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (%s, %s, %s, %s) "
+                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (?, ?, ?, ?) "
                     "ON CONFLICT (code) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
                     (code, cause, solution, priorite)
                 )
@@ -3563,7 +3563,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             existing = conn.execute(
-                "SELECT id FROM logs_uploaded WHERE content_hash = %s AND equipement = %s",
+                "SELECT id FROM logs_uploaded WHERE content_hash = ? AND equipement = ?",
                 (content_hash, equipement)
             ).fetchone()
             if existing:
@@ -3571,7 +3571,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
                 # Update parsed_errors on duplicate if not already stored
                 if parsed_errors_str:
                     conn.execute(
-                        "UPDATE logs_uploaded SET parsed_errors = %s WHERE id = %s AND (parsed_errors IS NULL OR parsed_errors = '')",
+                        "UPDATE logs_uploaded SET parsed_errors = ? WHERE id = ? AND (parsed_errors IS NULL OR parsed_errors = '')",
                         (parsed_errors_str, eid)
                     )
                 return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
@@ -3593,13 +3593,13 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
             # Métadonnées en PostgreSQL
             cursor = conn.execute(
                 """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
                 (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
             )
             new_row = cursor.fetchone()
             new_id = (new_row["id"] if isinstance(new_row, dict) else new_row[0]) if new_row else None
             conn.execute(
-                "INSERT INTO audit_log (username, action, details) VALUES (%s, %s, %s)",
+                "INSERT INTO audit_log (username, action, details) VALUES (?, ?, ?)",
                 (username, "Upload Log", f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)")
             )
             return {"ok": True, "id": new_id, "s3_key": s3_key,
@@ -3616,7 +3616,7 @@ def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
         with get_db() as conn:
             if equipement:
                 rows = conn.execute(
-                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = %s ORDER BY uploaded_at DESC",
+                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = ? ORDER BY uploaded_at DESC",
                     (equipement,)
                 ).fetchall()
             else:
@@ -3637,7 +3637,7 @@ def get_log(log_id: int, user: dict = Depends(_verify_token)):
     """Récupère le contenu d'un log depuis S3/MinIO."""
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = %s", (log_id,)).fetchone()
+            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Log non trouvé")
             # Support both dict (PG) and tuple (SQLite) rows
@@ -4533,7 +4533,7 @@ def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token))
             for k, v in body.items():
                 logger.info(f"[UPDATE_SETTINGS] Saving key='{k}', value_type={type(v).__name__}, value_length={len(str(v))}")
                 # Use SQLite-compatible syntax with ? placeholder
-                # Note: PgCursorWrapper translates ? to %s and EXCLUDED handles both SQLite and PostgreSQL
+                # Note: PgCursorWrapper translates ? to ? and EXCLUDED handles both SQLite and PostgreSQL
                 conn.execute(
                     """
                     INSERT INTO config_client (cle, valeur) VALUES (?, ?)
@@ -5857,7 +5857,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         if client_name:
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         client_region = dict(cl_row).get("region", "") or ""
                         client_ville = dict(cl_row).get("ville", "") or ""
@@ -6144,7 +6144,7 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         if client_name and client_name != "-":
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         d = dict(cl_row)
                         client_region = d.get("region", "") or ""
@@ -6442,7 +6442,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             try:
                 with get_db() as conn:
                     cl_row = conn.execute(
-                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = %s LIMIT 1",
+                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = ? LIMIT 1",
                         (client_name,)
                     ).fetchone()
                     if cl_row:

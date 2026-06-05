@@ -2,6 +2,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
+import { TimePicker } from '@/components/ui/time-picker';
+import { DurationCalculator } from '@/components/ui/duration-calculator';
 import {
   Plus, Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
   Sparkles, FileText, Download, Users, DollarSign, XCircle, ChevronDown,
@@ -107,9 +109,9 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '', start_time: '08:00', end_time: '09:00' };
   const [form, setForm] = useState(emptyForm);
-  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '' });
+  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '', start_time: '08:00', end_time: '09:00' });
 
   // Custom intervention types ("Autre" pattern)
   const TYPES_INTERVENTION_BASE = ['Corrective', 'Préventive', 'Installation', 'Formation', 'Démo'];
@@ -296,13 +298,38 @@ export default function SavPage() {
   }, []);
 
 
+  // Calculate duration from start_time and end_time
+  const calculateDurationFromTimes = (startTime: string, endTime: string): number => {
+    try {
+      const [startH, startM] = startTime.split(':').map(Number);
+      const [endH, endM] = endTime.split(':').map(Number);
+      let duration = (endH * 60 + endM) - (startH * 60 + startM);
+      
+      // Handle midnight crossing (if end time is before start time)
+      if (duration < 0) {
+        duration += 24 * 60;
+      }
+      
+      // Enforce minimum 1 hour billing (60 minutes)
+      return Math.max(60, duration);
+    } catch (e) {
+      return 60; // Default to 1 hour on error
+    }
+  };
+
   const handleSave = async () => {
     if (!form.machine.trim()) return;
     setIsSaving(true);
     try {
+      // Calculate duration from times if both are provided
+      let finalDurationMinutes = Math.round(Number(form.duree_heures) * 60);
+      if (form.start_time && form.end_time) {
+        finalDurationMinutes = calculateDurationFromTimes(form.start_time, form.end_time);
+      }
+      
       await interventions.create({
         ...form,
-        duree_minutes: Math.round(Number(form.duree_heures) * 60),
+        duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(form.duree_deplacement) * 60),
         pieces_utilisees: selectedPieces.map((p: any) => `${p.designation} (${p.reference})`).join(', '),
         cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + (p.prix_unitaire || 0), 0),
@@ -322,12 +349,18 @@ export default function SavPage() {
     if (!selectedIntervention) return;
     setIsSaving(true);
     try {
+      // Calculate duration from times if both are provided
+      let finalDurationMinutes = Math.round(Number(statusForm.duree_heures) * 60) || selectedIntervention.duree_minutes;
+      if (statusForm.start_time && statusForm.end_time) {
+        finalDurationMinutes = calculateDurationFromTimes(statusForm.start_time, statusForm.end_time);
+      }
+      
       const payload: any = {
         statut: statusForm.statut,
         probleme: statusForm.probleme,
         cause: statusForm.cause,
         solution: statusForm.solution,
-        duree_minutes: Math.round(Number(statusForm.duree_heures) * 60) || selectedIntervention.duree_minutes,
+        duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(statusForm.duree_deplacement) * 60),
       };
       // Envoyer les pièces en rupture sélectionnées pour générer des notifications
@@ -1472,7 +1505,15 @@ export default function SavPage() {
             <select className={INPUT_CLS} value={form.priorite} onChange={e => setForm({...form, priorite: e.target.value})}>
               {PRIORITES.map(p => <option key={p}>{p}</option>)}
             </select></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_heures} onChange={e => setForm({...form, duree_heures: e.target.value})} /></div>
+          <TimePicker label="Heure début d'intervention" value={form.start_time} onChange={time => setForm({...form, start_time: time})} className="" />
+          <TimePicker label="Heure fin d'intervention" value={form.end_time} onChange={time => setForm({...form, end_time: time})} className="" />
+          <div>
+            <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée calculée</label>
+            <div className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              <span className="font-semibold">{Math.max(1, Math.round(calculateDurationFromTimes(form.start_time, form.end_time) / 60 * 10) / 10)}h</span>
+              <span className="text-xs text-savia-text-muted ml-2">Min 1h de facturation</span>
+            </div>
+          </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_deplacement} onChange={e => setForm({...form, duree_deplacement: e.target.value})} /></div>
           <div className="md:col-span-2">
             <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Pièces utilisées</label>
@@ -1670,7 +1711,15 @@ export default function SavPage() {
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 1.5" value={statusForm.duree_heures} onChange={e => setStatusForm({...statusForm, duree_heures: e.target.value})} /></div>
+            <TimePicker label="Heure début d'intervention" value={statusForm.start_time} onChange={time => setStatusForm({...statusForm, start_time: time})} className="" />
+            <TimePicker label="Heure fin d'intervention" value={statusForm.end_time} onChange={time => setStatusForm({...statusForm, end_time: time})} className="" />
+            <div>
+              <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée calculée</label>
+              <div className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+                <span className="font-semibold">{Math.max(1, Math.round(calculateDurationFromTimes(statusForm.start_time, statusForm.end_time) / 60 * 10) / 10)}h</span>
+                <span className="text-xs text-savia-text-muted ml-2">Min 1h de facturation</span>
+              </div>
+            </div>
             <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 0.5" value={statusForm.duree_deplacement} onChange={e => setStatusForm({...statusForm, duree_deplacement: e.target.value})} /></div>
           </div>
           {statusForm.statut.toLowerCase().includes('tur') && (

@@ -8,7 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import {
   Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
   XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
-  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare
+  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare, Zap
 } from 'lucide-react';
 
 const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
@@ -84,6 +84,7 @@ export default function InterventionDetailPage() {
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
     duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
+    start_time: '08:00', end_time: '09:00',
   });
 
   useEffect(() => {
@@ -109,6 +110,16 @@ export default function InterventionDetailPage() {
       setIntervention(found);
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
+      
+      // Calculate start and end times from duration
+      // Assuming work starts at 14:00 (2 PM)
+      const startTime = '14:00';
+      const durationMinutes = found.duree_minutes || 60;
+      const totalEndMinutes = 14 * 60 + durationMinutes;
+      const endHours = Math.min(Math.floor(totalEndMinutes / 60), 18);
+      const endMinutes = totalEndMinutes % 60;
+      const endTime = `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+      
       setForm({
         statut:           found.statut || 'En cours',
         probleme:         found.probleme || '',
@@ -121,6 +132,8 @@ export default function InterventionDetailPage() {
         duree_minutes:    found.duree_minutes || 0,
         deplacement:      found.deplacement || 0,
         fiche_validation: found.fiche_validation || 'En attente',
+        start_time:       startTime,
+        end_time:         endTime,
       });
     } catch {
       setError('Erreur lors du chargement.');
@@ -406,22 +419,68 @@ export default function InterventionDetailPage() {
                   {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
                 </select>
               </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
-                <label style={LABEL}><Timer style={ICON_INLINE} /> Durée (heures)</label>
+                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de début</label>
                 <input
-                  type="number" style={INPUT} min={0} step={0.5}
-                  value={form.duree_minutes > 0 ? +(form.duree_minutes / 60).toFixed(2) : 0}
-                  onChange={e => set('duree_minutes', Math.round((parseFloat(e.target.value) || 0) * 60))}
+                  type="time" style={INPUT}
+                  value={form.start_time}
+                  onChange={(e) => {
+                    const time = e.target.value;
+                    setForm(f => {
+                      const newForm = { ...f, start_time: time };
+                      // Auto-calculate duration
+                      const [startH, startM] = time.split(':').map(Number);
+                      const [endH, endM] = f.end_time.split(':').map(Number);
+                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
+                      durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
+                      newForm.duree_minutes = durationMin;
+                      return newForm;
+                    });
+                  }}
                 />
               </div>
               <div>
-                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (heures)</label>
+                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de fin</label>
                 <input
-                  type="number" style={INPUT} min={0} step={0.5}
-                  value={form.deplacement}
-                  onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
+                  type="time" style={INPUT}
+                  value={form.end_time}
+                  onChange={(e) => {
+                    const time = e.target.value;
+                    setForm(f => {
+                      const newForm = { ...f, end_time: time };
+                      // Auto-calculate duration
+                      const [startH, startM] = f.start_time.split(':').map(Number);
+                      const [endH, endM] = time.split(':').map(Number);
+                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
+                      durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
+                      newForm.duree_minutes = durationMin;
+                      return newForm;
+                    });
+                  }}
                 />
               </div>
+              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '8px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
+              <Zap style={{ width: 16, height: 16, color: 'var(--teal)' }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Durée calculée:</span>
+              <span style={{ fontWeight: 700, color: 'var(--teal)', marginLeft: 'auto' }}>
+                {form.duree_minutes > 0 ? (form.duree_minutes / 60).toFixed(2) : 0}h
+              </span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Min 1h</span>
+            </div>
+            <div style={{ marginTop: '12px' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                <Car style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Déplacement (heures)
+              </label>
+              <input
+                type="number" style={{ width: '100%', background: '#fff', border: '1px solid var(--border)', borderRadius: '10px', color: 'var(--text)', padding: '12px 14px', fontSize: '1rem', outline: 'none', fontFamily: 'inherit' }} min={0} step={0.5}
+                value={form.deplacement}
+                onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
+              />
+            </div>
             </div>
           </div>
 
