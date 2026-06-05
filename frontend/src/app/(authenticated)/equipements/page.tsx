@@ -1452,8 +1452,8 @@ export default function EquipementsPage() {
                       <Settings className="w-4 h-4 text-savia-accent" /> Type & Statut
                     </h3>
                     <div className="flex items-center gap-4 flex-wrap">
-                      <div className="flex-1 min-w-[160px]">
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Type client</label>
+                      <div>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Type client *</label>
                         <select className={INPUT_CLS} value={clientForm.type_client} onChange={e => setClientForm({ ...clientForm, type_client: e.target.value })}>
                           <option value="Privé">Privé</option>
                           <option value="Public">Public</option>
@@ -1479,7 +1479,7 @@ export default function EquipementsPage() {
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
-                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région</label>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région *</label>
                           <select className={INPUT_CLS} value={clientForm.region} onChange={e => setClientForm({ ...clientForm, region: e.target.value, ville: '' })}>
                             <option value="">— Sélectionner —</option>
                             <option value="Nord">Nord</option>
@@ -1488,14 +1488,14 @@ export default function EquipementsPage() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Ville</label>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Ville *</label>
                           <select className={INPUT_CLS} value={clientForm.ville} onChange={e => setClientForm({ ...clientForm, ville: e.target.value })}>
                             <option value="">— Sélectionner —</option>
                             {clientVilles.map(v => <option key={v} value={v}>{v}</option>)}
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Adresse</label>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Adresse *</label>
                           <input className={INPUT_CLS} placeholder="Adresse complète..."
                             value={clientForm.adresse} onChange={e => setClientForm({ ...clientForm, adresse: e.target.value })} />
                         </div>
@@ -1510,12 +1510,12 @@ export default function EquipementsPage() {
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Nom du contact</label>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Nom du contact *</label>
                         <input className={INPUT_CLS} placeholder="Ex: Dr. Ben Ali"
                           value={clientForm.contact} onChange={e => setClientForm({ ...clientForm, contact: e.target.value })} />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Téléphone</label>
+                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Téléphone *</label>
                         <input className={INPUT_CLS} placeholder="Ex: +216 71 000 000"
                           value={clientForm.telephone} onChange={e => setClientForm({ ...clientForm, telephone: e.target.value })} />
                       </div>
@@ -1528,7 +1528,7 @@ export default function EquipementsPage() {
                       className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">
                       Annuler
                     </button>
-                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim()}
+                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim() || !clientForm.matricule_fiscale.trim() || !clientForm.contact.trim() || !clientForm.telephone.trim() || !clientForm.type_client || (!clientForm.international && (!clientForm.region || !clientForm.ville || !clientForm.adresse.trim()))}
                       className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
                       {savingClient ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       {editingClient ? 'Mettre à jour' : 'Sauvegarder'}
