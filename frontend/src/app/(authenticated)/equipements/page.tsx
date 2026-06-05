@@ -439,10 +439,18 @@ export default function EquipementsPage() {
     if (!clientForm.nom.trim()) return;
     setSavingClient(true);
     try {
+      // Auto-generate code_client for new clients if not already set
+      let formToSave = { ...clientForm };
+      if (!editingClient && !formToSave.code_client.trim()) {
+        // Generate as CL001, CL002, etc. based on existing clients count
+        const nextNumber = clientsList.length + 1;
+        formToSave.code_client = `CL${String(nextNumber).padStart(3, '0')}`;
+      }
+      
       if (editingClient) {
-        await clientsApi.update(editingClient.id, clientForm);
+        await clientsApi.update(editingClient.id, formToSave);
       } else {
-        await clientsApi.create(clientForm);
+        await clientsApi.create(formToSave);
       }
       setClientForm(emptyClientForm); setShowClientForm(false); setEditingClient(null);
       await loadClients();
@@ -1376,7 +1384,20 @@ export default function EquipementsPage() {
           {!isLecteur && (
             <div className="glass rounded-xl overflow-hidden">
               <button
-                onClick={() => { if (showClientForm) { setShowClientForm(false); setEditingClient(null); setClientForm(emptyClientForm); } else { setEditingClient(null); setClientForm(emptyClientForm); setShowClientForm(true); } }}
+                onClick={() => { 
+                  if (showClientForm) { 
+                    setShowClientForm(false); 
+                    setEditingClient(null); 
+                    setClientForm(emptyClientForm); 
+                  } else { 
+                    setEditingClient(null);
+                    // Auto-generate code_client for new client
+                    const nextNumber = clientsList.length + 1;
+                    const autoCode = `CL${String(nextNumber).padStart(3, '0')}`;
+                    setClientForm({ ...emptyClientForm, code_client: autoCode }); 
+                    setShowClientForm(true); 
+                  } 
+                }}
                 className="w-full flex items-center justify-between p-4 hover:bg-savia-surface-hover/30 transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-3">
