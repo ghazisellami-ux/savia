@@ -543,6 +543,25 @@ export default function EquipementsPage() {
     }
   };
 
+  // Valider que tous les champs obligatoires sont remplis
+  const isEquipmentFormValid = () => {
+    return (
+      form.Nom.trim() &&
+      form.Client.trim() &&
+      form.Type.trim() &&
+      form.Domaine.trim() &&
+      form.Fabricant.trim() &&
+      form.Modele.trim() &&
+      form.NumSerie.trim() &&
+      form.Statut.trim() &&
+      form.Service.trim() &&
+      form.DateInstallation &&
+      form.DernieresMaintenance &&
+      form.GarantieDebut &&
+      form.GarantieDuree > 0
+    );
+  };
+
   const handleSave = async () => {
     if (!form.Nom.trim() || !form.Client.trim()) return;
     setIsSaving(true);
@@ -1094,7 +1113,7 @@ export default function EquipementsPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Factory className="w-3.5 h-3.5" /> Fabricant
+                          <Factory className="w-3.5 h-3.5" /> Fabricant *
                         </label>
                         {customFabricant ? (
                           <div className="flex gap-2">
@@ -1120,35 +1139,35 @@ export default function EquipementsPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <ClipboardList className="w-3.5 h-3.5" /> Modèle
+                          <ClipboardList className="w-3.5 h-3.5" /> Modèle *
                         </label>
                         <input className={INPUT_CLS} placeholder="Ex: SOMATOM go.Up" value={form.Modele}
                           onChange={e => setForm({ ...form, Modele: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Hash className="w-3.5 h-3.5" /> N° de série
+                          <Hash className="w-3.5 h-3.5" /> N° de série *
                         </label>
                         <input className={INPUT_CLS} placeholder="Ex: SN-2024-001" value={form.NumSerie}
                           onChange={e => setForm({ ...form, NumSerie: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Calendar className="w-3.5 h-3.5" /> Date d&apos;installation
+                          <Calendar className="w-3.5 h-3.5" /> Date d&apos;installation *
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.DateInstallation}
                           onChange={e => setForm({ ...form, DateInstallation: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Settings className="w-3.5 h-3.5" /> Dernière maintenance
+                          <Settings className="w-3.5 h-3.5" /> Dernière maintenance *
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.DernieresMaintenance}
                           onChange={e => setForm({ ...form, DernieresMaintenance: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Activity className="w-3.5 h-3.5" /> Statut
+                          <Activity className="w-3.5 h-3.5" /> Statut *
                         </label>
                         <select className={INPUT_CLS} value={form.Statut} onChange={e => setForm({ ...form, Statut: e.target.value })}>
                           {['Opérationnel', 'Hors Service', 'En atelier'].map(s => <option key={s} value={s}>{s}</option>)}
@@ -1156,7 +1175,7 @@ export default function EquipementsPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Stethoscope className="w-3.5 h-3.5" /> Service
+                          <Stethoscope className="w-3.5 h-3.5" /> Service *
                         </label>
                         <select className={INPUT_CLS} value={form.Service} onChange={e => setForm({ ...form, Service: e.target.value })}>
                           <option value="">— Sélectionner —</option>
@@ -1182,14 +1201,14 @@ export default function EquipementsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Calendar className="w-3.5 h-3.5" /> Date début garantie
+                          <Calendar className="w-3.5 h-3.5" /> Date début garantie *
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.GarantieDebut}
                           onChange={e => setForm({ ...form, GarantieDebut: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Settings className="w-3.5 h-3.5" /> Durée de garantie
+                          <Settings className="w-3.5 h-3.5" /> Durée de garantie *
                         </label>
                         <select className={INPUT_CLS} value={form.GarantieDuree}
                           onChange={e => setForm({ ...form, GarantieDuree: Number(e.target.value) })}>
@@ -1251,7 +1270,7 @@ export default function EquipementsPage() {
                       className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">
                       Annuler
                     </button>
-                    <button onClick={handleSave} disabled={isSaving || !form.Nom.trim() || !form.Client.trim()}
+                    <button onClick={handleSave} disabled={isSaving || !isEquipmentFormValid()}
                       className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
                       {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       {editingEquip ? 'Mettre à jour' : 'Sauvegarder'}
