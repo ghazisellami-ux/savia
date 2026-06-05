@@ -163,7 +163,15 @@ export default function SavPage() {
 
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
+  const dynamicEquip = useMemo(() => {
+    // If a client is selected, show only equipment from that client with interventions
+    // Otherwise show all equipment with interventions
+    let filtered_data = data;
+    if (filterClient !== 'Tous') {
+      filtered_data = filtered_data.filter(d => d.client === filterClient);
+    }
+    return ['Tous', ...Array.from(new Set(filtered_data.map(d => d.machine).filter(Boolean)))];
+  }, [data, filterClient]);
   const availableYears = useMemo(() => {
     const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
     years.add(new Date().getFullYear());
@@ -580,9 +588,9 @@ export default function SavPage() {
   }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
   // ===== KPI CALCULATIONS =====
-  // Use totalInterventionsInDB for TOTAL count (from database)
-  // Use filtered for ratios and filtered calculations
-  const totalInterv = totalInterventionsInDB > 0 ? totalInterventionsInDB : filtered.length;
+  // Use filtered.length for TOTAL count (respects all filters: period, status, type, client, equipment)
+  // This makes the card show the same number as displayed in the table
+  const totalInterv = filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
   const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
@@ -837,7 +845,10 @@ export default function SavPage() {
               <option value="Tous">Tous les types</option>
               {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-            <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+            <select value={filterClient} onChange={e => {
+              setFilterClient(e.target.value);
+              setFilterEquip('Tous'); // Reset equipment filter when client changes
+            }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
             </select>
             <select value={filterEquip} onChange={e => setFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
