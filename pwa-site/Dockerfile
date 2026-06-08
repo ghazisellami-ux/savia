@@ -4,7 +4,9 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 
-RUN npm ci --include=dev
+# Try alternative npm registry if default fails
+RUN npm ci --include=dev --registry https://registry.npmmirror.com || \
+    npm ci --include=dev
 
 COPY . .
 

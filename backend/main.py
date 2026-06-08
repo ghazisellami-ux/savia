@@ -149,6 +149,16 @@ def startup():
             conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_validation TEXT DEFAULT 'En attente'")
         logger.info("✅ Migration fiche_photo: colonnes OK")
     except Exception as e:
+        logger.error(f"❌ Migration fiche_photo échouée: {e}")
+    
+    # Vérifier et ajouter colonnes time persistence
+    try:
+        from db_engine import verifier_et_migrer_schema
+        verifier_et_migrer_schema()
+        logger.info("✅ Migration schema (time persistence): OK")
+    except Exception as e:
+        logger.error(f"❌ Migration schema échouée: {e}")
+    except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
     # Migration: planning_id + facture_envoyee on interventions
     try:
@@ -1911,6 +1921,7 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 
 @app.put("/api/interventions/{intervention_id}")
 def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+    logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
         # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref' ou 'reference'
@@ -2183,14 +2194,26 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     params = []
     for f in ["technicien", "probleme", "cause", "solution", "pieces_utilisees", "cout",
               "duree_minutes", "duree_deplacement", "description", "notes", "type_erreur", "priorite",
-              "fiche_validation"]:
+              "fiche_validation", "start_time", "end_time"]:
         if f in body:
             fields.append(f"{f} = ?")
             params.append(body[f])
+            logger.info(f"  ✓ {f} = {body[f]}")
+        # Handle PWA field names mapping: deplacement comes in MINUTES from PWA
+        elif f == "duree_deplacement" and "deplacement" in body:
+            fields.append(f"duree_deplacement = ?")
+            params.append(body["deplacement"])  # Already in minutes from PWA
+            logger.info(f"  ✓ duree_deplacement = {body['deplacement']} (from deplacement)")
     if fields:
         params.append(intervention_id)
-        with get_db() as conn:
-            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
+        logger.info(f"update_intervention #{intervention_id}: fields={fields}, params={params}")
+        try:
+            with get_db() as conn:
+                conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
+            logger.info(f"✅ update_intervention #{intervention_id}: SUCCESS - Updated {len(fields)} fields")
+        except Exception as e:
+            logger.error(f"❌ update_intervention #{intervention_id} FAILED: {e}")
+            raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
     return {"ok": True}
 
 
@@ -5849,7 +5872,8 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         equip_type = (matched_equip or {}).get("Type", "") or (matched_equip or {}).get("type", "") or str(interv.get("type_intervention", "-"))
         duree_min = int(interv.get("duree_minutes", 0) or 0)
         duree_h = round(duree_min / 60, 2) if duree_min else 0
-        deplacement = interv.get("deplacement", 0) or 0
+        deplacement_min = int(interv.get("duree_deplacement", 0) or 0)
+        deplacement_h = round(deplacement_min / 60, 2) if deplacement_min else 0
 
         # Fetch client region/ville
         client_region = ""
@@ -5896,185 +5920,256 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
 
         # Date line
         pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
+        # INFORMATION PRINCIPALE - Two columns layout
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        
         date_str = str(interv.get("date", ""))[:10]
-        pdf.cell(W, 5, _sanitize(f"Date : {date_str}"), align="C")
-        pdf.ln(8)
-
-        # ── SECTION: CLIENT & EQUIPEMENT ──
-        y0 = pdf.get_y()
-        pdf.set_fill_color(242, 252, 250)
-        pdf.set_draw_color(180, 220, 215)
-        pdf.set_line_width(0.3)
-        pdf.rect(10, y0, W, 58, style="FD")
-        pdf.set_xy(14, y0 + 2)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(W - 8, 6, "INFORMATIONS CLIENT & EQUIPEMENT")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(30, 40, 60)
-
-        left_x = 14
-        right_x = pdf.w / 2 + 5
-        row_h = 7
-
+        intervention_id = str(interv.get("id", ""))
+        technicien = str(interv.get("technicien", "-")).strip()
+        
         # Left column
-        for i, (label, value) in enumerate([
-            ("Client", _sanitize(client_name or "-")),
-            ("Equipement", _sanitize(str(interv.get("machine", "-")))),
-            ("N. de serie", _sanitize(str(num_serie))),
-            ("Type equipement", _sanitize(str(equip_type))),
-        ]):
-            pdf.set_xy(left_x, y0 + 9 + i * row_h)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(25, row_h, _sanitize(label + " :"))
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(60, row_h, value[:40])
+        left_x = 14
+        right_col_x = pdf.w / 2 + 5
+        line_h = 5
+        y_start = pdf.get_y()
+        
+        # LEFT COLUMN: Date, Client, Equipement, Marque/Modele, N° Serie
+        pdf.set_xy(left_x, y_start)
+        pdf.cell(70, line_h, _sanitize(f"Date: {date_str}"))
+        
+        pdf.set_xy(left_x, y_start + 5)
+        pdf.cell(70, line_h, _sanitize(f"Client: {client_name or '-'}"))
+        
+        pdf.set_xy(left_x, y_start + 10)
+        pdf.cell(70, line_h, _sanitize(f"Equipement: {str(interv.get('machine', '-'))[:35]}"))
+        
+        pdf.set_xy(left_x, y_start + 15)
+        pdf.cell(70, line_h, _sanitize(f"Marque/Modele: {str(equip_type or '-')[:30]}"))
+        
+        pdf.set_xy(left_x, y_start + 20)
+        pdf.cell(70, line_h, _sanitize(f"N° Serie: {str(num_serie or '-')[:25]}"))
+        
+        # RIGHT COLUMN: Technicien, Garantie, Contrat
+        pdf.set_xy(right_col_x, y_start)
+        pdf.cell(70, line_h, _sanitize(f"Technicien: {technicien}"))
+        
+        pdf.set_xy(right_col_x, y_start + 5)
+        pdf.cell(70, line_h, _sanitize(f"Garantie: {'OUI' if sous_garantie else 'NON'}"))
+        
+        pdf.set_xy(right_col_x, y_start + 10)
+        pdf.cell(70, line_h, _sanitize(f"Contrat: {'OUI' if sous_contrat else 'NON'}"))
+        
+        # Move down after info section
+        pdf.set_y(y_start + 28)
 
-        # Right column
-        for i, (label, value, color) in enumerate([
-            ("Region", _sanitize(client_region or "-"), (30, 40, 60)),
-            ("Ville", _sanitize(client_ville or "-"), (30, 40, 60)),
-            ("Sous garantie", "Oui" if sous_garantie else "Non", (22, 163, 74) if sous_garantie else (200, 50, 50)),
-            ("Sous contrat", "Oui" if sous_contrat else "Non", (22, 163, 74) if sous_contrat else (200, 50, 50)),
-            ("Technicien", _sanitize(str(interv.get("technicien", "-"))), (30, 40, 60)),
-        ]):
-            pdf.set_xy(right_x, y0 + 9 + i * row_h)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(30, 40, 60)
-            pdf.cell(28, row_h, _sanitize(label + " :"))
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.set_text_color(*color)
-            pdf.cell(40, row_h, value[:35])
-        pdf.set_text_color(30, 40, 60)
-
-        # ── SECTION: DETAILS INTERVENTION ──
-        pdf.set_y(y0 + 62)
-        y1 = pdf.get_y()
-        pdf.set_fill_color(240, 245, 255)
-        pdf.set_draw_color(180, 200, 230)
-        pdf.rect(10, y1, W, 30, style="FD")
-        pdf.set_xy(14, y1 + 2)
+        # TRAVAUX EFFECTUES - Table with Date, Start, End, Travel
         pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(30, 80, 170)
-        pdf.cell(W - 8, 6, "DETAILS INTERVENTION")
-        pdf.set_text_color(30, 40, 60)
-
-        details = [
-            ("Type", _sanitize(str(interv.get("type_intervention", "-")))),
-            ("Statut", _sanitize(str(interv.get("statut", "-")))),
-            ("Priorite", _sanitize(str(interv.get("priorite", "-")))),
-        ]
-        details_r = [
-            ("Duree (h)", f"{duree_h}h"),
-            ("Deplacement (h)", f"{deplacement}h"),
-        ]
-        for i, (label, value) in enumerate(details):
-            pdf.set_xy(left_x, y1 + 10 + i * 6)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(22, 6, label + " :")
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(50, 6, value[:35])
-        for i, (label, value) in enumerate(details_r):
-            pdf.set_xy(right_x, y1 + 10 + i * 6)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(30, 6, label + " :")
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(30, 6, value)
-
-        # ── SECTION: DIAGNOSTIC ──
-        pdf.set_y(y1 + 34)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(180, 100, 0)
-        pdf.cell(W, 6, "DIAGNOSTIC")
-        pdf.ln(7)
-        pdf.set_text_color(30, 40, 60)
-
-        for label, key in [("Description", "description"), ("Probleme", "probleme"), ("Cause", "cause"), ("Solution", "solution")]:
-            val = str(interv.get(key, "") or "").strip()
-            if val:
-                pdf.set_font("Helvetica", "B", 8)
-                pdf.cell(25, 5, _sanitize(label + " :"))
-                pdf.set_font("Helvetica", "", 8.5)
-                pdf.multi_cell(W - 35, 5, _sanitize(val[:500]))
-                pdf.ln(1)
-
-        code_err = str(interv.get("code_erreur", "") or "").strip()
-        type_err = str(interv.get("type_erreur", "") or "").strip()
-        if code_err:
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.cell(25, 5, "Code erreur :")
-            pdf.set_font("Helvetica", "", 8.5)
-            txt = code_err + (f" ({type_err})" if type_err else "")
-            pdf.cell(80, 5, _sanitize(txt))
-            pdf.ln(6)
-
-        # ── SECTION: PIECES UTILISEES ──
-        pdf.ln(3)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(30, 100, 180)
-        pdf.cell(W, 6, "PIECES UTILISEES")
-        pdf.ln(6)
-        pdf.set_text_color(30, 40, 60)
-
-        pieces = str(interv.get("pieces_utilisees", "") or "").strip()
-        if pieces:
-            pdf.set_font("Helvetica", "", 7.5)
-            # Afficher chaque pièce sur une ligne
-            pieces_lines = pieces.split('\n')
-            for piece_line in pieces_lines:
-                if piece_line.strip():
-                    # Vérifier s'il y a assez d'espace, sinon ajouter une page
-                    if pdf.get_y() + 8 > pdf.h - 20:
-                        pdf.add_page()
-                        pdf.set_y(pdf.get_y() + 10)
-                    # Utiliser multi_cell pour permettre le wrapping du texte
-                    pdf.multi_cell(0, 4, _sanitize(piece_line.strip()), new_x="LMARGIN", new_y="NEXT")
-        else:
-            pdf.set_font("Helvetica", "I", 8.5)
-            pdf.set_text_color(150, 160, 170)
-            pdf.cell(W, 5, "Aucune piece utilisee")
-            pdf.ln(5)
-            pdf.set_text_color(30, 40, 60)
-
-        # ── SECTION: SIGNATURES ──
-        sig_y = max(pdf.get_y() + 12, pdf.h - 55)
-        if sig_y > pdf.h - 20:
-            pdf.add_page()
-            sig_y = pdf.get_y() + 10
-
-        pdf.set_xy(10, sig_y - 4)
-        pdf.set_draw_color(15, 118, 110)
-        pdf.set_line_width(0.5)
-        pdf.line(10, sig_y - 4, pdf.w - 10, sig_y - 4)
-
-        pdf.set_xy(14, sig_y)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(W, 5, "SIGNATURES")
-        pdf.set_text_color(30, 40, 60)
-        sig_y += 8
-
-        col1 = 14
-        col2 = pdf.w / 3 + 5
-        col3 = (pdf.w / 3) * 2 + 2
-        box_w = 52
-        box_h = 28
-
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 6, "Travaux Effectues")
+        pdf.ln(7)  # Increased space before table
+        
+        # Table header
         pdf.set_font("Helvetica", "B", 8)
-        pdf.set_xy(col1, sig_y)
-        pdf.cell(box_w, 5, "Technicien")
-        pdf.set_xy(col2, sig_y)
-        pdf.cell(box_w, 5, "Responsable Technique")
-        pdf.set_xy(col3, sig_y)
-        pdf.cell(box_w, 5, "Cachet & Signature Client")
+        pdf.set_fill_color(200, 200, 200)
+        pdf.set_text_color(0, 0, 0)
+        col_widths = [35, 30, 30, 30, 50]
+        headers = ["Date", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution Appliquee"]
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 6, header, border=1, align="C", fill=True)
+        pdf.ln(6)
+        
+        # Table data row
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Extract time data - USE start_time and end_time from database, with fallbacks
+        date_val = date_str
+        
+        # Get start_time and end_time directly from database (TIME type columns)
+        start_time = str(interv.get("start_time", "") or "").strip()
+        if not start_time or start_time == "None" or start_time == "00:00":
+            # Fallback: try to extract from date_debut_intervention
+            start_time_fb = str(interv.get("date_debut_intervention", "") or "").strip()
+            if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 19:
+                start_time = start_time_fb[11:16]
+            else:
+                # Second fallback: use date field
+                start_time_fb2 = str(interv.get("date", "") or "").strip()
+                if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 19:
+                    start_time = start_time_fb2[11:16]
+                else:
+                    start_time = "-"
+        
+        end_time = str(interv.get("end_time", "") or "").strip()
+        if not end_time or end_time == "None" or end_time == "00:00":
+            # Fallback: use date_cloture
+            end_time_fb = str(interv.get("date_cloture", "") or "").strip()
+            if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 19:
+                end_time = end_time_fb[11:16]
+            else:
+                end_time = "-"
+        
+        # Trajet: duree_deplacement is in MINUTES, convert to hours
+        trajet = f"{round(deplacement_min / 60, 1)}" if deplacement_min > 0 else "-"
+        description = _sanitize(str(interv.get("solution", ""))[:50])  # Solution field
+        
+        # Row with borders - SANITIZE ALL VALUES
+        pdf.cell(col_widths[0], 6, _sanitize(date_val), border=1)
+        pdf.cell(col_widths[1], 6, _sanitize(start_time), border=1)
+        pdf.cell(col_widths[2], 6, _sanitize(end_time), border=1)
+        pdf.cell(col_widths[3], 6, _sanitize(trajet), border=1)
+        pdf.cell(col_widths[4], 6, description, border=1)
+        pdf.ln(6)
+        
+        # Add empty rows for manual fill (per model)
+        for _ in range(2):
+            pdf.cell(col_widths[0], 6, "", border=1)
+            pdf.cell(col_widths[1], 6, "", border=1)
+            pdf.cell(col_widths[2], 6, "", border=1)
+            pdf.cell(col_widths[3], 6, "", border=1)
+            pdf.cell(col_widths[4], 6, "", border=1)
+            pdf.ln(6)
+        
+        pdf.ln(8)
+        
+        # STATUT INTERVENTION - MOVED AFTER TABLE, IN BOLD
+        pdf.set_font("Helvetica", "B", 10)  # Bold
+        pdf.set_text_color(0, 0, 0)
+        statut_val = str(interv.get("statut", "-"))
+        status_map = {
+            "Clôturee": "Clôturee",
+            "En cours": "En cours",
+            "En attente de piece": "En attente de piece",
+        }
+        display_status = status_map.get(statut_val, statut_val)
+        pdf.cell(W, 5, _sanitize(f"Statut: {display_status}"))
+        pdf.ln(8)
+        
+        # PIECES UTILISEES / REFERENCES TABLE
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 6, "References - Pieces Utilisees")
+        pdf.ln(7)  # Increased space before table
+        
+        # Table header - INCREASED REFERENCE COLUMN WIDTH
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(200, 200, 200)
+        pdf.set_text_color(0, 0, 0)
+        ref_col_widths = [50, 15, 100]  # Increased reference from 30 to 50
+        ref_headers = ["Reference", "Qte", "Designation"]
+        for i, header in enumerate(ref_headers):
+            pdf.cell(ref_col_widths[i], 6, header, border=1, align="C", fill=True)
+        pdf.ln(6)
+        
+        # Parse pieces data - USE PIPE DELIMITER - SHOW MORE TEXT
+        pdf.set_font("Helvetica", "", 7)  # Smaller font for pieces
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(0, 0, 0)
+        
+        pieces = str(interv.get("pieces_utilisees", "") or "").strip()
+        row_count = 0
+        if pieces:
+            pieces_lines = pieces.split('\n')  # Multiple pieces separated by newlines
+            for piece_line in pieces_lines[:8]:  # Max 8 rows
+                if piece_line.strip():
+                    # Parse format: "Product | Ref: XXX | Fournisseur: YYY | Qty: Z"
+                    parts = piece_line.split('|')
+                    
+                    # Extract each part
+                    product_name = _sanitize(parts[0].strip()[:80]) if len(parts) > 0 else "-"
+                    
+                    # Find reference and quantity
+                    ref_val = "-"
+                    qty_val = "-"
+                    for part in parts[1:]:
+                        part_lower = part.lower()
+                        if "ref:" in part_lower:
+                            ref_val = _sanitize(part.replace("Ref:", "").replace("ref:", "").strip()[:45])  # Increased from 30 to 45
+                        if "qty:" in part_lower:
+                            qty_val = _sanitize(part.replace("Qty:", "").replace("qty:", "").strip()[:10])
+                    
+                    # Full designation includes product name
+                    desc_val = product_name
+                    
+                    pdf.cell(ref_col_widths[0], 6, ref_val, border=1)
+                    pdf.cell(ref_col_widths[1], 6, qty_val, border=1)
+                    pdf.cell(ref_col_widths[2], 6, desc_val, border=1)
+                    pdf.ln(6)
+                    row_count += 1
+        
+        # Add empty rows for manual fill
+        for _ in range(max(0, 8 - row_count)):
+            pdf.cell(ref_col_widths[0], 6, "", border=1)
+            pdf.cell(ref_col_widths[1], 6, "", border=1)
+            pdf.cell(ref_col_widths[2], 6, "", border=1)
+            pdf.ln(6)
+        
+        pdf.ln(8)
+        
+        # OBSERVATIONS section
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 5, "Observations:")
+        pdf.ln(6)
+        
+        # Add 2 extended dotted lines for client to write observations
+        pdf.set_font("Helvetica", "", 9)
+        for _ in range(2):
+            # Create a dotted line that extends to the right edge
+            # Each dot is about 1.5-2 characters wide, so we need about 130-150 dots for full width
+            dots = "." * 150
+            pdf.cell(W, 5, dots)
+            pdf.ln(5)
 
-        sig_y += 6
-        pdf.set_draw_color(200, 210, 220)
+        # SIGNATURES SECTION
+        pdf.ln(8)
+        sig_start_y = pdf.get_y()
+        
+        if sig_start_y > pdf.h - 60:
+            pdf.add_page()
+            sig_start_y = pdf.get_y()
+        
+        # Separator line
+        pdf.set_draw_color(0, 0, 0)
+        pdf.set_line_width(0.5)
+        pdf.line(10, sig_start_y, pdf.w - 10, sig_start_y)
+        
+        pdf.set_y(sig_start_y + 3)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 5, "Signatures & Approbations")
+        pdf.ln(8)
+        
+        # Three signature labels on ONE line
+        col1_x = 18
+        col2_x = pdf.w / 3 + 10
+        col3_x = (pdf.w / 3) * 2 + 2
+        box_w = 45
+        box_h = 22
+        label_y = pdf.get_y()
+        
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Position labels horizontally
+        pdf.set_xy(col1_x, label_y)
+        pdf.cell(box_w, 5, "Visa Intervenant", align="C")
+        
+        pdf.set_xy(col2_x, label_y)
+        pdf.cell(box_w, 5, "Visa Client", align="C")
+        
+        pdf.set_xy(col3_x, label_y)
+        pdf.cell(box_w, 5, "Visa Administration", align="C")
+        
+        # Draw signature boxes below each label
+        box_y = label_y + 6
+        pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.3)
-        pdf.rect(col1, sig_y, box_w, box_h, style="D")
-        pdf.rect(col2, sig_y, box_w, box_h, style="D")
-        pdf.rect(col3, sig_y, box_w, box_h, style="D")
+        pdf.rect(col1_x, box_y, box_w, box_h, style="D")
+        pdf.rect(col2_x, box_y, box_w, box_h, style="D")
+        pdf.rect(col3_x, box_y, box_w, box_h, style="D")
 
         # Footer
         pdf.set_auto_page_break(auto=False)
@@ -6082,15 +6177,15 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         for pg in range(1, total_pages + 1):
             pdf.page = pg
-            pdf.set_xy(10, pdf.h - 11)
-            pdf.set_draw_color(200, 205, 220)
-            pdf.set_line_width(0.3)
-            pdf.line(10, pdf.h - 11, pdf.w - 10, pdf.h - 11)
+            pdf.set_xy(10, pdf.h - 12)
+            pdf.set_draw_color(150, 180, 180)
+            pdf.set_line_width(0.5)
+            pdf.line(10, pdf.h - 12, pdf.w - 10, pdf.h - 12)
             pdf.set_xy(10, pdf.h - 9)
             pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(160, 170, 190)
-            pdf.cell(pdf.w - 40, 5, _sanitize(f"Genere par {company_name} - {now_str}"), align="L")
-            pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
+            pdf.set_text_color(120, 140, 150)
+            pdf.cell(pdf.w - 40, 5, _sanitize(f"Généré par {company_name} - {now_str}"), align="L")
+            pdf.cell(30, 5, f"Page {pg}/{total_pages}", align="R")
 
         pdf_bytes = bytes(pdf.output())
         _fn = f"fiche_intervention_{interv_id}"

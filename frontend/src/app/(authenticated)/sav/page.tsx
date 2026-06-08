@@ -27,7 +27,9 @@ interface Intervention {
   technicien: string;
   duree: number;
   duree_minutes: number;
-  deplacement: number;
+  duree_deplacement: number;
+  start_time?: string;
+  end_time?: string;
   statut: string;
   description: string;
   probleme: string;
@@ -331,6 +333,8 @@ export default function SavPage() {
         ...form,
         duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(form.duree_deplacement) * 60),
+        start_time: form.start_time,
+        end_time: form.end_time,
         pieces_utilisees: selectedPieces.map((p: any) => `${p.designation} (${p.reference})`).join(', '),
         cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + (p.prix_unitaire || 0), 0),
       });
@@ -362,6 +366,8 @@ export default function SavPage() {
         solution: statusForm.solution,
         duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(statusForm.duree_deplacement) * 60),
+        start_time: statusForm.start_time,
+        end_time: statusForm.end_time,
       };
       // Envoyer les pièces en rupture sélectionnées pour générer des notifications
       if (statusForm.statut.toLowerCase().includes('attente') && statusForm.statut.toLowerCase().includes('pi')) {
@@ -956,7 +962,16 @@ export default function SavPage() {
                         <div className="flex items-center gap-1">
                           <button onClick={() => {
                             setSelectedIntervention(i);
-                            setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), duree_deplacement: String(Math.round(((i.deplacement || 0) / 60) * 100) / 100) });
+                            setStatusForm({ 
+                              statut: i.statut, 
+                              probleme: i.probleme, 
+                              cause: i.cause, 
+                              solution: i.solution, 
+                              duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), 
+                              duree_deplacement: String(Math.round(((i.duree_deplacement || 0) / 60) * 100) / 100),
+                              start_time: i.start_time || '08:00',
+                              end_time: i.end_time || '09:00'
+                            });
                             setShowStatusModal(true);
                           }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
                             <Edit className="w-3.5 h-3.5" />
