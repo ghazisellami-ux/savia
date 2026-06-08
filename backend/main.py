@@ -1920,7 +1920,7 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 
 
 @app.put("/api/interventions/{intervention_id}")
-def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+def update_intervention(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
     logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
@@ -1951,6 +1951,9 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                 body.get("solution", ""),
                 pieces_a_deduire=pieces_valides if pieces_valides else None,
                 duree_minutes=body.get("duree_minutes", 0),
+                start_time=body.get("start_time"),
+                end_time=body.get("end_time"),
+                duree_deplacement=body.get("deplacement"),  # PWA sends "deplacement"
             )
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
@@ -2189,21 +2192,37 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
     if new_statut:
         update_intervention_statut(intervention_id, new_statut)
+    
     # Update other fields
     fields = []
     params = []
-    for f in ["technicien", "probleme", "cause", "solution", "pieces_utilisees", "cout",
-              "duree_minutes", "duree_deplacement", "description", "notes", "type_erreur", "priorite",
-              "fiche_validation", "start_time", "end_time"]:
-        if f in body:
-            fields.append(f"{f} = ?")
-            params.append(body[f])
-            logger.info(f"  ✓ {f} = {body[f]}")
-        # Handle PWA field names mapping: deplacement comes in MINUTES from PWA
-        elif f == "duree_deplacement" and "deplacement" in body:
-            fields.append(f"duree_deplacement = ?")
-            params.append(body["deplacement"])  # Already in minutes from PWA
-            logger.info(f"  ✓ duree_deplacement = {body['deplacement']} (from deplacement)")
+    
+    # Map of field names in request body to database column names
+    field_mapping = {
+        "technicien": "technicien",
+        "probleme": "probleme",
+        "cause": "cause",
+        "solution": "solution",
+        "pieces_utilisees": "pieces_utilisees",
+        "cout": "cout",
+        "duree_minutes": "duree_minutes",
+        "description": "description",
+        "notes": "notes",
+        "type_erreur": "type_erreur",
+        "priorite": "priorite",
+        "fiche_validation": "fiche_validation",
+        "start_time": "start_time",
+        "end_time": "end_time",
+        "deplacement": "duree_deplacement",  # PWA sends "deplacement", map to "duree_deplacement"
+    }
+    
+    for body_field, db_column in field_mapping.items():
+        if body_field in body:
+            value = body[body_field]
+            fields.append(f"{db_column} = ?")
+            params.append(value)
+            logger.info(f"  ✓ {db_column} = {value}")
+    
     if fields:
         params.append(intervention_id)
         logger.info(f"update_intervention #{intervention_id}: fields={fields}, params={params}")
@@ -5992,24 +6011,32 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         if not start_time or start_time == "None" or start_time == "00:00":
             # Fallback: try to extract from date_debut_intervention
             start_time_fb = str(interv.get("date_debut_intervention", "") or "").strip()
-            if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 19:
-                start_time = start_time_fb[11:16]
+            if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 16:
+                start_time = start_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
             else:
                 # Second fallback: use date field
                 start_time_fb2 = str(interv.get("date", "") or "").strip()
-                if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 19:
-                    start_time = start_time_fb2[11:16]
+                if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 16:
+                    start_time = start_time_fb2[11:16]  # Extract HH:MM
                 else:
                     start_time = "-"
+        else:
+            # Ensure we only have HH:MM (remove seconds if present)
+            if len(start_time) > 5 and start_time[5] == ':':
+                start_time = start_time[:5]  # Remove :SS
         
         end_time = str(interv.get("end_time", "") or "").strip()
         if not end_time or end_time == "None" or end_time == "00:00":
             # Fallback: use date_cloture
             end_time_fb = str(interv.get("date_cloture", "") or "").strip()
-            if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 19:
-                end_time = end_time_fb[11:16]
+            if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 16:
+                end_time = end_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
             else:
                 end_time = "-"
+        else:
+            # Ensure we only have HH:MM (remove seconds if present)
+            if len(end_time) > 5 and end_time[5] == ':':
+                end_time = end_time[:5]  # Remove :SS
         
         # Trajet: duree_deplacement is in MINUTES, convert to hours
         trajet = f"{round(deplacement_min / 60, 1)}" if deplacement_min > 0 else "-"

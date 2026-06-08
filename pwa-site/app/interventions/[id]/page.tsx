@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import TimeScrollPicker from '@/components/TimeScrollPicker';
 import {
   Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
   XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
@@ -84,7 +85,7 @@ export default function InterventionDetailPage() {
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
     duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
-    heure_debut: 8, heure_fin: 9,  // Store as decimal hours (8.5 = 8h30)
+    start_time: '08:00', end_time: '09:00',  // HH:MM format
   });
 
   useEffect(() => {
@@ -111,25 +112,28 @@ export default function InterventionDetailPage() {
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
       
-      // Load hours as decimal - try new columns first, fallback to old TIME columns
-      let heureDebut = 8;
-      let heureFin = 9;
+      // Load times in HH:MM format from TIME columns
+      let startTime = '08:00';
+      let endTime = '09:00';
       
-      // Try new decimal hour columns first
-      if (found.heure_debut !== null && found.heure_debut !== undefined) {
-        heureDebut = parseFloat(found.heure_debut) || 8;
-      } else if (found.start_time) {
-        // Fallback: convert old TIME format
-        const [h, m] = found.start_time.split(':').map(Number);
-        heureDebut = h + (m / 60);
+      if (found.start_time) {
+        // start_time from DB is HH:MM or HH:MM:SS
+        startTime = found.start_time.substring(0, 5);  // Extract HH:MM
       }
       
-      if (found.heure_fin !== null && found.heure_fin !== undefined) {
-        heureFin = parseFloat(found.heure_fin) || 9;
-      } else if (found.end_time) {
-        // Fallback: convert old TIME format
-        const [h, m] = found.end_time.split(':').map(Number);
-        heureFin = h + (m / 60);
+      if (found.end_time) {
+        // end_time from DB is HH:MM or HH:MM:SS
+        endTime = found.end_time.substring(0, 5);  // Extract HH:MM
+      }
+      
+      // Calculate duration from times if both are provided
+      let durationMin = 60;  // Default 1 hour
+      if (startTime && endTime) {
+        const [startH, startM] = startTime.split(':').map(Number);
+        const [endH, endM] = endTime.split(':').map(Number);
+        durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+        if (durationMin <= 0) durationMin += 24 * 60;  // Handle midnight crossing
+        durationMin = Math.max(60, durationMin);  // Minimum 1 hour
       }
       
       setForm({
@@ -141,11 +145,11 @@ export default function InterventionDetailPage() {
         notes:            found.notes || '',
         type_erreur:      found.type_erreur || '',
         priorite:         found.priorite || '',
-        duree_minutes:    found.duree_minutes || 0,
-        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,  // Convert minutes to hours
+        duree_minutes:    durationMin,
+        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,  // Convert minutes to hours for display
         fiche_validation: found.fiche_validation || 'En attente',
-        heure_debut:      heureDebut,
-        heure_fin:        heureFin,
+        start_time:       startTime,
+        end_time:         endTime,
       });
     } catch {
       setError('Erreur lors du chargement.');
@@ -212,15 +216,21 @@ export default function InterventionDetailPage() {
         designation: p.designation || p.nom || '',
       }));
       
-      // Convert times to HH:MM format for TIME columns
-      const formatTime = (decimalHours: number): string => {
-        const hours = Math.floor(decimalHours);
-        const minutes = Math.round((decimalHours - hours) * 60);
-        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      // Calculate duration from times (HH:MM format)
+      const calculateDuration = (startTime: string, endTime: string): number => {
+        try {
+          const [startH, startM] = startTime.split(':').map(Number);
+          const [endH, endM] = endTime.split(':').map(Number);
+          let duration = (endH * 60 + endM) - (startH * 60 + startM);
+          if (duration <= 0) duration += 24 * 60;  // Handle midnight crossing
+          return Math.max(60, duration);  // Minimum 1 hour billing
+        } catch (e) {
+          return 60;
+        }
       };
       
-      // Convert deployment from hours to minutes before sending to backend
       const deploymentMinutes = Math.round(form.deplacement * 60);
+      const durationMinutes = calculateDuration(form.start_time, form.end_time);
       
       const updatePayload = { 
         statut: form.statut,
@@ -231,19 +241,20 @@ export default function InterventionDetailPage() {
         notes: form.notes,
         type_erreur: form.type_erreur,
         priorite: form.priorite,
-        duree_minutes: form.duree_minutes,
-        start_time: formatTime(form.heure_debut),  // Convert decimal to HH:MM
-        end_time: formatTime(form.heure_fin),      // Convert decimal to HH:MM
-        deplacement: deploymentMinutes,  // Send in minutes to match database format
+        duree_minutes: durationMinutes,
+        start_time: form.start_time,  // Send HH:MM directly
+        end_time: form.end_time,      // Send HH:MM directly
+        deplacement: deploymentMinutes,  // Send in minutes
         pieces_a_deduire, 
         pieces_rupture, 
         ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) 
       };
       
       console.log('🚀 Sending update payload:', updatePayload);
-      console.log('  start_time:', updatePayload.start_time, '(from', form.heure_debut, 'decimal hours)');
-      console.log('  end_time:', updatePayload.end_time, '(from', form.heure_fin, 'decimal hours)');
-      console.log('  deplacement:', updatePayload.deplacement, 'from', form.deplacement, 'hours');
+      console.log('  start_time:', updatePayload.start_time, '(HH:MM format)');
+      console.log('  end_time:', updatePayload.end_time, '(HH:MM format)');
+      console.log('  duree_minutes:', updatePayload.duree_minutes);
+      console.log('  deplacement:', updatePayload.deplacement, 'minutes');
       
       await api.interventions.update(id, updatePayload);
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
@@ -465,47 +476,41 @@ export default function InterventionDetailPage() {
                   {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
                 </select>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de début (h)</label>
-                <input
-                  type="number" style={INPUT} min={0} max={24} step={0.25}
-                  value={form.heure_debut}
-                  onChange={(e) => {
-                    const hDebut = parseFloat(e.target.value) || 0;
-                    setForm(f => {
-                      const newForm = { ...f, heure_debut: hDebut };
-                      // Auto-calculate duration
-                      let durationMin = (f.heure_fin - hDebut) * 60;
-                      if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
-                      durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
-                      newForm.duree_minutes = Math.round(durationMin);
-                      return newForm;
-                    });
-                  }}
-                />
-              </div>
-              <div>
-                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de fin (h)</label>
-                <input
-                  type="number" style={INPUT} min={0} max={24} step={0.25}
-                  value={form.heure_fin}
-                  onChange={(e) => {
-                    const hFin = parseFloat(e.target.value) || 0;
-                    setForm(f => {
-                      const newForm = { ...f, heure_fin: hFin };
-                      // Auto-calculate duration
-                      let durationMin = (hFin - f.heure_debut) * 60;
-                      if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
-                      durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
-                      newForm.duree_minutes = Math.round(durationMin);
-                      return newForm;
-                    });
-                  }}
-                />
-              </div>
-              </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '8px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
+            </div>
+
+            {/* Time pickers with scrollable UI */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+              <TimeScrollPicker 
+                label="Heure de début"
+                value={form.start_time}
+                onChange={(time) => {
+                  set('start_time', time);
+                  // Auto-calculate duration
+                  const [startH, startM] = time.split(':').map(Number);
+                  const [endH, endM] = form.end_time.split(':').map(Number);
+                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                  if (durationMin <= 0) durationMin += 24 * 60;
+                  durationMin = Math.max(60, durationMin);
+                  setForm(f => ({ ...f, duree_minutes: durationMin }));
+                }}
+              />
+              <TimeScrollPicker 
+                label="Heure de fin"
+                value={form.end_time}
+                onChange={(time) => {
+                  set('end_time', time);
+                  // Auto-calculate duration
+                  const [startH, startM] = form.start_time.split(':').map(Number);
+                  const [endH, endM] = time.split(':').map(Number);
+                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                  if (durationMin <= 0) durationMin += 24 * 60;
+                  durationMin = Math.max(60, durationMin);
+                  setForm(f => ({ ...f, duree_minutes: durationMin }));
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
               <Zap style={{ width: 16, height: 16, color: 'var(--teal)' }} />
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Durée calculée:</span>
               <span style={{ fontWeight: 700, color: 'var(--teal)', marginLeft: 'auto' }}>
@@ -513,6 +518,7 @@ export default function InterventionDetailPage() {
               </span>
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Min 1h</span>
             </div>
+
             <div style={{ marginTop: '12px' }}>
               <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                 <Car style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Déplacement (heures)
@@ -522,7 +528,6 @@ export default function InterventionDetailPage() {
                 value={form.deplacement}
                 onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
               />
-            </div>
             </div>
           </div>
 

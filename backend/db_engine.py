@@ -2676,7 +2676,7 @@ def update_intervention_statut(intervention_id, nouveau_statut):
 # FONCTIONS SPÉCIALES — WORKFLOW SAV
 # ==========================================
 
-def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_deduire=None, duree_minutes=None):
+def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_deduire=None, duree_minutes=None, start_time=None, end_time=None, duree_deplacement=None):
     """
     Clôture une intervention, déduit le stock et alimente la base de connaissances.
     pieces_a_deduire: liste de dict {'ref': str, 'qty': int, 'designation': str}
@@ -2751,21 +2751,44 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
 
         # 2. Mettre à jour l'intervention (date = date de clôture)
         date_cloture = datetime.now().isoformat()
+        
+        # Préparer les champs optionnels
+        update_fields = [
+            "statut='Cloturee'",
+            "probleme=%s",
+            "cause=%s",
+            "solution=%s",
+            "duree_minutes=%s",
+            "cout=%s",
+            "date=%s",
+            "date_cloture=%s"
+        ]
+        update_values = [probleme, cause, solution, duree_val, cout_total, date_cloture, date_cloture]
+        
+        # Ajouter les champs optionnels s'ils sont fournis
+        if start_time is not None:
+            update_fields.append("start_time=%s")
+            update_values.append(start_time)
+        if end_time is not None:
+            update_fields.append("end_time=%s")
+            update_values.append(end_time)
+        if duree_deplacement is not None:
+            update_fields.append("duree_deplacement=%s")
+            update_values.append(duree_deplacement)
         if pieces_str:
-            # Remplacer pieces_utilisees (pas concaténer) avec le nouveau format
-            conn.execute("""
-                UPDATE interventions
-                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s,
-                    pieces_utilisees=%s, duree_minutes=%s,
-                    cout_pieces=%s, cout=%s, date=%s, date_cloture=%s
-                WHERE id=%s
-            """, (probleme, cause, solution, pieces_str, duree_val, total_cout_pieces, cout_total, date_cloture, date_cloture, intervention_id))
-        else:
-            conn.execute("""
-                UPDATE interventions
-                SET statut='Cloturee', probleme=%s, cause=%s, solution=%s, duree_minutes=%s, cout=%s, date=%s, date_cloture=%s
-                WHERE id=%s
-            """, (probleme, cause, solution, duree_val, cout_total, date_cloture, date_cloture, intervention_id))
+            update_fields.append("pieces_utilisees=%s")
+            update_fields.append("cout_pieces=%s")
+            update_values.insert(-4, pieces_str)  # Insert before date values
+            update_values.insert(-3, total_cout_pieces)
+        
+        update_values.append(intervention_id)
+        
+        sql = f"""
+            UPDATE interventions
+            SET {", ".join(update_fields)}
+            WHERE id=%s
+        """
+        conn.execute(sql, update_values)
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
         row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()
