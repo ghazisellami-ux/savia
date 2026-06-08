@@ -2103,6 +2103,7 @@ def ajouter_notification_piece(notif_dict):
 
 def lire_notifications_pieces(destination=None, statut=None, technicien=None):
     """Lit les notifications pièces, filtrées par destination, statut et/ou technicien."""
+    _ensure_notifications_pieces_exists()
     query = "SELECT * FROM notifications_pieces WHERE 1=1"
     params = []
     if destination:
@@ -2119,8 +2120,70 @@ def lire_notifications_pieces(destination=None, statut=None, technicien=None):
         return read_sql(query, conn, params=params)
 
 
+def _ensure_notifications_pieces_exists():
+    """Crée la table notifications_pieces si elle n'existe pas (defensive initialization)."""
+    with get_db() as conn:
+        try:
+            if USE_PG:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'notifications_pieces'
+                """)
+                if not cur.fetchone():
+                    # Table doesn't exist, create it
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS notifications_pieces (
+                            id SERIAL PRIMARY KEY,
+                            type TEXT NOT NULL,
+                            intervention_id INTEGER,
+                            piece_reference TEXT,
+                            piece_nom TEXT,
+                            intervention_ref TEXT,
+                            equipement TEXT,
+                            client TEXT,
+                            technicien TEXT,
+                            message TEXT,
+                            source TEXT NOT NULL DEFAULT '',
+                            destination TEXT NOT NULL,
+                            statut TEXT DEFAULT 'non_lu',
+                            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            date_lecture TIMESTAMP,
+                            date_traitement TIMESTAMP
+                        )
+                    """)
+                    conn._conn.commit()
+                    logger.info("⚠️  Table notifications_pieces created dynamically (defensive)")
+            else:
+                # SQLite
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS notifications_pieces (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        type TEXT NOT NULL,
+                        intervention_id INTEGER,
+                        piece_reference TEXT,
+                        piece_nom TEXT,
+                        intervention_ref TEXT,
+                        equipement TEXT,
+                        client TEXT,
+                        technicien TEXT,
+                        message TEXT,
+                        source TEXT NOT NULL DEFAULT '',
+                        destination TEXT NOT NULL,
+                        statut TEXT DEFAULT 'non_lu',
+                        date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        date_lecture TIMESTAMP,
+                        date_traitement TIMESTAMP
+                    )
+                """)
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"_ensure_notifications_pieces_exists: {e}")
+
+
 def compter_notifications_non_lues(destination, technicien=None):
     """Compte les notifications non lues pour une destination (et optionnellement un technicien)."""
+    _ensure_notifications_pieces_exists()
     query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = %s AND statut = 'non_lu'"
     params = [destination]
     if technicien:
