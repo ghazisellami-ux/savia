@@ -464,7 +464,7 @@ def init_db():
             rappel_envoye INTEGER DEFAULT 0,
             recurrence TEXT DEFAULT '',
             notes TEXT DEFAULT '',
-            is_ghost BOOLEAN DEFAULT 0
+            is_ghost BOOLEAN DEFAULT false
         );
 
         -- Pièces de rechange
