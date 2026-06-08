@@ -132,13 +132,19 @@ export default function ContratsPage() {
   // When multiple equipments are selected, show pieces for all of them
   const filteredPieces = form.equipements.length > 0
     ? stockPieces.filter((p: any) => {
-        // Check if piece matches any of the selected equipments
+        // Check if piece matches ANY of the selected equipments
         return form.equipements.some(selectedEq => {
           const eq = equips.find((e: any) => e.Nom === selectedEq);
-          const eqType = (eq?.Type_Equipement || eq?.type || '').toLowerCase().split(' ')[0];
-          if (!eqType) return true;
-          return (p.designation || '').toLowerCase().includes(eqType) ||
-                 (p.equipement_type || '').toLowerCase().includes(eqType);
+          // Equipment type is stored in "Type" field (renamed from "type" in the backend)
+          const eqType = (eq?.Type || '').toLowerCase().trim();
+          if (!eqType) return false; // If no equipment type, don't include the piece
+          
+          const pDesignation = (p.designation || '').toLowerCase().trim();
+          const pEquipType = (p.equipement_type || '').toLowerCase().trim();
+          
+          // Match equipment type against piece's equipement_type field
+          // Case-insensitive exact match is preferred
+          return eqType === pEquipType;
         });
       })
     : stockPieces;
