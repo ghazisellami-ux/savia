@@ -232,6 +232,8 @@ export const planning = {
     request<{ ok: boolean }>('/api/planning', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body }),
+  reschedule: (id: number, body: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/planning/${id}/reschedule`, { method: 'PUT', body }),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };

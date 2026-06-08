@@ -40,6 +40,7 @@ const STATUT_COLORS: Record<string, { cell: string; badge: string; dot: string }
   'Terminée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'Réalisée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'En retard':  { cell: 'bg-red-500/20 border-red-500 text-red-300',        badge: 'bg-red-500/15 text-red-400',      dot: 'bg-red-400' },
+  'Décalé':     { cell: 'bg-gray-500/20 border-gray-500 text-gray-400',     badge: 'bg-gray-500/15 text-gray-500',    dot: 'bg-gray-400' },
 };
 const getStatutColor = (statut: string, isOverdue: boolean) => {
   if (isOverdue) return STATUT_COLORS['En retard'];
@@ -49,6 +50,11 @@ const getStatutColor = (statut: string, isOverdue: boolean) => {
 // Helper function to calculate automatic status based on date and stored status
 const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string => {
   if (!datePlanifiee) return storedStatus;
+  
+  // If status is "Décalé" (ghost entry), keep it as is
+  if (storedStatus === 'Décalé') {
+    return 'Décalé';
+  }
   
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -130,6 +136,14 @@ export default function PlanningPage() {
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
   const [dayDetailEvents, setDayDetailEvents] = useState<PlanItem[]>([]);
   const [techDropdownOpen, setTechDropdownOpen] = useState(false);
+  
+  // Reschedule modal
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [selectedIntervention, setSelectedIntervention] = useState<PlanItem | null>(null);
+  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '' });
+  const [rescheduleError, setRescheduleError] = useState('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
 
   // Table filters — Toutes les Maintenances
   const [filterClient,  setFilterClient]  = useState('Tous');
@@ -296,6 +310,43 @@ export default function PlanningPage() {
       setError('Erreur lors de la création. Veuillez réessayer.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleOpenReschedule = (intervention: PlanItem) => {
+    setSelectedIntervention(intervention);
+    setRescheduleForm({
+      newDate: intervention.date_planifiee,
+      newTechs: intervention.technicien,
+    });
+    setRescheduleError('');
+    setShowRescheduleModal(true);
+  };
+
+  const handleReschedule = async () => {
+    setRescheduleError('');
+    if (!selectedIntervention) return;
+    
+    if (!rescheduleForm.newDate) {
+      setRescheduleError('Veuillez sélectionner une nouvelle date.');
+      return;
+    }
+    
+    setIsRescheduling(true);
+    try {
+      await planning.reschedule(selectedIntervention.id, {
+        date_planifiee: rescheduleForm.newDate,
+        technicien_assigne: rescheduleForm.newTechs,
+      });
+      setShowRescheduleModal(false);
+      setSelectedIntervention(null);
+      setRescheduleForm({ newDate: '', newTechs: '' });
+      await loadData();
+    } catch (err: any) {
+      console.error(err);
+      setRescheduleError(err.message || 'Erreur lors du décalage. Veuillez réessayer.');
+    } finally {
+      setIsRescheduling(false);
     }
   };
 
@@ -883,9 +934,153 @@ export default function PlanningPage() {
                         <p className="italic text-savia-text-muted">{ev.notes}</p>
                       </div>
                     )}
+                    
+                    {/* Action buttons for Admin/Manager */}
+                    {(user?.role === 'Admin' || user?.role === 'Manager') && (
+                      <div className="flex items-center gap-2 pt-2 border-t border-savia-border">
+                        <button
+                          onClick={() => handleOpenReschedule(ev)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent bg-savia-accent/10 hover:bg-savia-accent/20 border border-savia-accent/30 transition-all cursor-pointer flex-1"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Décaler et assigner
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule Modal */}
+      {showRescheduleModal && selectedIntervention && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowRescheduleModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
+              <h2 className="text-base font-black gradient-text flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-savia-accent" />
+                Décaler l&apos;intervention
+              </h2>
+              <button onClick={() => setShowRescheduleModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 space-y-4">
+              {/* Current info */}
+              <div className="bg-savia-surface-hover/50 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Intervention actuelle</div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-savia-text-muted">Équipement :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.machine}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Client :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.client}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Date prévue :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.date_planifiee}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Technicien(s) :</span>
+                    <p className="font-semibold text-savia-text text-xs">{selectedIntervention.technicien || '—'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Error message */}
+              {rescheduleError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {rescheduleError}
+                </div>
+              )}
+
+              {/* New date */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Calendar className="w-3.5 h-3.5 text-savia-accent" /> Nouvelle date prévue *
+                </label>
+                <input
+                  type="date"
+                  className={INPUT_CLS}
+                  value={rescheduleForm.newDate}
+                  onChange={e => setRescheduleForm({...rescheduleForm, newDate: e.target.value})}
+                />
+              </div>
+
+              {/* New technicians */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <User className="w-3.5 h-3.5 text-savia-accent" /> Techniciens assignés
+                </label>
+                {/* Chips for selected techs */}
+                {rescheduleForm.newTechs && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {rescheduleForm.newTechs.split(', ').filter(Boolean).map(t => (
+                      <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-savia-accent/15 text-savia-accent border border-savia-accent/30">
+                        {t}
+                        <button type="button" onClick={() => {
+                          const updated = rescheduleForm.newTechs.split(', ').filter(x => x !== t).join(', ');
+                          setRescheduleForm({...rescheduleForm, newTechs: updated});
+                        }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Dropdown */}
+                <div className="relative">
+                  <button type="button" onClick={() => setRescheduleDropdownOpen(!rescheduleDropdownOpen)}
+                    className={INPUT_CLS + ' flex items-center justify-between cursor-pointer text-left'}>
+                    <span className={rescheduleForm.newTechs ? 'text-savia-text' : 'text-savia-text-dim'}>
+                      {rescheduleForm.newTechs ? `${rescheduleForm.newTechs.split(', ').length} technicien(s)` : '— Sélectionner —'}
+                    </span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${rescheduleDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {rescheduleDropdownOpen && (
+                    <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {techsList.map(t => {
+                        const selected = rescheduleForm.newTechs.split(', ').filter(Boolean).includes(t);
+                        return (
+                          <button key={t} type="button" onClick={() => {
+                            const current = rescheduleForm.newTechs.split(', ').filter(Boolean);
+                            const updated = selected ? current.filter(x => x !== t) : [...current, t];
+                            setRescheduleForm({...rescheduleForm, newTechs: updated.join(', ')});
+                          }}
+                            className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                              selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
+                            }`}>
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selected ? 'bg-savia-accent border-savia-accent' : 'border-savia-border'
+                            }`}>
+                              {selected && <Check className="w-3 h-3 text-white" />}
+                            </div>
+                            {t}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50">
+              <button onClick={() => setShowRescheduleModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Annuler
+              </button>
+              <button onClick={handleReschedule} disabled={isRescheduling}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
+                {isRescheduling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Décaler
+              </button>
             </div>
           </div>
         </div>
