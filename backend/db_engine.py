@@ -975,43 +975,82 @@ def init_db():
         """)
 
         # Table Notifications pièces (cross-app SIC Terrain ↔ SIC Radiologie)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS notifications_pieces (
-            id SERIAL PRIMARY KEY,
-            type TEXT NOT NULL,
-            intervention_id INTEGER,
-            piece_reference TEXT,
-            piece_nom TEXT,
-            intervention_ref TEXT,
-            equipement TEXT,
-            client TEXT,
-            technicien TEXT,
-            message TEXT,
-            source TEXT NOT NULL DEFAULT '',
-            destination TEXT NOT NULL,
-            statut TEXT DEFAULT 'non_lu',
-            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            date_lecture TIMESTAMP,
-            date_traitement TIMESTAMP
-        )
-        """)
+        if USE_PG:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications_pieces (
+                id SERIAL PRIMARY KEY,
+                type TEXT NOT NULL,
+                intervention_id INTEGER,
+                piece_reference TEXT,
+                piece_nom TEXT,
+                intervention_ref TEXT,
+                equipement TEXT,
+                client TEXT,
+                technicien TEXT,
+                message TEXT,
+                source TEXT NOT NULL DEFAULT '',
+                destination TEXT NOT NULL,
+                statut TEXT DEFAULT 'non_lu',
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_lecture TIMESTAMP,
+                date_traitement TIMESTAMP
+            )
+            """)
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications_pieces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                intervention_id INTEGER,
+                piece_reference TEXT,
+                piece_nom TEXT,
+                intervention_ref TEXT,
+                equipement TEXT,
+                client TEXT,
+                technicien TEXT,
+                message TEXT,
+                source TEXT NOT NULL DEFAULT '',
+                destination TEXT NOT NULL,
+                statut TEXT DEFAULT 'non_lu',
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_lecture TIMESTAMP,
+                date_traitement TIMESTAMP
+            )
+            """)
 
         # Table Pièces demandées (non référencées) par les techniciens
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS pieces_demandees (
-            id SERIAL PRIMARY KEY,
-            reference TEXT NOT NULL,
-            designation TEXT NOT NULL DEFAULT '',
-            intervention_id INTEGER,
-            equipement TEXT DEFAULT '',
-            client TEXT DEFAULT '',
-            technicien TEXT DEFAULT '',
-            probleme TEXT DEFAULT '',
-            statut TEXT DEFAULT 'en_attente',
-            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            date_resolution TIMESTAMP
-        )
-        """)
+        if USE_PG:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS pieces_demandees (
+                id SERIAL PRIMARY KEY,
+                reference TEXT NOT NULL,
+                designation TEXT NOT NULL DEFAULT '',
+                intervention_id INTEGER,
+                equipement TEXT DEFAULT '',
+                client TEXT DEFAULT '',
+                technicien TEXT DEFAULT '',
+                probleme TEXT DEFAULT '',
+                statut TEXT DEFAULT 'en_attente',
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_resolution TIMESTAMP
+            )
+            """)
+        else:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS pieces_demandees (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reference TEXT NOT NULL,
+                designation TEXT NOT NULL DEFAULT '',
+                intervention_id INTEGER,
+                equipement TEXT DEFAULT '',
+                client TEXT DEFAULT '',
+                technicien TEXT DEFAULT '',
+                probleme TEXT DEFAULT '',
+                statut TEXT DEFAULT 'en_attente',
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                date_resolution TIMESTAMP
+            )
+            """)
         # Migration: ajouter colonne probleme si elle n'existe pas
         try:
             conn.execute("ALTER TABLE pieces_demandees ADD COLUMN IF NOT EXISTS probleme TEXT DEFAULT ''")
