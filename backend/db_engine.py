@@ -718,21 +718,43 @@ def init_db():
 
         # Notification schedules table migration (create if not exists)
         try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS notification_schedules (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    bot_key TEXT NOT NULL UNIQUE,
-                    enabled INTEGER DEFAULT 1,
-                    hour INTEGER DEFAULT 8,
-                    minute INTEGER DEFAULT 30,
-                    days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            logger.info("Table notification_schedules créée ou déjà existante")
+            if USE_PG:
+                # PostgreSQL syntax with SERIAL PRIMARY KEY
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS notification_schedules (
+                        id SERIAL PRIMARY KEY,
+                        bot_key TEXT NOT NULL UNIQUE,
+                        enabled INTEGER DEFAULT 1,
+                        hour INTEGER DEFAULT 8,
+                        minute INTEGER DEFAULT 30,
+                        days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            else:
+                # SQLite syntax
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS notification_schedules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        bot_key TEXT NOT NULL UNIQUE,
+                        enabled INTEGER DEFAULT 1,
+                        hour INTEGER DEFAULT 8,
+                        minute INTEGER DEFAULT 30,
+                        days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            conn.commit()
+            logger.info("✅ Table notification_schedules créée ou déjà existante")
         except Exception as e:
-            logger.debug(f"Erreur lors de la création de notification_schedules: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.debug(f"⚠️  Erreur lors de la création de notification_schedules: {e}")
+
 
         # Technicien enrichment columns
         _safe_add_column("techniciens", "niveau_competence")
