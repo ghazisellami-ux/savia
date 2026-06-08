@@ -649,22 +649,34 @@ def init_db():
             if USE_PG:
                 try:
                     cur = conn._conn.cursor()
-                    cur.execute(
-                        f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS {col} {col_type} DEFAULT {default}"
-                    )
-                    conn._conn.commit()
+                    # First check if column already exists
+                    cur.execute("""
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = %s AND column_name = %s
+                    """, (tbl, col))
+                    column_exists = cur.fetchone() is not None
+                    
+                    if not column_exists:
+                        # Column doesn't exist, add it
+                        cur.execute(
+                            f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type} DEFAULT {default}"
+                        )
+                        conn._conn.commit()
+                        logger.info(f"✅ Colonne {col} ajoutée à {tbl}")
+                    else:
+                        logger.debug(f"ℹ️  Colonne {col} déjà présente sur {tbl}")
                 except Exception as e:
                     try:
                         conn._conn.rollback()
                     except Exception:
                         pass
-                    logger.debug(f"Col {col} déjà présente sur {tbl} (PG)")
+                    logger.debug(f"⚠️  Erreur lors de l'ajout de {col} à {tbl}: {e}")
             else:
                 try:
                     conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type} DEFAULT {default}")
-                    logger.info(f"Colonne {col} ajoutée à {tbl}")
-                except Exception:
-                    pass  # Attendu si déjà là en SQLite
+                    logger.info(f"✅ Colonne {col} ajoutée à {tbl}")
+                except Exception as e:
+                    logger.debug(f"ℹ️  Colonne {col} déjà présente sur {tbl} (SQLite)")  # Attendu si déjà là
 
 
         # Migrations : colonnes ajoutées progressivement
@@ -1006,6 +1018,36 @@ def init_db():
                 logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
             except Exception as e:
                 logger.info(f"Migration ignorée (utilisateurs role check): {e}")
+
+        # --- Migration: Update CHECK constraint for planning_maintenance.statut to include "Décalé" ---
+        # This allows reschedule feature to mark original date entries as "Décalé" (ghosted)
+        if USE_PG:
+            try:
+                # First check if "Décalé" is already in the constraint
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    SELECT constraint_definition FROM information_schema.table_constraints tc 
+                    JOIN information_schema.check_constraints cc 
+                    ON tc.constraint_name = cc.constraint_name 
+                    WHERE tc.table_name='planning_maintenance' AND tc.constraint_type='CHECK'
+                """)
+                result = cur.fetchone()
+                
+                if result:
+                    constraint_def = result[0]
+                    if 'Décalé' not in constraint_def:
+                        # "Décalé" not in constraint, need to update it
+                        conn.execute("ALTER TABLE planning_maintenance DROP CONSTRAINT IF EXISTS planning_maintenance_statut_check")
+                        conn.execute("""
+                            ALTER TABLE planning_maintenance 
+                            ADD CONSTRAINT planning_maintenance_statut_check 
+                            CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
+                        """)
+                        logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
+                    else:
+                        logger.info("ℹ️  'Décalé' already in planning_maintenance statut constraint")
+            except Exception as e:
+                logger.debug(f"Migration planning_maintenance statut check ignorée: {e}")
 
         # --- Migration: Populate contrats_equipements from existing contrats.equipement ---
         # This is a one-time migration that safely populates the junction table from legacy data
