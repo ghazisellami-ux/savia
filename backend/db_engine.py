@@ -2752,40 +2752,37 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         # 2. Mettre à jour l'intervention (date = date de clôture)
         date_cloture = datetime.now().isoformat()
         
-        # Préparer les champs optionnels
-        update_fields = [
-            "statut='Cloturee'",
-            "probleme=%s",
-            "cause=%s",
-            "solution=%s",
-            "duree_minutes=%s",
-            "cout=%s",
-            "date=%s",
-            "date_cloture=%s"
-        ]
-        update_values = [probleme, cause, solution, duree_val, cout_total, date_cloture, date_cloture]
+        # Préparer l'UPDATE avec un dictionnaire pour éviter les décalages
+        update_data = {
+            "statut": "Cloturee",
+            "probleme": probleme,
+            "cause": cause,
+            "solution": solution,
+            "duree_minutes": duree_val,
+            "cout": cout_total,
+            "date": date_cloture,
+            "date_cloture": date_cloture
+        }
         
         # Ajouter les champs optionnels s'ils sont fournis
         if start_time is not None:
-            update_fields.append("start_time=%s")
-            update_values.append(start_time)
+            update_data["start_time"] = start_time
         if end_time is not None:
-            update_fields.append("end_time=%s")
-            update_values.append(end_time)
+            update_data["end_time"] = end_time
         if duree_deplacement is not None:
-            update_fields.append("duree_deplacement=%s")
-            update_values.append(duree_deplacement)
+            update_data["duree_deplacement"] = duree_deplacement
         if pieces_str:
-            update_fields.append("pieces_utilisees=%s")
-            update_fields.append("cout_pieces=%s")
-            update_values.insert(-4, pieces_str)  # Insert before date values
-            update_values.insert(-3, total_cout_pieces)
+            update_data["pieces_utilisees"] = pieces_str
+            update_data["cout_pieces"] = total_cout_pieces
         
+        # Construire l'UPDATE dynamiquement
+        set_clauses = [f"{k}=%s" for k in update_data.keys()]
+        update_values = list(update_data.values())
         update_values.append(intervention_id)
         
         sql = f"""
             UPDATE interventions
-            SET {", ".join(update_fields)}
+            SET {", ".join(set_clauses)}
             WHERE id=%s
         """
         conn.execute(sql, update_values)
