@@ -3341,8 +3341,54 @@ def supprimer_demande_intervention(demande_id):
 # Notification Schedules Management
 # ==========================================
 
+def _ensure_notification_schedules_exists():
+    """Crée la table notification_schedules si elle n'existe pas (defensive initialization)."""
+    with get_db() as conn:
+        try:
+            if USE_PG:
+                cur = conn._conn.cursor()
+                cur.execute("""
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'notification_schedules'
+                """)
+                if not cur.fetchone():
+                    # Table doesn't exist, create it
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS notification_schedules (
+                            id SERIAL PRIMARY KEY,
+                            bot_key TEXT NOT NULL UNIQUE,
+                            enabled INTEGER DEFAULT 1,
+                            hour INTEGER DEFAULT 8,
+                            minute INTEGER DEFAULT 30,
+                            days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    conn._conn.commit()
+                    logger.info("⚠️  Table notification_schedules created dynamically (defensive)")
+            else:
+                # SQLite: Just try to create, it will silently succeed if exists
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS notification_schedules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        bot_key TEXT NOT NULL UNIQUE,
+                        enabled INTEGER DEFAULT 1,
+                        hour INTEGER DEFAULT 8,
+                        minute INTEGER DEFAULT 30,
+                        days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+        except Exception as e:
+            logger.debug(f"_ensure_notification_schedules_exists: {e}")
+
+
 def lire_notification_schedules():
     """Lit tous les horaires de notification pour les bots Telegram."""
+    _ensure_notification_schedules_exists()
     with get_db() as conn:
         rows = conn.execute("""
             SELECT id, bot_key, enabled, hour, minute, days_of_week, created_at, updated_at
