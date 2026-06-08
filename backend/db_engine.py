@@ -857,6 +857,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS contrats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client TEXT NOT NULL,
+            equipement TEXT,
             type_contrat TEXT DEFAULT 'Standard',
             date_debut DATE NOT NULL,
             date_fin DATE NOT NULL,
@@ -866,7 +867,21 @@ def init_db():
             conditions TEXT DEFAULT '',
             statut TEXT DEFAULT 'Actif',
             notes TEXT DEFAULT '',
+            pieces_incluses TEXT DEFAULT '',
+            avec_pieces INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # Junction Table: Contrats ↔ Equipements (multi-equipment support)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS contrats_equipements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contrat_id INTEGER NOT NULL,
+            equipement_nom TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (contrat_id) REFERENCES contrats(id) ON DELETE CASCADE,
+            UNIQUE(contrat_id, equipement_nom)
         )
         """)
 
@@ -987,6 +1002,46 @@ def init_db():
                 logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
             except Exception as e:
                 logger.info(f"Migration ignorée (utilisateurs role check): {e}")
+
+        # --- Migration: Populate contrats_equipements from existing contrats.equipement ---
+        # This is a one-time migration that safely populates the junction table from legacy data
+        try:
+            if USE_PG:
+                # PostgreSQL version
+                conn.execute("""
+                    INSERT INTO contrats_equipements (contrat_id, equipement_nom, created_at)
+                    SELECT id, equipement, created_at FROM contrats
+                    WHERE equipement IS NOT NULL AND equipement != ''
+                    ON CONFLICT (contrat_id, equipement_nom) DO NOTHING
+                """)
+            else:
+                # SQLite version
+                conn.execute("""
+                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom, created_at)
+                    SELECT id, equipement, created_at FROM contrats
+                    WHERE equipement IS NOT NULL AND equipement != ''
+                """)
+            logger.info("✅ Migration réussie: contrats_equipements peuplée depuis contrats.equipement")
+        except Exception as e:
+            logger.debug(f"Migration contrats_equipements ignorée: {e}")
+
+        # --- Migration: Add pieces_incluses and avec_pieces columns to contrats if not exist ---
+        try:
+            if USE_PG:
+                # PostgreSQL: Try to add columns if they don't exist
+                conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS pieces_incluses TEXT DEFAULT ''")
+                conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS avec_pieces INTEGER DEFAULT 0")
+            else:
+                # SQLite: Check if columns exist, add if not
+                cursor = conn.execute("PRAGMA table_info(contrats)")
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if "pieces_incluses" not in existing_cols:
+                    conn.execute("ALTER TABLE contrats ADD COLUMN pieces_incluses TEXT DEFAULT ''")
+                if "avec_pieces" not in existing_cols:
+                    conn.execute("ALTER TABLE contrats ADD COLUMN avec_pieces INTEGER DEFAULT 0")
+            logger.info("✅ Migration réussie: colonnes pieces_incluses et avec_pieces ajoutées à contrats")
+        except Exception as e:
+            logger.debug(f"Migration colonnes pièces ignorée: {e}")
 
 
 # ---- Nettoyage texte double-encodé UTF-8 (à la lecture) ----
@@ -2519,20 +2574,62 @@ def supprimer_technicien(tech_id):
 # ==========================================
 
 def lire_contrats(client=None):
-    """Lit les contrats, optionnellement filtr\u00e9s par client."""
+    """Lit les contrats, optionnellement filtrés par client."""
     with get_db() as conn:
         if client:
-            return read_sql("SELECT * FROM contrats WHERE client=? ORDER BY date_fin DESC", conn, params=(client,))
-        return read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
+            df = read_sql("SELECT * FROM contrats WHERE client=? ORDER BY date_fin DESC", conn, params=(client,))
+        else:
+            df = read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
+    return df
+
+def get_contract_equipements(contrat_id):
+    """Récupère tous les équipements d'un contrat."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = ? ORDER BY id",
+            (contrat_id,)
+        ).fetchall()
+        return [dict(row)["equipement_nom"] for row in rows]
 
 def ajouter_contrat(contrat_dict):
-    """Ajoute un contrat et retourne son ID."""
+    """
+    Ajoute un contrat et ses équipements, retourne son ID.
+    
+    Supporte deux formats:
+    - equipement (str): rétrocompatibilité - sera converti en array
+    - equipements (list): array d'équipements
+    
+    Stocke aussi les pièces incluses en JSON si avec_pieces=true
+    """
     with get_db() as conn:
+        # Extract equipments (support both single and multiple)
+        equipements = contrat_dict.get("equipements", [])
+        if isinstance(equipements, str):
+            equipements = [equipements] if equipements else []
+        elif not isinstance(equipements, list):
+            equipements = []
+        
+        # For backward compatibility, also check for singular "equipement"
+        if not equipements:
+            single_eq = contrat_dict.get("equipement", "")
+            if single_eq:
+                equipements = [single_eq]
+        
+        # Store first equipment in main table for backward compatibility
+        first_equipment = equipements[0] if equipements else ""
+        
+        # Handle pieces_incluses - convert list to JSON string
+        pieces_incluses = contrat_dict.get("pieces_incluses", "")
+        if isinstance(pieces_incluses, (list, dict)):
+            import json
+            pieces_incluses = json.dumps(pieces_incluses)
+        
         conn.execute("""
             INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                 sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                pieces_incluses, avec_pieces)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             contrat_dict.get("client", ""),
             contrat_dict.get("type_contrat", "Standard"),
@@ -2544,13 +2641,28 @@ def ajouter_contrat(contrat_dict):
             contrat_dict.get("conditions", ""),
             contrat_dict.get("notes", ""),
             contrat_dict.get("fichier_contrat", ""),
-            contrat_dict.get("equipement", ""),
+            first_equipment,
             contrat_dict.get("recurrence_maintenance", ""),
             contrat_dict.get("date_premiere_maintenance", ""),
+            contrat_dict.get("statut", "Actif"),
+            pieces_incluses,
+            1 if contrat_dict.get("avec_pieces") else 0,
         ))
         # Retrieve the newly created contrat ID
         row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
         contrat_id = dict(row)["id"] if row else None
+        
+        # Insert equipments into junction table
+        for eq in equipements:
+            if eq:  # Only insert non-empty equipments
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom) VALUES (?, ?)",
+                        (contrat_id, eq)
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
+    
     _trigger_backup()
     return contrat_id
 
@@ -2559,6 +2671,10 @@ def generer_planning_from_contrat(contrat_id):
     """
     Génère automatiquement les entrées de planning de maintenance préventive
     à partir d'un contrat, selon sa récurrence et ses dates.
+    
+    Supporte les équipements multiples: génère une entrée de planning pour 
+    CHAQUE équipement du contrat.
+    
     Retourne le nombre d'entrées créées.
     """
     from dateutil.relativedelta import relativedelta
@@ -2585,7 +2701,6 @@ def generer_planning_from_contrat(contrat_id):
 
         date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
         date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
-        equipement = contrat.get("equipement", "")
         client = contrat.get("client", "")
 
         if not date_fin_str or not date_premiere_str:
@@ -2598,41 +2713,80 @@ def generer_planning_from_contrat(contrat_id):
         except ValueError:
             return 0
 
+        # Récupérer tous les équipements du contrat
+        equipements_rows = conn.execute(
+            "SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = ? ORDER BY id",
+            (contrat_id,)
+        ).fetchall()
+        
+        if equipements_rows:
+            equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+        else:
+            # Fallback: utiliser l'équipement du contrat (pour rétrocompatibilité)
+            equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
+        
+        if not equipements:
+            return 0  # Aucun équipement à planifier
+
         delta = RECURRENCE_DELTAS[recurrence]
         count = 0
-        current_date = date_premiere
 
-        while current_date <= date_fin:
-            conn.execute("""
-                INSERT INTO planning_maintenance
-                    (machine, client, type_maintenance, description,
-                     date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                equipement,
-                client,
-                "Préventive",
-                f"MP Contrat #{contrat_id} — {equipement}" if equipement else f"MP Contrat #{contrat_id}",
-                current_date.isoformat(),
-                "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
-                recurrence,
-                contrat_id,
-                "Planifiée",
-                f"[{client}] Généré automatiquement depuis contrat #{contrat_id}" if client else f"Généré automatiquement depuis contrat #{contrat_id}",
-            ))
-            count += 1
-            current_date = current_date + delta
+        # Générer planning pour CHAQUE équipement
+        for equipement in equipements:
+            current_date = date_premiere
+            while current_date <= date_fin:
+                conn.execute("""
+                    INSERT INTO planning_maintenance
+                        (machine, client, type_maintenance, description,
+                         date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    equipement,
+                    client,
+                    "Préventive",
+                    f"MP Contrat #{contrat_id} — {equipement}",
+                    current_date.isoformat(),
+                    "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
+                    recurrence,
+                    contrat_id,
+                    "Planifiée",
+                    f"[{client}] Généré automatiquement depuis contrat #{contrat_id}",
+                ))
+                count += 1
+                current_date = current_date + delta
 
     return count
 
 
 def modifier_contrat(contrat_id, contrat_dict):
-    """Modifie un contrat existant."""
+    """Modifie un contrat existant et ses équipements."""
     with get_db() as conn:
+        # Extract equipments (support both single and multiple)
+        equipements = contrat_dict.get("equipements", [])
+        if isinstance(equipements, str):
+            equipements = [equipements] if equipements else []
+        elif not isinstance(equipements, list):
+            equipements = []
+        
+        # For backward compatibility, also check for singular "equipement"
+        if not equipements:
+            single_eq = contrat_dict.get("equipement", "")
+            if single_eq:
+                equipements = [single_eq]
+        
+        # Store first equipment in main table for backward compatibility
+        first_equipment = equipements[0] if equipements else ""
+        
+        # Handle pieces_incluses - convert list to JSON string
+        pieces_incluses = contrat_dict.get("pieces_incluses", "")
+        if isinstance(pieces_incluses, (list, dict)):
+            import json
+            pieces_incluses = json.dumps(pieces_incluses)
+        
         conn.execute("""
             UPDATE contrats SET client=?, type_contrat=?, date_debut=?, date_fin=?,
                 sla_temps_reponse_h=?, interventions_incluses=?, montant=?, conditions=?, notes=?, statut=?,
-                fichier_contrat=?, equipement=?
+                fichier_contrat=?, equipement=?, pieces_incluses=?, avec_pieces=?
             WHERE id=?
         """, (
             contrat_dict.get("client", ""),
@@ -2646,9 +2800,26 @@ def modifier_contrat(contrat_id, contrat_dict):
             contrat_dict.get("notes", ""),
             contrat_dict.get("statut", "Actif"),
             contrat_dict.get("fichier_contrat", ""),
-            contrat_dict.get("equipement", ""),
+            first_equipment,
+            pieces_incluses,
+            1 if contrat_dict.get("avec_pieces") else 0,
             contrat_id,
         ))
+        
+        # Delete existing equipments for this contract
+        conn.execute("DELETE FROM contrats_equipements WHERE contrat_id=?", (contrat_id,))
+        
+        # Insert new equipments into junction table
+        for eq in equipements:
+            if eq:  # Only insert non-empty equipments
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom) VALUES (?, ?)",
+                        (contrat_id, eq)
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
+    
     _trigger_backup()
 
 def supprimer_contrat(contrat_id):

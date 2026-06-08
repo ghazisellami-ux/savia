@@ -30,7 +30,7 @@ from db_engine import (
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
     ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee, lire_toutes_pieces_demandees,
-    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat,
+    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat, get_contract_equipements,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
     lire_techniciens, ajouter_technicien, update_technicien, supprimer_technicien,
@@ -3093,7 +3093,21 @@ def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
 def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     # Pour Lecteur : forcer le filtre par son client
     effective_client = _get_client_filter(user) or client
-    return _df_to_records(lire_contrats(client=effective_client))
+    df = lire_contrats(client=effective_client)
+    records = _df_to_records(df)
+    
+    # Enrich each contract with its equipements array
+    for record in records:
+        contrat_id = record.get("id")
+        if contrat_id:
+            try:
+                equipements = get_contract_equipements(contrat_id)
+                record["equipements"] = equipements if equipements else []
+            except Exception as e:
+                logger.debug(f"Could not get equipements for contract {contrat_id}: {e}")
+                record["equipements"] = []
+    
+    return records
 
 
 @app.post("/api/contrats")
@@ -3107,14 +3121,22 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
                 logger.info(f"Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées automatiquement")
                 # Notification Telegram
                 recurrence = body.get("recurrence_maintenance", "")
-                equipement = body.get("equipement", "")
+                # Support both single equipment and multiple equipments
+                equipements = body.get("equipements", [])
+                if isinstance(equipements, str):
+                    equipements = [equipements] if equipements else []
+                if not equipements:
+                    single_eq = body.get("equipement", "")
+                    if single_eq:
+                        equipements = [single_eq]
+                equipement_str = ", ".join(equipements) if equipements else "— Non spécifié —"
                 client = body.get("client", "")
                 date_fin = body.get("date_fin", "")
                 msg = (
                     f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
                     f"👤 Client : <b>{client}</b>\n"
-                    + (f"🏥 Équipement : <b>{equipement}</b>\n" if equipement else "")
-                    + f"🔄 Récurrence : <b>{recurrence}</b>\n"
+                    f"🏥 Équipement(s) : <b>{equipement_str}</b>\n"
+                    f"🔄 Récurrence : <b>{recurrence}</b>\n"
                     f"📅 Jusqu'au : {date_fin}\n\n"
                     f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
                     f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
