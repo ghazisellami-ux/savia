@@ -739,6 +739,16 @@ def init_db():
 
         # Ghost entry tracking for rescheduled interventions
         _safe_add_column("planning_maintenance", "is_ghost", "BOOLEAN", "0")
+        
+        # Ensure commit after all _safe_add_column migrations
+        try:
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
 
         # Fabricants table
         if USE_PG:
@@ -1015,8 +1025,13 @@ def init_db():
                     ALTER TABLE utilisateurs ADD CONSTRAINT utilisateurs_role_check 
                     CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire'))
                 """)
+                conn.commit()
                 logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.info(f"Migration ignorée (utilisateurs role check): {e}")
 
         # --- Migration: Update CHECK constraint for planning_maintenance.statut to include "Décalé" ---
@@ -1043,11 +1058,26 @@ def init_db():
                             ADD CONSTRAINT planning_maintenance_statut_check 
                             CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
                         """)
+                        conn.commit()
                         logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
                     else:
                         logger.info("ℹ️  'Décalé' already in planning_maintenance statut constraint")
+                else:
+                    # No constraint found, create it
+                    conn.execute("""
+                        ALTER TABLE planning_maintenance 
+                        ADD CONSTRAINT planning_maintenance_statut_check 
+                        CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
+                    """)
+                    conn.commit()
+                    logger.info("✅ Migration réussie: planning_maintenance statut constraint created with 'Décalé' status")
             except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.debug(f"Migration planning_maintenance statut check ignorée: {e}")
+
 
         # --- Migration: Populate contrats_equipements from existing contrats.equipement ---
         # This is a one-time migration that safely populates the junction table from legacy data
