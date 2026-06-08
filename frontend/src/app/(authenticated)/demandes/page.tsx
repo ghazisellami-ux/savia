@@ -56,6 +56,24 @@ const STATUT_ICONS: Record<string, React.ReactNode> = {
   'Clôturée':   <Lock         className="w-3 h-3 inline mr-1" />,
 };
 
+// Format date-time: "2026-06-15 17:45:30" or "2026-06-15T17:45:30" → "15/06/2026  •  17:45"
+const formatDateTime = (dateStr: string): string => {
+  if (!dateStr || dateStr === 'N/A') return dateStr;
+  try {
+    // Handle both "2026-06-15 17:45:30" and "2026-06-15T17:45:30" formats
+    const normalized = dateStr.replace('T', ' ');
+    const parts = normalized.split(' ');
+    if (parts.length >= 2) {
+      const [year, month, day] = parts[0].split('-');
+      const [hour, minute] = parts[1].split(':');
+      return `${day}/${month}/${year}  •  ${hour}:${minute}`;
+    }
+  } catch (e) {
+    return dateStr;
+  }
+  return dateStr;
+};
+
 export default function DemandesPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
@@ -64,7 +82,7 @@ export default function DemandesPage() {
   const demandeurNom = user?.nom || '';
 
   const emptyForm = {
-    demandeur: isLecteur ? demandeurNom : '',
+    demandeur: demandeurNom,
     client: isLecteur ? clientNom : '',
     equipement: '',
     urgence: 'Moyenne',
@@ -103,7 +121,7 @@ export default function DemandesPage() {
       ]);
       const mapped = (res as any[]).map((item: any) => ({
         id: Number(item.id || 0),
-        date: item.date_demande ? String(item.date_demande).substring(0, 10) : (item.date || 'N/A'),
+        date: item.date_demande ? String(item.date_demande).substring(0, 16) : (item.date || 'N/A'),
         machine: item.equipement || item.machine || '',
         client: item.client || '',
         demandeur: item.demandeur || '',
@@ -322,7 +340,7 @@ export default function DemandesPage() {
               <span className="flex items-center gap-1"><Server className="w-3 h-3" />{d.machine || '—'}</span>
               <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{d.client || '—'}</span>
               <span className="flex items-center gap-1"><User className="w-3 h-3" />{d.demandeur || '—'}</span>
-              <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{d.date}</span>
+              <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDateTime(d.date)}</span>
             </div>
             {d.technicien_assigne && (
               <div className="mt-2 text-xs text-blue-400 flex items-center gap-1 flex-wrap">
