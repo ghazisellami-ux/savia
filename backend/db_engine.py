@@ -605,40 +605,42 @@ def init_db():
         _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
-        try:
-            indexes = conn.execute("PRAGMA index_list(equipements)").fetchall()
-            needs_migration = False
-            for idx in indexes:
-                idx_info = conn.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()
-                if len(idx_info) == 1 and any(col[2] == 'nom' for col in idx_info):
-                    needs_migration = True
-                    break
-            if needs_migration:
-                logger.info("Début migration de la table équipements pour contrainte UNIQUE(nom, client)")
-                conn.executescript("""
-                    CREATE TABLE IF NOT EXISTS equipements_new (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        nom TEXT NOT NULL,
-                        type TEXT DEFAULT '',
-                        fabricant TEXT DEFAULT '',
-                        modele TEXT DEFAULT '',
-                        num_serie TEXT DEFAULT '',
-                        date_installation TEXT DEFAULT '',
-                        derniere_maintenance TEXT DEFAULT '',
-                        statut TEXT DEFAULT 'Actif',
-                        notes TEXT DEFAULT '',
-                        client TEXT DEFAULT 'Centre Principal',
-                        UNIQUE(nom, client)
-                    );
-                    INSERT OR IGNORE INTO equipements_new
-                        SELECT id, nom, type, fabricant, modele, num_serie,
-                               date_installation, derniere_maintenance, statut, notes, client
-                        FROM equipements;
-                    DROP TABLE equipements;
-                    ALTER TABLE equipements_new RENAME TO equipements;
-                """)
-        except Exception as e:
-            logger.error(f"Erreur lors de la migration complexe des équipements: {e}")
+        # NOTE: PRAGMA is SQLite-specific, skip for PostgreSQL
+        if not USE_PG:
+            try:
+                indexes = conn.execute("PRAGMA index_list(equipements)").fetchall()
+                needs_migration = False
+                for idx in indexes:
+                    idx_info = conn.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()
+                    if len(idx_info) == 1 and any(col[2] == 'nom' for col in idx_info):
+                        needs_migration = True
+                        break
+                if needs_migration:
+                    logger.info("Début migration de la table équipements pour contrainte UNIQUE(nom, client)")
+                    conn.executescript("""
+                        CREATE TABLE IF NOT EXISTS equipements_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            nom TEXT NOT NULL,
+                            type TEXT DEFAULT '',
+                            fabricant TEXT DEFAULT '',
+                            modele TEXT DEFAULT '',
+                            num_serie TEXT DEFAULT '',
+                            date_installation TEXT DEFAULT '',
+                            derniere_maintenance TEXT DEFAULT '',
+                            statut TEXT DEFAULT 'Actif',
+                            notes TEXT DEFAULT '',
+                            client TEXT DEFAULT 'Centre Principal',
+                            UNIQUE(nom, client)
+                        );
+                        INSERT OR IGNORE INTO equipements_new
+                            SELECT id, nom, type, fabricant, modele, num_serie,
+                                   date_installation, derniere_maintenance, statut, notes, client
+                            FROM equipements;
+                        DROP TABLE equipements;
+                        ALTER TABLE equipements_new RENAME TO equipements;
+                    """)
+            except Exception as e:
+                logger.error(f"Erreur lors de la migration complexe des équipements: {e}")
 
         # Migration helper: ajouter colonne si elle n'existe pas (compatible PG + SQLite)
         def _safe_add_column(tbl, col, col_type="TEXT", default="''"):
@@ -1552,13 +1554,16 @@ def lire_interventions(machine=None):
     with get_db() as conn:
         # Use JOIN instead of subquery to avoid N+1 pattern
         # Select only necessary columns to reduce data transfer
+        # Note: start_time, end_time are TIME columns for shift tracking
         base_query = """
             SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
                    i.description, i.probleme, i.cause, i.solution,
                    i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
+                   i.duree_deplacement,
                    i.code_erreur, i.statut, i.notes,
                    i.date_debut_intervention, i.date_cloture,
                    i.type_erreur, i.priorite,
+                   i.start_time, i.end_time,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
@@ -1634,8 +1639,8 @@ def ajouter_intervention(intervention_dict):
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite,
-                                       duree_deplacement)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       duree_deplacement, start_time, end_time, fiche_validation)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
@@ -1654,6 +1659,9 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("type_erreur") or "",
             intervention_dict.get("priorite") or "",
             intervention_dict.get("duree_deplacement", 0),
+            intervention_dict.get("start_time") or None,
+            intervention_dict.get("end_time") or None,
+            intervention_dict.get("fiche_validation", "En attente"),
         ))
     _trigger_backup()
     return True
@@ -2318,7 +2326,41 @@ def lire_telemetry(machine, sensor_type=None, hours=24):
 
 def verifier_et_migrer_schema():
     """Vérifie et migre le schéma si nécessaire (ajout colonnes manquantes)."""
-    init_db()
+    # NOTE: init_db() est déjà appelée dans @app.on_event("startup")
+    # Ne pas l'appeler ici pour éviter une boucle infinie!
+    
+    if USE_PG:
+        # Mode PostgreSQL - utiliser psycopg2
+        import psycopg2
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            conn.set_client_encoding('UTF8')
+            cur = conn.cursor()
+            
+            # Colonnes à vérifier/ajouter
+            missing_cols = [
+                ("start_time", "TIME"),
+                ("end_time", "TIME"),
+                ("duree_deplacement", "INTEGER DEFAULT 0"),
+                ("fiche_validation", "TEXT DEFAULT 'En attente'"),
+            ]
+            
+            for col, type_def in missing_cols:
+                try:
+                    cur.execute(f"ALTER TABLE interventions ADD COLUMN IF NOT EXISTS {col} {type_def}")
+                    conn.commit()
+                    logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée.")
+                except psycopg2.Error as e:
+                    logger.debug(f"Migration PostgreSQL colonne {col}: {e}")
+                    conn.rollback()
+            
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Erreur migration PostgreSQL: {e}")
+        return
+    
+    # Mode SQLite - utiliser la migration classique
     with get_db() as conn:
         # Vérifier colonnes table interventions
         cursor = conn.execute("PRAGMA table_info(interventions)")
@@ -2329,6 +2371,14 @@ def verifier_et_migrer_schema():
             "cause": "TEXT DEFAULT ''",
             "solution": "TEXT DEFAULT ''",
             "cout_pieces": "REAL DEFAULT 0.0",
+            "start_time": "TIME",
+            "end_time": "TIME",
+            "duree_deplacement": "INTEGER DEFAULT 0",
+            "type_erreur": "TEXT DEFAULT ''",
+            "priorite": "TEXT DEFAULT ''",
+            "fiche_validation": "TEXT DEFAULT 'En attente'",
+            "date_debut_intervention": "TIMESTAMP",
+            "date_cloture": "TIMESTAMP",
         }
 
         for col, type_def in missing_cols.items():

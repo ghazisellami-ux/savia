@@ -84,7 +84,7 @@ export default function InterventionDetailPage() {
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
     duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
-    start_time: '08:00', end_time: '09:00',
+    heure_debut: 8, heure_fin: 9,  // Store as decimal hours (8.5 = 8h30)
   });
 
   useEffect(() => {
@@ -111,14 +111,26 @@ export default function InterventionDetailPage() {
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
       
-      // Calculate start and end times from duration
-      // Assuming work starts at 14:00 (2 PM)
-      const startTime = '14:00';
-      const durationMinutes = found.duree_minutes || 60;
-      const totalEndMinutes = 14 * 60 + durationMinutes;
-      const endHours = Math.min(Math.floor(totalEndMinutes / 60), 18);
-      const endMinutes = totalEndMinutes % 60;
-      const endTime = `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+      // Load hours as decimal - try new columns first, fallback to old TIME columns
+      let heureDebut = 8;
+      let heureFin = 9;
+      
+      // Try new decimal hour columns first
+      if (found.heure_debut !== null && found.heure_debut !== undefined) {
+        heureDebut = parseFloat(found.heure_debut) || 8;
+      } else if (found.start_time) {
+        // Fallback: convert old TIME format
+        const [h, m] = found.start_time.split(':').map(Number);
+        heureDebut = h + (m / 60);
+      }
+      
+      if (found.heure_fin !== null && found.heure_fin !== undefined) {
+        heureFin = parseFloat(found.heure_fin) || 9;
+      } else if (found.end_time) {
+        // Fallback: convert old TIME format
+        const [h, m] = found.end_time.split(':').map(Number);
+        heureFin = h + (m / 60);
+      }
       
       setForm({
         statut:           found.statut || 'En cours',
@@ -130,10 +142,10 @@ export default function InterventionDetailPage() {
         type_erreur:      found.type_erreur || '',
         priorite:         found.priorite || '',
         duree_minutes:    found.duree_minutes || 0,
-        deplacement:      found.deplacement || 0,
+        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,  // Convert minutes to hours
         fiche_validation: found.fiche_validation || 'En attente',
-        start_time:       startTime,
-        end_time:         endTime,
+        heure_debut:      heureDebut,
+        heure_fin:        heureFin,
       });
     } catch {
       setError('Erreur lors du chargement.');
@@ -199,7 +211,41 @@ export default function InterventionDetailPage() {
         reference: p.reference || '',
         designation: p.designation || p.nom || '',
       }));
-      await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture, ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) });
+      
+      // Convert times to HH:MM format for TIME columns
+      const formatTime = (decimalHours: number): string => {
+        const hours = Math.floor(decimalHours);
+        const minutes = Math.round((decimalHours - hours) * 60);
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      };
+      
+      // Convert deployment from hours to minutes before sending to backend
+      const deploymentMinutes = Math.round(form.deplacement * 60);
+      
+      const updatePayload = { 
+        statut: form.statut,
+        probleme: form.probleme,
+        cause: form.cause,
+        solution: form.solution,
+        description: form.description,
+        notes: form.notes,
+        type_erreur: form.type_erreur,
+        priorite: form.priorite,
+        duree_minutes: form.duree_minutes,
+        start_time: formatTime(form.heure_debut),  // Convert decimal to HH:MM
+        end_time: formatTime(form.heure_fin),      // Convert decimal to HH:MM
+        deplacement: deploymentMinutes,  // Send in minutes to match database format
+        pieces_a_deduire, 
+        pieces_rupture, 
+        ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) 
+      };
+      
+      console.log('🚀 Sending update payload:', updatePayload);
+      console.log('  start_time:', updatePayload.start_time, '(from', form.heure_debut, 'decimal hours)');
+      console.log('  end_time:', updatePayload.end_time, '(from', form.heure_fin, 'decimal hours)');
+      console.log('  deplacement:', updatePayload.deplacement, 'from', form.deplacement, 'hours');
+      
+      await api.interventions.update(id, updatePayload);
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
       setSuccess('Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
@@ -421,42 +467,38 @@ export default function InterventionDetailPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
-                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de début</label>
+                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de début (h)</label>
                 <input
-                  type="time" style={INPUT}
-                  value={form.start_time}
+                  type="number" style={INPUT} min={0} max={24} step={0.25}
+                  value={form.heure_debut}
                   onChange={(e) => {
-                    const time = e.target.value;
+                    const hDebut = parseFloat(e.target.value) || 0;
                     setForm(f => {
-                      const newForm = { ...f, start_time: time };
+                      const newForm = { ...f, heure_debut: hDebut };
                       // Auto-calculate duration
-                      const [startH, startM] = time.split(':').map(Number);
-                      const [endH, endM] = f.end_time.split(':').map(Number);
-                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      let durationMin = (f.heure_fin - hDebut) * 60;
                       if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
                       durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
-                      newForm.duree_minutes = durationMin;
+                      newForm.duree_minutes = Math.round(durationMin);
                       return newForm;
                     });
                   }}
                 />
               </div>
               <div>
-                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de fin</label>
+                <label style={LABEL}><Clock style={ICON_INLINE} /> Heure de fin (h)</label>
                 <input
-                  type="time" style={INPUT}
-                  value={form.end_time}
+                  type="number" style={INPUT} min={0} max={24} step={0.25}
+                  value={form.heure_fin}
                   onChange={(e) => {
-                    const time = e.target.value;
+                    const hFin = parseFloat(e.target.value) || 0;
                     setForm(f => {
-                      const newForm = { ...f, end_time: time };
+                      const newForm = { ...f, heure_fin: hFin };
                       // Auto-calculate duration
-                      const [startH, startM] = f.start_time.split(':').map(Number);
-                      const [endH, endM] = time.split(':').map(Number);
-                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      let durationMin = (hFin - f.heure_debut) * 60;
                       if (durationMin <= 0) durationMin += 24 * 60; // Handle midnight crossing
                       durationMin = Math.max(60, durationMin); // Minimum 1 hour billing
-                      newForm.duree_minutes = durationMin;
+                      newForm.duree_minutes = Math.round(durationMin);
                       return newForm;
                     });
                   }}

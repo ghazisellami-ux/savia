@@ -1,7 +1,7 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
-  # ── PostgreSQL Database ─────────────────
+  # ÔöÇÔöÇ PostgreSQL Database ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   postgres:
     image: postgres:16-alpine
     container_name: savia_postgres
@@ -22,7 +22,7 @@ services:
     networks:
       - savia-network
 
-  # ── FastAPI Backend ─────────────────────
+  # ÔöÇÔöÇ FastAPI Backend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   backend:
     build:
       context: ./backend
@@ -76,7 +76,7 @@ services:
     command: server /data --console-address ":9001"
     restart: unless-stopped
 
-  # ── Next.js Admin Frontend ──────────────
+  # ÔöÇÔöÇ Next.js Admin Frontend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   frontend:
     build:
       context: ./frontend
@@ -102,7 +102,7 @@ services:
     networks:
       - savia-network
 
-  # ── SAVIA Site — PWA Techniciens ────────
+  # ÔöÇÔöÇ SAVIA Site ÔÇö PWA Techniciens ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   pwa-site:
     build:
       context: ./pwa-site

@@ -9,7 +9,9 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # On force l'installation de TOUTES les dépendances (y compris devDeps)
-RUN npm ci --include=dev
+# Try alternative npm registry if default fails
+RUN npm ci --include=dev --registry https://registry.npmmirror.com || \
+    npm ci --include=dev
 
 # ── Stage 2: Development ──────────────────
 FROM deps AS dev
