@@ -460,10 +460,11 @@ def init_db():
             date_prevue DATE NOT NULL,
             date_realisee DATE,
             technicien_assigne TEXT DEFAULT '',
-            statut TEXT DEFAULT 'Planifiée' CHECK(statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard')),
+            statut TEXT DEFAULT 'Planifiée' CHECK(statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé')),
             rappel_envoye INTEGER DEFAULT 0,
             recurrence TEXT DEFAULT '',
-            notes TEXT DEFAULT ''
+            notes TEXT DEFAULT '',
+            is_ghost BOOLEAN DEFAULT 0
         );
 
         -- Pièces de rechange
@@ -723,6 +724,9 @@ def init_db():
 
         # Travel time column on interventions
         _safe_add_column("interventions", "duree_deplacement", "INTEGER", "0")
+
+        # Ghost entry tracking for rescheduled interventions
+        _safe_add_column("planning_maintenance", "is_ghost", "BOOLEAN", "0")
 
         # Fabricants table
         if USE_PG:

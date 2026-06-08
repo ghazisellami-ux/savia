@@ -3219,6 +3219,115 @@ def update_planning_status(planning_id: int, body: dict, user: dict = Depends(_v
     return {"ok": True}
 
 
+@app.put("/api/planning/{planning_id}/reschedule")
+def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Reschedule an intervention (change date and/or technicians).
+    Only Admin and Manager can perform this action.
+    Creates a greyed-out "Décalé" entry at the old date for audit trail.
+    """
+    # Check authorization (Admin or Manager only)
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Admin and Manager can reschedule interventions"
+        )
+    
+    new_date = body.get("date_planifiee")
+    new_technicians = body.get("technicien_assigne")
+    
+    if not new_date and new_technicians is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least date_planifiee or technicien_assigne must be provided"
+        )
+    
+    try:
+        with get_db() as conn:
+            # Get current planning item
+            current = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ?",
+                (planning_id,)
+            ).fetchone()
+            
+            if not current:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Planning item not found"
+                )
+            
+            old_date = current.get("date_prevue")
+            
+            # Update the main planning entry
+            update_data = {}
+            if new_date:
+                update_data["date_prevue"] = new_date
+            if new_technicians is not None:
+                update_data["technicien_assigne"] = new_technicians
+            
+            if update_data:
+                set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
+                values = list(update_data.values()) + [planning_id]
+                conn.execute(
+                    f"UPDATE planning_maintenance SET {set_clause} WHERE id = ?",
+                    values
+                )
+                conn.commit()
+            
+            # Create a greyed-out "Décalé" entry at the old date AFTER updating (separate transaction)
+            # BUT: Only if this is NOT already a ghost entry (to avoid duplicate ghosts on re-reschedule)
+            is_current_ghost = current.get("is_ghost", False)
+            
+            if new_date and new_date != old_date and not is_current_ghost:
+                try:
+                    old_machine = current.get("machine", "")
+                    old_client = current.get("client", "")
+                    old_description = current.get("description", "")
+                    old_notes = current.get("notes", "")
+                    old_type = current.get("type_maintenance", "Préventive")
+                    
+                    # Check if a ghost ALREADY EXISTS for this machine (any date with is_ghost=true)
+                    # This prevents creating multiple ghosts from the same original intervention
+                    existing_ghost = conn.execute(
+                        "SELECT id FROM planning_maintenance WHERE machine = ? AND is_ghost = true",
+                        (old_machine,)
+                    ).fetchone()
+                    
+                    if not existing_ghost:
+                        # Only create a ghost from the ORIGINAL intervention (first reschedule only)
+                        conn.execute(
+                            """INSERT INTO planning_maintenance 
+                               (machine, client, date_prevue, technicien_assigne, type_maintenance, 
+                                recurrence, statut, description, notes, is_ghost)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (old_machine, old_client, old_date, "", old_type, 
+                             "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True)
+                        )
+                        conn.commit()
+                        logger.info(f"Ghost entry created for planning {planning_id}: {old_machine} on {old_date}")
+                    else:
+                        logger.info(f"Ghost already exists for {old_machine}, skipping (prevents duplicate ghosts)")
+                except Exception as e:
+                    logger.warning(f"Could not create ghost entry for planning {planning_id}: {e}")
+                    # Don't fail if ghost entry creation fails - main update already succeeded
+            
+            # Log audit
+            log_audit(
+                user.get("username", "unknown"),
+                "RESCHEDULE_PLANNING",
+                f"Planning {planning_id}: {update_data}"
+            )
+            
+            return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rescheduling planning {planning_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error rescheduling intervention: {str(e)}"
+        )
+
+
 @app.delete("/api/planning/{planning_id}")
 def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
     supprimer_planning(planning_id)
