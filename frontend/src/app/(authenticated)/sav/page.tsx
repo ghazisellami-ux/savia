@@ -632,7 +632,7 @@ export default function SavPage() {
   const totalInterv = filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+  const totalCout = filtered.reduce((a, b) => a + (b.cout || 0) + (b.coutPieces || 0), 0);
   const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
   const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
   const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
@@ -839,7 +839,7 @@ export default function SavPage() {
           { label: 'En cours', value: enCours, icon: <Clock className="w-5 h-5" />, color: 'text-yellow-400' },
           { label: 'Taux résol.', value: `${tauxResolution}%`, icon: <Target className="w-5 h-5" />, color: 'text-blue-400' },
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
-          { label: 'Coût total', value: `${(totalCout/1000).toFixed(0)}K`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
+          { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
         ].map(k => (
           <div key={k.label} className="glass rounded-xl p-3 text-center">
             <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
