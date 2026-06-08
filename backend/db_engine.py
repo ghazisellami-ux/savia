@@ -604,6 +604,9 @@ def init_db():
         _run_migration("ALTER TABLE pieces_rechange ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur pieces_rechange")
         _run_migration("ALTER TABLE pieces_rechange ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur pieces_rechange")
         _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
+        
+        # Migration: Ghost entry tracking for reschedule feature
+        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN is_ghost BOOLEAN DEFAULT false", "is_ghost sur planning_maintenance")
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         # NOTE: PRAGMA is SQLite-specific, skip for PostgreSQL
@@ -737,9 +740,6 @@ def init_db():
         # Travel time column on interventions
         _safe_add_column("interventions", "duree_deplacement", "INTEGER", "0")
 
-        # Ghost entry tracking for rescheduled interventions
-        _safe_add_column("planning_maintenance", "is_ghost", "BOOLEAN", "0")
-        
         # Ensure commit after all _safe_add_column migrations
         try:
             conn.commit()
@@ -748,6 +748,7 @@ def init_db():
                 conn.rollback()
             except Exception:
                 pass
+
 
 
         # Fabricants table
@@ -1038,21 +1039,21 @@ def init_db():
         # This allows reschedule feature to mark original date entries as "Décalé" (ghosted)
         if USE_PG:
             try:
-                # First check if "Décalé" is already in the constraint
+                # Check if "Décalé" is already in the constraint
                 cur = conn._conn.cursor()
                 cur.execute("""
-                    SELECT constraint_definition FROM information_schema.table_constraints tc 
-                    JOIN information_schema.check_constraints cc 
-                    ON tc.constraint_name = cc.constraint_name 
-                    WHERE tc.table_name='planning_maintenance' AND tc.constraint_type='CHECK'
+                    SELECT check_clause FROM information_schema.check_constraints 
+                    WHERE constraint_name LIKE 'planning_maintenance%'
                 """)
                 result = cur.fetchone()
                 
                 if result:
-                    constraint_def = result[0]
-                    if 'Décalé' not in constraint_def:
+                    check_clause = result[0]
+                    if check_clause and 'Décalé' not in check_clause:
                         # "Décalé" not in constraint, need to update it
-                        conn.execute("ALTER TABLE planning_maintenance DROP CONSTRAINT IF EXISTS planning_maintenance_statut_check")
+                        cur.execute("SELECT constraint_name FROM information_schema.check_constraints WHERE constraint_name LIKE 'planning_maintenance%'")
+                        constraint_name = cur.fetchone()[0]
+                        conn.execute(f"ALTER TABLE planning_maintenance DROP CONSTRAINT {constraint_name}")
                         conn.execute("""
                             ALTER TABLE planning_maintenance 
                             ADD CONSTRAINT planning_maintenance_statut_check 
@@ -1060,7 +1061,7 @@ def init_db():
                         """)
                         conn.commit()
                         logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
-                    else:
+                    elif check_clause and 'Décalé' in check_clause:
                         logger.info("ℹ️  'Décalé' already in planning_maintenance statut constraint")
                 else:
                     # No constraint found, create it
@@ -1076,7 +1077,7 @@ def init_db():
                     conn.rollback()
                 except Exception:
                     pass
-                logger.debug(f"Migration planning_maintenance statut check ignorée: {e}")
+                logger.debug(f"⚠️  Migration planning_maintenance statut check: {e}")
 
 
         # --- Migration: Populate contrats_equipements from existing contrats.equipement ---
