@@ -8,6 +8,7 @@ import {
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
+  ChevronDown,
 } from 'lucide-react';
 import { admin, techniciens, clients } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -134,6 +135,7 @@ interface Technicien {
   nom: string;
   prenom: string;
   specialite: string;
+  competences?: Array<{ domaine: string; modalites: string[] }>;
   qualification: string;
   niveau_competence: string;
   dispo: string;
@@ -145,13 +147,40 @@ interface Technicien {
 const emptyUser = () => ({
   username: '', password: '', nom_complet: '', email: '', profileId: 'lecteur', client: '', actif: true,
 });
-const SPECIALITES = ['Scanner CT', 'IRM', 'Radiographie', 'Mammographie', 'Échographie', 'DICOM / Informatique médicale', 'Général'];
+const SPECIALITES = ['Radiologie', 'POC', 'Ultrason', 'Autre'];
 const NIVEAUX = ['Junior', 'Intermédiaire', 'Senior', 'Expert'];
 
+// Domaines médicaux et leurs modalités
+const DOMAINES_MEDICAUX: Record<string, string[]> = {
+  'Radiologie': ['Scanner CT', 'IRM', 'Radiographie', 'Mammographie', 'Fluoroscopie', 'Angiographie', 'Radiographie conventionnelle', 'CBCT (Cone Beam CT)', 'Ostéodensitométrie (DXA)', 'Amplificateur de brillance'],
+  'POC': ['Échographie', 'ECG', 'Capnographie', 'Oxymétrie', 'Tension artérielle', 'Thermographie'],
+  'Ultrason': ['Échographie abdominale', 'Échographie cardiaque', 'Échographie vasculaire', 'Échographie musculosquelettique', 'Échographie gynécologique', 'Élastographie'],
+  'Autre': [],
+};
+
 const emptyTech = () => ({
-  nom: '', prenom: '', specialite: '', qualification: '',
+  nom: '', prenom: '', specialite: '', competences: [], qualification: '',
   niveau_competence: 'Intermédiaire', email: '', telephone: '', telegram_id: '',
 });
+
+// Fonction pour formater les compétences pour l'affichage
+const formatCompetences = (specialiteStr: string): string => {
+  if (!specialiteStr) return '';
+  try {
+    // Essayer de parser comme JSON si ça commence par [
+    if (specialiteStr.startsWith('[')) {
+      const competences = JSON.parse(specialiteStr);
+      if (Array.isArray(competences) && competences.length > 0) {
+        return competences
+          .map(c => `${c.domaine}: ${(c.modalites || []).join(', ')}`)
+          .join('\n');
+      }
+    }
+  } catch (e) {
+    // Fallback: retourner le texte tel quel si ce n'est pas du JSON valide
+  }
+  return specialiteStr;
+};
 
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
@@ -212,8 +241,14 @@ export default function AdminPage() {
   const [showAddTech, setShowAddTech] = useState(false);
   const [editingTech, setEditingTech] = useState<Technicien | null>(null);
   const [techForm, setTechForm] = useState(emptyTech());
+  const [customModalite, setCustomModalite] = useState('');
+  const [customModaliteDomaine, setCustomModaliteDomaine] = useState('');
+  const [customDomaine, setCustomDomaine] = useState('');
+  const [customModalitesPerDomaine, setCustomModalitesPerDomaine] = useState<Record<string, string[]>>({});
   const [isSavingTech, setIsSavingTech] = useState(false);
   const [techMsg, setTechMsg] = useState('');
+  const [modalitesDropdownOpen, setModalitesDropdownOpen] = useState<string | null>(null);
+  const [allMedicalDomains, setAllMedicalDomains] = useState<string[]>(Object.keys(DOMAINES_MEDICAUX));
 
   const load = useCallback(async () => {
     try {
@@ -233,18 +268,58 @@ export default function AdminPage() {
           ? (DEFAULT_PROFILES.find(p => p.nom === item.profil)?.id || ROLE_PROFILE_MAP[item.role] || 'lecteur')
           : (ROLE_PROFILE_MAP[item.role] || 'lecteur'),
       })));
-      setTechs((techsRes as any[]).map((item: any) => ({
-        id: item.id || 0,
-        nom: item.nom || '',
-        prenom: item.prenom || '',
-        specialite: item.specialite || 'Général',
-        qualification: item.qualification || '',
-        niveau_competence: item.niveau_competence || 'Junior',
-        dispo: typeof item.dispo === 'number' ? (item.dispo ? 'Disponible' : 'Indisponible') : (item.dispo || 'Disponible'),
-        email: item.email || '',
-        telephone: item.telephone || '',
-        telegram_id: item.telegram_id || '',
-      })));
+      
+      const mappedTechs = (techsRes as any[]).map((item: any) => {
+        // Parser les compétences: JSON format {domaine: string, modalites: string[]}[]
+        let competencesArray: Array<{ domaine: string; modalites: string[] }> = [];
+        if (item.specialite) {
+          try {
+            // Essayer de parser comme JSON
+            if (item.specialite.startsWith('[')) {
+              competencesArray = JSON.parse(item.specialite);
+            } else {
+              // Fallback: format ancien (chaîne simple)
+              competencesArray = [];
+            }
+          } catch (e) {
+            competencesArray = [];
+          }
+        }
+        return {
+          id: item.id || 0,
+          nom: item.nom || '',
+          prenom: item.prenom || '',
+          specialite: item.specialite || '',
+          competences: competencesArray,
+          qualification: item.qualification || '',
+          niveau_competence: item.niveau_competence || 'Junior',
+          dispo: typeof item.dispo === 'number' ? (item.dispo ? 'Disponible' : 'Indisponible') : (item.dispo || 'Disponible'),
+          email: item.email || '',
+          telephone: item.telephone || '',
+          telegram_id: item.telegram_id || '',
+        };
+      });
+      setTechs(mappedTechs);
+      
+      // Extraire les modalités personnalisées par domaine
+      const customMod: Record<string, Set<string>> = {};
+      mappedTechs.forEach(t => {
+        (t.competences || []).forEach(c => {
+          if (!customMod[c.domaine]) customMod[c.domaine] = new Set();
+          (c.modalites || []).forEach(m => {
+            if (!DOMAINES_MEDICAUX[c.domaine]?.includes(m)) {
+              customMod[c.domaine].add(m);
+            }
+          });
+        });
+      });
+      
+      // Convertir en objet pour le state
+      const customModObj: Record<string, string[]> = {};
+      Object.keys(customMod).forEach(dom => {
+        customModObj[dom] = Array.from(customMod[dom]).sort();
+      });
+      setCustomModalitesPerDomaine(customModObj);
 
       // Charger les permissions depuis la BD et les appliquer aux profils
       try {
@@ -338,15 +413,29 @@ export default function AdminPage() {
     if (!techForm.nom.trim()) return;
     setIsSavingTech(true); setTechMsg('');
     try {
+      // Sérialiser les compétences en JSON
+      const competencesJSON = JSON.stringify(techForm.competences || []);
+
+      const dataToSave = {
+        ...techForm,
+        specialite: competencesJSON,
+        competences: techForm.competences || [],
+      };
+
       if (editingTech) {
-        await techniciens.update(editingTech.id, techForm as any);
+        await techniciens.update(editingTech.id, dataToSave as any);
       } else {
-        await techniciens.create(techForm);
+        await techniciens.create(dataToSave as any);
       }
       setTechForm(emptyTech());
+      setCustomModalite('');
+      setCustomModaliteDomaine('');
+      setCustomDomaine('');
+      setModalitesDropdownOpen(null);
       setShowAddTech(false);
       setEditingTech(null);
       setTechMsg('');
+      // Recharger pour mettre à jour la liste des modalités personnalisées
       await load();
     } catch (err: any) {
       setTechMsg(`❌ ${err?.message || 'Erreur'}`);
@@ -354,10 +443,24 @@ export default function AdminPage() {
   };
   const setT = (k: string, v: string) => setTechForm(f => ({ ...f, [k]: v }));
 
-  const openAddTech = () => { setEditingTech(null); setTechForm(emptyTech()); setTechMsg(''); setShowAddTech(true); };
+  const openAddTech = () => { setEditingTech(null); setTechForm(emptyTech()); setCustomModalite(''); setCustomModaliteDomaine(''); setCustomDomaine(''); setModalitesDropdownOpen(null); setTechMsg(''); setShowAddTech(true); };
   const openEditTech = (t: Technicien) => {
     setEditingTech(t);
-    setTechForm({ nom: t.nom, prenom: t.prenom, specialite: t.specialite, qualification: t.qualification, niveau_competence: t.niveau_competence || 'Intermédiaire', email: t.email, telephone: t.telephone, telegram_id: t.telegram_id });
+    setTechForm({
+      nom: t.nom,
+      prenom: t.prenom,
+      specialite: t.specialite,
+      competences: t.competences || [],
+      qualification: t.qualification,
+      niveau_competence: t.niveau_competence || 'Intermédiaire',
+      email: t.email,
+      telephone: t.telephone,
+      telegram_id: t.telegram_id,
+    });
+    setCustomModalite('');
+    setCustomModaliteDomaine('');
+    setCustomDomaine('');
+    setModalitesDropdownOpen(null);
     setTechMsg('');
     setShowAddTech(true);
   };
@@ -604,7 +707,11 @@ export default function AdminPage() {
                       <div className="font-semibold">{t.nom} {t.prenom}</div>
                       <div className="text-xs text-savia-text-muted">{t.qualification}</div>
                     </td>
-                    <td className="py-2.5 px-3 text-sm">{t.specialite}</td>
+                    <td className="py-2.5 px-3 text-sm">
+                      <div className="whitespace-pre-wrap text-xs leading-relaxed">
+                        {formatCompetences(t.specialite)}
+                      </div>
+                    </td>
                     <td className="py-2.5 px-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
                         t.niveau_competence === 'Expert' ? 'bg-purple-500/10 text-purple-400' :
@@ -784,7 +891,7 @@ export default function AdminPage() {
                     }}>
                     <option value="">— Sélectionner un technicien —</option>
                     {techs.map(t => (
-                      <option key={t.id} value={t.id}>{t.nom} {t.prenom} — {t.specialite}</option>
+                      <option key={t.id} value={t.id}>{t.nom} {t.prenom}</option>
                     ))}
                   </select>
                 </div>
@@ -917,36 +1024,348 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              {/* Compétences */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className={LABEL}>Spécialité</label>
-                  <select className={INPUT} value={techForm.specialite} onChange={e => setT('specialite', e.target.value)}>
-                    <option value="">— Sélectionner —</option>
-                    {SPECIALITES.map(s => <option key={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className={LABEL}>Niveau de compétence</label>
-                  <div className="flex gap-1.5">
-                    {NIVEAUX.map(n => (
-                      <button key={n} type="button" onClick={() => setT('niveau_competence', n)}
-                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
-                          techForm.niveau_competence === n
-                            ? n === 'Expert' ? 'bg-purple-500/20 text-purple-400 border-purple-500/40'
-                              : n === 'Senior' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
-                              : n === 'Intermédiaire' ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-                              : 'bg-green-500/20 text-green-400 border-green-500/40'
-                            : 'border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
-                        }`}>{n}</button>
-                    ))}
+              {/* Compétences Médicales - NEW REFACTORED VERSION */}
+              <div>
+                <label className={LABEL}>Compétences Médicales</label>
+                <div className="space-y-3">
+                  {/* 1. Sélecteur de domaine + option "Autre" */}
+                  <div className="bg-savia-surface rounded-lg p-4 border border-savia-border space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Dropdown domaine */}
+                      <div>
+                        <label className="text-xs text-savia-text-muted font-semibold mb-2 block uppercase tracking-wider">Domaine Médical</label>
+                        <select
+                          className={INPUT}
+                          value={customModaliteDomaine}
+                          onChange={e => {
+                            setCustomModaliteDomaine(e.target.value);
+                            setCustomDomaine('');
+                            setCustomModalite('');
+                            setModalitesDropdownOpen(null);
+                          }}
+                        >
+                          <option value="">— Sélectionner —</option>
+                          {allMedicalDomains.map(d => (
+                            <option key={d}>{d}</option>
+                          ))}
+                          <option value="__OTHER__">Autre (saisie manuelle)</option>
+                        </select>
+                      </div>
+
+                      {/* Champ "Autre domaine" (si "Autre" sélectionné) */}
+                      {customModaliteDomaine === '__OTHER__' && (
+                        <div>
+                          <label className="text-xs text-savia-text-muted font-semibold mb-2 block uppercase tracking-wider">Nouveau Domaine</label>
+                          <input
+                            type="text"
+                            className={INPUT}
+                            placeholder="Ex: Tomographie, Scanographie..."
+                            value={customDomaine}
+                            onChange={e => setCustomDomaine(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && customDomaine.trim()) {
+                                e.preventDefault();
+                                const domaineName = customDomaine.trim();
+                                if (!allMedicalDomains.includes(domaineName)) {
+                                  setAllMedicalDomains(prev => [...prev, domaineName]);
+                                }
+                                setCustomModaliteDomaine(domaineName);
+                                setCustomDomaine('');
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Confirmer nouveau domaine si "Autre" mode */}
+                    {customModaliteDomaine === '__OTHER__' && customDomaine.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const domaineName = customDomaine.trim();
+                          if (!allMedicalDomains.includes(domaineName)) {
+                            setAllMedicalDomains(prev => [...prev, domaineName]);
+                          }
+                          setCustomModaliteDomaine(domaineName);
+                          setCustomDomaine('');
+                        }}
+                        className="w-full px-4 py-2 rounded-lg bg-savia-accent text-white text-sm font-bold hover:bg-savia-accent/90 transition-all cursor-pointer"
+                      >
+                        Utiliser ce domaine
+                      </button>
+                    )}
                   </div>
+
+                  {/* 2. Multi-select Modalités (collapsible dropdown) - quand domaine sélectionné */}
+                  {customModaliteDomaine && customModaliteDomaine !== '__OTHER__' && (
+                    <div className="bg-savia-surface rounded-lg p-4 border border-savia-border space-y-3">
+                      {/* Affichage des modalités sélectionnées pour ce domaine */}
+                      {techForm.competences?.find(c => c.domaine === customModaliteDomaine)?.modalites.length || 0 > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {techForm.competences
+                            ?.find(c => c.domaine === customModaliteDomaine)
+                            ?.modalites.map(mod => (
+                              <span key={`chip-${customModaliteDomaine}-${mod}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-savia-accent/15 text-savia-accent text-xs font-semibold border border-savia-accent/30">
+                                {mod}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    let comps = [...(techForm.competences || [])];
+                                    const existing = comps.find(c => c.domaine === customModaliteDomaine);
+                                    if (existing) {
+                                      existing.modalites = existing.modalites.filter(m => m !== mod);
+                                      if (existing.modalites.length === 0) {
+                                        comps = comps.filter(c => c.domaine !== customModaliteDomaine);
+                                      }
+                                    }
+                                    setTechForm(f => ({ ...f, competences: comps }));
+                                  }}
+                                  className="hover:text-red-400 cursor-pointer ml-0.5"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                        </div>
+                      )}
+
+                      {/* Dropdown button */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setModalitesDropdownOpen(modalitesDropdownOpen === customModaliteDomaine ? null : customModaliteDomaine)}
+                          className={`${INPUT} flex items-center justify-between cursor-pointer text-left`}
+                        >
+                          <span className={modalitesDropdownOpen === customModaliteDomaine ? 'text-savia-accent font-semibold' : 'text-savia-text-dim'}>
+                            {modalitesDropdownOpen === customModaliteDomaine ? '▼ Sélectionnez les modalités' : '▶ Ajouter des modalités'}
+                          </span>
+                          <ChevronDown className={`w-4 h-4 transition-transform ${modalitesDropdownOpen === customModaliteDomaine ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {/* Dropdown content */}
+                        {modalitesDropdownOpen === customModaliteDomaine && (
+                          <div className="absolute z-20 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                            {/* Prédéfinies */}
+                            {(DOMAINES_MEDICAUX[customModaliteDomaine] || []).map(mod => {
+                              const isSelected = techForm.competences?.find(c => c.domaine === customModaliteDomaine)?.modalites.includes(mod);
+                              return (
+                                <button
+                                  key={`pred-${customModaliteDomaine}-${mod}`}
+                                  type="button"
+                                  onClick={() => {
+                                    let comps = [...(techForm.competences || [])];
+                                    let existing = comps.find(c => c.domaine === customModaliteDomaine);
+                                    if (isSelected) {
+                                      if (existing) {
+                                        existing.modalites = existing.modalites.filter(m => m !== mod);
+                                        if (existing.modalites.length === 0) {
+                                          comps = comps.filter(c => c.domaine !== customModaliteDomaine);
+                                        }
+                                      }
+                                    } else {
+                                      if (!existing) {
+                                        existing = { domaine: customModaliteDomaine, modalites: [] };
+                                        comps.push(existing);
+                                      }
+                                      existing.modalites.push(mod);
+                                    }
+                                    setTechForm(f => ({ ...f, competences: comps }));
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                                    isSelected ? 'text-savia-accent font-semibold' : 'text-savia-text'
+                                  }`}
+                                >
+                                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                                    isSelected ? 'bg-savia-accent border-savia-accent' : 'border-savia-border'
+                                  }`}>
+                                    {isSelected && <Check className="w-3 h-3 text-white" />}
+                                  </div>
+                                  {mod}
+                                </button>
+                              );
+                            })}
+
+                            {/* Séparateur si modalités perso */}
+                            {(customModalitesPerDomaine[customModaliteDomaine] || []).length > 0 && (DOMAINES_MEDICAUX[customModaliteDomaine] || []).length > 0 && (
+                              <div className="border-t border-savia-border/30 my-1" />
+                            )}
+
+                            {/* Modalités personnalisées */}
+                            {(customModalitesPerDomaine[customModaliteDomaine] || []).map(mod => {
+                              const isSelected = techForm.competences?.find(c => c.domaine === customModaliteDomaine)?.modalites.includes(mod);
+                              return (
+                                <button
+                                  key={`custom-${customModaliteDomaine}-${mod}`}
+                                  type="button"
+                                  onClick={() => {
+                                    let comps = [...(techForm.competences || [])];
+                                    let existing = comps.find(c => c.domaine === customModaliteDomaine);
+                                    if (isSelected) {
+                                      if (existing) {
+                                        existing.modalites = existing.modalites.filter(m => m !== mod);
+                                        if (existing.modalites.length === 0) {
+                                          comps = comps.filter(c => c.domaine !== customModaliteDomaine);
+                                        }
+                                      }
+                                    } else {
+                                      if (!existing) {
+                                        existing = { domaine: customModaliteDomaine, modalites: [] };
+                                        comps.push(existing);
+                                      }
+                                      existing.modalites.push(mod);
+                                    }
+                                    setTechForm(f => ({ ...f, competences: comps }));
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                                    isSelected ? 'text-amber-400 font-semibold' : 'text-amber-200/60'
+                                  }`}
+                                >
+                                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                                    isSelected ? 'bg-amber-500 border-amber-500' : 'border-amber-500/30'
+                                  }`}>
+                                    {isSelected && <Check className="w-3 h-3 text-white" />}
+                                  </div>
+                                  <span className="italic text-amber-300">+</span> {mod}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Ajouter "Autre" modalité pour ce domaine */}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          className={`${INPUT} flex-1`}
+                          placeholder="Autre modalité (saisie manuelle)"
+                          value={customModalite}
+                          onChange={e => setCustomModalite(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && customModalite.trim()) {
+                              e.preventDefault();
+                              const mod = customModalite.trim();
+                              let comps = [...(techForm.competences || [])];
+                              let existing = comps.find(c => c.domaine === customModaliteDomaine);
+                              if (!existing) {
+                                existing = { domaine: customModaliteDomaine, modalites: [] };
+                                comps.push(existing);
+                              }
+                              if (!existing.modalites.includes(mod)) {
+                                existing.modalites.push(mod);
+                                // Ajouter à la liste des modalités perso
+                                setCustomModalitesPerDomaine(prev => ({
+                                  ...prev,
+                                  [customModaliteDomaine]: [...(prev[customModaliteDomaine] || []), mod].filter((v, i, a) => a.indexOf(v) === i),
+                                }));
+                              }
+                              setTechForm(f => ({ ...f, competences: comps }));
+                              setCustomModalite('');
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (customModalite.trim()) {
+                              const mod = customModalite.trim();
+                              let comps = [...(techForm.competences || [])];
+                              let existing = comps.find(c => c.domaine === customModaliteDomaine);
+                              if (!existing) {
+                                existing = { domaine: customModaliteDomaine, modalites: [] };
+                                comps.push(existing);
+                              }
+                              if (!existing.modalites.includes(mod)) {
+                                existing.modalites.push(mod);
+                                setCustomModalitesPerDomaine(prev => ({
+                                  ...prev,
+                                  [customModaliteDomaine]: [...(prev[customModaliteDomaine] || []), mod].filter((v, i, a) => a.indexOf(v) === i),
+                                }));
+                              }
+                              setTechForm(f => ({ ...f, competences: comps }));
+                              setCustomModalite('');
+                            }
+                          }}
+                          disabled={!customModalite.trim()}
+                          className="px-4 py-2 rounded-lg bg-savia-accent text-white text-sm font-bold hover:bg-savia-accent/90 transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                        >
+                          Ajouter
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Tags affichage final */}
+                  {(techForm.competences || []).length > 0 && (
+                    <div className="bg-savia-accent/5 rounded-lg p-3 border border-savia-accent/20">
+                      <div className="text-xs text-savia-text-muted font-semibold mb-3 uppercase tracking-wider">Récapitulatif des Compétences</div>
+                      <div className="space-y-2">
+                        {(techForm.competences || []).map(comp => (
+                          <div key={comp.domaine} className="flex items-start gap-2 p-2 rounded-lg bg-savia-surface/50 border border-savia-border/30">
+                            <span className="px-2.5 py-1 rounded-full bg-savia-accent/20 text-savia-accent text-xs font-bold whitespace-nowrap mt-0.5">
+                              {comp.domaine}
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 flex-1">
+                              {comp.modalites.map(mod => {
+                                const isCustom = (customModalitesPerDomaine[comp.domaine] || []).includes(mod);
+                                return (
+                                  <span key={`recap-${comp.domaine}-${mod}`} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                    isCustom ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' : 'bg-savia-accent/10 text-savia-accent border border-savia-accent/30'
+                                  }`}>
+                                    {isCustom && <span className="italic text-amber-300">+</span>}
+                                    {mod}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        let comps = [...(techForm.competences || [])];
+                                        const existing = comps.find(c => c.domaine === comp.domaine);
+                                        if (existing) {
+                                          existing.modalites = existing.modalites.filter(m => m !== mod);
+                                          if (existing.modalites.length === 0) {
+                                            comps = comps.filter(c => c.domaine !== comp.domaine);
+                                          }
+                                        }
+                                        setTechForm(f => ({ ...f, competences: comps }));
+                                      }}
+                                      className="hover:opacity-70 cursor-pointer text-base leading-none ml-0.5"
+                                    >
+                                      ✕
+                                    </button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
+              {/* Qualification */}
               <div>
                 <label className={LABEL}>Qualification</label>
                 <input className={INPUT} placeholder="Ex: Ingénieur Biomédical" value={techForm.qualification} onChange={e => setT('qualification', e.target.value)} />
+              </div>
+
+              {/* Niveau de Compétence */}
+              <div>
+                <label className={LABEL}>Niveau de Compétence Global</label>
+                <div className="flex gap-1.5">
+                  {NIVEAUX.map(n => (
+                    <button key={n} type="button" onClick={() => setT('niveau_competence', n)}
+                      className={`flex-1 py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                        techForm.niveau_competence === n
+                          ? n === 'Expert' ? 'bg-purple-500/20 text-purple-400 border-purple-500/40'
+                            : n === 'Senior' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
+                            : n === 'Intermédiaire' ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                            : 'bg-green-500/20 text-green-400 border-green-500/40'
+                          : 'border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
+                      }`}>{n}</button>
+                  ))}
+                </div>
               </div>
 
               {/* Contact */}
