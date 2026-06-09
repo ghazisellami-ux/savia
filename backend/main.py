@@ -3318,6 +3318,15 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             )
             
             return {"ok": True}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rescheduling planning {planning_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error rescheduling intervention: {str(e)}"
+        )
 
 
 @app.delete("/api/planning/cleanup-ghosts/{machine}")
