@@ -3234,6 +3234,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
     
     new_date = body.get("date_planifiee")
     new_technicians = body.get("technicien_assigne")
+    reason = body.get("reason", "").strip()  # ← Add reason support
     
     if not new_date and new_technicians is None:
         raise HTTPException(
@@ -3264,6 +3265,14 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             if new_technicians is not None:
                 update_data["technicien_assigne"] = new_technicians
             
+            # ← Add reason to notes if provided
+            if reason:
+                old_notes = current.get("notes", "")
+                new_notes = f"[Raison décalage] {reason}"
+                if old_notes:
+                    new_notes = f"{old_notes} | {new_notes}"
+                update_data["notes"] = new_notes
+            
             if update_data:
                 set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
                 values = list(update_data.values()) + [planning_id]
@@ -3285,27 +3294,51 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     old_notes = current.get("notes", "")
                     old_type = current.get("type_maintenance", "Préventive")
                     
-                    # Check if a ghost ALREADY EXISTS for this machine (any date with is_ghost=true)
-                    # This prevents creating multiple ghosts from the same original intervention
+                    # Check if a ghost ALREADY EXISTS for this ORIGINAL planning
+                    # Using original_planning_id to link ghost to its source intervention
+                    # This prevents duplicate ghosts when same intervention is rescheduled multiple times
                     existing_ghost = conn.execute(
-                        "SELECT id FROM planning_maintenance WHERE machine = ? AND is_ghost = true",
-                        (old_machine,)
+                        "SELECT id FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
+                        (planning_id,)
                     ).fetchone()
                     
                     if not existing_ghost:
-                        # Only create a ghost from the ORIGINAL intervention (first reschedule only)
+                        # Create a ghost from the ORIGINAL intervention at the old date
+                        # Set original_planning_id to track that this ghost belongs to planning_id
                         conn.execute(
                             """INSERT INTO planning_maintenance 
                                (machine, client, date_prevue, technicien_assigne, type_maintenance, 
-                                recurrence, statut, description, notes, is_ghost)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                recurrence, statut, description, notes, is_ghost, original_planning_id)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (old_machine, old_client, old_date, "", old_type, 
-                             "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True)
+                             "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True, planning_id)
                         )
                         conn.commit()
                         logger.info(f"Ghost entry created for planning {planning_id}: {old_machine} on {old_date}")
                     else:
-                        logger.info(f"Ghost already exists for {old_machine}, skipping (prevents duplicate ghosts)")
+                        # Ghost already exists - update its notes to accumulate all reschedule reasons
+                        ghost_id = existing_ghost.get("id")
+                        ghost_current = conn.execute(
+                            "SELECT notes FROM planning_maintenance WHERE id = ?",
+                            (ghost_id,)
+                        ).fetchone()
+                        ghost_notes = ghost_current.get("notes", "") if ghost_current else ""
+                        
+                        # Append reason if provided and not already there
+                        if reason:
+                            new_reason_line = f"[Raison décalage] {reason}"
+                            if new_reason_line not in ghost_notes:
+                                if ghost_notes:
+                                    updated_notes = f"{ghost_notes} | {new_reason_line}"
+                                else:
+                                    updated_notes = new_reason_line
+                                conn.execute(
+                                    "UPDATE planning_maintenance SET notes = ? WHERE id = ?",
+                                    (updated_notes, ghost_id)
+                                )
+                                conn.commit()
+                                logger.info(f"Ghost {ghost_id} notes updated with reschedule reason")
+                        logger.info(f"Ghost already exists for planning {planning_id}, notes accumulated")
                 except Exception as e:
                     logger.warning(f"Could not create ghost entry for planning {planning_id}: {e}")
                     # Don't fail if ghost entry creation fails - main update already succeeded
@@ -3318,7 +3351,6 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             )
             
             return {"ok": True}
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -3326,38 +3358,6 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error rescheduling intervention: {str(e)}"
-        )
-
-
-@app.delete("/api/planning/cleanup-ghosts/{machine}")
-def cleanup_ghosts_for_machine(machine: str, user: dict = Depends(_verify_token)):
-    """Admin-only endpoint to cleanup ghost entries for a specific machine.
-    Useful for recovering from duplicate ghost entries.
-    """
-    if user.get("role") not in ["Admin", "Manager"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Admin and Manager can cleanup ghosts"
-        )
-    
-    try:
-        with get_db() as conn:
-            # Delete ghosts for this specific machine
-            conn.execute(
-                "DELETE FROM planning_maintenance WHERE is_ghost = true AND machine = ?",
-                (machine,)
-            )
-            conn.commit()
-            deleted_count = conn.total_changes
-            
-            logger.info(f"Cleanup: Deleted {deleted_count} ghost(s) for machine {machine}")
-            
-            return {"ok": True, "deleted": deleted_count, "machine": machine}
-    except Exception as e:
-        logger.error(f"Error cleaning up ghosts for {machine}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not cleanup ghosts: {e}"
         )
 
 
