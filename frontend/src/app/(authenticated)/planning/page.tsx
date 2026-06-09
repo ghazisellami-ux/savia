@@ -140,7 +140,7 @@ export default function PlanningPage() {
   // Reschedule modal
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<PlanItem | null>(null);
-  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '' });
+  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '', reason: '' });
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
@@ -318,6 +318,7 @@ export default function PlanningPage() {
     setRescheduleForm({
       newDate: intervention.date_planifiee,
       newTechs: intervention.technicien,
+      reason: '',
     });
     setRescheduleError('');
     setShowRescheduleModal(true);
@@ -337,10 +338,11 @@ export default function PlanningPage() {
       await planning.reschedule(selectedIntervention.id, {
         date_planifiee: rescheduleForm.newDate,
         technicien_assigne: rescheduleForm.newTechs,
+        reason: rescheduleForm.reason,
       });
       setShowRescheduleModal(false);
       setSelectedIntervention(null);
-      setRescheduleForm({ newDate: '', newTechs: '' });
+      setRescheduleForm({ newDate: '', newTechs: '', reason: '' });
       await loadData();
     } catch (err: any) {
       console.error(err);
@@ -1068,6 +1070,19 @@ export default function PlanningPage() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Raison du décalage */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <StickyNote className="w-3.5 h-3.5 text-savia-accent" /> Raison du décalage (optionnel)
+                </label>
+                <textarea
+                  placeholder="Ex: Client indisponible, pièce non disponible, urgence prioritaire..."
+                  className={INPUT_CLS + ' resize-none min-h-20 py-2'}
+                  value={rescheduleForm.reason}
+                  onChange={e => setRescheduleForm({...rescheduleForm, reason: e.target.value})}
+                />
               </div>
             </div>
 
