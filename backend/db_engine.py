@@ -712,6 +712,9 @@ def init_db():
         _safe_add_column("contrats", "date_premiere_maintenance")
         _safe_add_column("planning_maintenance", "contrat_id", "INTEGER", "NULL")
 
+        # Ghost entry tracking for reschedule feature (prevent duplicates on multiple reschedules)
+        _safe_add_column("planning_maintenance", "original_planning_id", "INTEGER", "NULL")
+
         # User profile & page permissions (used by admin panel)
         _safe_add_column("utilisateurs", "profil")
         _safe_add_column("utilisateurs", "pages_autorisees")
