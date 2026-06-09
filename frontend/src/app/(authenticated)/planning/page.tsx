@@ -6,10 +6,11 @@ import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
-  ChevronDown, Check, Download, MapPin, Stethoscope
+  ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
+import { exportComparateurToCSV, exportComparateurToJSON, exportComparateurToPDF, getComparateurSummary } from '@/lib/export';
 import { useAuth } from '@/lib/auth-context';
 
 // Import domaines API
@@ -144,6 +145,13 @@ export default function PlanningPage() {
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
+
+  // Comparateur export modal
+  const [showComparateurModal, setShowComparateurModal] = useState(false);
+  const [selectedForComparateur, setSelectedForComparateur] = useState<PlanItem | null>(null);
+  const [comparateurData, setComparateurData] = useState<any>(null);
+  const [isLoadingComparateur, setIsLoadingComparateur] = useState(false);
+  const [comparateurError, setComparateurError] = useState('');
 
   // Table filters — Toutes les Maintenances
   const [filterClient,  setFilterClient]  = useState('Tous');
@@ -349,6 +357,49 @@ export default function PlanningPage() {
       setRescheduleError(err.message || 'Erreur lors du décalage. Veuillez réessayer.');
     } finally {
       setIsRescheduling(false);
+    }
+  };
+
+  const handleOpenComparateur = async (intervention: PlanItem) => {
+    setSelectedForComparateur(intervention);
+    setComparateurError('');
+    setComparateurData(null);
+    setIsLoadingComparateur(true);
+    setShowComparateurModal(true);
+    
+    try {
+      const data = await planning.comparateur(intervention.id);
+      setComparateurData(data);
+    } catch (err: any) {
+      console.error('Comparateur error:', err);
+      setComparateurError(err.message || 'Erreur lors du chargement du comparateur');
+    } finally {
+      setIsLoadingComparateur(false);
+    }
+  };
+
+  const handleExportComparateur = async (format: 'csv' | 'pdf' | 'json') => {
+    if (!comparateurData) return;
+    
+    try {
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const machine = comparateurData.machine || 'intervention';
+      const filename = `comparateur_${machine}_${timestamp}`;
+      
+      switch (format) {
+        case 'csv':
+          exportComparateurToCSV(comparateurData, `${filename}.csv`);
+          break;
+        case 'json':
+          exportComparateurToJSON(comparateurData, `${filename}.json`);
+          break;
+        case 'pdf':
+          await exportComparateurToPDF(comparateurData, `${filename}.pdf`);
+          break;
+      }
+    } catch (err: any) {
+      console.error('Export error:', err);
+      alert(`Erreur export ${format.toUpperCase()}: ${err.message || 'Erreur'}`);
     }
   };
 
@@ -579,6 +630,22 @@ export default function PlanningPage() {
               <X className="w-3 h-3" /> Réinitialiser
             </button>
           )}
+          {/* Comparateur Export */}
+          <button
+            onClick={() => {
+              if (filteredData.length === 0) {
+                alert('Sélectionnez une maintenance à comparer');
+                return;
+              }
+              // For now, show first intervention in filtered list
+              if (filteredData.length > 0) {
+                handleOpenComparateur(filteredData[0]);
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-cyan-400 hover:bg-cyan-400/10 border border-cyan-400/30 transition-all cursor-pointer"
+          >
+            <BarChart3 className="w-3.5 h-3.5" /> Comparateur
+          </button>
           {/* PDF Download */}
           <button
             onClick={async () => {
@@ -608,7 +675,7 @@ export default function PlanningPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-surface z-10">
                 <tr className="border-b border-savia-border">
-                  {['Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
+                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
                     <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -632,6 +699,7 @@ export default function PlanningPage() {
                     const isOverdue = automaticStatus === 'En retard';
                     return (
                       <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
+                        <td className="py-2 px-3 text-xs font-mono whitespace-nowrap text-savia-text-muted">#{ev.id}</td>
                         <td className="py-2 px-3 text-xs font-mono whitespace-nowrap">
                           {hasDate ? ev.date_planifiee.substring(0, 10) : <span className="text-savia-text-dim italic">Sans date</span>}
                         </td>
@@ -1097,6 +1165,132 @@ export default function PlanningPage() {
                 {isRescheduling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 Décaler
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comparateur Modal */}
+      {showComparateurModal && selectedForComparateur && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowComparateurModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-2xl shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border/50">
+              <h2 className="text-lg font-black gradient-text flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" /> Comparateur Planning
+              </h2>
+              <button onClick={() => setShowComparateurModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+              {isLoadingComparateur ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-savia-accent" />
+                </div>
+              ) : comparateurError ? (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
+                  Erreur: {comparateurError}
+                </div>
+              ) : comparateurData && !comparateurData.has_ghost ? (
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-blue-400">
+                  Aucun décalage trouvé pour cette intervention. Il n'y a pas de ghost entry.
+                </div>
+              ) : comparateurData ? (
+                <>
+                  {/* Summary */}
+                  <div className="bg-savia-surface-hover rounded-lg p-4 border border-savia-border/30">
+                    <div className="text-sm font-semibold text-savia-accent mb-2">Résumé</div>
+                    <div className="text-sm text-savia-text">{getComparateurSummary(comparateurData)}</div>
+                  </div>
+
+                  {/* Equipment Info */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Machine</div>
+                      <div className="text-sm text-savia-text">{comparateurData.machine}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Client</div>
+                      <div className="text-sm text-savia-text">{comparateurData.client}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Type</div>
+                      <div className="text-sm text-savia-text">{comparateurData.type_maintenance}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Description</div>
+                      <div className="text-sm text-savia-text truncate">{comparateurData.description}</div>
+                    </div>
+                  </div>
+
+                  {/* Comparison */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Planning Réel */}
+                    <div className="bg-green-500/5 border border-green-500/30 rounded-lg p-3">
+                      <div className="text-xs font-semibold text-green-400 mb-2">Planning Réel (Nouvelle date)</div>
+                      <div className="space-y-1.5 text-xs">
+                        <div><span className="text-savia-text-muted">Date:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.date}</span></div>
+                        <div><span className="text-savia-text-muted">Technicien:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.technicien || 'Non assigné'}</span></div>
+                        <div><span className="text-savia-text-muted">Statut:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.statut}</span></div>
+                      </div>
+                    </div>
+
+                    {/* Planning Décalé */}
+                    {comparateurData.ghost && (
+                      <div className="bg-gray-500/5 border border-gray-500/30 rounded-lg p-3">
+                        <div className="text-xs font-semibold text-gray-400 mb-2">Planning Décalé (Date originale)</div>
+                        <div className="space-y-1.5 text-xs">
+                          <div><span className="text-savia-text-muted">Date:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.date}</span></div>
+                          <div><span className="text-savia-text-muted">Technicien:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.technicien || 'Non assigné'}</span></div>
+                          <div><span className="text-savia-text-muted">Statut:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.statut}</span></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Reasons */}
+                  {comparateurData.reasons && comparateurData.reasons.length > 0 && (
+                    <div className="bg-savia-surface-hover rounded-lg p-3 border border-savia-border/30">
+                      <div className="text-xs font-semibold text-savia-accent mb-2">Raisons du décalage</div>
+                      <div className="space-y-1 text-xs text-savia-text">
+                        {comparateurData.reasons.map((reason: string, idx: number) => (
+                          <div key={idx} className="flex gap-2">
+                            <span className="text-savia-text-muted">{idx + 1}.</span>
+                            <span>{reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50">
+              <button onClick={() => setShowComparateurModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Fermer
+              </button>
+              {comparateurData && (
+                <>
+                  <button onClick={() => handleExportComparateur('csv')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-blue-600/40 hover:bg-blue-600/60 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> CSV
+                  </button>
+                  <button onClick={() => handleExportComparateur('json')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-purple-600/40 hover:bg-purple-600/60 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> JSON
+                  </button>
+                  <button onClick={() => handleExportComparateur('pdf')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> PDF
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
