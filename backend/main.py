@@ -3350,14 +3350,6 @@ def cleanup_ghosts_for_machine(machine: str, user: dict = Depends(_verify_token)
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not cleanup ghosts: {e}"
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error rescheduling planning {planning_id}: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error rescheduling intervention: {str(e)}"
-        )
 
 
 @app.delete("/api/planning/{planning_id}")
