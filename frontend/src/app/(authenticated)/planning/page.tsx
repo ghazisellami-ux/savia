@@ -478,6 +478,7 @@ export default function PlanningPage() {
           { label: 'En cours',   dot: 'bg-yellow-400', text: 'text-yellow-400' },
           { label: 'Terminée',   dot: 'bg-green-400',  text: 'text-green-400'  },
           { label: 'En retard',  dot: 'bg-red-400',    text: 'text-red-400'    },
+          { label: 'Décalé',     dot: 'bg-gray-400',   text: 'text-gray-400'   },
         ].map(s => (
           <div key={s.label} className="flex items-center gap-2">
             <span className={`w-3 h-3 rounded-sm border-l-2 ${s.dot} opacity-80`} />
@@ -510,7 +511,7 @@ export default function PlanningPage() {
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
-        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard'];
+        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'];
         const filteredData = data
           .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
           .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
