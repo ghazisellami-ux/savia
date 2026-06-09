@@ -933,6 +933,7 @@ def init_db():
             equipement_nom TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (contrat_id) REFERENCES contrats(id) ON DELETE CASCADE,
+            FOREIGN KEY (equipement_nom) REFERENCES equipements(nom) ON DELETE RESTRICT,
             UNIQUE(contrat_id, equipement_nom)
         )
         """)
@@ -2828,7 +2829,8 @@ def ajouter_contrat(contrat_dict):
             import json
             pieces_incluses = json.dumps(pieces_incluses)
         
-        conn.execute("""
+        # Insert and retrieve ID in a single operation - works for both SQLite and PostgreSQL
+        result = conn.execute("""
             INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                 sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
                 fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
@@ -2852,9 +2854,9 @@ def ajouter_contrat(contrat_dict):
             pieces_incluses,
             1 if contrat_dict.get("avec_pieces") else 0,
         ))
-        # Retrieve the newly created contrat ID
+        # Retrieve the newly created contrat ID - PostgreSQL RealDictCursor returns dict-like rows
         row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
-        contrat_id = dict(row)["id"] if row else None
+        contrat_id = row["id"] if row else None
         
         # Insert equipments into junction table
         for eq in equipements:
