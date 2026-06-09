@@ -234,6 +234,8 @@ export const planning = {
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body }),
   reschedule: (id: number, body: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/planning/${id}/reschedule`, { method: 'PUT', body }),
+  comparateur: (id: number) =>
+    request<Record<string, unknown>>(`/api/planning/${id}/comparateur`),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
