@@ -3318,6 +3318,38 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             )
             
             return {"ok": True}
+
+
+@app.delete("/api/planning/cleanup-ghosts/{machine}")
+def cleanup_ghosts_for_machine(machine: str, user: dict = Depends(_verify_token)):
+    """Admin-only endpoint to cleanup ghost entries for a specific machine.
+    Useful for recovering from duplicate ghost entries.
+    """
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Admin and Manager can cleanup ghosts"
+        )
+    
+    try:
+        with get_db() as conn:
+            # Delete ghosts for this specific machine
+            conn.execute(
+                "DELETE FROM planning_maintenance WHERE is_ghost = true AND machine = ?",
+                (machine,)
+            )
+            conn.commit()
+            deleted_count = conn.total_changes
+            
+            logger.info(f"Cleanup: Deleted {deleted_count} ghost(s) for machine {machine}")
+            
+            return {"ok": True, "deleted": deleted_count, "machine": machine}
+    except Exception as e:
+        logger.error(f"Error cleaning up ghosts for {machine}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not cleanup ghosts: {e}"
+        )
     except HTTPException:
         raise
     except Exception as e:
