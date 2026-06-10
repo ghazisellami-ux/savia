@@ -444,24 +444,7 @@ export default function PlanningPage() {
       const timestamp = new Date().toISOString().slice(0, 10);
       const filename = `comparateur-periode_${timestamp}`;
       
-      if (format === 'csv') {
-        // Build CSV from comparisons array
-        const headers = ['Machine', 'Client', 'Type', 'Date Originale', 'Date Décalée', 'Décalage (jours)', 'Ancien Technicien', 'Nouveau Technicien', 'Raisons'];
-        const rows = comparateurPeriodeData.comparisons.map((c: any) => [
-          c.machine,
-          c.client,
-          c.type_maintenance,
-          c.old_date,
-          c.new_date,
-          c.days_difference,
-          c.old_technicien || '-',
-          c.new_technicien || '-',
-          c.reasons.join('; ') || '-'
-        ]);
-        
-        const csv = [headers, ...rows].map(row => row.map((cell: any) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
-        downloadBlob(csv, `${filename}.csv`, 'text/csv');
-      }
+      // PDF export removed - keeping only modal display
     } catch (err: any) {
       console.error('Export error:', err);
       alert(`Erreur export ${format.toUpperCase()}: ${err.message || 'Erreur'}`);
@@ -1456,12 +1439,6 @@ export default function PlanningPage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
                 <X className="w-4 h-4" /> Fermer
               </button>
-              {comparateurPeriodeData?.comparisons && comparateurPeriodeData.comparisons.length > 0 && (
-                <button onClick={() => handleExportComparateurPeriode('csv')} disabled={isLoadingComparateurPeriode}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-savia-accent hover:bg-savia-accent-blue text-white font-semibold cursor-pointer transition-colors disabled:opacity-50">
-                  <Download className="w-4 h-4" /> Exporter CSV
-                </button>
-              )}
             </div>
           </div>
         </div>

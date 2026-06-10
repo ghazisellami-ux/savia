@@ -3652,22 +3652,35 @@ def get_planning_comparateur_periode(
                 
                 real_dict = dict(real)
                 
-                # Extract reason from notes (format: "[Raison décalage] text")
+                # Extract reason from notes of the REAL entry (not the ghost)
+                # The reschedule reason is stored in the real entry's notes
                 reason_lines = []
-                ghost_notes = ghost_dict.get("notes", "") or ""
-                for line in ghost_notes.split("|"):
+                real_notes = real_dict.get("notes", "") or ""
+                for line in real_notes.split("|"):
                     line = line.strip()
                     if line.startswith("[Raison décalage]"):
                         reason = line.replace("[Raison décalage]", "").strip()
                         reason_lines.append(reason)
                 
-                # Calculate days difference
+                # For clarity: ghost = original date, real = rescheduled date
+                # Calculate days difference (rescheduled - original)
                 try:
-                    from datetime import datetime
-                    old_date = datetime.strptime(real_dict.get("date_prevue", ""), "%Y-%m-%d")
-                    new_date = datetime.strptime(ghost_dict.get("date_prevue", ""), "%Y-%m-%d")
-                    days_diff = (new_date - old_date).days
-                except:
+                    from datetime import datetime, date
+                    ghost_date = ghost_dict.get("date_prevue")
+                    real_date = real_dict.get("date_prevue")
+                    
+                    # Convert to date objects if they're strings
+                    if isinstance(ghost_date, str):
+                        ghost_date = datetime.strptime(ghost_date, "%Y-%m-%d").date()
+                    if isinstance(real_date, str):
+                        real_date = datetime.strptime(real_date, "%Y-%m-%d").date()
+                    
+                    if ghost_date and real_date:
+                        days_diff = (real_date - ghost_date).days
+                    else:
+                        days_diff = 0
+                except Exception as e:
+                    logger.error(f"Error calculating days diff: {e}, ghost_date={ghost_dict.get('date_prevue')}, real_date={real_dict.get('date_prevue')}")
                     days_diff = 0
                 
                 comparison = {
@@ -3676,11 +3689,11 @@ def get_planning_comparateur_periode(
                     "machine": real_dict.get("machine", ""),
                     "client": real_dict.get("client", ""),
                     "type_maintenance": real_dict.get("type_maintenance", ""),
-                    "old_date": real_dict.get("date_prevue"),
-                    "new_date": ghost_dict.get("date_prevue"),
-                    "days_difference": days_diff,
-                    "old_technicien": real_dict.get("technicien_assigne", ""),
-                    "new_technicien": ghost_dict.get("technicien_assigne", ""),
+                    "old_date": ghost_dict.get("date_prevue"),  # Original date (ghost entry)
+                    "new_date": real_dict.get("date_prevue"),   # Rescheduled date (real entry)
+                    "days_difference": days_diff,  # This is now (real - ghost) = newer - older
+                    "old_technicien": ghost_dict.get("technicien_assigne", ""),
+                    "new_technicien": real_dict.get("technicien_assigne", ""),
                     "statut": real_dict.get("statut", ""),
                     "reasons": reason_lines if reason_lines else [],
                 }
