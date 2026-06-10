@@ -236,6 +236,8 @@ export const planning = {
     request<{ ok: boolean }>(`/api/planning/${id}/reschedule`, { method: 'PUT', body }),
   comparateur: (id: number) =>
     request<Record<string, unknown>>(`/api/planning/${id}/comparateur`),
+  comparateurPeriode: (dateDebut: string, dateFin: string) =>
+    request<Record<string, unknown>>(`/api/planning/comparateur-periode?date_debut=${dateDebut}&date_fin=${dateFin}`),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };

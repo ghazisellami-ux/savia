@@ -153,6 +153,13 @@ export default function PlanningPage() {
   const [isLoadingComparateur, setIsLoadingComparateur] = useState(false);
   const [comparateurError, setComparateurError] = useState('');
 
+  // Comparateur période modal
+  const [showComparateurPeriodeModal, setShowComparateurPeriodeModal] = useState(false);
+  const [comparateurPeriodeForm, setComparateurPeriodeForm] = useState({ dateDebut: '', dateFin: '' });
+  const [comparateurPeriodeData, setComparateurPeriodeData] = useState<any>(null);
+  const [isLoadingComparateurPeriode, setIsLoadingComparateurPeriode] = useState(false);
+  const [comparateurPeriodeError, setComparateurPeriodeError] = useState('');
+
   // Table filters — Toutes les Maintenances
   const [filterClient,  setFilterClient]  = useState('Tous');
   const [filterEquip,   setFilterEquip]   = useState('Tous');
@@ -403,6 +410,47 @@ export default function PlanningPage() {
     }
   };
 
+  const handleOpenComparateurPeriode = () => {
+    setComparateurPeriodeError('');
+    setComparateurPeriodeData(null);
+    setComparateurPeriodeForm({ dateDebut: '', dateFin: '' });
+    setShowComparateurPeriodeModal(true);
+  };
+
+  const handleFetchComparateurPeriode = async () => {
+    setComparateurPeriodeError('');
+    
+    if (!comparateurPeriodeForm.dateDebut || !comparateurPeriodeForm.dateFin) {
+      setComparateurPeriodeError('Veuillez sélectionner les deux dates');
+      return;
+    }
+
+    setIsLoadingComparateurPeriode(true);
+    try {
+      const data = await planning.comparateurPeriode(comparateurPeriodeForm.dateDebut, comparateurPeriodeForm.dateFin);
+      setComparateurPeriodeData(data);
+    } catch (err: any) {
+      console.error('Comparateur période error:', err);
+      setComparateurPeriodeError(err.message || 'Erreur lors du chargement');
+    } finally {
+      setIsLoadingComparateurPeriode(false);
+    }
+  };
+
+  const handleExportComparateurPeriode = async (format: 'csv' | 'pdf' | 'json') => {
+    if (!comparateurPeriodeData?.comparisons) return;
+    
+    try {
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const filename = `comparateur-periode_${timestamp}`;
+      
+      // PDF export removed - keeping only modal display
+    } catch (err: any) {
+      console.error('Export error:', err);
+      alert(`Erreur export ${format.toUpperCase()}: ${err.message || 'Erreur'}`);
+    }
+  };
+
   const prevMonth = () => {
     if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear(y => y - 1); }
     else setCurrentMonth(m => m - 1);
@@ -432,6 +480,10 @@ export default function PlanningPage() {
           <Plus className="w-4 h-4" /> Planifier une maintenance
         </button>
         )}
+        <button onClick={handleOpenComparateurPeriode}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-purple-500 hover:opacity-90 transition-all cursor-pointer shadow-lg">
+          <BarChart3 className="w-4 h-4" /> Comparateur Période
+        </button>
       </div>
 
       {/* KPIs */}
@@ -1291,6 +1343,102 @@ export default function PlanningPage() {
                   </button>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comparateur Période Modal */}
+      {showComparateurPeriodeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowComparateurPeriodeModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-4xl shadow-2xl animate-fade-in max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border sticky top-0 bg-savia-surface">
+              <h2 className="text-lg font-black gradient-text flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" /> Comparateur Périod</h2>
+              <button onClick={() => setShowComparateurPeriodeModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-6 space-y-4">
+              {/* Date Selection */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-savia-text-muted mb-2 block">Date début</label>
+                  <input type="date" value={comparateurPeriodeForm.dateDebut} onChange={e => setComparateurPeriodeForm({...comparateurPeriodeForm, dateDebut: e.target.value})} 
+                    className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-savia-text-muted mb-2 block">Date fin</label>
+                  <input type="date" value={comparateurPeriodeForm.dateFin} onChange={e => setComparateurPeriodeForm({...comparateurPeriodeForm, dateFin: e.target.value})}
+                    className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all" />
+                </div>
+              </div>
+
+              {/* Search Button */}
+              <button onClick={handleFetchComparateurPeriode} disabled={isLoadingComparateurPeriode}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                {isLoadingComparateurPeriode ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
+                {isLoadingComparateurPeriode ? 'Chargement...' : 'Charger les comparaisons'}
+              </button>
+
+              {/* Error */}
+              {comparateurPeriodeError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400 text-sm">
+                  {comparateurPeriodeError}
+                </div>
+              )}
+
+              {/* Results Table */}
+              {comparateurPeriodeData && comparateurPeriodeData.comparisons && comparateurPeriodeData.comparisons.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <div className="text-sm font-semibold text-savia-text-muted mb-3">
+                    {comparateurPeriodeData.total} décalage(s) trouvé(s)
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-savia-border">
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Machine</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Client</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Type</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Date Original</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Date Décalée</th>
+                        <th className="text-center px-3 py-2 font-semibold text-savia-accent">Décalage (j)</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Raisons</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comparateurPeriodeData.comparisons.map((c: any, idx: number) => (
+                        <tr key={idx} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/30">
+                          <td className="px-3 py-2 text-savia-text">{c.machine}</td>
+                          <td className="px-3 py-2 text-savia-text-muted">{c.client}</td>
+                          <td className="px-3 py-2 text-savia-text-muted text-xs">{c.type_maintenance}</td>
+                          <td className="px-3 py-2 text-savia-text">{c.old_date}</td>
+                          <td className="px-3 py-2 text-savia-text">{c.new_date}</td>
+                          <td className="px-3 py-2 text-center font-semibold" style={{color: c.days_difference > 0 ? '#ef4444' : '#10b981'}}>
+                            {c.days_difference > 0 ? `+${c.days_difference}` : c.days_difference}
+                          </td>
+                          <td className="px-3 py-2 text-savia-text-muted text-xs max-w-xs truncate">{c.reasons.join('; ') || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : comparateurPeriodeData && comparateurPeriodeData.comparisons?.length === 0 ? (
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-blue-400 text-sm text-center">
+                  Aucun décalage trouvé pour cette période
+                </div>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50 sticky bottom-0 bg-savia-surface">
+              <button onClick={() => setShowComparateurPeriodeModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Fermer
+              </button>
             </div>
           </div>
         </div>
