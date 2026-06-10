@@ -3114,9 +3114,11 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
 
         pieces_str = "\n".join(synthese_pieces)
 
-        # Calculer le coût (taux_horaire × durée)
+        # Calculer le coût main d'oeuvre (taux_horaire × durée)
+        # NOTE: cout = main d'oeuvre ONLY (NOT including pieces)
+        # cout_pieces = pieces cost ONLY (stored separately)
         duree_val = duree_minutes if duree_minutes is not None else 0
-        cout_total = 0.0
+        cout_main_oeuvre = 0.0
         try:
             config_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
             if not config_row or not config_row["valeur"]:
@@ -3124,19 +3126,22 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             taux_horaire = float(config_row["valeur"])
         except (ValueError, TypeError) as e:
             raise Exception(f"Erreur configuration: {str(e)}")
-        cout_total = round((duree_val / 60) * taux_horaire, 2) + total_cout_pieces
+        cout_main_oeuvre = round((duree_val / 60) * taux_horaire, 2)
 
         # 2. Mettre à jour l'intervention (date = date de clôture)
         date_cloture = datetime.now().isoformat()
         
         # Préparer l'UPDATE avec un dictionnaire pour éviter les décalages
+        # IMPORTANT: cout = main d'oeuvre ONLY (NOT including pieces)
+        # cout_pieces = pieces cost (stored separately)
+        # Dashboard calculates total cost as: cout + cout_pieces
         update_data = {
             "statut": "Cloturee",
             "probleme": probleme,
             "cause": cause,
             "solution": solution,
             "duree_minutes": duree_val,
-            "cout": cout_total,
+            "cout": cout_main_oeuvre,  # ← Main d'oeuvre ONLY
             "date": date_cloture,
             "date_cloture": date_cloture
         }
@@ -3150,7 +3155,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             update_data["duree_deplacement"] = duree_deplacement
         if pieces_str:
             update_data["pieces_utilisees"] = pieces_str
-            update_data["cout_pieces"] = total_cout_pieces
+            update_data["cout_pieces"] = total_cout_pieces  # ← Pièces ONLY
         
         # Construire l'UPDATE dynamiquement
         set_clauses = [f"{k}=%s" for k in update_data.keys()]

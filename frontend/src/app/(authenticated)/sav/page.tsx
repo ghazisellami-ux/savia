@@ -336,7 +336,7 @@ export default function SavPage() {
         start_time: form.start_time,
         end_time: form.end_time,
         pieces_utilisees: selectedPieces.map((p: any) => `${p.designation} (${p.reference})`).join(', '),
-        cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + (p.prix_unitaire || 0), 0),
+        cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + ((p.prix_unitaire || 0) * (p.qty || 0)), 0),
       });
       setForm(emptyForm);
       setSelectedPieces([]);
@@ -424,23 +424,10 @@ export default function SavPage() {
       // Use the same logic as Rentabilité Client page
       const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
       const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalCoutTotal = totalCoutInterv + totalCoutPieces;  // ← Total = MO + Pièces
       const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
       
-      // Use hourly rate from state (fetched on component mount)
-      // This ensures consistency with Rentabilité Client page
-      if (tauxHoraire <= 0) {
-        setAiError('Erreur: Taux horaire technicien non configuré dans les paramètres');
-        setIsAnalyzing(false);
-        return;
-      }
-      
-      const totalCoutMO = (totalDureeMin / 60.0) * tauxHoraire;
-      
-      // Service cost = Total intervention cost - Labor cost - Parts cost
-      const totalCoutService = Math.max(0, totalCoutInterv - totalCoutMO - totalCoutPieces);
-      
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
-      const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
       // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
@@ -488,8 +475,8 @@ export default function SavPage() {
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
         cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMO,
-        cout_total: totalCoutInterv,
-        cout_moyen: nb_total > 0 ? Math.round(totalCoutInterv / nb_total) : 0,
+        cout_total: totalCoutTotal,
+        cout_moyen: nb_total > 0 ? Math.round(totalCoutTotal / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
@@ -632,7 +619,9 @@ export default function SavPage() {
   const totalInterv = filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCout = filtered.reduce((a, b) => a + (b.cout || 0) + (b.coutPieces || 0), 0);
+  const totalCoutMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const totalCoutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
+  const totalCout = totalCoutMO + totalCoutPieces;  // ← Total = MO + Pièces
   const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
   const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
   const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
@@ -663,7 +652,8 @@ export default function SavPage() {
   // Recalculate costs using current hourly rate (same as Rentabilité Client page)
   const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
   const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const coutInterventions = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutMainOeuvreMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutInterventions = coutMainOeuvreMO + coutPieces;  // ← Total = MO + Pièces
   
   // Recalculate labor cost based on current hourly rate
   const coutMainOeuvre = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;

@@ -1273,8 +1273,11 @@ def get_dashboard_kpis(
                 if len(durations) > 0:
                     mttr = float(durations.mean())
         
-        # Calculate total cost - ONLY from CLOSED interventions
-        cout_total = 0.0
+        # Calculate total cost = cout_main_oeuvre + cout_pieces (NOT cout_interventions which double-counts)
+        # Only from CLOSED interventions
+        cout_main_oeuvre_total = 0.0
+        cout_pieces_total = 0.0
+        
         if not df_int.empty:
             # First filter to only closed interventions
             status_col = None
@@ -1289,17 +1292,30 @@ def get_dashboard_kpis(
             else:
                 df_int_closed = df_int
             
-            # Check for cost columns (could be "cout", "cost", "prix", etc.)
-            cost_col = None
-            for col in ["cout", "cost", "prix", "montant", "Cout"]:
+            # Debug: log available columns
+            logger.info(f"Available intervention columns: {list(df_int_closed.columns)}")
+            
+            # Sum cout_main_oeuvre (column is named "cout" in interventions table)
+            for col in ["cout", "cout_main_oeuvre", "main_oeuvre", "cout_mo", "mo_cost", "cout_MO", "Cout_Main_Oeuvre", "Cout_MO"]:
                 if col in df_int_closed.columns:
-                    cost_col = col
+                    mo_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
+                    if len(mo_costs) > 0:
+                        cout_main_oeuvre_total = float(mo_costs.sum())
+                    logger.info(f"Found {col}: total = {cout_main_oeuvre_total}")
                     break
             
-            if cost_col and not df_int_closed.empty:
-                costs = pd.to_numeric(df_int_closed[cost_col], errors="coerce").dropna()
-                if len(costs) > 0:
-                    cout_total = float(costs.sum())
+            # Sum cout_pieces
+            for col in ["cout_pieces", "pieces", "cout_pieces_utilisees", "pieces_cost", "cout_Pieces", "Cout_Pieces", "Cout_pieces_utilisees", "Cost_Pieces"]:
+                if col in df_int_closed.columns:
+                    pieces_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
+                    if len(pieces_costs) > 0:
+                        cout_pieces_total = float(pieces_costs.sum())
+                    logger.info(f"Found {col}: total = {cout_pieces_total}")
+                    break
+        
+        # Total cost = main d'oeuvre + pièces (no double-counting)
+        cout_total = cout_main_oeuvre_total + cout_pieces_total
+        logger.info(f"Dashboard KPIs: cout_main_oeuvre_total={cout_main_oeuvre_total}, cout_pieces_total={cout_pieces_total}, cout_total={cout_total}")
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
@@ -7620,16 +7636,15 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
             except (ValueError, TypeError) as e:
                 raise HTTPException(400, f"Erreur: {str(e)}")
             
-            # Calculate labor cost from duration
-            cout_mo = float((duree_totale / 60.0) * taux)
+            # Calculate labor cost from duration (for recalculation with current rate)
+            cout_mo_recalculated = float((duree_totale / 60.0) * taux)
             
-            # cout_interv already includes labor + parts, so we need to extract the service cost
             # Service cost = Total intervention cost - Labor cost - Parts cost
-            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
+            cout_service = max(0, float(cout_interv) - cout_mo_recalculated - float(cout_pieces))
 
-            # Total cost = Service cost + Labor cost + Parts cost (no double-counting)
-            cout_total = cout_service + cout_mo + float(cout_pieces)
-            marge = float(revenu) - cout_total
+            # Total cost remains the same
+            cout_total_final = cout_service + cout_mo_recalculated + float(cout_pieces)
+            marge = float(revenu) - cout_total_final
             marge_pct = round((marge / float(revenu) * 100), 1) if float(revenu) > 0 else 0.0
 
             nb_equip = int(len(df_equip[df_equip["Client"] == cl])) if not df_equip.empty else 0
@@ -7640,8 +7655,8 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 "revenu_contrats": round(float(revenu), 0),
                 "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
-                "cout_main_oeuvre": round(float(cout_mo), 0),
-                "cout_total": round(float(cout_total), 0),
+                "cout_main_oeuvre": round(float(cout_mo_recalculated), 0),
+                "cout_total": round(float(cout_total_final), 0),
                 "marge": round(float(marge), 0),
                 "marge_pct": float(marge_pct),
                 "nb_interventions": int(nb_interv),
