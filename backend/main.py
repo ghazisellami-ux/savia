@@ -3485,25 +3485,50 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
     """
     Get comparison between real planning and ghost (décalé) entry.
     Returns data for generating comparateur export (planning réel vs planning décalé).
+    Accepts either the real planning ID or the ghost planning ID.
     """
     try:
         with get_db() as conn:
-            # Get the real planning entry
-            real = conn.execute(
-                "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+            # Check if the provided ID is a ghost entry
+            test_entry = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ?",
                 (planning_id,)
             ).fetchone()
             
-            if not real:
+            if not test_entry:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Planning entry not found"
                 )
             
+            # If the provided ID is a ghost entry, use its original_planning_id as the real ID
+            test_dict = dict(test_entry)
+            if test_dict.get("is_ghost"):
+                real_planning_id = test_dict.get("original_planning_id")
+                if not real_planning_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Ghost entry has no associated original planning"
+                    )
+            else:
+                real_planning_id = planning_id
+            
+            # Get the real planning entry
+            real = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                (real_planning_id,)
+            ).fetchone()
+            
+            if not real:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Real planning entry not found"
+                )
+            
             # Get the ghost entry associated with this planning
             ghost = conn.execute(
                 "SELECT * FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
-                (planning_id,)
+                (real_planning_id,)
             ).fetchone()
             
             # Extract reason from notes (format: "[Raison décalage] text")
@@ -3522,7 +3547,7 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
             ghost_dict = dict(ghost) if ghost else {}
             
             comparison = {
-                "planning_id": planning_id,
+                "planning_id": real_planning_id,
                 "machine": real_dict.get("machine", ""),
                 "client": real_dict.get("client", ""),
                 "type_maintenance": real_dict.get("type_maintenance", ""),
@@ -3564,6 +3589,113 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
         raise
     except Exception as e:
         logger.error(f"Error getting planning comparateur for {planning_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching comparateur data: {str(e)}"
+        )
+
+
+@app.get("/api/planning/comparateur-periode")
+def get_planning_comparateur_periode(
+    date_debut: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_fin: str = Query(..., description="End date (YYYY-MM-DD)"),
+    user: dict = Depends(_verify_token)
+):
+    """
+    Get all reschedules (comparisons) within a date range.
+    Returns all ghost entries (décalés) between date_debut and date_fin.
+    """
+    try:
+        # Validate dates
+        try:
+            from datetime import datetime
+            d_debut = datetime.strptime(date_debut, "%Y-%m-%d")
+            d_fin = datetime.strptime(date_fin, "%Y-%m-%d")
+            if d_debut > d_fin:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="date_debut must be before date_fin"
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format. Use YYYY-MM-DD"
+            )
+        
+        with get_db() as conn:
+            # Get all ghost entries (décalés) with their original entries
+            # Filter by ghost entry's date_prevue (the rescheduled date)
+            ghosts = conn.execute(
+                """SELECT * FROM planning_maintenance 
+                   WHERE is_ghost = true 
+                   AND date_prevue BETWEEN ? AND ?
+                   ORDER BY date_prevue ASC""",
+                (date_debut, date_fin)
+            ).fetchall()
+            
+            comparisons = []
+            for ghost_row in ghosts:
+                ghost_dict = dict(ghost_row)
+                original_planning_id = ghost_dict.get("original_planning_id")
+                
+                if not original_planning_id:
+                    continue  # Skip if no original planning
+                
+                # Get the real planning entry
+                real = conn.execute(
+                    "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                    (original_planning_id,)
+                ).fetchone()
+                
+                if not real:
+                    continue
+                
+                real_dict = dict(real)
+                
+                # Extract reason from notes (format: "[Raison décalage] text")
+                reason_lines = []
+                ghost_notes = ghost_dict.get("notes", "") or ""
+                for line in ghost_notes.split("|"):
+                    line = line.strip()
+                    if line.startswith("[Raison décalage]"):
+                        reason = line.replace("[Raison décalage]", "").strip()
+                        reason_lines.append(reason)
+                
+                # Calculate days difference
+                try:
+                    from datetime import datetime
+                    old_date = datetime.strptime(real_dict.get("date_prevue", ""), "%Y-%m-%d")
+                    new_date = datetime.strptime(ghost_dict.get("date_prevue", ""), "%Y-%m-%d")
+                    days_diff = (new_date - old_date).days
+                except:
+                    days_diff = 0
+                
+                comparison = {
+                    "planning_id": original_planning_id,
+                    "ghost_id": ghost_dict.get("id"),
+                    "machine": real_dict.get("machine", ""),
+                    "client": real_dict.get("client", ""),
+                    "type_maintenance": real_dict.get("type_maintenance", ""),
+                    "old_date": real_dict.get("date_prevue"),
+                    "new_date": ghost_dict.get("date_prevue"),
+                    "days_difference": days_diff,
+                    "old_technicien": real_dict.get("technicien_assigne", ""),
+                    "new_technicien": ghost_dict.get("technicien_assigne", ""),
+                    "statut": real_dict.get("statut", ""),
+                    "reasons": reason_lines if reason_lines else [],
+                }
+                comparisons.append(comparison)
+            
+            return {
+                "total": len(comparisons),
+                "period": {"debut": date_debut, "fin": date_fin},
+                "comparisons": comparisons
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting planning comparateur-periode: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching comparateur data: {str(e)}"
