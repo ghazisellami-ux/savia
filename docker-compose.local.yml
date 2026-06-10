@@ -82,12 +82,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: runner
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+        BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
     container_name: savia_frontend
     ports:
       - "3000:3000"
     environment:
       BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0

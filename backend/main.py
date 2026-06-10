@@ -1922,6 +1922,30 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 @app.put("/api/interventions/{intervention_id}")
 def update_intervention(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
     logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
+    
+    # Vérifier les permissions : un technicien ne peut éditer que ses interventions
+    if user.get("role") == "Technicien":
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT technicien FROM interventions WHERE id = ?",
+                (intervention_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            current_tech = str(row.get("technicien") or "").strip()
+            user_nom_complet = (user.get("nom") or "").strip()
+            
+            # Vérifier que le technicien est assigné à l'intervention
+            name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+            is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+            
+            if not is_assigned and current_tech:  # Si l'intervention est assignée et ce n'est pas ce technicien
+                raise HTTPException(
+                    status_code=403,
+                    detail="Vous ne pouvez éditer que vos propres interventions"
+                )
+    
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
         # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref' ou 'reference'
@@ -3192,6 +3216,17 @@ def get_planning(
     user: dict = Depends(_verify_token),
 ):
     df = lire_planning(machine=machine, statut=statut)
+    
+    # Si le user est un Technicien → filtrer automatiquement ses plannings
+    if user.get("role") == "Technicien" and not df.empty:
+        user_nom_complet = (user.get("nom") or "").strip()
+        # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
+        name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+        if name_words and "technicien_assigne" in df.columns:
+            df = df[df["technicien_assigne"].astype(str).apply(
+                lambda t: all(word in t.lower() for word in name_words)
+            )]
+    
     # Pour Lecteur : filtrer par les machines de son client
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -3202,8 +3237,6 @@ def get_planning(
             )
             if "machine" in df.columns:
                 df = df[df["machine"].isin(machines_client)]
-            elif "equipement" in df.columns:
-                df = df[df["equipement"].isin(machines_client)]
     return _df_to_records(df)
 
 
@@ -3211,6 +3244,314 @@ def get_planning(
 def create_planning(body: dict, user: dict = Depends(_verify_token)):
     ajouter_planning(body)
     return {"ok": True}
+
+
+@app.post("/api/planning/sync")
+def force_planning_sync(user: dict = Depends(_verify_token)):
+    """Force la synchronisation planning -> interventions pour aujourd'hui."""
+    created = sync_planning_to_interventions()
+    return {"ok": True, "created": len(created), "interventions": created}
+
+
+@app.post("/api/planning/pdf")
+def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
+    """Generate a maintenance planning PDF using FPDF with proper header."""
+    from io import BytesIO
+    from fastapi.responses import Response
+    import base64 as _b64
+    import urllib.request as _ur
+
+    SAVIA_LOGO = "/app/logo-savia.png"
+
+    try:
+        rows = body.get("rows", [])
+        filter_label = body.get("filter_label", "Tous les clients")
+        company_name = body.get("company_name", "SAVIA")
+        company_logo = body.get("company_logo", "")
+
+        # Client logo
+        _client_logo_io = None
+
+        from fpdf import FPDF
+        from datetime import datetime
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=10)
+
+        # Page 1: Header with logo
+        pdf.add_page()
+        pdf.set_font("DejaVu", size=10)
+
+        # Left: SAVIA logo
+        if os.path.exists(SAVIA_LOGO):
+            pdf.image(SAVIA_LOGO, x=10, y=10, w=30)
+        
+        # Right: Company info
+        pdf.set_xy(120, 15)
+        pdf.set_font("DejaVu", 'B', size=12)
+        pdf.cell(0, 5, company_name, ln=True, align='R')
+        pdf.set_xy(120, 20)
+        pdf.set_font("DejaVu", size=9)
+        pdf.cell(0, 4, f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
+        
+        # Title
+        pdf.set_xy(10, 50)
+        pdf.set_font("DejaVu", 'B', size=16)
+        pdf.cell(0, 10, "PLANNING MAINTENANCE", ln=True)
+        
+        pdf.set_font("DejaVu", size=10)
+        pdf.cell(0, 5, f"Filtre: {filter_label}", ln=True)
+        pdf.ln(5)
+
+        # Table header
+        pdf.set_font("DejaVu", 'B', size=9)
+        col_widths = [25, 25, 25, 30, 30, 25, 25]
+        headers = ["Date", "Machine", "Type", "Technicien", "Client", "Statut", "Notes"]
+        
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 7, header, border=1, align='C')
+        pdf.ln()
+
+        # Table data
+        pdf.set_font("DejaVu", size=8)
+        for row in rows:
+            date_str = row.get("date_prevue", "")[:10] if row.get("date_prevue") else ""
+            machine = row.get("machine", "")[:15]
+            type_maint = row.get("type_maintenance", "")[:12]
+            tech = row.get("technicien_assigne", "")[:15]
+            client = row.get("client", "")[:15]
+            statut = row.get("statut", "")[:10]
+            notes = row.get("notes", "")[:15]
+            
+            pdf.cell(col_widths[0], 6, date_str, border=1, align='C')
+            pdf.cell(col_widths[1], 6, machine, border=1)
+            pdf.cell(col_widths[2], 6, type_maint, border=1)
+            pdf.cell(col_widths[3], 6, tech, border=1)
+            pdf.cell(col_widths[4], 6, client, border=1)
+            pdf.cell(col_widths[5], 6, statut, border=1, align='C')
+            pdf.cell(col_widths[6], 6, notes, border=1)
+            pdf.ln()
+
+        # Footer
+        pdf.set_y(-15)
+        pdf.set_font("DejaVu", size=8)
+        pdf.cell(0, 5, f"Page {pdf.page_no()}", align='C')
+
+        pdf_output = BytesIO()
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=planning.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"Error generating planning PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating PDF: {str(e)}"
+        )
+
+
+@app.post("/api/planning/comparateur/pdf")
+def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
+    """
+    Generate PDF from comparateur data.
+    Input: comparateur data from GET /api/planning/{id}/comparateur
+    Output: PDF file
+    """
+    try:
+        from fpdf import FPDF
+        from datetime import datetime
+        
+        # Get comparateur data from body
+        data = body
+        
+        # Create PDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("DejaVu", size=12)
+        
+        # Title
+        pdf.set_font("DejaVu", 'B', size=16)
+        pdf.cell(0, 10, "RAPPORT COMPARATEUR PLANNING", ln=True, align='C')
+        pdf.ln(5)
+        
+        # Timestamp
+        pdf.set_font("DejaVu", size=9)
+        pdf.cell(0, 8, f"Généré le: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
+        pdf.ln(3)
+        
+        # Equipment info
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "INFORMATIONS ÉQUIPEMENT", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        pdf.cell(0, 7, f"Machine: {data.get('machine', '')}", ln=True)
+        pdf.cell(0, 7, f"Client: {data.get('client', '')}", ln=True)
+        pdf.cell(0, 7, f"Type: {data.get('type_maintenance', '')}", ln=True)
+        pdf.cell(0, 7, f"Description: {data.get('description', '')}", ln=True)
+        pdf.ln(3)
+        
+        # Real planning
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "PLANNING RÉEL (Nouvelle date)", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        real = data.get('real', {})
+        pdf.cell(0, 7, f"Date: {real.get('date', '')}", ln=True)
+        pdf.cell(0, 7, f"Technicien: {real.get('technicien', '')}", ln=True)
+        pdf.cell(0, 7, f"Statut: {real.get('statut', '')}", ln=True)
+        pdf.ln(3)
+        
+        # Ghost planning
+        if data.get('has_ghost'):
+            pdf.set_font("DejaVu", 'B', size=11)
+            pdf.cell(0, 8, "PLANNING DÉCALÉ (Date originale)", ln=True)
+            pdf.set_font("DejaVu", size=10)
+            ghost = data.get('ghost', {})
+            pdf.cell(0, 7, f"Date: {ghost.get('date', '')}", ln=True)
+            pdf.cell(0, 7, f"Technicien: {ghost.get('technicien', '')}", ln=True)
+            pdf.cell(0, 7, f"Statut: {ghost.get('statut', '')}", ln=True)
+            pdf.ln(3)
+        
+        # Differences
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "CHANGEMENTS", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        diff = data.get('differences', {})
+        if diff.get('date_changed'):
+            old_date = diff.get('old_date', '')
+            new_date = diff.get('new_date', '')
+            pdf.cell(0, 7, f"Date modifiée: {old_date} → {new_date}", ln=True)
+        if diff.get('technicien_changed'):
+            old_tech = diff.get('old_technicien', 'Non assigné')
+            new_tech = diff.get('new_technicien', 'Non assigné')
+            pdf.cell(0, 7, f"Technicien modifié: {old_tech} → {new_tech}", ln=True)
+        pdf.ln(3)
+        
+        # Reasons
+        reasons = data.get('reasons', [])
+        if reasons:
+            pdf.set_font("DejaVu", 'B', size=11)
+            pdf.cell(0, 8, "RAISONS DU DÉCALAGE", ln=True)
+            pdf.set_font("DejaVu", size=10)
+            for idx, reason in enumerate(reasons, 1):
+                # Use multi_cell for text wrapping
+                pdf.multi_cell(0, 5, f"{idx}. {reason}")
+            pdf.ln(2)
+        
+        # Footer
+        pdf.set_font("DejaVu", size=8)
+        pdf.ln(5)
+        pdf.cell(0, 5, "---", ln=True)
+        pdf.cell(0, 5, "Rapport généré automatiquement par SAVIA", align='C')
+        
+        # Return PDF as blob
+        from io import BytesIO
+        pdf_output = BytesIO()
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type='application/pdf',
+            headers={'Content-Disposition': 'attachment; filename=comparateur.pdf'}
+        )
+    except Exception as e:
+        logger.error(f"Error generating comparateur PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating PDF: {str(e)}"
+        )
+
+
+@app.get("/api/planning/{planning_id}/comparateur")
+def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_token)):
+    """
+    Get comparison between real planning and ghost (décalé) entry.
+    Returns data for generating comparateur export (planning réel vs planning décalé).
+    """
+    try:
+        with get_db() as conn:
+            # Get the real planning entry
+            real = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                (planning_id,)
+            ).fetchone()
+            
+            if not real:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Planning entry not found"
+                )
+            
+            # Get the ghost entry associated with this planning
+            ghost = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
+                (planning_id,)
+            ).fetchone()
+            
+            # Extract reason from notes (format: "[Raison décalage] text")
+            reason_lines = []
+            if ghost:
+                ghost_notes = ghost.get("notes", "") or ""
+                # Extract all "[Raison décalage]" lines
+                for line in ghost_notes.split("|"):
+                    line = line.strip()
+                    if line.startswith("[Raison décalage]"):
+                        reason = line.replace("[Raison décalage]", "").strip()
+                        reason_lines.append(reason)
+            
+            # Build comparison data
+            real_dict = dict(real) if real else {}
+            ghost_dict = dict(ghost) if ghost else {}
+            
+            comparison = {
+                "planning_id": planning_id,
+                "machine": real_dict.get("machine", ""),
+                "client": real_dict.get("client", ""),
+                "type_maintenance": real_dict.get("type_maintenance", ""),
+                "description": real_dict.get("description", ""),
+                
+                # Real planning (new date after reschedule)
+                "real": {
+                    "date": real_dict.get("date_prevue", ""),
+                    "technicien": real_dict.get("technicien_assigne", ""),
+                    "statut": real_dict.get("statut", ""),
+                },
+                
+                # Ghost planning (original date - décalé)
+                "ghost": {
+                    "date": ghost_dict.get("date_prevue", "") if ghost else None,
+                    "technicien": ghost_dict.get("technicien_assigne", "") if ghost else None,
+                    "statut": ghost_dict.get("statut", "") if ghost else None,
+                } if ghost else None,
+                
+                # Differences
+                "differences": {
+                    "date_changed": real_dict.get("date_prevue") != ghost_dict.get("date_prevue") if ghost else False,
+                    "technicien_changed": real_dict.get("technicien_assigne") != ghost_dict.get("technicien_assigne") if ghost else False,
+                    "old_date": ghost_dict.get("date_prevue") if ghost else None,
+                    "new_date": real_dict.get("date_prevue"),
+                    "old_technicien": ghost_dict.get("technicien_assigne") if ghost else None,
+                    "new_technicien": real_dict.get("technicien_assigne"),
+                },
+                
+                # Reschedule reasons (accumulated)
+                "reasons": reason_lines if reason_lines else [],
+                
+                # Meta
+                "has_ghost": ghost is not None,
+            }
+            
+            return comparison
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting planning comparateur for {planning_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching comparateur data: {str(e)}"
+        )
 
 
 @app.put("/api/planning/{planning_id}")
@@ -3350,6 +3691,46 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 f"Planning {planning_id}: {update_data}"
             )
             
+            # Send Telegram notification to assigned technicians
+            if new_technicians:
+                try:
+                    machine = current.get("machine", "?")
+                    client = current.get("client", "")
+                    tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
+                    
+                    msg = (
+                        f"🔧 <b>Nouvelle Intervention Assignée</b>\n"
+                        f"<i>{len(tech_list)} technicien(s) assigné(s) :</i>\n\n"
+                    )
+                    
+                    for tech in tech_list:
+                        msg += f"  • <b>{tech}</b>\n"
+                    
+                    msg += (
+                        f"\n<b>Détails :</b>\n"
+                        f"  📦 Équipement : {machine}\n"
+                    )
+                    if client:
+                        msg += f"  🏢 Client : {client}\n"
+                    if new_date:
+                        msg += f"  📅 Date : {new_date}\n"
+                    if reason:
+                        msg += f"  💬 Raison : {reason}\n"
+                    
+                    msg += f"\n📱 Consultez le PWA pour plus de détails."
+                    
+                    # Send to general telegram bot (technicien will receive it)
+                    _send_telegram_bot("telegram", msg)
+                    logger.info(f"Telegram notification sent to {len(tech_list)} technician(s) for planning {planning_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to send Telegram notification for planning {planning_id}: {e}")
+            
+            # Auto-sync planning to interventions (create intervention if date is today)
+            try:
+                sync_planning_to_interventions()
+            except Exception as e:
+                logger.warning(f"Planning sync after reschedule failed: {e}")
+            
             return {"ok": True}
     except HTTPException:
         raise
@@ -3359,7 +3740,6 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error rescheduling intervention: {str(e)}"
         )
-
 
 @app.delete("/api/planning/{planning_id}")
 def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
