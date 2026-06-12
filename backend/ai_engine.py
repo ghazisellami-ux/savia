@@ -253,11 +253,12 @@ def clean_json_response(text_response):
     return None
 
 
-def get_ai_suggestion(code, msg, context, log_context=""):
+def get_ai_suggestion(code, msg, context, log_context="", equipment_type=""):
     """
     Demande à l'IA un diagnostic précis.
     Inclut les solutions validées de la base locale pour un apprentissage continu.
     log_context : lignes du fichier log AVANT l'erreur pour contextualiser.
+    equipment_type : type d'équipement (ex: Mammographie, Scanner CT, IRM) pour contextualiser le diagnostic.
     Fallback local si l'IA n'est pas disponible.
     Retourne un dict {Probleme, Cause, Solution, Type, Priorite, Confidence_Score} ou None.
     """
@@ -329,12 +330,20 @@ Tu dois fournir un diagnostic clinique et technique pointu suite à une anomalie
 - Code Erreur : "{code}"
 - Constat : "{msg}"
 - Équipement : "{context}"
+- Type d'équipement : "{equipment_type or 'Non spécifié'}"
 {db_info_section}
 {log_section}
+
+CONTEXTE TECHNIQUE PAR TYPE D'ÉQUIPEMENT:
+- Mammographie: Pas de slipring (composant du scanner CT). Les défauts typiques concernent le tube RX, les détecteurs, le système d'imagerie 2D/3D, le réfrigérant, les encodeurs.
+- Scanner CT: Risque de slipring, anneaux de slip-ring, détecteurs, haute tension, tube RX rotatif.
+- IRM: Bobines RF, gradient, cryogénique (hélium), shimming, détecteur, refroidissement.
+- RX (Radiographie): Tube RX, haute tension, système de collimation, détecteur, refroidissement.
 
 RÈGLES :
 - Sois BREF et DIRECT (2-3 lignes max par champ)
 - Ne donne pas de réponses génériques. Identifie précisément la carte électronique, le composant mécanique (tube RX, inverter, détécteur...), ou la perturbation réseau en cause.
+- IMPORTANT: Assure-toi que ta réponse est appropriée au type d'équipement "{equipment_type or 'Unknown'}". Ne suggère pas de composants inexistants sur ce type (ex: pas de slipring sur une Mammographie).
 - Définis l'impact immédiat : Y a-t-il un risque d'émission de rayons X incontrôlée ? La machine est-elle immobilisée (Down) ?
 - Propose une procédure de dépannage avec les valeurs de test exactes (ex: vérification des tensions au multimètre, purge, etc).
 - Si la base contient déjà une solution, NE LA RÉPÈTE PAS — donne un complément utile de niveau 3.
@@ -343,7 +352,7 @@ RÈGLES :
 Réponds en JSON strict uniquement :
 {{
     "Probleme": "Description technique du défaut et de l'impact immédiat",
-    "Cause": "Cause racine identifiée (carte, mécanique, réseau)",
+    "Cause": "Cause racine identifiée (carte, mécanique, réseau) — PERTINENTE AU TYPE: {equipment_type or 'Unknown'}",
     "Solution": "Procédure de dépannage exacte et ciblée",
     "Prevention": "Action préventive pour éviter la récurrence",
     "Urgence": "Impact clinique : machine utilisable ou non ?",

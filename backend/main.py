@@ -4439,9 +4439,10 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token)):
     code_erreur = body.get("code_erreur", "")
     message_erreur = body.get("message_erreur", "")
     log_context = body.get("log_context", "")
+    equipment_type = body.get("equipment_type", "")
 
     try:
-        result = get_ai_suggestion(code_erreur, message_erreur, machine, log_context=log_context)
+        result = get_ai_suggestion(code_erreur, message_erreur, machine, log_context=log_context, equipment_type=equipment_type)
         import json
         if isinstance(result, str):
             try:

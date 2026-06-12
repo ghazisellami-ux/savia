@@ -274,11 +274,18 @@ export default function SupervisionPage() {
       const err = displayErrors.find((e: any) => e.code === selectedError);
       if (!err) return;
       
+      // Extract equipment type from raw equipments
+      const equipmentData = rawEquipments.find((eq: any) => 
+        (eq.Nom || eq.nom || '').toLowerCase() === currentMachine.machine.toLowerCase()
+      );
+      const equipmentType = equipmentData?.type || equipmentData?.Type || '';
+      
       const response = await aiApi.analyzeDiagnostic(
         currentMachine.machine, 
         err.code, 
         err.message, 
-        "Pas de logs supplementaires specifiés"
+        "Pas de logs supplementaires specifiés",
+        equipmentType
       );
       
       if (response && response.ok && response.result) {
