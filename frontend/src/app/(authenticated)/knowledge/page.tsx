@@ -2,7 +2,7 @@
 import { SectionCard } from '@/components/ui/cards';
 import {
   Search, Loader2, BookOpen, Download, FileSpreadsheet, FileText,
-  FileType, Upload, AlertTriangle, Zap, Wrench, Lightbulb, Tag
+  FileType, Upload, AlertTriangle, Zap, Wrench, Lightbulb, Tag, X
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { knowledge } from '@/lib/api';
@@ -24,6 +24,7 @@ export default function KnowledgePage() {
   const [importMsg, setImportMsg] = useState('');
   const [importLoading, setImportLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const pdfRef = useRef<HTMLInputElement>(null);
   const wordRef = useRef<HTMLInputElement>(null);
@@ -87,6 +88,28 @@ export default function KnowledgePage() {
     if (f) handleImport(f);
   };
 
+  const handleDeleteCode = async (code: string) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer le code ${code}?`)) return;
+    try {
+      const token = localStorage.getItem('savia_token');
+      const res = await fetch(`/api/knowledge/${code}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setDeleteMsg(`✓ Code ${code} supprimé avec succès.`);
+        await loadData();
+        // Masquer le message après 2 secondes
+        setTimeout(() => setDeleteMsg(''), 2000);
+      } else {
+        alert(`Erreur: ${json.detail || 'Erreur inconnue'}`);
+      }
+    } catch (e: any) {
+      alert(`Erreur: ${e.message}`);
+    }
+  };
+
   const filtered = data.filter(k =>
     !search ||
     k.code.toLowerCase().includes(search.toLowerCase()) ||
@@ -116,6 +139,13 @@ export default function KnowledgePage() {
         </h1>
         <p className="text-savia-text-muted text-sm mt-1">{data.length} solutions documentées</p>
       </div>
+
+      {/* Delete Success Toast */}
+      {deleteMsg && (
+        <div className="fixed top-8 left-1/2 -translate-x-1/2 bg-green-500/20 border border-green-500/30 text-green-400 px-6 py-3 rounded-lg text-sm font-semibold shadow-lg animate-in fade-in slide-in-from-top-4 z-40">
+          {deleteMsg}
+        </div>
+      )}
 
       {/* Import Section */}
       <SectionCard title={<span className="flex items-center gap-2"><Download className="w-4 h-4 text-savia-accent" /> Importer des données</span>}>
@@ -303,6 +333,7 @@ export default function KnowledgePage() {
                 <th className="py-3 px-3">Cause</th>
                 <th className="py-3 px-3">Solution</th>
                 <th className="py-3 px-3">Priorité</th>
+                <th className="py-3 px-3 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-savia-border/30">
@@ -335,6 +366,15 @@ export default function KnowledgePage() {
                     <span className={`px-2 py-0.5 rounded-full text-xs font-bold inline-flex items-center gap-1 ${prioriteColor(k.priorite)}`}>
                       <Zap className="w-3 h-3" /> {k.priorite}
                     </span>
+                  </td>
+                  <td className="py-3 px-3 text-center">
+                    <button
+                      onClick={() => handleDeleteCode(k.code)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all text-xs font-semibold border border-red-500/30"
+                      title={`Supprimer ${k.code}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
                   </td>
                 </tr>
               ))}

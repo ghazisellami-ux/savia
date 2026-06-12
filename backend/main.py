@@ -4168,45 +4168,127 @@ Réponds en JSON: [{{"code":"ERR001","message":"...","type":"Hardware","cause":"
 async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import error codes from an uploaded Excel/CSV file."""
     import io
+    
+    def sanitize_text(text: str) -> str:
+        """Nettoie le texte en fixant les problèmes de mojibake et caractères corrompus."""
+        if not text:
+            return text
+        
+        # ÉTAPE 1: Détecter et réparer la mojibake UTF-8 mal décodée
+        # Pattern: caractères UTF-8 multi-bytes mal interprétés comme latin-1
+        # Ex: "â€¯" (U+00E2 U+0080 U+00AF) = corruption de U+203F (overline)
+        try:
+            # Essayer de ré-encoder en latin-1 puis décoder en UTF-8
+            # Cela répare souvent les problèmes de mojibake
+            text = text.encode('latin-1', errors='ignore').decode('utf-8', errors='replace')
+        except Exception:
+            pass
+        
+        # ÉTAPE 2: Remplacer les caractères de typographie spéciaux par ASCII
+        char_map = {
+            ''': "'",           # apostrophe courbe
+            ''': "'",           # autre apostrophe
+            '"': '"',           # guillemet ouvrant courbe
+            '"': '"',           # guillemet fermant courbe
+            '–': '-',           # tiret court
+            '—': '--',          # tiret long
+            '«': '"',           # guillemet français
+            '»': '"',           # guillemet français
+            '‹': '<',           # chevron ouvrant
+            '›': '>',           # chevron fermant
+            '\u00A0': ' ',      # espace insécable
+            '\u2000': ' ',      # en quad
+            '\u2001': ' ',      # em quad
+            '\u2002': ' ',      # en space
+            '\u2003': ' ',      # em space
+            '\u2004': ' ',      # three-per-em space
+            '\u2005': ' ',      # four-per-em space
+            '\u2006': ' ',      # six-per-em space
+            '\u2007': ' ',      # figure space
+            '\u2008': ' ',      # punctuation space
+            '\u2009': ' ',      # thin space
+            '\u200A': ' ',      # hair space
+            '\u200B': '',       # zero-width space
+            '\u200C': '',       # zero-width non-joiner
+            '\u200D': '',       # zero-width joiner
+            '\u3000': ' ',      # ideographic space
+            '\ufeff': '',       # BOM
+        }
+        
+        for old_char, new_char in char_map.items():
+            text = text.replace(old_char, new_char)
+        
+        # ÉTAPE 3: Supprimer les caractères de contrôle sauf newline et tab
+        text = ''.join(c if ord(c) >= 32 or c in '\n\t\r' else '' for c in text)
+        
+        # ÉTAPE 4: Convertir en NFD (décomposé) puis en NFC (composé) pour normaliser
+        import unicodedata
+        text = unicodedata.normalize('NFC', text)
+        
+        # ÉTAPE 5: Nettoyer les espaces multiples
+        text = ' '.join(text.split())
+        
+        return text
+    
     filename = file.filename or ""
     content = await file.read()
 
     try:
         if filename.endswith(".csv"):
             import csv
-            text = content.decode("utf-8", errors="replace")
+            # Essayer différents encodages
+            text = None
+            for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
+                try:
+                    text = content.decode(encoding)
+                    break
+                except (UnicodeDecodeError, AttributeError):
+                    continue
+            
+            if text is None:
+                text = content.decode('utf-8', errors='replace')
+            
+            text = sanitize_text(text)
             reader = csv.DictReader(io.StringIO(text))
             rows = list(reader)
+        
         elif filename.endswith((".xlsx", ".xls")):
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
             ws = wb.active
-            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            headers = [sanitize_text(str(c.value or "").strip()) for c in next(ws.iter_rows(min_row=1, max_row=1))]
             rows = []
             for row in ws.iter_rows(min_row=2, values_only=True):
-                rows.append({headers[i]: (str(v) if v else "") for i, v in enumerate(row) if i < len(headers)})
+                row_dict = {}
+                for i, v in enumerate(row):
+                    if i < len(headers):
+                        val = str(v) if v else ""
+                        row_dict[headers[i]] = sanitize_text(val)
+                rows.append(row_dict)
+        
         elif filename.endswith(".pdf"):
-            # Parse PDF text using PyMuPDF (fitz)
             try:
                 import fitz
                 doc = fitz.open(stream=content, filetype="pdf")
                 full_text = "\n".join(page.get_text() for page in doc)
             except Exception:
                 full_text = content.decode("utf-8", errors="replace")
+            full_text = sanitize_text(full_text)
             rows = _parse_text_to_rows(full_text)
+        
         elif filename.endswith((".docx", ".doc")):
-            # Parse Word text
             try:
                 import docx
                 doc = docx.Document(io.BytesIO(content))
-                full_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-                # Also check tables
+                full_text = "\n".join(sanitize_text(p.text) for p in doc.paragraphs if p.text.strip())
                 for table in doc.tables:
                     for row in table.rows:
-                        full_text += "\n" + " | ".join(cell.text for cell in row.cells)
+                        full_text += "\n" + " | ".join(sanitize_text(cell.text) for cell in row.cells)
             except Exception:
                 full_text = content.decode("utf-8", errors="replace")
+            full_text = sanitize_text(full_text)
             rows = _parse_text_to_rows(full_text)
+        
         else:
             raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV, XLSX, PDF ou DOCX.")
 
@@ -4227,14 +4309,14 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         imported = 0
         with get_db() as conn:
             for row in rows:
-                code = row.get(col_map.get("code", ""), "").strip()
+                code = sanitize_text(row.get(col_map.get("code", ""), "").strip())
                 if not code:
                     continue
-                msg = row.get(col_map.get("message", ""), "")
-                typ = row.get(col_map.get("type", ""), "Hardware")
-                cause = row.get(col_map.get("cause", ""), "")
-                solution = row.get(col_map.get("solution", ""), "")
-                priorite = row.get(col_map.get("priorite", ""), "MOYENNE")
+                msg = sanitize_text(row.get(col_map.get("message", ""), ""))
+                typ = sanitize_text(row.get(col_map.get("type", ""), "Hardware"))
+                cause = sanitize_text(row.get(col_map.get("cause", ""), ""))
+                solution = sanitize_text(row.get(col_map.get("solution", ""), ""))
+                priorite = sanitize_text(row.get(col_map.get("priorite", ""), "MOYENNE"))
 
                 # Insert or update codes_erreurs
                 conn.execute(
@@ -4255,6 +4337,20 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur d'import: {str(e)}")
+
+
+@app.delete("/api/knowledge/{code}")
+def delete_knowledge_code(code: str, user: dict = Depends(_verify_token)):
+    """Supprimer un code d'erreur spécifique et ses solutions."""
+    try:
+        with get_db() as conn:
+            # Supprimer la solution d'abord (FK contraint) - utiliser mot_cle
+            conn.execute("DELETE FROM solutions WHERE mot_cle = ?", (code,))
+            # Puis le code d'erreur - utiliser code
+            conn.execute("DELETE FROM codes_erreurs WHERE code = ?", (code,))
+        return {"ok": True, "message": f"Code {code} supprimé avec succès."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur de suppression: {str(e)}")
 
 
 # ==========================================
