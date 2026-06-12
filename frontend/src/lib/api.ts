@@ -294,8 +294,8 @@ export const admin = {
 export const ai = {
   analyzePerformance: (kpis: Record<string, unknown>, sym: string = "EUR") => 
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
-  analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "") =>
-    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
+  analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "", equipment_type: string = "") =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context, equipment_type } }),
   analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
   analyzePieces: (pieces: Array<Record<string, unknown>>, sym: string = "TND") =>
