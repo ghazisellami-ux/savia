@@ -411,7 +411,7 @@ export default function PredictionsPage() {
             {aiAnalysis.tendances?.length > 0 && (
               <div className="bg-purple-500/5 rounded-xl p-5 border border-purple-500/20">
                 <div className="flex items-center gap-2 mb-3 text-purple-400 font-bold text-sm">
-                  <TrendingUp className="w-4 h-4" /> Tendances observées
+                  <Sparkles className="w-4 h-4" /> Tendances observées
                 </div>
                 <div className="space-y-2">
                   {aiAnalysis.tendances.map((t: string, i: number) => (
