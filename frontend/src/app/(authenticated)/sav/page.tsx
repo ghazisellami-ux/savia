@@ -469,12 +469,16 @@ export default function SavPage() {
         interventions_detail += `- ${i.date.substring(0,10)} | ${i.machine} | ${i.technicien} | ${i.type} | ${i.statut} | ${i.duree}h | ${i.cout || i.coutPieces} TND | ${i.probleme || '-'}\n`;
       });
 
+      const mttrH = terminees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
+      const totalCoutService = totalCoutInterv;
+      const totalCoutMOLocal = totalCoutInterv;
+      
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
-        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMO,
+        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMOLocal,
         cout_total: totalCoutTotal,
         cout_moyen: nb_total > 0 ? Math.round(totalCoutTotal / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
@@ -1733,36 +1737,7 @@ export default function SavPage() {
                 <Camera className="w-3.5 h-3.5" /> Photo fiche signée <span className="text-xs opacity-60">(optionnel)</span>
               </label>
               <div className="border-2 border-dashed border-savia-border/50 rounded-lg p-4 text-center cursor-pointer hover:border-savia-accent/50 transition-colors"
-                onClick={() => document.getElementById('fiche-upload-modal')?.click()}>
-                {ficheFile ? (
-                  <div className="flex items-center justify-center gap-2 text-green-400">
-                    <CheckCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium">{ficheFile.name}</span>
-                    <button onClick={e => { e.stopPropagation(); setFicheFile(null); }} className="ml-2 text-red-400 hover:text-red-300">
-                      <XCircle className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-savia-text-muted">
-                    <Upload className="w-6 h-6 mx-auto mb-1 opacity-50" />
-                    <p className="text-xs">Cliquez pour sélectionner une photo (JPG, PNG, PDF)</p>
-                  </div>
-                )}
-              </div>
-              <input id="fiche-upload-modal" type="file" accept="image/*,.pdf" className="hidden"
-                onChange={e => setFicheFile(e.target.files?.[0] || null)} />
-            </div>
-          )}
-          {/* Upload fiche signée si clôture */}
-          {statusForm.statut.toLowerCase().includes('tur') && (
-            <div>
-              <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
-                <Camera className="w-3.5 h-3.5" /> Photo fiche signée <span className="text-xs text-savia-text-muted/60">(optionnel)</span>
-              </label>
-              <div
-                className="border-2 border-dashed border-savia-border/50 rounded-lg p-4 text-center cursor-pointer hover:border-savia-accent/50 transition-colors"
-                onClick={() => document.getElementById('fiche-upload')?.click()}
-              >
+                onClick={() => document.getElementById('fiche-upload')?.click()}>
                 {ficheFile ? (
                   <div className="flex items-center justify-center gap-2 text-green-400">
                     <CheckCircle className="w-4 h-4" />
