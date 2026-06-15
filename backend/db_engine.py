@@ -1011,11 +1011,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS contrats_equipements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             contrat_id INTEGER NOT NULL,
-            equipement_nom TEXT NOT NULL,
+            equipement_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (contrat_id) REFERENCES contrats(id) ON DELETE CASCADE,
-            FOREIGN KEY (equipement_nom) REFERENCES equipements(nom) ON DELETE RESTRICT,
-            UNIQUE(contrat_id, equipement_nom)
+            FOREIGN KEY (equipement_id) REFERENCES equipements(id) ON DELETE RESTRICT,
+            UNIQUE(contrat_id, equipement_id)
         )
         """)
 
@@ -1152,11 +1152,20 @@ def init_db():
             """)
             # Transférer nom, prenom, email de techniciens vers technicien_pii
             # Note: on concatène nom et prenom pour nom_complet si besoin
-            conn.execute("""
-                INSERT OR IGNORE INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
-                SELECT id, (IFNULL(nom, '') || ' ' || IFNULL(prenom, '')), email, telegram_id FROM techniciens
-                WHERE nom != '' OR email != ''
-            """)
+            # Use COALESCE for PostgreSQL compatibility (IFNULL is SQLite-only)
+            if USE_PG:
+                conn.execute("""
+                    INSERT INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
+                    SELECT id, (COALESCE(nom, '') || ' ' || COALESCE(prenom, '')), email, telegram_id FROM techniciens
+                    WHERE nom != '' OR email != ''
+                    ON CONFLICT DO NOTHING
+                """)
+            else:
+                conn.execute("""
+                    INSERT OR IGNORE INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
+                    SELECT id, (IFNULL(nom, '') || ' ' || IFNULL(prenom, '')), email, telegram_id FROM techniciens
+                    WHERE nom != '' OR email != ''
+                """)
             logger.info("Audit Trail: Migration PII effectuée avec succès.")
         except Exception as e:
             logger.debug(f"Migration PII ignorée (Pillar 2): {e}")
@@ -1230,19 +1239,21 @@ def init_db():
         # This is a one-time migration that safely populates the junction table from legacy data
         try:
             if USE_PG:
-                # PostgreSQL version
+                # PostgreSQL version - join with equipements table to get the ID
                 conn.execute("""
-                    INSERT INTO contrats_equipements (contrat_id, equipement_nom, created_at)
-                    SELECT id, equipement, created_at FROM contrats
-                    WHERE equipement IS NOT NULL AND equipement != ''
-                    ON CONFLICT (contrat_id, equipement_nom) DO NOTHING
+                    INSERT INTO contrats_equipements (contrat_id, equipement_id, created_at)
+                    SELECT c.id, e.id, c.created_at FROM contrats c
+                    LEFT JOIN equipements e ON e.nom = c.equipement
+                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
+                    ON CONFLICT (contrat_id, equipement_id) DO NOTHING
                 """)
             else:
                 # SQLite version
                 conn.execute("""
-                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom, created_at)
-                    SELECT id, equipement, created_at FROM contrats
-                    WHERE equipement IS NOT NULL AND equipement != ''
+                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id, created_at)
+                    SELECT c.id, e.id, c.created_at FROM contrats c
+                    LEFT JOIN equipements e ON e.nom = c.equipement
+                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
                 """)
             logger.info("✅ Migration réussie: contrats_equipements peuplée depuis contrats.equipement")
         except Exception as e:
@@ -2872,11 +2883,14 @@ def lire_contrats(client=None):
 def get_contract_equipements(contrat_id):
     """Récupère tous les équipements d'un contrat."""
     with get_db() as conn:
+        ph = "%s" if USE_PG else "?"
         rows = conn.execute(
-            "SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = ? ORDER BY id",
+            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                LEFT JOIN equipements e ON ce.equipement_id = e.id
+                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
             (contrat_id,)
         ).fetchall()
-        return [dict(row)["equipement_nom"] for row in rows]
+        return [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
 
 def ajouter_contrat(contrat_dict):
     """
@@ -2912,12 +2926,13 @@ def ajouter_contrat(contrat_dict):
             pieces_incluses = json.dumps(pieces_incluses)
         
         # Insert and retrieve ID in a single operation - works for both SQLite and PostgreSQL
-        result = conn.execute("""
+        ph = "%s" if USE_PG else "?"
+        result = conn.execute(f"""
             INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                 sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
                 fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
                 pieces_incluses, avec_pieces)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             contrat_dict.get("client", ""),
             contrat_dict.get("type_contrat", "Standard"),
@@ -2944,10 +2959,25 @@ def ajouter_contrat(contrat_dict):
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom) VALUES (?, ?)",
-                        (contrat_id, eq)
-                    )
+                    # Get equipement ID from equipements table
+                    eq_row = conn.execute(
+                        f"SELECT id FROM equipements WHERE nom = {('%s' if USE_PG else '?')} LIMIT 1",
+                        (eq,)
+                    ).fetchone()
+                    eq_id = eq_row["id"] if eq_row else None
+                    
+                    if eq_id:
+                        ph = "%s" if USE_PG else "?"
+                        if USE_PG:
+                            conn.execute(
+                                f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                                (contrat_id, eq_id)
+                            )
+                        else:
+                            conn.execute(
+                                f"INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph})",
+                                (contrat_id, eq_id)
+                            )
                 except Exception as e:
                     logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
     
@@ -3005,7 +3035,9 @@ def generer_planning_from_contrat(contrat_id):
 
         # Récupérer tous les équipements du contrat
         equipements_rows = conn.execute(
-            f"SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = {ph} ORDER BY id",
+            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                LEFT JOIN equipements e ON ce.equipement_id = e.id
+                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
             (contrat_id,)
         ).fetchall()
         

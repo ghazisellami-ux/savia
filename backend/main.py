@@ -7,6 +7,8 @@ Replaces Flask api_server.py with modern async endpoints.
 """
 import math
 import os
+import base64
+import tempfile
 import jwt
 import bcrypt
 import logging
@@ -3542,56 +3544,76 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/pdf")
 def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a maintenance planning PDF using FPDF with proper header."""
+    """Generate a maintenance planning PDF using FPDF with proper header.
+    Supports date range filtering."""
     from io import BytesIO
     from fastapi.responses import Response
-    import base64 as _b64
-    import urllib.request as _ur
+    from datetime import datetime
+    from fpdf import FPDF
 
     SAVIA_LOGO = "/app/logo-savia.png"
 
     try:
         rows = body.get("rows", [])
+        logger.info(f"[PDF] Received {len(rows)} rows from frontend")
         filter_label = body.get("filter_label", "Tous les clients")
         company_name = body.get("company_name", "SAVIA")
         company_logo = body.get("company_logo", "")
-
-        # Client logo
-        _client_logo_io = None
-
-        from fpdf import FPDF
-        from datetime import datetime
 
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=10)
 
         # Page 1: Header with logo
         pdf.add_page()
-        pdf.set_font("DejaVu", size=10)
+        # Use built-in Arial font instead of DejaVu
+        pdf.set_font("Arial", size=10)
 
         # Left: SAVIA logo
         if os.path.exists(SAVIA_LOGO):
             pdf.image(SAVIA_LOGO, x=10, y=10, w=30)
         
-        # Right: Company info
-        pdf.set_xy(120, 15)
-        pdf.set_font("DejaVu", 'B', size=12)
+        # Right: Company logo (uploaded in admin)
+        if company_logo:
+            try:
+                # company_logo is base64 data URL: "data:image/png;base64,..."
+                if company_logo.startswith('data:'):
+                    # Extract base64 part
+                    base64_data = company_logo.split(',')[1]
+                    image_bytes = base64.b64decode(base64_data)
+                    
+                    # Create temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+                    
+                    # Add company logo to top right (x=160 aligns it to right, y=10, w=35 for width)
+                    pdf.image(tmp_path, x=160, y=10, w=35)
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+            except Exception as e:
+                logger.warning(f"Failed to add company logo: {e}")
+        
+        # Right: Company info (below logo)
+        pdf.set_xy(120, 50)
+        pdf.set_font("Arial", 'B', size=12)
         pdf.cell(0, 5, company_name, ln=True, align='R')
-        pdf.set_xy(120, 20)
-        pdf.set_font("DejaVu", size=9)
+        pdf.set_xy(120, 55)
+        pdf.set_font("Arial", size=9)
         pdf.cell(0, 4, f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
         
         # Title
         pdf.set_xy(10, 50)
-        pdf.set_font("DejaVu", 'B', size=16)
+        pdf.set_font("Arial", 'B', size=16)
         pdf.cell(0, 10, "PLANNING MAINTENANCE", ln=True)
         
-        pdf.set_font("DejaVu", size=10)
+        pdf.set_font("Arial", size=10)
         pdf.cell(0, 5, f"Filtre: {filter_label}", ln=True)
+        pdf.cell(0, 3, f"Nombre d'interventions: {len(rows)}", ln=True)
         pdf.ln(5)
 
         # Table header
-        pdf.set_font("DejaVu", 'B', size=9)
+        pdf.set_font("Arial", 'B', size=9)
         col_widths = [25, 25, 25, 30, 30, 25, 25]
         headers = ["Date", "Machine", "Type", "Technicien", "Client", "Statut", "Notes"]
         
@@ -3600,15 +3622,16 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
         pdf.ln()
 
         # Table data
-        pdf.set_font("DejaVu", size=8)
+        pdf.set_font("Arial", size=8)
         for row in rows:
-            date_str = row.get("date_prevue", "")[:10] if row.get("date_prevue") else ""
-            machine = row.get("machine", "")[:15]
-            type_maint = row.get("type_maintenance", "")[:12]
-            tech = row.get("technicien_assigne", "")[:15]
-            client = row.get("client", "")[:15]
-            statut = row.get("statut", "")[:10]
-            notes = row.get("notes", "")[:15]
+            # Use the column names that the frontend sends
+            date_str = row.get("date_planifiee", "")[:10] if row.get("date_planifiee") else ""
+            machine = str(row.get("machine", ""))[:15]
+            type_maint = str(row.get("type_maintenance", ""))[:12]
+            tech = str(row.get("technicien", ""))[:15]  # Frontend sends "technicien", not "technicien_assigne"
+            client = str(row.get("client", ""))[:15]
+            statut = str(row.get("statut", ""))[:10]
+            notes = str(row.get("notes", ""))[:15]
             
             pdf.cell(col_widths[0], 6, date_str, border=1, align='C')
             pdf.cell(col_widths[1], 6, machine, border=1)
@@ -3621,11 +3644,17 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
 
         # Footer
         pdf.set_y(-15)
-        pdf.set_font("DejaVu", size=8)
+        pdf.set_font("Arial", size=8)
         pdf.cell(0, 5, f"Page {pdf.page_no()}", align='C')
 
-        pdf_output = BytesIO()
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
         
         return Response(
             content=pdf_bytes,
@@ -3633,7 +3662,7 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
             headers={"Content-Disposition": "attachment; filename=planning.pdf"}
         )
     except Exception as e:
-        logger.error(f"Error generating planning PDF: {e}")
+        logger.error(f"Error generating planning PDF: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating PDF: {str(e)}"
@@ -3734,8 +3763,14 @@ def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
         
         # Return PDF as blob
         from io import BytesIO
-        pdf_output = BytesIO()
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
         
         from fastapi.responses import StreamingResponse
         return StreamingResponse(
@@ -4200,152 +4235,8 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 
 @app.post("/api/planning/pdf")
-def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a maintenance planning PDF using FPDF with proper header."""
-    from io import BytesIO
-    from fastapi.responses import Response
-    import base64 as _b64
-    import urllib.request as _ur
-
-    SAVIA_LOGO = "/app/logo-savia.png"
-
-    try:
-        rows = body.get("rows", [])
-        filter_label = body.get("filter_label", "Tous les clients")
-        company_name = body.get("company_name", "SAVIA")
-        company_logo = body.get("company_logo", "")
-
-        # Client logo
-        _client_logo_io = None
-        if company_logo:
-            try:
-                clogo = company_logo.strip()
-                if clogo.startswith("data:"):
-                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
-                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
-                elif clogo.startswith("http"):
-                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
-                    with _ur.urlopen(req_, timeout=6) as _r:
-                        _client_logo_io = BytesIO(_r.read())
-            except Exception:
-                pass
-
-        display_name = company_name if company_name and company_name != "SAVIA" else "SAVIA"
-
-        pdf = SaviaPDF(orientation="L", unit="mm", format="A4")
-        pdf.set_header_data(
-            SAVIA_LOGO, _client_logo_io,
-            company_name if company_name != "SAVIA" else "",
-            "",
-            report_title="PLANNING DE MAINTENANCE"
-        )
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.set_top_margin(pdf.HEADER_H + 10)
-        pdf.add_page()
-        W = pdf.w - 20
-
-        today_str = datetime.now().strftime("%d/%m/%Y")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
-        pdf.cell(W, 5, _sanitize(f"Filtre : {filter_label}  |  G\u00e9n\u00e9r\u00e9 le {today_str}  |  {len(rows)} maintenance(s)"), align="C")
-        pdf.ln(8)
-
-        # Table header
-        col_widths = [25, 50, 55, 40, 35, 30, 30]  # Date, Client, Equipement, Technicien, Type, Récurrence, Statut
-        headers = ["Date", "Client", "\u00c9quipement", "Technicien", "Type", "R\u00e9currence", "Statut"]
-
-        pdf.set_fill_color(15, 118, 110)
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 8)
-        for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-        pdf.ln()
-
-        # Table rows
-        pdf.set_text_color(30, 40, 60)
-        pdf.set_font("Helvetica", "", 7.5)
-        for idx, row in enumerate(rows):
-            if pdf.get_y() > pdf.h - 20:
-                pdf.add_page()
-                pdf.set_fill_color(15, 118, 110)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Helvetica", "B", 8)
-                for i, h in enumerate(headers):
-                    pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-                pdf.ln()
-                pdf.set_text_color(30, 40, 60)
-                pdf.set_font("Helvetica", "", 7.5)
-
-            # Alternate row colors
-            if idx % 2 == 0:
-                pdf.set_fill_color(248, 250, 252)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
-            date_val = str(row.get("date_planifiee", "") or "")[:10]
-            client_val = str(row.get("client", "") or "\u2014")
-            machine_val = str(row.get("machine", "") or "\u2014")
-            tech_val = str(row.get("technicien", "") or "\u2014")
-            type_val = str(row.get("type_maintenance", "") or "\u2014")
-            recurrence_val = str(row.get("recurrence", "") or "")
-            if recurrence_val == "Aucune":
-                recurrence_val = "\u2014"
-            statut_val = str(row.get("statut", "") or "\u2014")
-
-            # Check overdue
-            is_overdue = False
-            if date_val and statut_val not in ["R\u00e9alis\u00e9e", "Termin\u00e9e", "Annul\u00e9e"]:
-                try:
-                    if datetime.strptime(date_val, "%Y-%m-%d") < datetime.now():
-                        is_overdue = True
-                        statut_val = "En retard"
-                except Exception:
-                    pass
-
-            vals = [date_val, client_val, machine_val, tech_val, type_val, recurrence_val, statut_val]
-            for i, v in enumerate(vals):
-                # Color statut cell
-                if i == 6:
-                    if is_overdue or "retard" in statut_val.lower():
-                        pdf.set_text_color(153, 27, 27)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val in ["R\u00e9alis\u00e9e", "Termin\u00e9e"]:
-                        pdf.set_text_color(6, 95, 70)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val == "En cours":
-                        pdf.set_text_color(146, 64, 14)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    else:
-                        pdf.set_text_color(30, 64, 175)
-                        pdf.set_font("Helvetica", "B", 7.5)
-
-                pdf.cell(col_widths[i], 6.5, _sanitize(v[:30]), border="B", fill=True, align="C" if i in [0, 5, 6] else "L")
-
-                if i == 6:
-                    pdf.set_text_color(30, 40, 60)
-                    pdf.set_font("Helvetica", "", 7.5)
-            pdf.ln()
-
-        # Footer
-        pdf.set_y(-25)
-        pdf.set_font("Helvetica", "I", 7)
-        pdf.set_text_color(140, 150, 165)
-        pdf.cell(W, 4, _sanitize(f"Ce document est g\u00e9n\u00e9r\u00e9 automatiquement par {display_name} - {today_str}"), align="C")
-
-        buf = BytesIO()
-        pdf.output(buf)
-        buf.seek(0)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=planning_maintenance_{datetime.now().strftime('%Y%m%d')}.pdf"}
-        )
-    except Exception as e:
-        logging.error(f"Planning PDF error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
-
-
 @app.post("/api/interventions/{intervention_id}/factured")
+
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:

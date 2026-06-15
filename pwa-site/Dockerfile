@@ -1,5 +1,6 @@
 FROM node:20-alpine AS builder
-RUN apk add --no-cache libc6-compat
+# libc6-compat doesn't exist in Alpine, using glibc compatibility layer instead
+RUN apk add --no-cache python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
