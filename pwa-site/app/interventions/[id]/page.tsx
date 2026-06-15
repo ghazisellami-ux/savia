@@ -81,6 +81,11 @@ export default function InterventionDetailPage() {
   const [refuseRaison, setRefuseRaison] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Per-technician data state
+  const [technicianRecords, setTechnicianRecords] = useState<any[]>([]);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
+
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
@@ -88,8 +93,24 @@ export default function InterventionDetailPage() {
     start_time: '08:00', end_time: '09:00',  // HH:MM format
   });
 
+  // Per-technician form
+  const [techForm, setTechForm] = useState({
+    probleme_tech: '',
+    cause_tech: '',
+    solution_tech: '',
+    heure_debut_tech: '08:00',
+    heure_fin_tech: '09:00',
+    duree_minutes_tech: 60,
+    duree_deplacement_tech: 0,
+    notes_tech: '',
+    statut: 'En cours',
+  });
+
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
+    // Get current user name from localStorage (set during login)
+    const userName = localStorage.getItem('savia_site_user_nom') || '';
+    setCurrentUserName(userName);
     loadAll();
   }, [id]);
 
@@ -117,23 +138,21 @@ export default function InterventionDetailPage() {
       let endTime = '09:00';
       
       if (found.start_time) {
-        // start_time from DB is HH:MM or HH:MM:SS
-        startTime = found.start_time.substring(0, 5);  // Extract HH:MM
+        startTime = found.start_time.substring(0, 5);
       }
       
       if (found.end_time) {
-        // end_time from DB is HH:MM or HH:MM:SS
-        endTime = found.end_time.substring(0, 5);  // Extract HH:MM
+        endTime = found.end_time.substring(0, 5);
       }
       
       // Calculate duration from times if both are provided
-      let durationMin = 60;  // Default 1 hour
+      let durationMin = 60;
       if (startTime && endTime) {
         const [startH, startM] = startTime.split(':').map(Number);
         const [endH, endM] = endTime.split(':').map(Number);
         durationMin = (endH * 60 + endM) - (startH * 60 + startM);
-        if (durationMin <= 0) durationMin += 24 * 60;  // Handle midnight crossing
-        durationMin = Math.max(60, durationMin);  // Minimum 1 hour
+        if (durationMin <= 0) durationMin += 24 * 60;
+        durationMin = Math.max(60, durationMin);
       }
       
       setForm({
@@ -146,11 +165,23 @@ export default function InterventionDetailPage() {
         type_erreur:      found.type_erreur || '',
         priorite:         found.priorite || '',
         duree_minutes:    durationMin,
-        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,  // Convert minutes to hours for display
+        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,
         fiche_validation: found.fiche_validation || 'En attente',
         start_time:       startTime,
         end_time:         endTime,
       });
+
+      // Try to load technician records (if backend supports it)
+      try {
+        // Check if intervention has technicien to determine mode
+        if (found.technicien) {
+          // Could load from interventions_techniciens, but for now use single-tech mode
+          setUsePerTechnicianMode(false);
+        }
+      } catch (e) {
+        console.debug('Per-tech records not available, using standard mode');
+        setUsePerTechnicianMode(false);
+      }
     } catch {
       setError('Erreur lors du chargement.');
     } finally {
@@ -262,6 +293,70 @@ export default function InterventionDetailPage() {
       setTimeout(() => router.replace('/interventions'), 1500);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la mise à jour.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveTechnicianData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    // Validation: solution_tech required when marking as Cloturee
+    if (techForm.statut === 'Cloturee' && !techForm.solution_tech.trim()) {
+      setError('La "Solution" est obligatoire pour clôturer votre intervention.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Calculate duration from times
+      const calculateDuration = (startTime: string, endTime: string): number => {
+        try {
+          const [startH, startM] = startTime.split(':').map(Number);
+          const [endH, endM] = endTime.split(':').map(Number);
+          let duration = (endH * 60 + endM) - (startH * 60 + startM);
+          if (duration <= 0) duration += 24 * 60;
+          return Math.max(60, duration);
+        } catch (e) {
+          return 60;
+        }
+      };
+
+      const durationMinutes = calculateDuration(techForm.heure_debut_tech, techForm.heure_fin_tech);
+      const deploymentMinutes = Math.round(techForm.duree_deplacement_tech);
+
+      const payload = {
+        technicien_nom: currentUserName,
+        probleme_tech: techForm.probleme_tech,
+        cause_tech: techForm.cause_tech,
+        solution_tech: techForm.solution_tech,
+        heure_debut_tech: techForm.heure_debut_tech,
+        heure_fin_tech: techForm.heure_fin_tech,
+        duree_minutes_tech: durationMinutes,
+        duree_deplacement_tech: deploymentMinutes,
+        notes_tech: techForm.notes_tech,
+        statut: techForm.statut,  // Can be 'Cloturee' to mark as done
+      };
+
+      console.log('📤 Sending technician data:', payload);
+
+      const response = await api.interventions.updateTechnicianData(id, payload);
+      
+      if (response.status === 'ALL_COMPLETED') {
+        // All technicians done, awaiting admin closure
+        setSuccess(`✅ Tous les techniciens ont complété (${response.completed}/${response.total}). En attente de clôture administrative.`);
+      } else if (response.status === 'PARTIAL') {
+        // Still waiting for others
+        const pending = response.pending_technicians?.join(', ') || '';
+        setSuccess(`✅ Données sauvegardées (${response.completed}/${response.total} techniciens complétés). Restants: ${pending}`);
+      } else {
+        setSuccess('✅ Vos données ont été enregistrées.');
+      }
+      
+      setTimeout(() => router.replace('/interventions'), 2000);
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de la sauvegarde.');
     } finally {
       setSaving(false);
     }

@@ -6,8 +6,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system fonts for PDF Unicode support
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (fonts-dejavu removed - using Arial built-in font in FPDF)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies with retries, extended timeout, and alternative index
 COPY requirements.txt .

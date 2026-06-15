@@ -7,6 +7,8 @@ Replaces Flask api_server.py with modern async endpoints.
 """
 import math
 import os
+import base64
+import tempfile
 import jwt
 import bcrypt
 import logging
@@ -23,7 +25,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from db_engine import (
-    init_db, get_db, read_sql,
+    init_db, get_db, read_sql, _trigger_backup,
     lire_equipements, ajouter_equipement, modifier_equipement, supprimer_equipement,
     lire_interventions, ajouter_intervention, update_intervention_statut, cloturer_intervention,
     lire_pieces, ajouter_piece, modifier_piece, supprimer_piece,
@@ -1792,21 +1794,35 @@ def get_interventions(
     limit: int = 200,
     user: dict = Depends(_verify_token),
 ):
+    from db_engine import lire_child_interventions_for_technician
+    
     df = lire_interventions(machine=machine)
     
     # Si le user est un Technicien → filtrer automatiquement ses interventions
-    if user.get("role") == "Technicien" and not df.empty:
+    # ET inclure ses interventions enfants (temporary child interventions)
+    if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
         # Gère "Dridi Ali" vs "Ali Dridi" et autres variations d'ordre
         name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
-        if name_words and "technicien" in df.columns:
+        if name_words and not df.empty and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
                 lambda t: all(word in t.lower() for word in name_words)
             )]
-        elif not name_words:
-            # Aucun nom disponible → ne rien filtrer (afficher tout)
+        
+        # Also fetch child interventions assigned to this technician
+        try:
+            df_children = lire_child_interventions_for_technician(user_nom_complet)
+            if not df_children.empty:
+                # Combine parent and child interventions
+                import pandas as pd
+                df = pd.concat([df, df_children], ignore_index=True)
+                logger.info(f"Technician {user_nom_complet}: {len(df)} total interventions (parents + children)")
+        except Exception as e:
+            logger.warning(f"Error fetching child interventions for {user_nom_complet}: {e}")
+            # Continue with just parent interventions if children fetch fails
             pass
+        
     elif technicien and not df.empty and "technicien" in df.columns:
         words = technicien.lower().split()
         df = df[df["technicien"].astype(str).apply(
@@ -1832,6 +1848,30 @@ def get_interventions(
         total = 0
     
     return _df_to_records(df)
+
+
+@app.get("/api/interventions/{parent_id}/children")
+def get_child_interventions_endpoint(
+    parent_id: int,
+    user: dict = Depends(_verify_token),
+):
+    """
+    Récupère les interventions enfants d'une intervention parent.
+    Utilisé par PWA pour afficher les technicians assignés à une demande.
+    """
+    from db_engine import get_child_interventions
+    
+    try:
+        children = get_child_interventions(parent_id)
+        return {
+            "success": True,
+            "parent_id": parent_id,
+            "children": children,
+            "count": len(children)
+        }
+    except Exception as e:
+        logger.error(f"Error fetching child interventions for parent {parent_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la récupération des enfants: {str(e)}")
 
 
 @app.post("/api/interventions")
@@ -2496,7 +2536,12 @@ def get_demandes(
 
 @app.post("/api/demandes")
 def create_demande(body: dict, user: dict = Depends(_verify_token)):
-    from db_engine import get_db
+    """
+    Crée une demande d'intervention avec support multi-techniciens.
+    Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
+    """
+    from db_engine import get_db, USE_PG
+    
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     demandeur          = body.get("demandeur") or user.get("username", "")
     client             = body.get("client") or ""
@@ -2506,37 +2551,148 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     code_erreur        = body.get("code_erreur") or ""
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
-    technicien_assigne = body.get("technicien_assigne") or ""
-    # Convert technicien username to full name
-    if technicien_assigne:
-        technicien_assigne = _get_technician_fullname(technicien_assigne)
-    # Si technicien assigné dès la création → statut "Assignée"
-    statut = body.get("statut") or ("Assignée" if technicien_assigne else "En attente")
+    
+    # Support for multiple technicians: can be string (single) or list (multiple)
+    techniciens_input = body.get("technicien_assigne") or body.get("techniciens") or []
+    if isinstance(techniciens_input, str):
+        techniciens_input = [techniciens_input] if techniciens_input else []
+    
+    # Convert all to full names
+    techniciens_fullnames = []
+    for tech_username in techniciens_input:
+        if tech_username:
+            tech_fullname = _get_technician_fullname(tech_username)
+            techniciens_fullnames.append(tech_fullname)
+    
+    # First tech (for parent intervention)
+    first_tech = techniciens_fullnames[0] if techniciens_fullnames else ""
+    statut = "Assignée" if first_tech else "En attente"
+    
+    # Use correct placeholder based on database type
+    ph = "%s" if USE_PG else "?"
+
+    demande_id = None
+    parent_intervention_id = None
 
     with get_db() as conn:
-        conn.execute("""
+        # Create the DEMAND
+        conn.execute(f"""
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence,
             description, code_erreur, contact_nom, contact_tel,
-            statut, technicien_assigne,
+            statut, ", ".join(techniciens_fullnames),  # All techs in the demand
         ))
-        # Récupérer l'id de la demande créée
+        
+        # Get the newly created demand ID
         new_demande = conn.execute(
             "SELECT id FROM demandes_intervention ORDER BY id DESC LIMIT 1"
         ).fetchone()
         demande_id = new_demande["id"] if new_demande else None
 
-    # --- Notification Telegram ---
+        # --- Create PARENT intervention (visible in table) ---
+        today = datetime.now().strftime("%Y-%m-%d")
+        notes_parent = f"[{client}] Demande #{demande_id}"
+        
+        # Determine if single or multi-tech scenario
+        is_multi_tech = len(techniciens_fullnames) > 1
+        
+        # For single tech: parent is visible with "Assignée" status (technicien sees it and can accept/refuse)
+        # For multi tech: parent is temporary, hidden, tracking status only
+        parent_statut = "Assignée" if not is_multi_tech else "En attente"
+        parent_is_temporary = 1 if is_multi_tech else 0
+        
+        conn.execute(f"""
+            INSERT INTO interventions
+              (date, machine, technicien, type_intervention, description,
+               probleme, code_erreur, statut, priorite, notes,
+               is_temporary, parent_intervention_id)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+        """, (
+            today,
+            equipement,
+            first_tech,  # Primary tech on parent
+            "Corrective",
+            description[:500],
+            description[:500],
+            code_erreur,
+            parent_statut,  # "Assignée" for single tech, "En attente" for multi
+            urgence,
+            notes_parent,
+            parent_is_temporary,  # 0=visible (single), 1=hidden (multi)
+            None,  # parent_intervention_id = NULL (this IS the parent)
+        ))
+        
+        parent_intervention = conn.execute(
+            "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        parent_intervention_id = parent_intervention["id"] if parent_intervention else None
+        
+        # Link demand to parent intervention
+        if parent_intervention_id:
+            conn.execute(
+                f"UPDATE demandes_intervention SET intervention_id = {ph} WHERE id = {ph}",
+                (parent_intervention_id, demande_id)
+            )
+        
+        # --- Create CHILD interventions (one per technician, temporary) - ONLY FOR MULTI-TECH ---
+        if is_multi_tech:
+            for tech_fullname in techniciens_fullnames:
+                conn.execute(f"""
+                    INSERT INTO interventions
+                      (date, machine, technicien, type_intervention, description,
+                       probleme, code_erreur, statut, priorite, notes,
+                       is_temporary, parent_intervention_id)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                """, (
+                    today,
+                    equipement,
+                    tech_fullname,
+                    "Corrective",
+                    description[:500],
+                    description[:500],
+                    code_erreur,
+                    "Assignée",  # Child starts as "Assignée"
+                    urgence,
+                    f"[ENFANT] {notes_parent}",
+                    1,  # is_temporary = TRUE (hidden from main table)
+                    parent_intervention_id,  # Link to parent
+                ))
+                
+                child_intervention = conn.execute(
+                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                child_id = child_intervention["id"] if child_intervention else None
+                
+                # Create entry in interventions_techniciens table WITHIN SAME TRANSACTION
+                if child_id:
+                    conn.execute(f"""
+                        INSERT INTO interventions_techniciens 
+                        (intervention_id, technicien_nom, statut)
+                        VALUES ({ph}, {ph}, 'Assigné')
+                    """, (child_id, tech_fullname))
+                    logger.info(f"Child intervention #{child_id} created for {tech_fullname}")
+        else:
+            # For SINGLE TECH: create entry in interventions_techniciens for the parent
+            conn.execute(f"""
+                INSERT INTO interventions_techniciens 
+                (intervention_id, technicien_nom, statut)
+                VALUES ({ph}, {ph}, 'Assigné')
+            """, (parent_intervention_id, first_tech))
+            logger.info(f"Parent intervention #{parent_intervention_id} assigned to {first_tech}")
+        
+        _trigger_backup()
+
+    # --- Telegram notifications ---
     urg_icon = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
     contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
     code_line    = f"\n\U0001f522 Code erreur : <code>{code_erreur}</code>" if code_erreur else ""
-    tech_line    = f"\n\U0001f477 Assigné à : <b>{technicien_assigne}</b>" if technicien_assigne else ""
+    techs_line   = f"\n\U0001f477 Assigné à : <b>{', '.join(techniciens_fullnames)}</b>" if techniciens_fullnames else ""
     msg = (
         f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
@@ -2545,50 +2701,17 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f4dd Problème : {description[:300]}"
         f"{code_line}"
         f"{contact_line}"
-        f"{tech_line}\n"
+        f"{techs_line}\n"
         f"\U0001f464 Demandeur : <b>{demandeur}</b>\n"
         f"\U0001f550 Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
     _send_telegram_bot("telegram_sav", msg)
-
-    # --- Auto-créer une intervention SAV si technicien assigné dès la création ---
-    if technicien_assigne and demande_id:
-        try:
-            with get_db() as conn:
-                today = datetime.now().strftime("%Y-%m-%d")
-                notes_interv = f"[{client}] Demande #{demande_id}"
-                conn.execute("""
-                    INSERT INTO interventions
-                      (date, machine, technicien, type_intervention, description,
-                       probleme, code_erreur, statut, priorite, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    today,
-                    equipement,
-                    technicien_assigne,
-                    "Corrective",
-                    description[:500],
-                    description[:500],
-                    code_erreur,
-                    "Assignée",
-                    urgence,
-                    notes_interv,
-                ))
-                new_interv = conn.execute(
-                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                if new_interv:
-                    conn.execute(
-                        "UPDATE demandes_intervention SET intervention_id = ? WHERE id = ?",
-                        (new_interv["id"], demande_id)
-                    )
-                    logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
-        except Exception as e:
-            logger.error(f"Erreur auto-création intervention depuis demande: {e}")
-
-    return {"success": True}
+    
+    logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Parent intervention #{parent_intervention_id}")
+    
+    return {"success": True, "demande_id": demande_id, "parent_intervention_id": parent_intervention_id}
 
 
 @app.put("/api/demandes/{demande_id}/statut")
@@ -2715,6 +2838,148 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
             logger.error(f"Erreur auto-création intervention: {e}")
 
     return {"success": True}
+
+
+# ------ Technicien Update Per-Technician Data ------
+
+@app.put("/api/interventions/{intervention_id}/technicien-data")
+def update_technicien_data(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """
+    Updates per-technician data in interventions_techniciens table.
+    When technician marks their work as Cloturee, check if all are complete.
+    Only then finalize the parent intervention.
+    
+    Expected body:
+    {
+        "probleme_tech": "...",
+        "cause_tech": "...",
+        "solution_tech": "...",
+        "heure_debut_tech": "HH:MM",
+        "heure_fin_tech": "HH:MM",
+        "duree_minutes_tech": 60,
+        "duree_deplacement_tech": 30,
+        "notes_tech": "...",
+        "statut": "Cloturee" (marks this tech as done)
+    }
+    """
+    from db_engine import (
+        get_db, update_interventions_techniciens, 
+        get_or_create_interventions_techniciens, get_techniciens_status,
+        finalize_intervention_from_techniciens
+    )
+    
+    try:
+        # Get intervention to verify it exists
+        with get_db() as conn:
+            intervention = conn.execute(
+                "SELECT id, machine, technicien FROM interventions WHERE id = ?",
+                (intervention_id,)
+            ).fetchone()
+            
+            if not intervention:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Verify technician permissions
+            if user.get("role") == "Technicien":
+                current_tech = str(intervention.get("technicien") or "").strip()
+                user_nom_complet = (user.get("nom") or "").strip()
+                name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+                is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+                
+                if not is_assigned and current_tech:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Vous ne pouvez éditer que vos propres interventions"
+                    )
+        
+        # Get or create entry for this technician
+        tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
+        get_or_create_interventions_techniciens(intervention_id, tech_nom)
+        
+        # Update the per-technician data
+        success = update_interventions_techniciens(intervention_id, tech_nom, body)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
+        
+        # Get current status
+        status_info = get_techniciens_status(intervention_id)
+        
+        # Check if all technicians are now completed
+        if status_info['is_all_completed']:
+            # All done - aggregate data (but DO NOT close the parent intervention)
+            finalize_result = finalize_intervention_from_techniciens(intervention_id)
+            
+            if finalize_result.get('success'):
+                logger.info(f"✅ Intervention #{intervention_id} data aggregated from all {status_info['total']} technicians")
+                
+                # Send Telegram: ALL TECHNICIANS COMPLETED (but still waiting for admin closure)
+                try:
+                    machine = intervention.get('machine', '')
+                    total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
+                    solutions = finalize_result.get('combined_solution', '')
+                    
+                    msg_tg = (
+                        f"✅ <b>TOUS LES TECHNICIENS COMPLÉTÉS — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>\n"
+                        f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
+                        f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🔧 Solutions : {solutions}\n\n"
+                        f"⏳ En attente de clôture administrative...\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram_bot("telegram_sav", msg_tg)
+                    _send_telegram(msg_tg)
+                except Exception as te:
+                    logger.error(f"Telegram notification error: {te}")
+                
+                return {
+                    "success": True,
+                    "message": "✅ Tous les techniciens ont complété leurs données. Intervention en attente de clôture administrative.",
+                    "intervention_finalized": False,
+                    "status": "ALL_COMPLETED",
+                    "completed": status_info['completed'],
+                    "total": status_info['total']
+                }
+            else:
+                return HTTPException(status_code=500, detail="Erreur lors de l'agrégation")
+        else:
+            # Partial completion - still waiting for others
+            pending_list = ", ".join(status_info['pending_names'])
+            logger.info(f"⏳ Intervention #{intervention_id} partially complete: {status_info['completed']}/{status_info['total']} (pending: {pending_list})")
+            
+            # Send Telegram: PARTIALLY CLOSED
+            try:
+                machine = intervention.get('machine', '')
+                msg_tg = (
+                    f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
+                    f"🏥 Machine : <b>{machine}</b>\n"
+                    f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
+                    f"⏳ Techniciens restants :\n"
+                )
+                for pending_tech in status_info['pending_names']:
+                    msg_tg += f"  • {pending_tech}\n"
+                
+                msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                _send_telegram(msg_tg)
+            except Exception as te:
+                logger.error(f"Telegram notification error: {te}")
+            
+            return {
+                "success": True,
+                "message": f"Données sauvegardées ({status_info['completed']}/{status_info['total']} techniciens complétés)",
+                "intervention_finalized": False,
+                "status": "PARTIAL",
+                "completed": status_info['completed'],
+                "total": status_info['total'],
+                "pending_technicians": status_info['pending_names']
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur update_technicien_data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ------ Technicien Accept / Refuse intervention ------
@@ -3158,31 +3423,39 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
         try:
             nb_plannings = generer_planning_from_contrat(contrat_id)
             if nb_plannings > 0:
-                logger.info(f"Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées automatiquement")
-                # Notification Telegram
-                recurrence = body.get("recurrence_maintenance", "")
-                # Support both single equipment and multiple equipments
-                equipements = body.get("equipements", [])
-                if isinstance(equipements, str):
-                    equipements = [equipements] if equipements else []
-                if not equipements:
-                    single_eq = body.get("equipement", "")
-                    if single_eq:
-                        equipements = [single_eq]
-                equipement_str = ", ".join(equipements) if equipements else "— Non spécifié —"
-                client = body.get("client", "")
-                date_fin = body.get("date_fin", "")
-                msg = (
-                    f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
-                    f"👤 Client : <b>{client}</b>\n"
-                    f"🏥 Équipement(s) : <b>{equipement_str}</b>\n"
-                    f"🔄 Récurrence : <b>{recurrence}</b>\n"
-                    f"📅 Jusqu'au : {date_fin}\n\n"
-                    f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
-                    f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
-                )
-                _send_telegram_bot("telegram_sav", msg)
-                _send_telegram_bot("telegram_manager", msg)
+                logger.info(f"✅ Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées")
+                # Notification Telegram - Send in background (non-blocking)
+                def send_telegram_async():
+                    try:
+                        recurrence = body.get("recurrence_maintenance", "")
+                        equipements = body.get("equipements", [])
+                        if isinstance(equipements, str):
+                            equipements = [equipements] if equipements else []
+                        if not equipements:
+                            single_eq = body.get("equipement", "")
+                            if single_eq:
+                                equipements = [single_eq]
+                        equipement_str = ", ".join(equipements) if equipements else "— Non spécifié —"
+                        client = body.get("client", "")
+                        date_fin = body.get("date_fin", "")
+                        msg = (
+                            f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
+                            f"👤 Client : <b>{client}</b>\n"
+                            f"🏥 Équipement(s) : <b>{equipement_str}</b>\n"
+                            f"🔄 Récurrence : <b>{recurrence}</b>\n"
+                            f"📅 Jusqu'au : {date_fin}\n\n"
+                            f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
+                            f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
+                        )
+                        _send_telegram_bot("telegram_sav", msg)
+                        _send_telegram_bot("telegram_manager", msg)
+                        logger.info(f"📨 Telegram notifications sent for contrat #{contrat_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to send Telegram for contrat #{contrat_id}: {e}")
+                
+                import threading
+                telegram_thread = threading.Thread(target=send_telegram_async, daemon=True)
+                telegram_thread.start()
         except Exception as e:
             logger.error(f"Erreur génération planning pour contrat #{contrat_id}: {e}")
     return {"ok": True, "contrat_id": contrat_id, "nb_plannings": nb_plannings}
@@ -3271,56 +3544,76 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/pdf")
 def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a maintenance planning PDF using FPDF with proper header."""
+    """Generate a maintenance planning PDF using FPDF with proper header.
+    Supports date range filtering."""
     from io import BytesIO
     from fastapi.responses import Response
-    import base64 as _b64
-    import urllib.request as _ur
+    from datetime import datetime
+    from fpdf import FPDF
 
     SAVIA_LOGO = "/app/logo-savia.png"
 
     try:
         rows = body.get("rows", [])
+        logger.info(f"[PDF] Received {len(rows)} rows from frontend")
         filter_label = body.get("filter_label", "Tous les clients")
         company_name = body.get("company_name", "SAVIA")
         company_logo = body.get("company_logo", "")
-
-        # Client logo
-        _client_logo_io = None
-
-        from fpdf import FPDF
-        from datetime import datetime
 
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=10)
 
         # Page 1: Header with logo
         pdf.add_page()
-        pdf.set_font("DejaVu", size=10)
+        # Use built-in Arial font instead of DejaVu
+        pdf.set_font("Arial", size=10)
 
         # Left: SAVIA logo
         if os.path.exists(SAVIA_LOGO):
             pdf.image(SAVIA_LOGO, x=10, y=10, w=30)
         
-        # Right: Company info
-        pdf.set_xy(120, 15)
-        pdf.set_font("DejaVu", 'B', size=12)
+        # Right: Company logo (uploaded in admin)
+        if company_logo:
+            try:
+                # company_logo is base64 data URL: "data:image/png;base64,..."
+                if company_logo.startswith('data:'):
+                    # Extract base64 part
+                    base64_data = company_logo.split(',')[1]
+                    image_bytes = base64.b64decode(base64_data)
+                    
+                    # Create temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+                    
+                    # Add company logo to top right (x=160 aligns it to right, y=10, w=35 for width)
+                    pdf.image(tmp_path, x=160, y=10, w=35)
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+            except Exception as e:
+                logger.warning(f"Failed to add company logo: {e}")
+        
+        # Right: Company info (below logo)
+        pdf.set_xy(120, 50)
+        pdf.set_font("Arial", 'B', size=12)
         pdf.cell(0, 5, company_name, ln=True, align='R')
-        pdf.set_xy(120, 20)
-        pdf.set_font("DejaVu", size=9)
+        pdf.set_xy(120, 55)
+        pdf.set_font("Arial", size=9)
         pdf.cell(0, 4, f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
         
         # Title
         pdf.set_xy(10, 50)
-        pdf.set_font("DejaVu", 'B', size=16)
+        pdf.set_font("Arial", 'B', size=16)
         pdf.cell(0, 10, "PLANNING MAINTENANCE", ln=True)
         
-        pdf.set_font("DejaVu", size=10)
+        pdf.set_font("Arial", size=10)
         pdf.cell(0, 5, f"Filtre: {filter_label}", ln=True)
+        pdf.cell(0, 3, f"Nombre d'interventions: {len(rows)}", ln=True)
         pdf.ln(5)
 
         # Table header
-        pdf.set_font("DejaVu", 'B', size=9)
+        pdf.set_font("Arial", 'B', size=9)
         col_widths = [25, 25, 25, 30, 30, 25, 25]
         headers = ["Date", "Machine", "Type", "Technicien", "Client", "Statut", "Notes"]
         
@@ -3329,15 +3622,16 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
         pdf.ln()
 
         # Table data
-        pdf.set_font("DejaVu", size=8)
+        pdf.set_font("Arial", size=8)
         for row in rows:
-            date_str = row.get("date_prevue", "")[:10] if row.get("date_prevue") else ""
-            machine = row.get("machine", "")[:15]
-            type_maint = row.get("type_maintenance", "")[:12]
-            tech = row.get("technicien_assigne", "")[:15]
-            client = row.get("client", "")[:15]
-            statut = row.get("statut", "")[:10]
-            notes = row.get("notes", "")[:15]
+            # Use the column names that the frontend sends
+            date_str = row.get("date_planifiee", "")[:10] if row.get("date_planifiee") else ""
+            machine = str(row.get("machine", ""))[:15]
+            type_maint = str(row.get("type_maintenance", ""))[:12]
+            tech = str(row.get("technicien", ""))[:15]  # Frontend sends "technicien", not "technicien_assigne"
+            client = str(row.get("client", ""))[:15]
+            statut = str(row.get("statut", ""))[:10]
+            notes = str(row.get("notes", ""))[:15]
             
             pdf.cell(col_widths[0], 6, date_str, border=1, align='C')
             pdf.cell(col_widths[1], 6, machine, border=1)
@@ -3350,11 +3644,17 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
 
         # Footer
         pdf.set_y(-15)
-        pdf.set_font("DejaVu", size=8)
+        pdf.set_font("Arial", size=8)
         pdf.cell(0, 5, f"Page {pdf.page_no()}", align='C')
 
-        pdf_output = BytesIO()
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
         
         return Response(
             content=pdf_bytes,
@@ -3362,7 +3662,7 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
             headers={"Content-Disposition": "attachment; filename=planning.pdf"}
         )
     except Exception as e:
-        logger.error(f"Error generating planning PDF: {e}")
+        logger.error(f"Error generating planning PDF: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating PDF: {str(e)}"
@@ -3463,8 +3763,14 @@ def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
         
         # Return PDF as blob
         from io import BytesIO
-        pdf_output = BytesIO()
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
         
         from fastapi.responses import StreamingResponse
         return StreamingResponse(
@@ -3734,6 +4040,9 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             detail="Only Admin and Manager can reschedule interventions"
         )
     
+    from db_engine import USE_PG
+    ph = "%s" if USE_PG else "?"  # Placeholder for PostgreSQL or SQLite
+    
     new_date = body.get("date_planifiee")
     new_technicians = body.get("technicien_assigne")
     reason = body.get("reason", "").strip()  # ← Add reason support
@@ -3748,7 +4057,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
         with get_db() as conn:
             # Get current planning item
             current = conn.execute(
-                "SELECT * FROM planning_maintenance WHERE id = ?",
+                f"SELECT * FROM planning_maintenance WHERE id = {ph}",
                 (planning_id,)
             ).fetchone()
             
@@ -3776,19 +4085,24 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 update_data["notes"] = new_notes
             
             if update_data:
-                set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
+                set_clause = ", ".join([f"{k} = {ph}" for k in update_data.keys()])
                 values = list(update_data.values()) + [planning_id]
                 conn.execute(
-                    f"UPDATE planning_maintenance SET {set_clause} WHERE id = ?",
+                    f"UPDATE planning_maintenance SET {set_clause} WHERE id = {ph}",
                     values
                 )
                 conn.commit()
+                logger.info(f"Planning {planning_id} updated: {update_data}")
             
             # Create a greyed-out "Décalé" entry at the old date AFTER updating (separate transaction)
-            # BUT: Only if this is NOT already a ghost entry (to avoid duplicate ghosts on re-reschedule)
+            # BUT: Only if the DATE ACTUALLY CHANGED (not if only technicien changed)
+            # AND only if this is NOT already a ghost entry
             is_current_ghost = current.get("is_ghost", False)
             
-            if new_date and new_date != old_date and not is_current_ghost:
+            # Check if date actually changed (compare as strings for consistency)
+            date_has_changed = new_date and str(new_date) != str(old_date)
+            
+            if date_has_changed and not is_current_ghost:
                 try:
                     old_machine = current.get("machine", "")
                     old_client = current.get("client", "")
@@ -3800,28 +4114,29 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     # Using original_planning_id to link ghost to its source intervention
                     # This prevents duplicate ghosts when same intervention is rescheduled multiple times
                     existing_ghost = conn.execute(
-                        "SELECT id FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
+                        f"SELECT id FROM planning_maintenance WHERE original_planning_id = {ph} AND is_ghost = true",
                         (planning_id,)
                     ).fetchone()
                     
                     if not existing_ghost:
                         # Create a ghost from the ORIGINAL intervention at the old date
                         # Set original_planning_id to track that this ghost belongs to planning_id
-                        conn.execute(
-                            """INSERT INTO planning_maintenance 
+                        insert_sql = f"""INSERT INTO planning_maintenance 
                                (machine, client, date_prevue, technicien_assigne, type_maintenance, 
                                 recurrence, statut, description, notes, is_ghost, original_planning_id)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"""
+                        conn.execute(
+                            insert_sql,
                             (old_machine, old_client, old_date, "", old_type, 
                              "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True, planning_id)
                         )
                         conn.commit()
-                        logger.info(f"Ghost entry created for planning {planning_id}: {old_machine} on {old_date}")
+                        logger.info(f"✅ Ghost entry created for planning {planning_id}: {old_machine} on {old_date}")
                     else:
                         # Ghost already exists - update its notes to accumulate all reschedule reasons
                         ghost_id = existing_ghost.get("id")
                         ghost_current = conn.execute(
-                            "SELECT notes FROM planning_maintenance WHERE id = ?",
+                            f"SELECT notes FROM planning_maintenance WHERE id = {ph}",
                             (ghost_id,)
                         ).fetchone()
                         ghost_notes = ghost_current.get("notes", "") if ghost_current else ""
@@ -3835,7 +4150,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                                 else:
                                     updated_notes = new_reason_line
                                 conn.execute(
-                                    "UPDATE planning_maintenance SET notes = ? WHERE id = ?",
+                                    f"UPDATE planning_maintenance SET notes = {ph} WHERE id = {ph}",
                                     (updated_notes, ghost_id)
                                 )
                                 conn.commit()
@@ -3896,7 +4211,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error rescheduling planning {planning_id}: {e}")
+        logger.error(f"Error rescheduling planning {planning_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error rescheduling intervention: {str(e)}"
@@ -3920,152 +4235,8 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 
 @app.post("/api/planning/pdf")
-def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a maintenance planning PDF using FPDF with proper header."""
-    from io import BytesIO
-    from fastapi.responses import Response
-    import base64 as _b64
-    import urllib.request as _ur
-
-    SAVIA_LOGO = "/app/logo-savia.png"
-
-    try:
-        rows = body.get("rows", [])
-        filter_label = body.get("filter_label", "Tous les clients")
-        company_name = body.get("company_name", "SAVIA")
-        company_logo = body.get("company_logo", "")
-
-        # Client logo
-        _client_logo_io = None
-        if company_logo:
-            try:
-                clogo = company_logo.strip()
-                if clogo.startswith("data:"):
-                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
-                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
-                elif clogo.startswith("http"):
-                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
-                    with _ur.urlopen(req_, timeout=6) as _r:
-                        _client_logo_io = BytesIO(_r.read())
-            except Exception:
-                pass
-
-        display_name = company_name if company_name and company_name != "SAVIA" else "SAVIA"
-
-        pdf = SaviaPDF(orientation="L", unit="mm", format="A4")
-        pdf.set_header_data(
-            SAVIA_LOGO, _client_logo_io,
-            company_name if company_name != "SAVIA" else "",
-            "",
-            report_title="PLANNING DE MAINTENANCE"
-        )
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.set_top_margin(pdf.HEADER_H + 10)
-        pdf.add_page()
-        W = pdf.w - 20
-
-        today_str = datetime.now().strftime("%d/%m/%Y")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
-        pdf.cell(W, 5, _sanitize(f"Filtre : {filter_label}  |  G\u00e9n\u00e9r\u00e9 le {today_str}  |  {len(rows)} maintenance(s)"), align="C")
-        pdf.ln(8)
-
-        # Table header
-        col_widths = [25, 50, 55, 40, 35, 30, 30]  # Date, Client, Equipement, Technicien, Type, Récurrence, Statut
-        headers = ["Date", "Client", "\u00c9quipement", "Technicien", "Type", "R\u00e9currence", "Statut"]
-
-        pdf.set_fill_color(15, 118, 110)
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 8)
-        for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-        pdf.ln()
-
-        # Table rows
-        pdf.set_text_color(30, 40, 60)
-        pdf.set_font("Helvetica", "", 7.5)
-        for idx, row in enumerate(rows):
-            if pdf.get_y() > pdf.h - 20:
-                pdf.add_page()
-                pdf.set_fill_color(15, 118, 110)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Helvetica", "B", 8)
-                for i, h in enumerate(headers):
-                    pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-                pdf.ln()
-                pdf.set_text_color(30, 40, 60)
-                pdf.set_font("Helvetica", "", 7.5)
-
-            # Alternate row colors
-            if idx % 2 == 0:
-                pdf.set_fill_color(248, 250, 252)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
-            date_val = str(row.get("date_planifiee", "") or "")[:10]
-            client_val = str(row.get("client", "") or "\u2014")
-            machine_val = str(row.get("machine", "") or "\u2014")
-            tech_val = str(row.get("technicien", "") or "\u2014")
-            type_val = str(row.get("type_maintenance", "") or "\u2014")
-            recurrence_val = str(row.get("recurrence", "") or "")
-            if recurrence_val == "Aucune":
-                recurrence_val = "\u2014"
-            statut_val = str(row.get("statut", "") or "\u2014")
-
-            # Check overdue
-            is_overdue = False
-            if date_val and statut_val not in ["R\u00e9alis\u00e9e", "Termin\u00e9e", "Annul\u00e9e"]:
-                try:
-                    if datetime.strptime(date_val, "%Y-%m-%d") < datetime.now():
-                        is_overdue = True
-                        statut_val = "En retard"
-                except Exception:
-                    pass
-
-            vals = [date_val, client_val, machine_val, tech_val, type_val, recurrence_val, statut_val]
-            for i, v in enumerate(vals):
-                # Color statut cell
-                if i == 6:
-                    if is_overdue or "retard" in statut_val.lower():
-                        pdf.set_text_color(153, 27, 27)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val in ["R\u00e9alis\u00e9e", "Termin\u00e9e"]:
-                        pdf.set_text_color(6, 95, 70)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val == "En cours":
-                        pdf.set_text_color(146, 64, 14)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    else:
-                        pdf.set_text_color(30, 64, 175)
-                        pdf.set_font("Helvetica", "B", 7.5)
-
-                pdf.cell(col_widths[i], 6.5, _sanitize(v[:30]), border="B", fill=True, align="C" if i in [0, 5, 6] else "L")
-
-                if i == 6:
-                    pdf.set_text_color(30, 40, 60)
-                    pdf.set_font("Helvetica", "", 7.5)
-            pdf.ln()
-
-        # Footer
-        pdf.set_y(-25)
-        pdf.set_font("Helvetica", "I", 7)
-        pdf.set_text_color(140, 150, 165)
-        pdf.cell(W, 4, _sanitize(f"Ce document est g\u00e9n\u00e9r\u00e9 automatiquement par {display_name} - {today_str}"), align="C")
-
-        buf = BytesIO()
-        pdf.output(buf)
-        buf.seek(0)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=planning_maintenance_{datetime.now().strftime('%Y%m%d')}.pdf"}
-        )
-    except Exception as e:
-        logging.error(f"Planning PDF error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
-
-
 @app.post("/api/interventions/{intervention_id}/factured")
+
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:

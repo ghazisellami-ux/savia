@@ -47,6 +47,7 @@ export const api = {
     update: (id: number, data: any) => req<any>(`/api/interventions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     accept: (id: number) => req<any>(`/api/interventions/${id}/accept`, { method: 'PUT' }),
     refuse: (id: number, raison: string) => req<any>(`/api/interventions/${id}/refuse`, { method: 'PUT', body: JSON.stringify({ raison }) }),
+    updateTechnicianData: (id: number, data: any) => req<any>(`/api/interventions/${id}/technicien-data`, { method: 'PUT', body: JSON.stringify(data) }),
     uploadPhoto: async (id: number, file: File) => {
       const token = localStorage.getItem('savia_site_token') || '';
       const fd = new FormData();

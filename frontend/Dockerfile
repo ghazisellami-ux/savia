@@ -4,8 +4,8 @@
 
 # ── Stage 1: Dependencies ─────────────────
 FROM node:20-alpine AS deps
-# Ajout de libc6-compat indispensable pour Next.js sur Alpine Linux
-RUN apk add --no-cache libc6-compat
+# libc6-compat doesn't exist in Alpine, using build tools instead for Next.js
+RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # On force l'installation de TOUTES les dépendances (y compris devDeps)

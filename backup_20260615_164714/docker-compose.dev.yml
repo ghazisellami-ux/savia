@@ -1,15 +1,16 @@
-﻿version: '3.8'
+version: '3.8'
 
-# Désactiver Buildkit (problème Windows)
+name: savia_dev
+
 services:
-  # ÔöÇÔöÇ PostgreSQL Database ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
-    container_name: savia_postgres
+    container_name: savia_dev_postgres
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_dev:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -21,14 +22,14 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - savia-network
+      - savia_dev_network
 
-  # ÔöÇÔöÇ FastAPI Backend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  # FastAPI Backend
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: savia_backend
+    container_name: savia_dev_backend
     ports:
       - "8001:8001"
     volumes:
@@ -62,22 +63,25 @@ services:
       timeout: 5s
       retries: 3
     networks:
-      - savia-network
+      - savia_dev_network
 
   minio:
     image: minio/minio:latest
+    container_name: savia_dev_minio
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio_data:/data
+      - minio_data_dev:/data
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
     restart: unless-stopped
+    networks:
+      - savia_dev_network
 
-  # ÔöÇÔöÇ Next.js Admin Frontend ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  # Next.js Admin Frontend
   frontend:
     build:
       context: ./frontend
@@ -86,7 +90,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
         BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
-    container_name: savia_frontend
+    container_name: savia_dev_frontend
     ports:
       - "3000:3000"
     environment:
@@ -103,14 +107,14 @@ services:
       timeout: 5s
       retries: 3
     networks:
-      - savia-network
+      - savia_dev_network
 
-  # ÔöÇÔöÇ SAVIA Site ÔÇö PWA Techniciens ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  # SAVIA Site - PWA Techniciens
   pwa-site:
     build:
       context: ./pwa-site
       dockerfile: Dockerfile
-    container_name: savia_pwa
+    container_name: savia_dev_pwa
     ports:
       - "3001:3001"
     environment:
@@ -126,15 +130,14 @@ services:
       timeout: 5s
       retries: 3
     networks:
-      - savia-network
+      - savia_dev_network
 
 volumes:
-  pgdata:
+  pgdata_dev:
     driver: local
-  minio_data:
+  minio_data_dev:
     driver: local
-
 
 networks:
-  savia-network:
+  savia_dev_network:
     driver: bridge

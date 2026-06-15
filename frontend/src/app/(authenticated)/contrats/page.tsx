@@ -187,7 +187,7 @@ export default function ContratsPage() {
       setForm(emptyForm());
       setEditingContrat(null);
       await load();
-      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 1500);
+      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 4000);
     } catch (err: any) {
       setSaveMsg(`❌ Erreur: ${err?.message || 'Indisponible'}`);
     } finally { setIsSaving(false); }

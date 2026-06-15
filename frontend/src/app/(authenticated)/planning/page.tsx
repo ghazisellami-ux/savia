@@ -168,6 +168,13 @@ export default function PlanningPage() {
   const [filterRegion,  setFilterRegion]  = useState('Tous');
   const [filterVille,   setFilterVille]   = useState('Tous');
   const [clientsFullData, setClientsFullData] = useState<any[]>([]);
+  
+  // PDF date filters
+  const [pdfDateFrom, setPdfDateFrom] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return d.toISOString().substring(0, 10);
+  });
+  const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
   // Combine default domains with custom domains
   const allDomaines = useMemo(() => {
@@ -627,6 +634,11 @@ export default function PlanningPage() {
             if (filterStatut === 'Tous') return true;
             const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
             return automaticStatus === filterStatut;
+          })
+          .filter(d => {
+            const dateStr = (d.date_planifiee || '').substring(0, 10);
+            if (!dateStr) return false;
+            return dateStr >= pdfDateFrom && dateStr <= pdfDateTo;
           });
         const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
         return (
@@ -675,6 +687,29 @@ export default function PlanningPage() {
               {fStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
             </select>
           </div>
+        </div>
+
+        {/* Second filter row: Date range for PDF */}
+        <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <label className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Période :</label>
+            <input 
+              type="date" 
+              value={pdfDateFrom} 
+              onChange={e => setPdfDateFrom(e.target.value)} 
+              title="Date début"
+              className="bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+            />
+            <span className="text-xs text-savia-text-muted">à</span>
+            <input 
+              type="date" 
+              value={pdfDateTo} 
+              onChange={e => setPdfDateTo(e.target.value)} 
+              title="Date fin"
+              className="bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+            />
+          </div>
           {/* Reset */}
           {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous' || filterRegion !== 'Tous' || filterVille !== 'Tous') && (
             <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); setFilterRegion('Tous'); setFilterVille('Tous'); }}
@@ -702,19 +737,27 @@ export default function PlanningPage() {
           <button
             onClick={async () => {
               try {
-                const printData = filteredData.slice().sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+                const printData = filteredData
+                  .sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+                
                 const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : filterTech !== 'Tous' ? `Technicien: ${filterTech}` : 'Tous les clients';
                 const token = localStorage.getItem('savia_token') || '';
                 const cn = localStorage.getItem('savia_company') || 'SAVIA';
                 const cl = localStorage.getItem('savia_logo') || '';
+                
                 const res = await fetch('/api/planning/pdf', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-                  body: JSON.stringify({ rows: printData, filter_label: filterLabel, company_name: cn, company_logo: cl }),
+                  body: JSON.stringify({ 
+                    rows: printData, 
+                    filter_label: filterLabel, 
+                    company_name: cn, 
+                    company_logo: cl
+                  }),
                 });
                 if (!res.ok) throw new Error('Erreur ' + res.status);
                 const blob = await res.blob();
-                downloadBlob(blob, 'planning_maintenance.pdf');
+                downloadBlob(blob, `planning_maintenance_${pdfDateFrom}_${pdfDateTo}.pdf`);
               } catch (err: any) { alert('Erreur PDF: ' + (err.message || 'Inconnue')); }
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/30 transition-all cursor-pointer ml-auto"

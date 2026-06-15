@@ -386,7 +386,9 @@ def init_db():
             duree_minutes INTEGER DEFAULT 0,
             code_erreur TEXT DEFAULT '',
             statut TEXT DEFAULT 'Terminée',
-            notes TEXT DEFAULT ''
+            notes TEXT DEFAULT '',
+            is_temporary INTEGER DEFAULT 0,           -- 1 = intervention enfant temporaire
+            parent_intervention_id INTEGER DEFAULT NULL -- ID de l'intervention parent (NULL si parent)
         );
 
         -- Techniciens (détails étendus)
@@ -548,6 +550,26 @@ def init_db():
             days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Techniciens assignés à une intervention (junction table pour per-tech data)
+        CREATE TABLE IF NOT EXISTS interventions_techniciens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intervention_id INTEGER NOT NULL,
+            technicien_id INTEGER,
+            technicien_nom TEXT NOT NULL,
+            statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé')),
+            probleme_tech TEXT DEFAULT '',
+            cause_tech TEXT DEFAULT '',
+            solution_tech TEXT DEFAULT '',
+            heure_debut_tech TIME,
+            heure_fin_tech TIME,
+            duree_minutes_tech INTEGER DEFAULT 0,
+            duree_deplacement_tech INTEGER DEFAULT 0,
+            notes_tech TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
         );
         """)
         
@@ -764,6 +786,65 @@ def init_db():
 
         # Travel time column on interventions
         _safe_add_column("interventions", "duree_deplacement", "INTEGER", "0")
+        _safe_add_column("interventions", "is_temporary", "INTEGER", "0")
+        _safe_add_column("interventions", "parent_intervention_id", "INTEGER", "NULL")
+
+        # Interventions_techniciens table migration (per-technician tracking)
+        try:
+            if USE_PG:
+                # PostgreSQL syntax
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS interventions_techniciens (
+                        id SERIAL PRIMARY KEY,
+                        intervention_id INTEGER NOT NULL,
+                        technicien_id INTEGER,
+                        technicien_nom TEXT NOT NULL,
+                        statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé')),
+                        probleme_tech TEXT DEFAULT '',
+                        cause_tech TEXT DEFAULT '',
+                        solution_tech TEXT DEFAULT '',
+                        heure_debut_tech TIME,
+                        heure_fin_tech TIME,
+                        duree_minutes_tech INTEGER DEFAULT 0,
+                        duree_deplacement_tech INTEGER DEFAULT 0,
+                        notes_tech TEXT DEFAULT '',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                # SQLite syntax
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS interventions_techniciens (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        intervention_id INTEGER NOT NULL,
+                        technicien_id INTEGER,
+                        technicien_nom TEXT NOT NULL,
+                        statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé')),
+                        probleme_tech TEXT DEFAULT '',
+                        cause_tech TEXT DEFAULT '',
+                        solution_tech TEXT DEFAULT '',
+                        heure_debut_tech TIME,
+                        heure_fin_tech TIME,
+                        duree_minutes_tech INTEGER DEFAULT 0,
+                        duree_deplacement_tech INTEGER DEFAULT 0,
+                        notes_tech TEXT DEFAULT '',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
+                    )
+                """)
+            # Create index for faster queries
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_int_tech_intervention_id ON interventions_techniciens(intervention_id)")
+            conn.commit()
+            logger.info("✅ Table interventions_techniciens créée ou déjà existante")
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.debug(f"⚠️  Erreur lors de la création de interventions_techniciens: {e}")
 
         # Ensure commit after all _safe_add_column migrations
         try:
@@ -930,11 +1011,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS contrats_equipements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             contrat_id INTEGER NOT NULL,
-            equipement_nom TEXT NOT NULL,
+            equipement_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (contrat_id) REFERENCES contrats(id) ON DELETE CASCADE,
-            FOREIGN KEY (equipement_nom) REFERENCES equipements(nom) ON DELETE RESTRICT,
-            UNIQUE(contrat_id, equipement_nom)
+            FOREIGN KEY (equipement_id) REFERENCES equipements(id) ON DELETE RESTRICT,
+            UNIQUE(contrat_id, equipement_id)
         )
         """)
 
@@ -1071,11 +1152,20 @@ def init_db():
             """)
             # Transférer nom, prenom, email de techniciens vers technicien_pii
             # Note: on concatène nom et prenom pour nom_complet si besoin
-            conn.execute("""
-                INSERT OR IGNORE INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
-                SELECT id, (IFNULL(nom, '') || ' ' || IFNULL(prenom, '')), email, telegram_id FROM techniciens
-                WHERE nom != '' OR email != ''
-            """)
+            # Use COALESCE for PostgreSQL compatibility (IFNULL is SQLite-only)
+            if USE_PG:
+                conn.execute("""
+                    INSERT INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
+                    SELECT id, (COALESCE(nom, '') || ' ' || COALESCE(prenom, '')), email, telegram_id FROM techniciens
+                    WHERE nom != '' OR email != ''
+                    ON CONFLICT DO NOTHING
+                """)
+            else:
+                conn.execute("""
+                    INSERT OR IGNORE INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
+                    SELECT id, (IFNULL(nom, '') || ' ' || IFNULL(prenom, '')), email, telegram_id FROM techniciens
+                    WHERE nom != '' OR email != ''
+                """)
             logger.info("Audit Trail: Migration PII effectuée avec succès.")
         except Exception as e:
             logger.debug(f"Migration PII ignorée (Pillar 2): {e}")
@@ -1149,19 +1239,21 @@ def init_db():
         # This is a one-time migration that safely populates the junction table from legacy data
         try:
             if USE_PG:
-                # PostgreSQL version
+                # PostgreSQL version - join with equipements table to get the ID
                 conn.execute("""
-                    INSERT INTO contrats_equipements (contrat_id, equipement_nom, created_at)
-                    SELECT id, equipement, created_at FROM contrats
-                    WHERE equipement IS NOT NULL AND equipement != ''
-                    ON CONFLICT (contrat_id, equipement_nom) DO NOTHING
+                    INSERT INTO contrats_equipements (contrat_id, equipement_id, created_at)
+                    SELECT c.id, e.id, c.created_at FROM contrats c
+                    LEFT JOIN equipements e ON e.nom = c.equipement
+                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
+                    ON CONFLICT (contrat_id, equipement_id) DO NOTHING
                 """)
             else:
                 # SQLite version
                 conn.execute("""
-                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom, created_at)
-                    SELECT id, equipement, created_at FROM contrats
-                    WHERE equipement IS NOT NULL AND equipement != ''
+                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id, created_at)
+                    SELECT c.id, e.id, c.created_at FROM contrats c
+                    LEFT JOIN equipements e ON e.nom = c.equipement
+                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
                 """)
             logger.info("✅ Migration réussie: contrats_equipements peuplée depuis contrats.equipement")
         except Exception as e:
@@ -1767,10 +1859,11 @@ def lire_interventions(machine=None):
                    COALESCE(e.client, '') AS client
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+            WHERE i.is_temporary = 0
         """
         if machine:
             df = read_sql(
-                base_query + " WHERE i.machine = ? ORDER BY i.date DESC",
+                base_query + " AND i.machine = ? ORDER BY i.date DESC",
                 conn, params=(machine,))
         else:
             df = read_sql(base_query + " ORDER BY i.date DESC", conn)
@@ -2790,11 +2883,14 @@ def lire_contrats(client=None):
 def get_contract_equipements(contrat_id):
     """Récupère tous les équipements d'un contrat."""
     with get_db() as conn:
+        ph = "%s" if USE_PG else "?"
         rows = conn.execute(
-            "SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = ? ORDER BY id",
+            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                LEFT JOIN equipements e ON ce.equipement_id = e.id
+                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
             (contrat_id,)
         ).fetchall()
-        return [dict(row)["equipement_nom"] for row in rows]
+        return [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
 
 def ajouter_contrat(contrat_dict):
     """
@@ -2830,12 +2926,13 @@ def ajouter_contrat(contrat_dict):
             pieces_incluses = json.dumps(pieces_incluses)
         
         # Insert and retrieve ID in a single operation - works for both SQLite and PostgreSQL
-        result = conn.execute("""
+        ph = "%s" if USE_PG else "?"
+        result = conn.execute(f"""
             INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                 sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
                 fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
                 pieces_incluses, avec_pieces)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             contrat_dict.get("client", ""),
             contrat_dict.get("type_contrat", "Standard"),
@@ -2862,10 +2959,25 @@ def ajouter_contrat(contrat_dict):
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom) VALUES (?, ?)",
-                        (contrat_id, eq)
-                    )
+                    # Get equipement ID from equipements table
+                    eq_row = conn.execute(
+                        f"SELECT id FROM equipements WHERE nom = {('%s' if USE_PG else '?')} LIMIT 1",
+                        (eq,)
+                    ).fetchone()
+                    eq_id = eq_row["id"] if eq_row else None
+                    
+                    if eq_id:
+                        ph = "%s" if USE_PG else "?"
+                        if USE_PG:
+                            conn.execute(
+                                f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                                (contrat_id, eq_id)
+                            )
+                        else:
+                            conn.execute(
+                                f"INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph})",
+                                (contrat_id, eq_id)
+                            )
                 except Exception as e:
                     logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
     
@@ -2894,8 +3006,10 @@ def generer_planning_from_contrat(contrat_id):
     }
 
     with get_db() as conn:
+        ph = "%s" if USE_PG else "?"
+        
         row = conn.execute(
-            "SELECT * FROM contrats WHERE id = ?", (contrat_id,)
+            f"SELECT * FROM contrats WHERE id = {ph}", (contrat_id,)
         ).fetchone()
         if not row:
             return 0
@@ -2921,7 +3035,9 @@ def generer_planning_from_contrat(contrat_id):
 
         # Récupérer tous les équipements du contrat
         equipements_rows = conn.execute(
-            "SELECT equipement_nom FROM contrats_equipements WHERE contrat_id = ? ORDER BY id",
+            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                LEFT JOIN equipements e ON ce.equipement_id = e.id
+                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
             (contrat_id,)
         ).fetchall()
         
@@ -2941,11 +3057,11 @@ def generer_planning_from_contrat(contrat_id):
         for equipement in equipements:
             current_date = date_premiere
             while current_date <= date_fin:
-                conn.execute("""
+                conn.execute(f"""
                     INSERT INTO planning_maintenance
                         (machine, client, type_maintenance, description,
                          date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 """, (
                     equipement,
                     client,
@@ -3542,3 +3658,344 @@ def sauvegarder_notification_schedules_batch(schedules):
     
     _trigger_backup()
     return True
+
+
+# ==========================================
+# INTERVENTIONS_TECHNICIENS — Per-Technician Tracking
+# ==========================================
+
+def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
+    """
+    Récupère ou crée un enregistrement interventions_techniciens pour un technicien.
+    
+    Args:
+        intervention_id: ID de l'intervention
+        technicien_nom: Nom complet du technicien (e.g., "Jean Dupont")
+    
+    Returns:
+        dict: Enregistrement with id, intervention_id, technicien_nom, statut, etc.
+    """
+    # Use correct placeholder based on database type
+    ph = "%s" if USE_PG else "?"
+    
+    with get_db() as conn:
+        # Check if entry exists
+        row = conn.execute(f"""
+            SELECT * FROM interventions_techniciens 
+            WHERE intervention_id = {ph} AND technicien_nom = {ph}
+        """, (intervention_id, technicien_nom)).fetchone()
+        
+        if row:
+            return dict(row)
+        
+        # Create new entry
+        conn.execute(f"""
+            INSERT INTO interventions_techniciens 
+            (intervention_id, technicien_nom, statut)
+            VALUES ({ph}, {ph}, 'Assigné')
+        """, (intervention_id, technicien_nom))
+        
+        # Fetch and return the new entry
+        row = conn.execute(f"""
+            SELECT * FROM interventions_techniciens 
+            WHERE intervention_id = {ph} AND technicien_nom = {ph}
+        """, (intervention_id, technicien_nom)).fetchone()
+        
+        _trigger_backup()
+        return dict(row) if row else None
+
+
+def update_interventions_techniciens(intervention_id, technicien_nom, data):
+    """
+    Met à jour les données per-technician pour une intervention.
+    
+    Args:
+        intervention_id: ID de l'intervention
+        technicien_nom: Nom complet du technicien
+        data: Dict with keys like probleme_tech, solution_tech, duree_minutes_tech, etc.
+    
+    Returns:
+        bool: Success
+    """
+    with get_db() as conn:
+        # Ensure the record exists
+        get_or_create_interventions_techniciens(intervention_id, technicien_nom)
+        
+        # Build update query
+        updates = []
+        params = []
+        
+        allowed_fields = [
+            'statut', 'probleme_tech', 'cause_tech', 'solution_tech',
+            'heure_debut_tech', 'heure_fin_tech', 'duree_minutes_tech',
+            'duree_deplacement_tech', 'notes_tech'
+        ]
+        
+        for field in allowed_fields:
+            if field in data:
+                updates.append(f"{field} = ?")
+                params.append(data[field])
+        
+        if not updates:
+            return False
+        
+        params.extend([intervention_id, technicien_nom])
+        
+        query = f"""
+            UPDATE interventions_techniciens 
+            SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
+            WHERE intervention_id = ? AND technicien_nom = ?
+        """
+        
+        conn.execute(query, params)
+        _trigger_backup()
+        return True
+
+
+def get_interventions_techniciens(intervention_id):
+    """
+    Récupère tous les enregistrements pour une intervention.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        list: Liste des techniciens assignés avec leurs données
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM interventions_techniciens 
+            WHERE intervention_id = ?
+            ORDER BY created_at ASC
+        """, (intervention_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def all_techniciens_completed(intervention_id):
+    """
+    Checks if all technicians have marked as Cloturee.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        bool: True if all techniciens have statut='Cloturee'
+    """
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) as total, 
+                   SUM(CASE WHEN statut = 'Cloturee' THEN 1 ELSE 0 END) as completed
+            FROM interventions_techniciens 
+            WHERE intervention_id = ?
+        """, (intervention_id,)).fetchone()
+        
+        if not row:
+            return False
+        
+        total = row['total'] or 0
+        completed = row['completed'] or 0
+        
+        return total > 0 and total == completed
+
+
+def calculate_intervention_totals(intervention_id):
+    """
+    Calcule les totaux pour une intervention à partir des données per-technician.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        dict: {total_duree_minutes, total_duree_deplacement}
+    """
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT 
+                COALESCE(SUM(duree_minutes_tech), 0) as total_duree,
+                COALESCE(SUM(duree_deplacement_tech), 0) as total_deplacement
+            FROM interventions_techniciens 
+            WHERE intervention_id = ? AND statut = 'Terminé'
+        """, (intervention_id,)).fetchone()
+        
+        if row:
+            return {
+                'total_duree_minutes': row['total_duree'] or 0,
+                'total_duree_deplacement': row['total_deplacement'] or 0
+            }
+        
+        return {'total_duree_minutes': 0, 'total_duree_deplacement': 0}
+
+
+def get_techniciens_status(intervention_id):
+    """
+    Gets the status of all technicians for an intervention.
+    Returns completed count, total count, and list of pending technicians.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        dict: {
+            'total': total number of technicians,
+            'completed': number completed (statut='Cloturee'),
+            'pending_names': list of technician names not yet completed,
+            'is_all_completed': bool
+        }
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT technicien_nom, statut FROM interventions_techniciens 
+            WHERE intervention_id = ?
+            ORDER BY technicien_nom
+        """, (intervention_id,)).fetchall()
+        
+        techs = [dict(r) for r in rows]
+        total = len(techs)
+        completed = sum(1 for t in techs if t.get('statut') == 'Cloturee')
+        pending = [t['technicien_nom'] for t in techs if t.get('statut') != 'Cloturee']
+        
+        return {
+            'total': total,
+            'completed': completed,
+            'pending_names': pending,
+            'is_all_completed': total > 0 and completed == total
+        }
+
+
+def get_child_interventions(parent_intervention_id):
+    """
+    Récupère toutes les interventions enfants d'une intervention parent.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, technicien, statut FROM interventions 
+            WHERE parent_intervention_id = ? AND is_temporary = 1
+            ORDER BY technicien
+        """, (parent_intervention_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def lire_child_interventions_for_technician(technician_name):
+    """
+    Récupère toutes les interventions enfants assignées à un technicien spécifique.
+    Utilisé par les techniciens sur PWA pour voir leurs interventions enfants.
+    """
+    with get_db() as conn:
+        # Query child interventions assigned to this technician
+        base_query = """
+            SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
+                   i.description, i.probleme, i.cause, i.solution,
+                   i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
+                   i.duree_deplacement,
+                   i.code_erreur, i.statut, i.notes,
+                   i.date_debut_intervention, i.date_cloture,
+                   i.type_erreur, i.priorite,
+                   i.start_time, i.end_time,
+                   COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
+                   COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
+                   (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
+                   COALESCE(e.client, '') AS client,
+                   i.parent_intervention_id
+            FROM interventions i
+            LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+            WHERE i.is_temporary = 1 AND i.technicien LIKE ?
+            ORDER BY i.date DESC
+        """
+        
+        # Use wildcard matching for flexible tech name matching
+        search_pattern = f"%{technician_name}%"
+        df = read_sql(base_query, conn, params=(search_pattern,))
+    
+    # Apply text fixes
+    text_columns = ["machine", "description", "probleme", "cause", "solution", "notes", "client"]
+    if not df.empty:
+        df = _fix_df_text(df, columns=text_columns)
+    
+    # Fill remaining NaN with empty string
+    if "client" in df.columns:
+        df["client"] = df["client"].fillna("")
+    
+    # Normalize statut
+    if not df.empty and "statut" in df.columns:
+        df["statut"] = df["statut"].apply(
+            lambda s: "Cloturee" if "tur" in str(s).lower() else str(s)
+        )
+    
+    return df
+
+
+def finalize_intervention_from_techniciens(intervention_id):
+    """
+    Finalizes an intervention by aggregating all technician data.
+    Should be called when ALL technicians have marked as Cloturee.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'total_duree_minutes': int,
+            'total_duree_deplacement': int,
+            'combined_solution': str,
+            'completed': int,
+            'total': int
+        }
+    """
+    with get_db() as conn:
+        # Get ALL technician records (only aggregate Cloturee ones)
+        rows = conn.execute("""
+            SELECT * FROM interventions_techniciens 
+            WHERE intervention_id = ?
+            ORDER BY technicien_nom
+        """, (intervention_id,)).fetchall()
+        
+        if not rows:
+            logger.warning(f"No technicians for intervention {intervention_id}")
+            return {'success': False, 'error': 'No technicians found'}
+        
+        techs = [dict(r) for r in rows]
+        
+        # Check if ALL are completed
+        completed_count = sum(1 for t in techs if t.get('statut') == 'Cloturee')
+        total_count = len(techs)
+        
+        if completed_count != total_count:
+            logger.info(f"Intervention {intervention_id}: Only {completed_count}/{total_count} completed, not finalizing yet")
+            return {
+                'success': False,
+                'reason': 'not_all_completed',
+                'completed': completed_count,
+                'total': total_count
+            }
+        
+        # Aggregate data from completed technicians
+        completed_techs = [t for t in techs if t.get('statut') == 'Cloturee']
+        total_duree = sum(t.get('duree_minutes_tech') or 0 for t in completed_techs)
+        total_deplacement = sum(t.get('duree_deplacement_tech') or 0 for t in completed_techs)
+        
+        # Combine technical notes
+        solutions = [t.get('solution_tech', '').strip() for t in completed_techs if t.get('solution_tech', '').strip()]
+        combined_solution = " | ".join(solutions) if solutions else ""
+        
+        # Update main intervention record (aggregate data but DO NOT close it)
+        # The intervention stays "En cours" until admin closes it manually
+        conn.execute("""
+            UPDATE interventions 
+            SET duree_minutes = ?,
+                duree_deplacement = ?,
+                solution = CASE WHEN solution = '' THEN ? ELSE solution END
+            WHERE id = ?
+        """, (total_duree, total_deplacement, combined_solution, intervention_id))
+        
+        _trigger_backup()
+        logger.info(f"✅ Intervention {intervention_id} fully finalized: {total_count} technicians, {total_duree} minutes total")
+        
+        return {
+            'success': True,
+            'completed': completed_count,
+            'total': total_count,
+            'total_duree_minutes': total_duree,
+            'total_duree_deplacement': total_deplacement,
+            'combined_solution': combined_solution
+        }
