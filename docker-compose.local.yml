@@ -1,5 +1,6 @@
 ﻿version: '3.8'
 
+# Désactiver Buildkit (problème Windows)
 services:
   # ÔöÇÔöÇ PostgreSQL Database ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   postgres:
@@ -131,6 +132,8 @@ volumes:
   pgdata:
     driver: local
   minio_data:
+    driver: local
+
 
 networks:
   savia-network:
