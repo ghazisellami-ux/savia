@@ -22,6 +22,7 @@ interface Contrat {
   id: string;
   client: string;
   equipement: string;
+  equipements?: string[];
   type_contrat: string;
   date_debut: string;
   date_fin: string;
@@ -30,11 +31,14 @@ interface Contrat {
   statut: string;
   conditions: string;
   notes: string;
+  avec_pieces?: boolean;
+  pieces_incluses?: string;
 }
 
 const emptyForm = () => ({
   client: '',
   equipement: '',
+  equipements: [] as string[],
   type_contrat: TYPES_CONTRAT[0],
   date_debut: new Date().toISOString().substring(0, 10),
   date_fin: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
@@ -55,6 +59,7 @@ export default function ContratsPage() {
   const { user } = useAuth();
   const canEdit = user?.role === 'Admin' || user?.role === 'Manager';
   const [search, setSearch] = useState('');
+  const [filterStatut, setFilterStatut] = useState('');
   const [data, setData] = useState<Contrat[]>([]);
   const [equips, setEquips] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
@@ -67,6 +72,7 @@ export default function ContratsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
+  const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +81,7 @@ export default function ContratsPage() {
         id: String(item.id || ''),
         client: item.client || item.Client || '',
         equipement: item.equipement || '',
+        equipements: item.equipements || [],
         type_contrat: item.type_contrat || 'Standard',
         date_debut: (item.date_debut || '').substring(0, 10),
         date_fin: (item.date_fin || '').substring(0, 10),
@@ -83,6 +90,8 @@ export default function ContratsPage() {
         statut: item.statut || 'Actif',
         conditions: item.conditions || '',
         notes: item.notes || '',
+        avec_pieces: item.avec_pieces || false,
+        pieces_incluses: item.pieces_incluses || '',
       })));
       setEquips(eqs as any[]);
       setClients(cls as any[]);
@@ -93,6 +102,26 @@ export default function ContratsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Helper function to determine actual status
+  const getActualStatus = (c: Contrat) => {
+    const fin = new Date(c.date_fin + 'T23:59:59');
+    const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+    
+    if (daysLeft < 0) {
+      return 'Expiré';
+    }
+    
+    const statut = (c.statut || 'Actif').toLowerCase();
+    if (statut.includes('suspendu')) {
+      return 'Suspendu';
+    }
+    if (statut.includes('expiré')) {
+      return 'Expiré';
+    }
+    
+    return 'Actif';
+  };
+
   // Derived lists
   const clientsList = clients.map((c: any) => c.nom).sort();
   const equipsByClient = form.client
@@ -100,24 +129,36 @@ export default function ContratsPage() {
     : [];
 
   // Filter pieces — use designation + equipement_type (correct DB fields)
-  const filteredPieces = form.equipement
+  // When multiple equipments are selected, show pieces for all of them
+  const filteredPieces = form.equipements.length > 0
     ? stockPieces.filter((p: any) => {
-        const eq = equips.find((e: any) => e.Nom === form.equipement);
-        const eqType = (eq?.Type_Equipement || eq?.type || '').toLowerCase().split(' ')[0];
-        if (!eqType) return true;
-        return (p.designation || '').toLowerCase().includes(eqType) ||
-               (p.equipement_type || '').toLowerCase().includes(eqType);
+        // Check if piece matches ANY of the selected equipments
+        return form.equipements.some(selectedEq => {
+          const eq = equips.find((e: any) => e.Nom === selectedEq);
+          // Equipment type is stored in "Type" field (renamed from "type" in the backend)
+          const eqType = (eq?.Type || '').toLowerCase().trim();
+          if (!eqType) return false; // If no equipment type, don't include the piece
+          
+          const pDesignation = (p.designation || '').toLowerCase().trim();
+          const pEquipType = (p.equipement_type || '').toLowerCase().trim();
+          
+          // Match equipment type against piece's equipement_type field
+          // Case-insensitive exact match is preferred
+          return eqType === pEquipType;
+        });
       })
     : stockPieces;
 
   const handleSave = async () => {
     if (!form.client) { setSaveMsg('Veuillez sélectionner un client.'); return; }
+    if (form.equipements.length === 0) { setSaveMsg('Veuillez sélectionner au moins un équipement.'); return; }
     setIsSaving(true);
     setSaveMsg('');
     try {
       const payload = {
         client: form.client,
-        equipement: form.equipement,
+        equipements: form.equipements,
+        equipement: form.equipements[0] || '', // Keep for backward compatibility
         type_contrat: form.type_contrat,
         date_debut: form.date_debut,
         date_fin: form.date_fin,
@@ -146,7 +187,7 @@ export default function ContratsPage() {
       setForm(emptyForm());
       setEditingContrat(null);
       await load();
-      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 1500);
+      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 4000);
     } catch (err: any) {
       setSaveMsg(`❌ Erreur: ${err?.message || 'Indisponible'}`);
     } finally { setIsSaving(false); }
@@ -154,16 +195,31 @@ export default function ContratsPage() {
 
   const openEdit = (c: Contrat) => {
     setEditingContrat(c);
+    
+    // Parse pieces_incluses from JSON if it exists
+    let pieces_selectionnees: { ref: string; designation: string; quota: number }[] = [];
+    if (c.pieces_incluses) {
+      try {
+        const parsed = JSON.parse(c.pieces_incluses);
+        if (Array.isArray(parsed)) {
+          pieces_selectionnees = parsed;
+        }
+      } catch (e) {
+        console.debug('Could not parse pieces_incluses:', e);
+      }
+    }
+    
     setForm({
       client: c.client,
       equipement: c.equipement,
+      equipements: c.equipements || (c.equipement ? [c.equipement] : []),
       type_contrat: c.type_contrat,
       date_debut: c.date_debut,
       date_fin: c.date_fin,
       sla_temps_reponse_h: c.sla_temps_reponse_h,
       montant: c.montant,
-      avec_pieces: false,
-      pieces_selectionnees: [],
+      avec_pieces: c.avec_pieces || false,
+      pieces_selectionnees: pieces_selectionnees,
       rappel_avant: 30,
       rappel_unite: 'jours' as 'jours' | 'mois',
       recurrence_maintenance: RECURRENCES[2],
@@ -194,19 +250,72 @@ export default function ContratsPage() {
     pieces_selectionnees: f.pieces_selectionnees.map(s => s.ref === ref ? { ...s, quota: Math.max(1, quota) } : s),
   }));
 
-  const filtered = data.filter(c =>
-    !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
-    c.id.toLowerCase().includes(search.toLowerCase()) ||
-    (c.type_contrat || '').toLowerCase().includes(search.toLowerCase())
-  );
+  // Equipment multi-select handlers
+  const toggleEquipment = (equipmentName: string) => {
+    setForm(f => ({
+      ...f,
+      equipements: f.equipements.includes(equipmentName)
+        ? f.equipements.filter(e => e !== equipmentName)
+        : [...f.equipements, equipmentName],
+    }));
+  };
 
-  const actifs = data.filter(c => (c.statut || '').toLowerCase().includes('actif')).length;
-  const expires = data.filter(c => {
-    const fin = new Date(c.date_fin);
-    const diff = (fin.getTime() - Date.now()) / 86400000;
-    return diff >= 0 && diff <= 60;
+  const removeEquipment = (equipmentName: string) => {
+    setForm(f => ({
+      ...f,
+      equipements: f.equipements.filter(e => e !== equipmentName),
+    }));
+  };
+
+  const filtered = data.filter(c => {
+    const matchSearch = !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
+      c.id.toLowerCase().includes(search.toLowerCase()) ||
+      (c.type_contrat || '').toLowerCase().includes(search.toLowerCase());
+    
+    // Determine actual status
+    const actualStatus = getActualStatus(c);
+    
+    const matchStatut = !filterStatut || actualStatus.toLowerCase() === filterStatut.toLowerCase();
+    return matchSearch && matchStatut;
+  });
+
+  const actifs = data.filter(c => getActualStatus(c) === 'Actif').length;
+  const suspendus = data.filter(c => getActualStatus(c) === 'Suspendu').length;
+  const expires = data.filter(c => getActualStatus(c) === 'Expiré').length;
+  const expiringIn60 = data.filter(c => {
+    const fin = new Date(c.date_fin + 'T23:59:59');
+    const diff = Math.floor((fin.getTime() - Date.now()) / 86400000);
+    return diff >= 0 && diff <= 60 && getActualStatus(c) === 'Actif';
   }).length;
-  const totalRevenu = data.reduce((a, b) => a + (b.montant || 0), 0);
+  
+  // Calculate prorata revenue for current year (2026)
+  const currentYear = new Date().getFullYear();
+  const yearStart = new Date(currentYear, 0, 1);
+  const yearEnd = new Date(currentYear, 11, 31);
+  const daysInYear = 365;
+  
+  const totalRevenu = data.reduce((total, c) => {
+    const montant = c.montant || 0;
+    if (montant === 0) return total;
+    
+    const debut = new Date(c.date_debut);
+    const fin = new Date(c.date_fin);
+    
+    // Calculate overlap between contract and current year
+    const overlapStart = new Date(Math.max(debut.getTime(), yearStart.getTime()));
+    const overlapEnd = new Date(Math.min(fin.getTime(), yearEnd.getTime()));
+    
+    // If no overlap, return 0
+    if (overlapStart > overlapEnd) return total;
+    
+    // Calculate days of overlap
+    const daysOverlap = (overlapEnd.getTime() - overlapStart.getTime()) / 86400000 + 1; // +1 to include both start and end days
+    
+    // Calculate prorata revenue
+    const prorataRevenu = montant * (daysOverlap / daysInYear);
+    
+    return total + prorataRevenu;
+  }, 0);
 
   if (isLoading) return (
     <div className="flex justify-center items-center h-64">
@@ -256,27 +365,38 @@ export default function ContratsPage() {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* KPIs - All in one row */}
+      <div className="grid grid-cols-2 md:grid-cols-12 gap-2">
         {[
-          { label: 'Total contrats', value: data.length, color: 'text-savia-accent', icon: <FileText className="w-5 h-5" /> },
-          { label: 'Actifs', value: actifs, color: 'text-green-400', icon: <CheckCircle2 className="w-5 h-5" /> },
-          { label: 'Expirent dans 60j', value: expires, color: 'text-yellow-400', icon: <AlertTriangle className="w-5 h-5" /> },
-          { label: 'Revenu annuel', value: `${(totalRevenu / 1000).toFixed(0)}K TND`, color: 'text-savia-accent', icon: <DollarSign className="w-5 h-5" /> },
+          { label: 'Total contrats', value: data.length, color: 'text-savia-accent', icon: <FileText className="w-4 h-4" />, span: false },
+          { label: 'Actifs', value: actifs, color: 'text-green-400', icon: <CheckCircle2 className="w-4 h-4" />, span: false },
+          { label: 'Suspendus', value: suspendus, color: 'text-orange-400', icon: <AlertTriangle className="w-4 h-4" />, span: false },
+          { label: 'Expiré', value: expires, color: 'text-red-500', icon: <AlertTriangle className="w-4 h-4" />, span: false },
+          { label: 'Expire dans 60j', value: expiringIn60, color: 'text-yellow-400', icon: <Clock className="w-4 h-4" />, span: false },
         ].map(k => (
-          <div key={k.label} className="glass rounded-xl p-4 text-center">
+          <div key={k.label} className={`glass rounded-xl p-2.5 text-center md:col-span-2`}>
             <div className={`${k.color} mx-auto mb-1 flex justify-center`}>{k.icon}</div>
             <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
-            <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
+            <div className="text-xs text-savia-text-muted mt-0.5">{k.label}</div>
           </div>
         ))}
+        
+        {/* Revenu annuel - larger card (2 columns) */}
+        <div className="glass rounded-xl p-4 text-center md:col-span-2">
+          <div className="text-savia-accent mx-auto mb-2 flex justify-center">
+            <DollarSign className="w-6 h-6" />
+          </div>
+          <div className="text-2xl font-black text-savia-accent">{(totalRevenu / 1000).toFixed(0)}K TND</div>
+          <div className="text-sm text-savia-text-muted mt-2">Revenu annuel</div>
+        </div>
       </div>
 
       {/* ===== BANNER : contrats expirant dans 30j ===== */}
       {(() => {
         const expiring30 = data.filter(c => {
-          const diff = (new Date(c.date_fin).getTime() - Date.now()) / 86400000;
-          return diff >= 0 && diff <= 30 && (c.statut || '').toLowerCase() === 'actif';
+          const fin = new Date(c.date_fin + 'T23:59:59');
+          const diff = Math.floor((fin.getTime() - Date.now()) / 86400000);
+          return diff >= 0 && diff <= 30 && getActualStatus(c) === 'Actif';
         });
         if (expiring30.length === 0) return null;
         return (
@@ -289,12 +409,17 @@ export default function ContratsPage() {
             </div>
             <div className="space-y-1 pl-7">
               {expiring30.map(c => {
-                const daysLeft = Math.round((new Date(c.date_fin).getTime() - Date.now()) / 86400000);
+                const fin = new Date(c.date_fin + 'T23:59:59');
+                const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
                 return (
                   <div key={c.id} className="flex items-center gap-2 text-sm text-amber-700">
                     <span className="font-mono text-xs bg-amber-100 px-1.5 py-0.5 rounded">#{c.id}</span>
                     <span className="font-semibold">{c.client}</span>
-                    {c.equipement && <span className="text-amber-500">— {c.equipement}</span>}
+                    {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string, idx: number) => (
+                      <span key={idx} className="text-amber-500">
+                        {idx === 0 ? '— ' : ', '}{eq}
+                      </span>
+                    ))}
                     <span className="ml-auto font-bold">{daysLeft}j restant(s)</span>
                     <span className="text-amber-500">• {c.date_fin}</span>
                   </div>
@@ -305,12 +430,30 @@ export default function ContratsPage() {
         );
       })()}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
-        <input type="text" placeholder="Rechercher par client, type, référence..." value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim outline-none" />
+      {/* Search & Filters */}
+      <div className="flex gap-3 flex-col md:flex-row">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+          <input type="text" placeholder="Rechercher par client, type, référence..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim outline-none" />
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          <label className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Filtre statut :</label>
+          <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)}
+            className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm font-semibold">
+            <option value="">Tous les statuts</option>
+            <option value="actif">Actif</option>
+            <option value="suspendu">Suspendu</option>
+            <option value="expiré">Expiré</option>
+          </select>
+          {filterStatut && (
+            <button onClick={() => setFilterStatut('')}
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer border border-savia-border">
+              <X className="w-3.5 h-3.5" /> Réinitialiser
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Contract list */}
@@ -322,10 +465,28 @@ export default function ContratsPage() {
           </div>
         )}
         {filtered.map(c => {
-          const fin = new Date(c.date_fin);
-          const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
-          const isExpiring = daysLeft >= 0 && daysLeft <= 60;
-          const isExpired = daysLeft < 0;
+          const fin = new Date(c.date_fin + 'T23:59:59'); // Add time to ensure full day
+          const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+          const actualStatus = getActualStatus(c);
+          const isExpired = actualStatus === 'Expiré';
+          const isSuspendu = actualStatus === 'Suspendu';
+          const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
+          
+          // Determine badge color and text
+          let badgeClass = 'bg-green-500/10 text-green-400';
+          let badgeText = actualStatus;
+          
+          if (isExpired) {
+            badgeClass = 'bg-red-500/10 text-red-500';
+            badgeText = 'Expiré';
+          } else if (isSuspendu) {
+            badgeClass = 'bg-orange-500/10 text-orange-400';
+            badgeText = 'Suspendu';
+          } else if (isExpiring) {
+            badgeClass = 'bg-yellow-500/10 text-yellow-400';
+            badgeText = `Expire dans ${daysLeft}j`;
+          }
+          
           return (
             <div key={c.id} className="glass rounded-xl p-4 hover:border-savia-accent/30 transition-all">
               <div className="flex items-start justify-between mb-2">
@@ -334,8 +495,17 @@ export default function ContratsPage() {
                     <FileText className="w-4 h-4 text-savia-accent shrink-0" />
                     <span className="font-mono text-savia-accent font-bold text-sm">#{c.id}</span>
                     <span className="font-bold">{c.client}</span>
-                    {c.equipement && <span className="text-xs text-savia-text-muted">— {c.equipement}</span>}
                   </div>
+                  {/* Display equipments */}
+                  {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string) => (
+                        <span key={eq} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-savia-accent/10 text-savia-accent text-xs font-medium border border-savia-accent/20">
+                          <Wrench className="w-2.5 h-2.5" /> {eq}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center gap-3 text-xs text-savia-text-muted flex-wrap">
                     <span className="flex items-center gap-1"><Wrench className="w-3 h-3" /> {c.type_contrat}</span>
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> SLA: {c.sla_temps_reponse_h}h</span>
@@ -344,12 +514,8 @@ export default function ContratsPage() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${
-                    isExpired ? 'bg-red-500/10 text-red-400' :
-                    isExpiring ? 'bg-yellow-500/10 text-yellow-400' :
-                    'bg-green-500/10 text-green-400'
-                  }`}>
-                    {isExpired ? 'Expiré' : isExpiring ? `Expire dans ${daysLeft}j` : c.statut}
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${badgeClass}`}>
+                    {badgeText}
                   </span>
                 </div>
               </div>
@@ -388,11 +554,27 @@ export default function ContratsPage() {
       {/* ============== DETAIL MODAL ============== */}
       {selectedContrat && (() => {
         const c = selectedContrat;
-        const fin = new Date(c.date_fin);
-        const daysLeft = Math.round((fin.getTime() - Date.now()) / 86400000);
-        const isExpired = daysLeft < 0;
-        const isExpiring = daysLeft >= 0 && daysLeft <= 60;
-        const statutLabel = isExpired ? 'Expiré' : isExpiring ? `Expire dans ${daysLeft}j` : c.statut;
+        const actualStatus = getActualStatus(c);
+        const fin = new Date(c.date_fin + 'T23:59:59');
+        const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+        const isExpired = actualStatus === 'Expiré';
+        const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
+        const isSuspendu = actualStatus === 'Suspendu';
+        
+        let statutLabel = actualStatus;
+        let badgeClass = 'bg-green-500/15 text-green-400';
+        
+        if (isExpired) {
+          statutLabel = 'Expiré';
+          badgeClass = 'bg-red-500/15 text-red-400';
+        } else if (isSuspendu) {
+          statutLabel = 'Suspendu';
+          badgeClass = 'bg-orange-500/15 text-orange-400';
+        } else if (isExpiring) {
+          statutLabel = `Expire dans ${daysLeft}j`;
+          badgeClass = 'bg-yellow-500/15 text-yellow-400';
+        }
+        
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSelectedContrat(null)}>
             <div className="glass rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -421,13 +603,12 @@ export default function ContratsPage() {
               <div className="p-5 space-y-5">
                 {/* Status badge */}
                 <div className="flex items-center gap-3">
-                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${isExpired ? 'bg-red-500/15 text-red-400' : isExpiring ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'}`}>{statutLabel}</span>
+                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${badgeClass}`}>{statutLabel}</span>
                   {c.montant > 0 && <span className="text-savia-text-muted text-sm">{c.montant.toLocaleString('fr')} TND / an</span>}
                 </div>
                 {/* Grid info */}
                 <div className="grid grid-cols-2 gap-4">
                   {[{icon: Building2, label: 'Client', val: c.client},
-                    {icon: Wrench, label: 'Équipement', val: c.equipement || '—'},
                     {icon: Calendar, label: 'Date début', val: c.date_debut},
                     {icon: Calendar, label: 'Date fin', val: c.date_fin},
                     {icon: Clock, label: 'SLA Réponse', val: c.sla_temps_reponse_h + 'h'},
@@ -442,6 +623,49 @@ export default function ContratsPage() {
                     </div>
                   ))}
                 </div>
+                
+                {/* Equipments List */}
+                {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).length > 0 && (
+                  <div className="bg-savia-surface-hover/40 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Wrench className="w-3.5 h-3.5 text-savia-accent" /> Équipements</p>
+                    <div className="flex flex-wrap gap-2">
+                      {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string) => (
+                        <span key={eq} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-savia-accent text-sm font-semibold">
+                          <Wrench className="w-3.5 h-3.5" /> {eq}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Pièces incluses */}
+                {c.avec_pieces && c.pieces_incluses && (() => {
+                  try {
+                    const pieces = JSON.parse(c.pieces_incluses);
+                    if (Array.isArray(pieces) && pieces.length > 0) {
+                      return (
+                        <div className="bg-savia-surface-hover/40 rounded-xl p-4">
+                          <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Package className="w-3.5 h-3.5 text-savia-accent" /> Pièces de rechange incluses</p>
+                          <div className="space-y-2">
+                            {pieces.map((p: any) => (
+                              <div key={p.ref} className="flex items-center justify-between px-3 py-2 rounded-lg bg-savia-surface/40 border border-savia-border/30">
+                                <div>
+                                  <p className="text-sm font-semibold text-savia-text">{p.designation}</p>
+                                  <p className="text-xs text-savia-text-muted font-mono">{p.ref}</p>
+                                </div>
+                                <span className="text-sm font-bold text-savia-accent">Quota: {p.quota}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                  } catch (e) {
+                    console.debug('Could not parse pieces:', e);
+                  }
+                  return null;
+                })()}
+                
                 {/* Conditions */}
                 {c.conditions && (
                   <div className="bg-savia-surface-hover/40 rounded-xl p-4">
@@ -487,17 +711,89 @@ export default function ContratsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={LABEL}>Client *</label>
-                    <select className={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('equipement', ''); }}>
+                    <select className={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('equipements', []); }}>
                       <option value="">— Sélectionner un client —</option>
                       {clientsList.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
+                  
+                  {/* Multi-select Equipment Dropdown */}
                   <div>
-                    <label className={LABEL}>Équipement</label>
-                    <select className={INPUT} value={form.equipement} onChange={e => set('equipement', e.target.value)} disabled={!form.client}>
-                      <option value="">— Tous les équipements —</option>
-                      {equipsByClient.map((e: any) => <option key={e.id} value={e.Nom}>{e.Nom}</option>)}
-                    </select>
+                    <label className={LABEL}>Équipements</label>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setEquipmentDropdownOpen(!equipmentDropdownOpen)}
+                        disabled={!form.client}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border transition-all text-sm ${
+                          !form.client
+                            ? 'bg-savia-surface-hover/50 border-savia-border/50 text-savia-text-muted cursor-not-allowed'
+                            : 'bg-savia-surface-hover border-savia-border text-savia-text hover:border-savia-accent/40 focus:ring-2 focus:ring-savia-accent/40 cursor-pointer'
+                        }`}
+                      >
+                        <span className="text-left">
+                          {form.equipements.length === 0
+                            ? '-- Sélectionnez --'
+                            : `${form.equipements.length} équipement(s)`}
+                        </span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${equipmentDropdownOpen ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {/* Dropdown Menu */}
+                      {equipmentDropdownOpen && form.client && (
+                        <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-savia-surface border border-savia-border rounded-lg shadow-lg overflow-hidden">
+                          <div className="max-h-64 overflow-y-auto divide-y divide-savia-border/40">
+                            {equipsByClient.length === 0 ? (
+                              <div className="px-4 py-3 text-xs text-savia-text-muted italic">
+                                Aucun équipement disponible pour ce client
+                              </div>
+                            ) : (
+                              equipsByClient.map((e: any) => (
+                                <label
+                                  key={e.id}
+                                  className={`flex items-center gap-3 cursor-pointer px-4 py-3 hover:bg-savia-surface-hover transition-colors ${
+                                    form.equipements.includes(e.Nom) ? 'bg-savia-accent/10' : ''
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="accent-cyan-400 w-4 h-4 shrink-0"
+                                    checked={form.equipements.includes(e.Nom)}
+                                    onChange={() => toggleEquipment(e.Nom)}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-semibold text-savia-text">{e.Nom}</div>
+                                    <div className="text-xs text-savia-text-muted">{e.Type_Equipement || e.type || ''}</div>
+                                  </div>
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Selected Equipment Badges */}
+                    {form.equipements.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {form.equipements.map(equip => (
+                          <div
+                            key={equip}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-sm font-semibold text-savia-accent"
+                          >
+                            <span>{equip}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeEquipment(equip)}
+                              className="flex items-center justify-center w-4 h-4 rounded-full hover:bg-savia-accent/20 transition-colors"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
                     {!form.client && <p className="text-xs text-savia-text-muted mt-1">Sélectionnez d'abord un client</p>}
                   </div>
                 </div>
@@ -518,7 +814,7 @@ export default function ContratsPage() {
                   <div>
                     <label className={LABEL}>Statut</label>
                     <select className={INPUT} value={form.statut} onChange={e => set('statut', e.target.value)}>
-                      {['Actif', 'Suspendu', 'Expiré', 'En attente'].map(s => <option key={s} value={s}>{s}</option>)}
+                      {['Actif', 'Suspendu', 'Expiré'].map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </div>
                   <div>

@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import {
-  Brain, TrendingUp, AlertTriangle, Clock, Server, Activity,
+  Brain, AlertTriangle, Clock, Server, Activity,
   CheckCircle2, Target, RefreshCw, ThumbsUp, ThumbsDown, Calendar,
   History, Loader2, Sparkles, ShieldCheck, Zap, ClipboardList,
   CircleDot, DollarSign, Wrench
@@ -30,15 +30,6 @@ interface FeedbackEntry {
   vraiDate?: string;
   timestamp: string;
 }
-
-const TREND_DATA = [
-  { mois: 'Oct', pannes: 3, preventives: 8 },
-  { mois: 'Nov', pannes: 5, preventives: 7 },
-  { mois: 'Dec', pannes: 2, preventives: 9 },
-  { mois: 'Jan', pannes: 4, preventives: 10 },
-  { mois: 'Fev', pannes: 1, preventives: 11 },
-  { mois: 'Mar', pannes: 3, preventives: 12 },
-];
 
 // Components to simulate common failure points
 const COMPOSANTS = [
@@ -420,7 +411,7 @@ export default function PredictionsPage() {
             {aiAnalysis.tendances?.length > 0 && (
               <div className="bg-purple-500/5 rounded-xl p-5 border border-purple-500/20">
                 <div className="flex items-center gap-2 mb-3 text-purple-400 font-bold text-sm">
-                  <TrendingUp className="w-4 h-4" /> Tendances observées
+                  <Sparkles className="w-4 h-4" /> Tendances observées
                 </div>
                 <div className="space-y-2">
                   {aiAnalysis.tendances.map((t: string, i: number) => (
@@ -579,19 +570,7 @@ export default function PredictionsPage() {
         )}
       </SectionCard>
 
-      {/* Trend Chart */}
-      <SectionCard title={<span className="flex items-center gap-2"><TrendingUp className="w-4 h-4 text-savia-accent" /> Tendance Pannes vs Préventives (6 mois)</span>}>
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={TREND_DATA}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(45,212,191,0.1)" />
-            <XAxis dataKey="mois" stroke="#64748b" fontSize={12} />
-            <YAxis stroke="#64748b" fontSize={12} />
-            <Tooltip contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }} />
-            <Bar dataKey="pannes" fill="#ef4444" radius={[4, 4, 0, 0]} name="Pannes" />
-            <Bar dataKey="preventives" fill="#2dd4bf" radius={[4, 4, 0, 0]} name="Préventives" />
-          </BarChart>
-        </ResponsiveContainer>
-      </SectionCard>
+
     </div>
   );
 }

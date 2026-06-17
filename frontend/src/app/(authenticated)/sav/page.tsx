@@ -2,6 +2,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
+import { TimePicker } from '@/components/ui/time-picker';
+import { DurationCalculator } from '@/components/ui/duration-calculator';
 import {
   Plus, Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
   Sparkles, FileText, Download, Users, DollarSign, XCircle, ChevronDown,
@@ -11,7 +13,7 @@ import {
   Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
   Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2, Package
 } from 'lucide-react';
-import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings } from '@/lib/api';
+import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings, dashboard } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
@@ -25,7 +27,9 @@ interface Intervention {
   technicien: string;
   duree: number;
   duree_minutes: number;
-  deplacement: number;
+  duree_deplacement: number;
+  start_time?: string;
+  end_time?: string;
   statut: string;
   description: string;
   probleme: string;
@@ -53,6 +57,7 @@ const MONTHS = [
 
 export default function SavPage() {
   const { user } = useAuth();
+  console.log('[SAV] Component rendering, user role:', user?.role);
   const isTechnicien = user?.role === 'Technicien';
   const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
 
@@ -82,6 +87,10 @@ export default function SavPage() {
   const [data, setData] = useState<Intervention[]>([]);
   const [techniciens, setTechniciens] = useState<{nom: string, prenom: string}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const PAGE_SIZE = 200;
   const [showAddModal, setShowAddModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<Intervention | null>(null);
@@ -102,9 +111,9 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '', start_time: '08:00', end_time: '09:00' };
   const [form, setForm] = useState(emptyForm);
-  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '' });
+  const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '', start_time: '08:00', end_time: '09:00' });
 
   // Custom intervention types ("Autre" pattern)
   const TYPES_INTERVENTION_BASE = ['Corrective', 'Préventive', 'Installation', 'Formation', 'Démo'];
@@ -112,6 +121,7 @@ export default function SavPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
   const [tauxHoraire, setTauxHoraire] = useState<number>(0);
+  const [totalInterventionsInDB, setTotalInterventionsInDB] = useState<number>(0);
 
   // Load custom types from database on mount
   useEffect(() => {
@@ -133,6 +143,20 @@ export default function SavPage() {
       });
   }, []);
 
+  // Fetch total intervention count from dashboard KPIs
+  useEffect(() => {
+    dashboard.kpis()
+      .then((kpis: any) => {
+        const total = kpis.nb_interventions || 0;
+        setTotalInterventionsInDB(total);
+        console.log('[SAV] Total interventions in DB:', total);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch total interventions:', err);
+        setTotalInterventionsInDB(0);
+      });
+  }, []);
+
   const allInterventionTypes = useMemo(() => {
     const merged = [...TYPES_INTERVENTION_BASE];
     for (const ct of customInterventionTypes) {
@@ -143,21 +167,38 @@ export default function SavPage() {
 
   // Derived filter options
   const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicEquip = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.machine).filter(Boolean)))], [data]);
+  const dynamicEquip = useMemo(() => {
+    // If a client is selected, show only equipment from that client with interventions
+    // Otherwise show all equipment with interventions
+    let filtered_data = data;
+    if (filterClient !== 'Tous') {
+      filtered_data = filtered_data.filter(d => d.client === filterClient);
+    }
+    return ['Tous', ...Array.from(new Set(filtered_data.map(d => d.machine).filter(Boolean)))];
+  }, [data, filterClient]);
   const availableYears = useMemo(() => {
     const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
     years.add(new Date().getFullYear());
     return Array.from(years).sort((a, b) => b - a);
   }, [data]);
 
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
+  const loadData = useCallback(async (pageOffset: number = 0, append: boolean = false) => {
+    if (pageOffset === 0) setIsLoading(true);
+    else setIsLoadingMore(true);
+    
     try {
+      console.log(`[SAV] loadData called: offset=${pageOffset}, append=${append}, PAGE_SIZE=${PAGE_SIZE}`);
       const [res, techRes] = await Promise.all([
-        interventions.list(),
-        techApi.list().catch(() => [])
+        interventions.list({ offset: pageOffset, limit: PAGE_SIZE }),
+        pageOffset === 0 ? techApi.list().catch(() => []) : Promise.resolve([])
       ]);
-      setTechniciens(techRes as any);
+      
+      console.log(`[SAV] API Response: ${res.length} items returned`);
+      
+      if (pageOffset === 0) {
+        setTechniciens(techRes as any);
+      }
+      
       const normalizeStatut = (s: string): string => {
         if (!s) return 'En cours';
         const low = s.toLowerCase();
@@ -167,13 +208,14 @@ export default function SavPage() {
         if (low.includes('planif')) return 'Planifiee';
         return s;
       };
+      
       const mapped = res.map((item: any) => ({
         id: Number(item.id || 0),
         date: item.date || 'N/A',
         machine: item.machine || '',
         client: item.client || '',
         type: item.type_intervention || 'Corrective',
-        technicien: item.technicien || 'Non assign\u00e9',
+        technicien: item.technicien || 'Non assigné',
         duree: Math.round((item.duree_minutes || 0) / 60),
         duree_minutes: item.duree_minutes || 0,
         deplacement: Math.round((item.duree_deplacement || 0) / 60 * 10) / 10,
@@ -189,40 +231,112 @@ export default function SavPage() {
         coutPieces: item.cout_pieces || 0,
         cout: item.cout || 0,
       }));
-      setData(mapped);
+      
+      if (append) {
+        setData(prev => [...prev, ...mapped]);
+      } else {
+        setData(mapped);
+      }
+      
+      // Check if there are more items to load
+      const hasMoreData = res.length === PAGE_SIZE;
+      console.log(`[SAV] Setting hasMore=${hasMoreData} (res.length=${res.length}, PAGE_SIZE=${PAGE_SIZE})`);
+      setHasMore(hasMoreData);
+      setOffset(pageOffset + PAGE_SIZE);
+      console.log(`[SAV] Loaded page at offset ${pageOffset}: ${res.length} items, hasMore=${hasMoreData}, new offset=${pageOffset + PAGE_SIZE}`);
     } catch (err) {
       console.error("Failed to fetch interventions", err);
     } finally {
-      setIsLoading(false);
+      if (pageOffset === 0) setIsLoading(false);
+      else setIsLoadingMore(false);
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(0, false); }, [loadData]);
+
+  // Infinite scroll: load more when user scrolls near bottom
+  useEffect(() => {
+    const handleScroll = () => {
+      // Check window scroll
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+        if (hasMore && !isLoadingMore && !isLoading) {
+          console.log(`[SAV] Window scroll triggered load at offset ${offset}`);
+          loadData(offset, true);
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [offset, hasMore, isLoadingMore, isLoading, loadData]);
 
   useEffect(() => {
-    interventions.listFiches().then(setFiches).catch(() => {});
-    interventions.listFacturation().then(setFacturationData).catch(() => {});
-    // Charger toutes les pièces pour le sélecteur rupture
-    import('@/lib/api').then(({ pieces: piecesApi }) => {
-      piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
-    });
-    // Charger équipements + contrats pour la fiche PDF
-    equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
-    clientsApi.list().then((res: any) => setClientsData(res || [])).catch(() => {});
-    contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
+    // Load non-critical data in background with delays
+    // These are not needed for initial page render
+    const timers = [
+      setTimeout(() => {
+        interventions.listFiches().then(setFiches).catch(() => {});
+      }, 300),
+      setTimeout(() => {
+        interventions.listFacturation().then(setFacturationData).catch(() => {});
+      }, 400),
+      setTimeout(() => {
+        import('@/lib/api').then(({ pieces: piecesApi }) => {
+          piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
+        });
+      }, 500),
+      setTimeout(() => {
+        equipements.list().then((res: any) => setEquipementsData(res || [])).catch(() => {});
+      }, 600),
+      setTimeout(() => {
+        clientsApi.list().then((res: any) => setClientsData(res || [])).catch(() => {});
+      }, 700),
+      setTimeout(() => {
+        contratsApi.list().then((res: any) => setContratsData(res || [])).catch(() => {});
+      }, 800),
+    ];
+    
+    return () => timers.forEach(t => clearTimeout(t));
   }, []);
 
+
+  // Calculate duration from start_time and end_time
+  const calculateDurationFromTimes = (startTime: string, endTime: string): number => {
+    try {
+      const [startH, startM] = startTime.split(':').map(Number);
+      const [endH, endM] = endTime.split(':').map(Number);
+      let duration = (endH * 60 + endM) - (startH * 60 + startM);
+      
+      // Handle midnight crossing (if end time is before start time)
+      if (duration < 0) {
+        duration += 24 * 60;
+      }
+      
+      // Enforce minimum 1 hour billing (60 minutes)
+      return Math.max(60, duration);
+    } catch (e) {
+      return 60; // Default to 1 hour on error
+    }
+  };
 
   const handleSave = async () => {
     if (!form.machine.trim()) return;
     setIsSaving(true);
     try {
+      // Calculate duration from times if both are provided
+      let finalDurationMinutes = Math.round(Number(form.duree_heures) * 60);
+      if (form.start_time && form.end_time) {
+        finalDurationMinutes = calculateDurationFromTimes(form.start_time, form.end_time);
+      }
+      
       await interventions.create({
         ...form,
-        duree_minutes: Math.round(Number(form.duree_heures) * 60),
+        duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(form.duree_deplacement) * 60),
+        start_time: form.start_time,
+        end_time: form.end_time,
         pieces_utilisees: selectedPieces.map((p: any) => `${p.designation} (${p.reference})`).join(', '),
-        cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + (p.prix_unitaire || 0), 0),
+        cout_pieces: selectedPieces.reduce((acc: number, p: any) => acc + ((p.prix_unitaire || 0) * (p.qty || 0)), 0),
       });
       setForm(emptyForm);
       setSelectedPieces([]);
@@ -239,13 +353,21 @@ export default function SavPage() {
     if (!selectedIntervention) return;
     setIsSaving(true);
     try {
+      // Calculate duration from times if both are provided
+      let finalDurationMinutes = Math.round(Number(statusForm.duree_heures) * 60) || selectedIntervention.duree_minutes;
+      if (statusForm.start_time && statusForm.end_time) {
+        finalDurationMinutes = calculateDurationFromTimes(statusForm.start_time, statusForm.end_time);
+      }
+      
       const payload: any = {
         statut: statusForm.statut,
         probleme: statusForm.probleme,
         cause: statusForm.cause,
         solution: statusForm.solution,
-        duree_minutes: Math.round(Number(statusForm.duree_heures) * 60) || selectedIntervention.duree_minutes,
+        duree_minutes: finalDurationMinutes,
         duree_deplacement: Math.round(Number(statusForm.duree_deplacement) * 60),
+        start_time: statusForm.start_time,
+        end_time: statusForm.end_time,
       };
       // Envoyer les pièces en rupture sélectionnées pour générer des notifications
       if (statusForm.statut.toLowerCase().includes('attente') && statusForm.statut.toLowerCase().includes('pi')) {
@@ -302,23 +424,10 @@ export default function SavPage() {
       // Use the same logic as Rentabilité Client page
       const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
       const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalCoutTotal = totalCoutInterv + totalCoutPieces;  // ← Total = MO + Pièces
       const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
       
-      // Use hourly rate from state (fetched on component mount)
-      // This ensures consistency with Rentabilité Client page
-      if (tauxHoraire <= 0) {
-        setAiError('Erreur: Taux horaire technicien non configuré dans les paramètres');
-        setIsAnalyzing(false);
-        return;
-      }
-      
-      const totalCoutMO = (totalDureeMin / 60.0) * tauxHoraire;
-      
-      // Service cost = Total intervention cost - Labor cost - Parts cost
-      const totalCoutService = Math.max(0, totalCoutInterv - totalCoutMO - totalCoutPieces);
-      
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
-      const mttrH = nb_cloturees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / nb_cloturees / 60 * 10) / 10 : 0;
 
       // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
@@ -360,14 +469,18 @@ export default function SavPage() {
         interventions_detail += `- ${i.date.substring(0,10)} | ${i.machine} | ${i.technicien} | ${i.type} | ${i.statut} | ${i.duree}h | ${i.cout || i.coutPieces} TND | ${i.probleme || '-'}\n`;
       });
 
+      const mttrH = terminees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
+      const totalCoutService = totalCoutInterv;
+      const totalCoutMOLocal = totalCoutInterv;
+      
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
-        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMO,
-        cout_total: totalCoutInterv,
-        cout_moyen: nb_total > 0 ? Math.round(totalCoutInterv / nb_total) : 0,
+        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMOLocal,
+        cout_total: totalCoutTotal,
+        cout_moyen: nb_total > 0 ? Math.round(totalCoutTotal / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
@@ -412,7 +525,6 @@ export default function SavPage() {
           { label: 'Interventions', val: String(pdfFiltered.length), color: '#01B4BC' },
           { label: 'Clôturées',      val: String(cloturees),         color: '#5FA55A' },
           { label: 'Taux résolution', val: tauxRes + '%',               color: '#FA8925' },
-          { label: 'Coût total (TND)', val: coutT.toLocaleString('fr'), color: '#5FA55A' },
         ],
         tables: [{
           title: 'Détail des interventions',
@@ -505,11 +617,15 @@ export default function SavPage() {
     });
   }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
 
-  // ===== KPI CALCULATIONS (based on filtered data) =====
+  // ===== KPI CALCULATIONS =====
+  // Use filtered.length for TOTAL count (respects all filters: period, status, type, client, equipment)
+  // This makes the card show the same number as displayed in the table
   const totalInterv = filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCout = filtered.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+  const totalCoutMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const totalCoutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
+  const totalCout = totalCoutMO + totalCoutPieces;  // ← Total = MO + Pièces
   const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
   const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
   const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
@@ -540,7 +656,8 @@ export default function SavPage() {
   // Recalculate costs using current hourly rate (same as Rentabilité Client page)
   const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
   const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const coutInterventions = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutMainOeuvreMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
+  const coutInterventions = coutMainOeuvreMO + coutPieces;  // ← Total = MO + Pièces
   
   // Recalculate labor cost based on current hourly rate
   const coutMainOeuvre = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
@@ -716,7 +833,7 @@ export default function SavPage() {
           { label: 'En cours', value: enCours, icon: <Clock className="w-5 h-5" />, color: 'text-yellow-400' },
           { label: 'Taux résol.', value: `${tauxResolution}%`, icon: <Target className="w-5 h-5" />, color: 'text-blue-400' },
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
-          { label: 'Coût total', value: `${(totalCout/1000).toFixed(0)}K`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
+          { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
         ].map(k => (
           <div key={k.label} className="glass rounded-xl p-3 text-center">
             <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
@@ -761,7 +878,10 @@ export default function SavPage() {
               <option value="Tous">Tous les types</option>
               {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-            <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+            <select value={filterClient} onChange={e => {
+              setFilterClient(e.target.value);
+              setFilterEquip('Tous'); // Reset equipment filter when client changes
+            }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
             </select>
             <select value={filterEquip} onChange={e => setFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
@@ -770,12 +890,17 @@ export default function SavPage() {
           </div>
 
           <div className="glass rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center gap-2">
-              <ClipboardList className="w-4 h-4 text-savia-accent" />
-              <span className="font-semibold text-sm">{filtered.length} intervention{filtered.length > 1 ? 's' : ''}</span>
+            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center gap-2 justify-between">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-4 h-4 text-savia-accent" />
+                <span className="font-semibold text-sm">{filtered.length} intervention{filtered.length > 1 ? 's' : ''}</span>
+              </div>
+              <div className="text-xs text-savia-text-muted">
+                Chargées: {data.length} | hasMore: {hasMore ? 'oui' : 'non'} | offset: {offset}
+              </div>
             </div>
-            {/* Table with max 5 visible rows + scroll */}
-            <div className="overflow-x-auto max-h-[310px] overflow-y-auto">
+            {/* Table with infinite scroll */}
+            <div className="overflow-x-auto overflow-y-auto" id="interventions-container">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-savia-surface-hover/80 backdrop-blur-sm">
                   <tr className="border-b border-savia-border">
@@ -831,7 +956,16 @@ export default function SavPage() {
                         <div className="flex items-center gap-1">
                           <button onClick={() => {
                             setSelectedIntervention(i);
-                            setStatusForm({ statut: i.statut, probleme: i.probleme, cause: i.cause, solution: i.solution, duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), duree_deplacement: String(Math.round(((i.deplacement || 0) / 60) * 100) / 100) });
+                            setStatusForm({ 
+                              statut: i.statut, 
+                              probleme: i.probleme, 
+                              cause: i.cause, 
+                              solution: i.solution, 
+                              duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), 
+                              duree_deplacement: String(Math.round(((i.duree_deplacement || 0) / 60) * 100) / 100),
+                              start_time: i.start_time || '08:00',
+                              end_time: i.end_time || '09:00'
+                            });
                             setShowStatusModal(true);
                           }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
                             <Edit className="w-3.5 h-3.5" />
@@ -868,6 +1002,20 @@ export default function SavPage() {
                 </tbody>
               </table>
             </div>
+            
+            {/* Loading indicator for infinite scroll */}
+            {isLoadingMore && (
+              <div className="flex justify-center items-center py-6">
+                <Loader2 className="w-5 h-5 animate-spin text-savia-accent mr-2" />
+                <span className="text-sm text-savia-text-muted">Chargement de plus d'interventions...</span>
+              </div>
+            )}
+            
+            {!hasMore && data.length > 0 && (
+              <div className="text-center py-4 text-sm text-savia-text-dim">
+                Toutes les interventions ont été chargées
+              </div>
+            )}
           </div>
         </>
       )}
@@ -1366,7 +1514,15 @@ export default function SavPage() {
             <select className={INPUT_CLS} value={form.priorite} onChange={e => setForm({...form, priorite: e.target.value})}>
               {PRIORITES.map(p => <option key={p}>{p}</option>)}
             </select></div>
-          <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_heures} onChange={e => setForm({...form, duree_heures: e.target.value})} /></div>
+          <TimePicker label="Heure début d'intervention" value={form.start_time} onChange={time => setForm({...form, start_time: time})} className="" />
+          <TimePicker label="Heure fin d'intervention" value={form.end_time} onChange={time => setForm({...form, end_time: time})} className="" />
+          <div>
+            <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée calculée</label>
+            <div className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              <span className="font-semibold">{Math.max(1, Math.round(calculateDurationFromTimes(form.start_time, form.end_time) / 60 * 10) / 10)}h</span>
+              <span className="text-xs text-savia-text-muted ml-2">Min 1h de facturation</span>
+            </div>
+          </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.5" min="0" className={INPUT_CLS} value={form.duree_deplacement} onChange={e => setForm({...form, duree_deplacement: e.target.value})} /></div>
           <div className="md:col-span-2">
             <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Wrench className="w-3.5 h-3.5" /> Pièces utilisées</label>
@@ -1564,7 +1720,15 @@ export default function SavPage() {
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Search className="w-3.5 h-3.5" /> Cause</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.cause} onChange={e => setStatusForm({...statusForm, cause: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Solution apportée</label><textarea className={INPUT_CLS + " h-16 resize-none"} value={statusForm.solution} onChange={e => setStatusForm({...statusForm, solution: e.target.value})} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 1.5" value={statusForm.duree_heures} onChange={e => setStatusForm({...statusForm, duree_heures: e.target.value})} /></div>
+            <TimePicker label="Heure début d'intervention" value={statusForm.start_time} onChange={time => setStatusForm({...statusForm, start_time: time})} className="" />
+            <TimePicker label="Heure fin d'intervention" value={statusForm.end_time} onChange={time => setStatusForm({...statusForm, end_time: time})} className="" />
+            <div>
+              <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Durée calculée</label>
+              <div className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+                <span className="font-semibold">{Math.max(1, Math.round(calculateDurationFromTimes(statusForm.start_time, statusForm.end_time) / 60 * 10) / 10)}h</span>
+                <span className="text-xs text-savia-text-muted ml-2">Min 1h de facturation</span>
+              </div>
+            </div>
             <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Timer className="w-3.5 h-3.5" /> Déplacement (heures)</label><input type="number" step="0.25" min="0" className={INPUT_CLS} placeholder="ex: 0.5" value={statusForm.duree_deplacement} onChange={e => setStatusForm({...statusForm, duree_deplacement: e.target.value})} /></div>
           </div>
           {statusForm.statut.toLowerCase().includes('tur') && (
@@ -1573,36 +1737,7 @@ export default function SavPage() {
                 <Camera className="w-3.5 h-3.5" /> Photo fiche signée <span className="text-xs opacity-60">(optionnel)</span>
               </label>
               <div className="border-2 border-dashed border-savia-border/50 rounded-lg p-4 text-center cursor-pointer hover:border-savia-accent/50 transition-colors"
-                onClick={() => document.getElementById('fiche-upload-modal')?.click()}>
-                {ficheFile ? (
-                  <div className="flex items-center justify-center gap-2 text-green-400">
-                    <CheckCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium">{ficheFile.name}</span>
-                    <button onClick={e => { e.stopPropagation(); setFicheFile(null); }} className="ml-2 text-red-400 hover:text-red-300">
-                      <XCircle className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-savia-text-muted">
-                    <Upload className="w-6 h-6 mx-auto mb-1 opacity-50" />
-                    <p className="text-xs">Cliquez pour sélectionner une photo (JPG, PNG, PDF)</p>
-                  </div>
-                )}
-              </div>
-              <input id="fiche-upload-modal" type="file" accept="image/*,.pdf" className="hidden"
-                onChange={e => setFicheFile(e.target.files?.[0] || null)} />
-            </div>
-          )}
-          {/* Upload fiche signée si clôture */}
-          {statusForm.statut.toLowerCase().includes('tur') && (
-            <div>
-              <label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1">
-                <Camera className="w-3.5 h-3.5" /> Photo fiche signée <span className="text-xs text-savia-text-muted/60">(optionnel)</span>
-              </label>
-              <div
-                className="border-2 border-dashed border-savia-border/50 rounded-lg p-4 text-center cursor-pointer hover:border-savia-accent/50 transition-colors"
-                onClick={() => document.getElementById('fiche-upload')?.click()}
-              >
+                onClick={() => document.getElementById('fiche-upload')?.click()}>
                 {ficheFile ? (
                   <div className="flex items-center justify-center gap-2 text-green-400">
                     <CheckCircle className="w-4 h-4" />

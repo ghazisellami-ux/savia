@@ -6,18 +6,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system fonts for PDF Unicode support
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (fonts-dejavu removed - using Arial built-in font in FPDF)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Install dependencies with retries, extended timeout, and alternative index
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    --default-timeout=180 \
+    --retries 10 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    -r requirements.txt || \
+    pip install --no-cache-dir \
+    --default-timeout=180 \
+    --retries 10 \
+    -r requirements.txt
 
 # Copy application files
-COPY main.py db_engine.py ai_engine.py auth.py config.py ./
-COPY log_preprocessor.py s3_storage.py ./
-COPY knowledge_base.xlsx ./
-COPY logo-savia.png ./
+COPY . .
 
 # Create data directory for persistent volumes
 RUN mkdir -p /app/data

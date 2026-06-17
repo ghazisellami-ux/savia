@@ -6,10 +6,11 @@ import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
-  ChevronDown, Check, Download, MapPin, Stethoscope
+  ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
+import { exportComparateurToCSV, exportComparateurToJSON, exportComparateurToPDF, getComparateurSummary } from '@/lib/export';
 import { useAuth } from '@/lib/auth-context';
 
 // Import domaines API
@@ -40,11 +41,51 @@ const STATUT_COLORS: Record<string, { cell: string; badge: string; dot: string }
   'Terminée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'Réalisée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'En retard':  { cell: 'bg-red-500/20 border-red-500 text-red-300',        badge: 'bg-red-500/15 text-red-400',      dot: 'bg-red-400' },
+  'Décalé':     { cell: 'bg-gray-500/20 border-gray-500 text-gray-400',     badge: 'bg-gray-500/15 text-gray-500',    dot: 'bg-gray-400' },
 };
 const getStatutColor = (statut: string, isOverdue: boolean) => {
   if (isOverdue) return STATUT_COLORS['En retard'];
   return STATUT_COLORS[statut] || { cell: 'bg-blue-500/20 border-blue-500 text-blue-300', badge: 'bg-blue-500/15 text-blue-400', dot: 'bg-blue-400' };
 };
+
+// Helper function to calculate automatic status based on date and stored status
+const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string => {
+  if (!datePlanifiee) return storedStatus;
+  
+  // If status is "Décalé" (ghost entry), keep it as is
+  if (storedStatus === 'Décalé') {
+    return 'Décalé';
+  }
+  
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  const plannedDate = new Date(datePlanifiee);
+  plannedDate.setHours(0, 0, 0, 0);
+  
+  // If already completed/terminated, keep that status
+  if (storedStatus === 'Réalisée' || storedStatus === 'Terminée' || storedStatus === 'Annulée') {
+    return storedStatus;
+  }
+  
+  // If planned date is in the future (> today), it's "Planifiée"
+  if (plannedDate > today) {
+    return 'Planifiée';
+  }
+  
+  // If planned date is today, it's "En cours"
+  if (plannedDate.getTime() === today.getTime()) {
+    return 'En cours';
+  }
+  
+  // If planned date is in the past (< today), it's "En retard"
+  if (plannedDate < today) {
+    return 'En retard';
+  }
+  
+  return storedStatus;
+};
+
 const RECURRENCES = ['Aucune', 'Hebdomadaire', 'Mensuelle', 'Trimestrielle', 'Semestrielle', 'Annuelle'];
 const TYPES_MAINTENANCE = ['Préventive', 'Corrective', 'Calibration', 'Inspection', 'Qualification', 'Mise à jour logiciel'];
 
@@ -96,6 +137,28 @@ export default function PlanningPage() {
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
   const [dayDetailEvents, setDayDetailEvents] = useState<PlanItem[]>([]);
   const [techDropdownOpen, setTechDropdownOpen] = useState(false);
+  
+  // Reschedule modal
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [selectedIntervention, setSelectedIntervention] = useState<PlanItem | null>(null);
+  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '', reason: '' });
+  const [rescheduleError, setRescheduleError] = useState('');
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
+
+  // Comparateur export modal
+  const [showComparateurModal, setShowComparateurModal] = useState(false);
+  const [selectedForComparateur, setSelectedForComparateur] = useState<PlanItem | null>(null);
+  const [comparateurData, setComparateurData] = useState<any>(null);
+  const [isLoadingComparateur, setIsLoadingComparateur] = useState(false);
+  const [comparateurError, setComparateurError] = useState('');
+
+  // Comparateur période modal
+  const [showComparateurPeriodeModal, setShowComparateurPeriodeModal] = useState(false);
+  const [comparateurPeriodeForm, setComparateurPeriodeForm] = useState({ dateDebut: '', dateFin: '' });
+  const [comparateurPeriodeData, setComparateurPeriodeData] = useState<any>(null);
+  const [isLoadingComparateurPeriode, setIsLoadingComparateurPeriode] = useState(false);
+  const [comparateurPeriodeError, setComparateurPeriodeError] = useState('');
 
   // Table filters — Toutes les Maintenances
   const [filterClient,  setFilterClient]  = useState('Tous');
@@ -105,6 +168,20 @@ export default function PlanningPage() {
   const [filterRegion,  setFilterRegion]  = useState('Tous');
   const [filterVille,   setFilterVille]   = useState('Tous');
   const [clientsFullData, setClientsFullData] = useState<any[]>([]);
+  
+  // PDF date filters
+  const [pdfDateFrom, setPdfDateFrom] = useState(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return d.toISOString().substring(0, 10);
+  });
+  const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
+
+  // Combine default domains with custom domains
+  const allDomaines = useMemo(() => {
+    const defaults = Array.from(DOMAINES_MEDICAUX);
+    const combined = [...new Set([...defaults, ...domainesCustom])];
+    return combined;
+  }, [domainesCustom]);
 
   // Filtrage en cascade : domaine → client → équipement
   const equipsForDomaine = useMemo(() => {
@@ -117,9 +194,16 @@ export default function PlanningPage() {
   }, [equipsAll, form.domaine]);
 
   const clientsForDomaine = useMemo(() => {
-    // Show all clients from the API, not just those with equipment in the selected domain
-    return clientsList;
-  }, [clientsList]);
+    // Filter clients to show only those with equipment in the selected domain
+    if (!form.domaine) return clientsList;
+    
+    // Get unique clients that have equipment in the selected domain
+    const clientsWithEquipInDomain = new Set(
+      equipsForDomaine.map(e => e.client).filter(Boolean)
+    );
+    
+    return Array.from(clientsWithEquipInDomain).sort();
+  }, [equipsForDomaine, form.domaine, clientsList]);
 
   const filteredEquips = useMemo(() => {
     if (!form.client) return equipsForDomaine.map(e => e.nom);
@@ -218,8 +302,9 @@ export default function PlanningPage() {
     return dt.getMonth() === currentMonth && dt.getFullYear() === currentYear;
   });
   const overdueCount = data.filter(d => {
-    const dt = new Date(d.date_planifiee);
-    return dt < now && d.statut !== 'Réalisée' && d.statut !== 'Annulée';
+    const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+    // Only count as overdue if automatic status is "En retard"
+    return automaticStatus === 'En retard';
   }).length;
 
   const handleSave = async () => {
@@ -247,6 +332,129 @@ export default function PlanningPage() {
       setError('Erreur lors de la création. Veuillez réessayer.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleOpenReschedule = (intervention: PlanItem) => {
+    setSelectedIntervention(intervention);
+    setRescheduleForm({
+      newDate: intervention.date_planifiee,
+      newTechs: intervention.technicien,
+      reason: '',
+    });
+    setRescheduleError('');
+    setShowRescheduleModal(true);
+  };
+
+  const handleReschedule = async () => {
+    setRescheduleError('');
+    if (!selectedIntervention) return;
+    
+    if (!rescheduleForm.newDate) {
+      setRescheduleError('Veuillez sélectionner une nouvelle date.');
+      return;
+    }
+    
+    setIsRescheduling(true);
+    try {
+      await planning.reschedule(selectedIntervention.id, {
+        date_planifiee: rescheduleForm.newDate,
+        technicien_assigne: rescheduleForm.newTechs,
+        reason: rescheduleForm.reason,
+      });
+      setShowRescheduleModal(false);
+      setSelectedIntervention(null);
+      setRescheduleForm({ newDate: '', newTechs: '', reason: '' });
+      await loadData();
+    } catch (err: any) {
+      console.error(err);
+      setRescheduleError(err.message || 'Erreur lors du décalage. Veuillez réessayer.');
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
+  const handleOpenComparateur = async (intervention: PlanItem) => {
+    setSelectedForComparateur(intervention);
+    setComparateurError('');
+    setComparateurData(null);
+    setIsLoadingComparateur(true);
+    setShowComparateurModal(true);
+    
+    try {
+      const data = await planning.comparateur(intervention.id);
+      setComparateurData(data);
+    } catch (err: any) {
+      console.error('Comparateur error:', err);
+      setComparateurError(err.message || 'Erreur lors du chargement du comparateur');
+    } finally {
+      setIsLoadingComparateur(false);
+    }
+  };
+
+  const handleExportComparateur = async (format: 'csv' | 'pdf' | 'json') => {
+    if (!comparateurData) return;
+    
+    try {
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const machine = comparateurData.machine || 'intervention';
+      const filename = `comparateur_${machine}_${timestamp}`;
+      
+      switch (format) {
+        case 'csv':
+          exportComparateurToCSV(comparateurData, `${filename}.csv`);
+          break;
+        case 'json':
+          exportComparateurToJSON(comparateurData, `${filename}.json`);
+          break;
+        case 'pdf':
+          await exportComparateurToPDF(comparateurData, `${filename}.pdf`);
+          break;
+      }
+    } catch (err: any) {
+      console.error('Export error:', err);
+      alert(`Erreur export ${format.toUpperCase()}: ${err.message || 'Erreur'}`);
+    }
+  };
+
+  const handleOpenComparateurPeriode = () => {
+    setComparateurPeriodeError('');
+    setComparateurPeriodeData(null);
+    setComparateurPeriodeForm({ dateDebut: '', dateFin: '' });
+    setShowComparateurPeriodeModal(true);
+  };
+
+  const handleFetchComparateurPeriode = async () => {
+    setComparateurPeriodeError('');
+    
+    if (!comparateurPeriodeForm.dateDebut || !comparateurPeriodeForm.dateFin) {
+      setComparateurPeriodeError('Veuillez sélectionner les deux dates');
+      return;
+    }
+
+    setIsLoadingComparateurPeriode(true);
+    try {
+      const data = await planning.comparateurPeriode(comparateurPeriodeForm.dateDebut, comparateurPeriodeForm.dateFin);
+      setComparateurPeriodeData(data);
+    } catch (err: any) {
+      console.error('Comparateur période error:', err);
+      setComparateurPeriodeError(err.message || 'Erreur lors du chargement');
+    } finally {
+      setIsLoadingComparateurPeriode(false);
+    }
+  };
+
+  const handleExportComparateurPeriode = async (format: 'csv' | 'pdf' | 'json') => {
+    if (!comparateurPeriodeData?.comparisons) return;
+    
+    try {
+      const timestamp = new Date().toISOString().slice(0, 10);
+      const filename = `comparateur-periode_${timestamp}`;
+      
+      // PDF export removed - keeping only modal display
+    } catch (err: any) {
+      console.error('Export error:', err);
+      alert(`Erreur export ${format.toUpperCase()}: ${err.message || 'Erreur'}`);
     }
   };
 
@@ -279,6 +487,10 @@ export default function PlanningPage() {
           <Plus className="w-4 h-4" /> Planifier une maintenance
         </button>
         )}
+        <button onClick={handleOpenComparateurPeriode}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-purple-500 hover:opacity-90 transition-all cursor-pointer shadow-lg">
+          <BarChart3 className="w-4 h-4" /> Comparateur Période
+        </button>
       </div>
 
       {/* KPIs */}
@@ -286,7 +498,7 @@ export default function PlanningPage() {
         {[
           { label: 'Total planifié', value: data.length, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
           { label: 'Ce mois', value: monthEvents.length, color: 'text-blue-400', icon: <Calendar className="w-5 h-5" /> },
-          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
+          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée' || d.statut === 'Terminée').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
           <div key={kpi.label} className="glass rounded-xl p-4 text-center">
@@ -353,11 +565,11 @@ export default function PlanningPage() {
                 <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-savia-text' : 'text-slate-600'}`}>{cell.day}</div>
                 <div className="space-y-0.5">
                   {events.slice(0, 3).map((ev, j) => {
-                    const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                    const colors = getStatutColor(ev.statut, isOverdue);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const colors = getStatutColor(automaticStatus, false);
                     return (
                       <div key={j} className={`text-[10px] leading-tight px-1 py-0.5 rounded border-l-2 truncate ${colors.cell}`}
-                        title={`[${isOverdue ? 'En retard' : ev.statut}] ${ev.machine} — ${ev.technicien}`}>
+                        title={`[${automaticStatus}] ${ev.machine} — ${ev.technicien}`}>
                         {ev.machine.substring(0, 14)}
                       </div>
                     );
@@ -378,6 +590,7 @@ export default function PlanningPage() {
           { label: 'En cours',   dot: 'bg-yellow-400', text: 'text-yellow-400' },
           { label: 'Terminée',   dot: 'bg-green-400',  text: 'text-green-400'  },
           { label: 'En retard',  dot: 'bg-red-400',    text: 'text-red-400'    },
+          { label: 'Décalé',     dot: 'bg-gray-400',   text: 'text-gray-400'   },
         ].map(s => (
           <div key={s.label} className="flex items-center gap-2">
             <span className={`w-3 h-3 rounded-sm border-l-2 ${s.dot} opacity-80`} />
@@ -410,7 +623,7 @@ export default function PlanningPage() {
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
-        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard'];
+        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'];
         const filteredData = data
           .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
           .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
@@ -419,10 +632,13 @@ export default function PlanningPage() {
           .filter(d => filterTech   === 'Tous' || d.technicien === filterTech)
           .filter(d => {
             if (filterStatut === 'Tous') return true;
-            const hasDate = !!d.date_planifiee;
-            const isOverdue = hasDate && new Date(d.date_planifiee) < now && d.statut !== 'Réalisée' && d.statut !== 'Terminée' && d.statut !== 'Annulée';
-            if (filterStatut === 'En retard') return isOverdue;
-            return d.statut === filterStatut && !isOverdue;
+            const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+            return automaticStatus === filterStatut;
+          })
+          .filter(d => {
+            const dateStr = (d.date_planifiee || '').substring(0, 10);
+            if (!dateStr) return false;
+            return dateStr >= pdfDateFrom && dateStr <= pdfDateTo;
           });
         const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
         return (
@@ -471,6 +687,29 @@ export default function PlanningPage() {
               {fStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
             </select>
           </div>
+        </div>
+
+        {/* Second filter row: Date range for PDF */}
+        <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
+            <label className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Période :</label>
+            <input 
+              type="date" 
+              value={pdfDateFrom} 
+              onChange={e => setPdfDateFrom(e.target.value)} 
+              title="Date début"
+              className="bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+            />
+            <span className="text-xs text-savia-text-muted">à</span>
+            <input 
+              type="date" 
+              value={pdfDateTo} 
+              onChange={e => setPdfDateTo(e.target.value)} 
+              title="Date fin"
+              className="bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all"
+            />
+          </div>
           {/* Reset */}
           {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous' || filterRegion !== 'Tous' || filterVille !== 'Tous') && (
             <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); setFilterRegion('Tous'); setFilterVille('Tous'); }}
@@ -478,23 +717,47 @@ export default function PlanningPage() {
               <X className="w-3 h-3" /> Réinitialiser
             </button>
           )}
+          {/* Comparateur Export */}
+          <button
+            onClick={() => {
+              if (filteredData.length === 0) {
+                alert('Sélectionnez une maintenance à comparer');
+                return;
+              }
+              // For now, show first intervention in filtered list
+              if (filteredData.length > 0) {
+                handleOpenComparateur(filteredData[0]);
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-cyan-400 hover:bg-cyan-400/10 border border-cyan-400/30 transition-all cursor-pointer"
+          >
+            <BarChart3 className="w-3.5 h-3.5" /> Comparateur
+          </button>
           {/* PDF Download */}
           <button
             onClick={async () => {
               try {
-                const printData = filteredData.slice().sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+                const printData = filteredData
+                  .sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
+                
                 const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : filterTech !== 'Tous' ? `Technicien: ${filterTech}` : 'Tous les clients';
                 const token = localStorage.getItem('savia_token') || '';
                 const cn = localStorage.getItem('savia_company') || 'SAVIA';
                 const cl = localStorage.getItem('savia_logo') || '';
+                
                 const res = await fetch('/api/planning/pdf', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-                  body: JSON.stringify({ rows: printData, filter_label: filterLabel, company_name: cn, company_logo: cl }),
+                  body: JSON.stringify({ 
+                    rows: printData, 
+                    filter_label: filterLabel, 
+                    company_name: cn, 
+                    company_logo: cl
+                  }),
                 });
                 if (!res.ok) throw new Error('Erreur ' + res.status);
                 const blob = await res.blob();
-                downloadBlob(blob, 'planning_maintenance.pdf');
+                downloadBlob(blob, `planning_maintenance_${pdfDateFrom}_${pdfDateTo}.pdf`);
               } catch (err: any) { alert('Erreur PDF: ' + (err.message || 'Inconnue')); }
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent hover:bg-savia-accent/10 border border-savia-accent/30 transition-all cursor-pointer ml-auto"
@@ -507,7 +770,7 @@ export default function PlanningPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-surface z-10">
                 <tr className="border-b border-savia-border">
-                  {['Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
+                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
                     <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -526,10 +789,12 @@ export default function PlanningPage() {
                   })
                   .map(ev => {
                     const hasDate = !!ev.date_planifiee;
-                    const isOverdue = hasDate && new Date(ev.date_planifiee) < now && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                    const colors = getStatutColor(ev.statut, isOverdue);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const colors = getStatutColor(automaticStatus, false);
+                    const isOverdue = automaticStatus === 'En retard';
                     return (
                       <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
+                        <td className="py-2 px-3 text-xs font-mono whitespace-nowrap text-savia-text-muted">#{ev.id}</td>
                         <td className="py-2 px-3 text-xs font-mono whitespace-nowrap">
                           {hasDate ? ev.date_planifiee.substring(0, 10) : <span className="text-savia-text-dim italic">Sans date</span>}
                         </td>
@@ -540,7 +805,7 @@ export default function PlanningPage() {
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—'}</td>
                         <td className="py-2 px-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>
-                            {isOverdue ? 'En retard' : ev.statut}
+                            {automaticStatus}
                           </span>
                         </td>
                       </tr>
@@ -570,34 +835,20 @@ export default function PlanningPage() {
               <Scan className="w-3.5 h-3.5 text-savia-accent" /> Domaine médical *
             </label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {/* Default domains */}
-              {DOMAINES_MEDICAUX.map(d => (
+              {/* All domains (default + custom) */}
+              {allDomaines.map(d => (
                 <button key={d} type="button"
                   onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
                   className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
                     form.domaine === d
-                      ? DOMAINE_ACTIVE_CLS[d]
+                      ? DOMAINE_ACTIVE_CLS[d] || 'bg-indigo-600/40 border-indigo-400/70 text-white'
                       : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
                   }`}
                 >
-                  <div className="scale-110">{DOMAINE_ICONS_MAP[d]}</div>
+                  <div className="scale-110">{DOMAINE_ICONS_MAP[d] || <Server className="w-4 h-4" />}</div>
                   <span className="text-center leading-tight">
-                    {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d}
+                    {d === 'POC / Soins Intensifs' ? 'POC / Soins' : d === 'Anesthésie / Bloc Op.' ? 'Anesthésie' : d.length > 12 ? d.substring(0, 12) + '...' : d}
                   </span>
-                </button>
-              ))}
-              {/* Custom domains */}
-              {domainesCustom.map(d => (
-                <button key={d} type="button"
-                  onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
-                  className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
-                    form.domaine === d
-                      ? 'bg-purple-600/40 border-purple-400/70 text-white'
-                      : 'bg-savia-bg/50 border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
-                  }`}
-                >
-                  <div className="scale-110"><Stethoscope className="w-4 h-4" /></div>
-                  <span className="text-center leading-tight">{d}</span>
                 </button>
               ))}
             </div>
@@ -793,9 +1044,8 @@ export default function PlanningPage() {
             {/* Events */}
             <div className="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
               {dayDetailEvents.map((ev, i) => {
-                const isPast = new Date(ev.date_planifiee) < now;
-                const isOverdue = isPast && ev.statut !== 'Réalisée' && ev.statut !== 'Terminée' && ev.statut !== 'Annulée';
-                const colors = getStatutColor(ev.statut, isOverdue);
+                const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                const colors = getStatutColor(automaticStatus, false);
                 return (
                   <div key={i} className={`rounded-xl border border-savia-border border-l-4 p-4 space-y-2 bg-savia-surface-hover/40 ${colors.dot.replace('bg-', 'border-l-').replace('bg-savia', 'border-l-savia')}`}
                     style={{ borderLeftColor: colors.dot === 'bg-blue-400' ? '#60a5fa' : colors.dot === 'bg-yellow-400' ? '#facc15' : colors.dot === 'bg-green-400' ? '#4ade80' : '#f87171' }}>
@@ -805,7 +1055,7 @@ export default function PlanningPage() {
                         <Server className="w-4 h-4 flex-shrink-0 text-savia-text-muted" /> {ev.machine}
                       </span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${colors.badge}`}>
-                        {isOverdue ? 'En retard' : ev.statut}
+                        {automaticStatus}
                       </span>
                     </div>
 
@@ -850,9 +1100,388 @@ export default function PlanningPage() {
                         <p className="italic text-savia-text-muted">{ev.notes}</p>
                       </div>
                     )}
+                    
+                    {/* Action buttons for Admin/Manager */}
+                    {(user?.role === 'Admin' || user?.role === 'Manager') && (
+                      <div className="flex items-center gap-2 pt-2 border-t border-savia-border">
+                        <button
+                          onClick={() => handleOpenReschedule(ev)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent bg-savia-accent/10 hover:bg-savia-accent/20 border border-savia-accent/30 transition-all cursor-pointer flex-1"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Décaler et assigner
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reschedule Modal */}
+      {showRescheduleModal && selectedIntervention && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowRescheduleModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
+              <h2 className="text-base font-black gradient-text flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-savia-accent" />
+                Décaler l&apos;intervention
+              </h2>
+              <button onClick={() => setShowRescheduleModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 space-y-4">
+              {/* Current info */}
+              <div className="bg-savia-surface-hover/50 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider">Intervention actuelle</div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-savia-text-muted">Équipement :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.machine}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Client :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.client}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Date prévue :</span>
+                    <p className="font-semibold text-savia-text">{selectedIntervention.date_planifiee}</p>
+                  </div>
+                  <div>
+                    <span className="text-savia-text-muted">Technicien(s) :</span>
+                    <p className="font-semibold text-savia-text text-xs">{selectedIntervention.technicien || '—'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Error message */}
+              {rescheduleError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-red-400 text-sm flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {rescheduleError}
+                </div>
+              )}
+
+              {/* New date */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Calendar className="w-3.5 h-3.5 text-savia-accent" /> Nouvelle date prévue *
+                </label>
+                <input
+                  type="date"
+                  className={INPUT_CLS}
+                  value={rescheduleForm.newDate}
+                  onChange={e => setRescheduleForm({...rescheduleForm, newDate: e.target.value})}
+                />
+              </div>
+
+              {/* New technicians */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <User className="w-3.5 h-3.5 text-savia-accent" /> Techniciens assignés
+                </label>
+                {/* Chips for selected techs */}
+                {rescheduleForm.newTechs && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {rescheduleForm.newTechs.split(', ').filter(Boolean).map(t => (
+                      <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-savia-accent/15 text-savia-accent border border-savia-accent/30">
+                        {t}
+                        <button type="button" onClick={() => {
+                          const updated = rescheduleForm.newTechs.split(', ').filter(x => x !== t).join(', ');
+                          setRescheduleForm({...rescheduleForm, newTechs: updated});
+                        }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Dropdown */}
+                <div className="relative">
+                  <button type="button" onClick={() => setRescheduleDropdownOpen(!rescheduleDropdownOpen)}
+                    className={INPUT_CLS + ' flex items-center justify-between cursor-pointer text-left'}>
+                    <span className={rescheduleForm.newTechs ? 'text-savia-text' : 'text-savia-text-dim'}>
+                      {rescheduleForm.newTechs ? `${rescheduleForm.newTechs.split(', ').length} technicien(s)` : '— Sélectionner —'}
+                    </span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${rescheduleDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {rescheduleDropdownOpen && (
+                    <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {techsList.map(t => {
+                        const selected = rescheduleForm.newTechs.split(', ').filter(Boolean).includes(t);
+                        return (
+                          <button key={t} type="button" onClick={() => {
+                            const current = rescheduleForm.newTechs.split(', ').filter(Boolean);
+                            const updated = selected ? current.filter(x => x !== t) : [...current, t];
+                            setRescheduleForm({...rescheduleForm, newTechs: updated.join(', ')});
+                          }}
+                            className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
+                              selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
+                            }`}>
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selected ? 'bg-savia-accent border-savia-accent' : 'border-savia-border'
+                            }`}>
+                              {selected && <Check className="w-3 h-3 text-white" />}
+                            </div>
+                            {t}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Raison du décalage */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <StickyNote className="w-3.5 h-3.5 text-savia-accent" /> Raison du décalage (optionnel)
+                </label>
+                <textarea
+                  placeholder="Ex: Client indisponible, pièce non disponible, urgence prioritaire..."
+                  className={INPUT_CLS + ' resize-none min-h-20 py-2'}
+                  value={rescheduleForm.reason}
+                  onChange={e => setRescheduleForm({...rescheduleForm, reason: e.target.value})}
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50">
+              <button onClick={() => setShowRescheduleModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Annuler
+              </button>
+              <button onClick={handleReschedule} disabled={isRescheduling}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
+                {isRescheduling ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Décaler
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comparateur Modal */}
+      {showComparateurModal && selectedForComparateur && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowComparateurModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-2xl shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border/50">
+              <h2 className="text-lg font-black gradient-text flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" /> Comparateur Planning
+              </h2>
+              <button onClick={() => setShowComparateurModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+              {isLoadingComparateur ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-savia-accent" />
+                </div>
+              ) : comparateurError ? (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400">
+                  Erreur: {comparateurError}
+                </div>
+              ) : comparateurData && !comparateurData.has_ghost ? (
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-blue-400">
+                  Aucun décalage trouvé pour cette intervention. Il n'y a pas de ghost entry.
+                </div>
+              ) : comparateurData ? (
+                <>
+                  {/* Summary */}
+                  <div className="bg-savia-surface-hover rounded-lg p-4 border border-savia-border/30">
+                    <div className="text-sm font-semibold text-savia-accent mb-2">Résumé</div>
+                    <div className="text-sm text-savia-text">{getComparateurSummary(comparateurData)}</div>
+                  </div>
+
+                  {/* Equipment Info */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Machine</div>
+                      <div className="text-sm text-savia-text">{comparateurData.machine}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Client</div>
+                      <div className="text-sm text-savia-text">{comparateurData.client}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Type</div>
+                      <div className="text-sm text-savia-text">{comparateurData.type_maintenance}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-savia-text-muted mb-1">Description</div>
+                      <div className="text-sm text-savia-text truncate">{comparateurData.description}</div>
+                    </div>
+                  </div>
+
+                  {/* Comparison */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Planning Réel */}
+                    <div className="bg-green-500/5 border border-green-500/30 rounded-lg p-3">
+                      <div className="text-xs font-semibold text-green-400 mb-2">Planning Réel (Nouvelle date)</div>
+                      <div className="space-y-1.5 text-xs">
+                        <div><span className="text-savia-text-muted">Date:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.date}</span></div>
+                        <div><span className="text-savia-text-muted">Technicien:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.technicien || 'Non assigné'}</span></div>
+                        <div><span className="text-savia-text-muted">Statut:</span> <span className="text-savia-text font-semibold">{comparateurData.real?.statut}</span></div>
+                      </div>
+                    </div>
+
+                    {/* Planning Décalé */}
+                    {comparateurData.ghost && (
+                      <div className="bg-gray-500/5 border border-gray-500/30 rounded-lg p-3">
+                        <div className="text-xs font-semibold text-gray-400 mb-2">Planning Décalé (Date originale)</div>
+                        <div className="space-y-1.5 text-xs">
+                          <div><span className="text-savia-text-muted">Date:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.date}</span></div>
+                          <div><span className="text-savia-text-muted">Technicien:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.technicien || 'Non assigné'}</span></div>
+                          <div><span className="text-savia-text-muted">Statut:</span> <span className="text-savia-text font-semibold">{comparateurData.ghost.statut}</span></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Reasons */}
+                  {comparateurData.reasons && comparateurData.reasons.length > 0 && (
+                    <div className="bg-savia-surface-hover rounded-lg p-3 border border-savia-border/30">
+                      <div className="text-xs font-semibold text-savia-accent mb-2">Raisons du décalage</div>
+                      <div className="space-y-1 text-xs text-savia-text">
+                        {comparateurData.reasons.map((reason: string, idx: number) => (
+                          <div key={idx} className="flex gap-2">
+                            <span className="text-savia-text-muted">{idx + 1}.</span>
+                            <span>{reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50">
+              <button onClick={() => setShowComparateurModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Fermer
+              </button>
+              {comparateurData && (
+                <>
+                  <button onClick={() => handleExportComparateur('csv')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-blue-600/40 hover:bg-blue-600/60 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> CSV
+                  </button>
+                  <button onClick={() => handleExportComparateur('json')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white bg-purple-600/40 hover:bg-purple-600/60 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> JSON
+                  </button>
+                  <button onClick={() => handleExportComparateur('pdf')} disabled={isLoadingComparateur}
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
+                    <Download className="w-4 h-4" /> PDF
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comparateur Période Modal */}
+      {showComparateurPeriodeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowComparateurPeriodeModal(false)}>
+          <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-4xl shadow-2xl animate-fade-in max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border sticky top-0 bg-savia-surface">
+              <h2 className="text-lg font-black gradient-text flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" /> Comparateur Périod</h2>
+              <button onClick={() => setShowComparateurPeriodeModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-6 space-y-4">
+              {/* Date Selection */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-savia-text-muted mb-2 block">Date début</label>
+                  <input type="date" value={comparateurPeriodeForm.dateDebut} onChange={e => setComparateurPeriodeForm({...comparateurPeriodeForm, dateDebut: e.target.value})} 
+                    className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-savia-text-muted mb-2 block">Date fin</label>
+                  <input type="date" value={comparateurPeriodeForm.dateFin} onChange={e => setComparateurPeriodeForm({...comparateurPeriodeForm, dateFin: e.target.value})}
+                    className="w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all" />
+                </div>
+              </div>
+
+              {/* Search Button */}
+              <button onClick={handleFetchComparateurPeriode} disabled={isLoadingComparateurPeriode}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                {isLoadingComparateurPeriode ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
+                {isLoadingComparateurPeriode ? 'Chargement...' : 'Charger les comparaisons'}
+              </button>
+
+              {/* Error */}
+              {comparateurPeriodeError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400 text-sm">
+                  {comparateurPeriodeError}
+                </div>
+              )}
+
+              {/* Results Table */}
+              {comparateurPeriodeData && comparateurPeriodeData.comparisons && comparateurPeriodeData.comparisons.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <div className="text-sm font-semibold text-savia-text-muted mb-3">
+                    {comparateurPeriodeData.total} décalage(s) trouvé(s)
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-savia-border">
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Machine</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Client</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Type</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Date Original</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Date Décalée</th>
+                        <th className="text-center px-3 py-2 font-semibold text-savia-accent">Décalage (j)</th>
+                        <th className="text-left px-3 py-2 font-semibold text-savia-accent">Raisons</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comparateurPeriodeData.comparisons.map((c: any, idx: number) => (
+                        <tr key={idx} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/30">
+                          <td className="px-3 py-2 text-savia-text">{c.machine}</td>
+                          <td className="px-3 py-2 text-savia-text-muted">{c.client}</td>
+                          <td className="px-3 py-2 text-savia-text-muted text-xs">{c.type_maintenance}</td>
+                          <td className="px-3 py-2 text-savia-text">{c.old_date}</td>
+                          <td className="px-3 py-2 text-savia-text">{c.new_date}</td>
+                          <td className="px-3 py-2 text-center font-semibold" style={{color: c.days_difference > 0 ? '#ef4444' : '#10b981'}}>
+                            {c.days_difference > 0 ? `+${c.days_difference}` : c.days_difference}
+                          </td>
+                          <td className="px-3 py-2 text-savia-text-muted text-xs max-w-xs truncate">{c.reasons.join('; ') || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : comparateurPeriodeData && comparateurPeriodeData.comparisons?.length === 0 ? (
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 text-blue-400 text-sm text-center">
+                  Aucun décalage trouvé pour cette période
+                </div>
+              ) : null}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-savia-border/50 sticky bottom-0 bg-savia-surface">
+              <button onClick={() => setShowComparateurPeriodeModal(false)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
+                <X className="w-4 h-4" /> Fermer
+              </button>
             </div>
           </div>
         </div>

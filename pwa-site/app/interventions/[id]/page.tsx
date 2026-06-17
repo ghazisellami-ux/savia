@@ -5,10 +5,11 @@ import { api } from '@/lib/api';
 import { isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import TimeScrollPicker from '@/components/TimeScrollPicker';
 import {
   Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
   XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
-  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare
+  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare, Zap
 } from 'lucide-react';
 
 const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
@@ -45,18 +46,16 @@ function coreWords(s: string): string[] {
   return s.toLowerCase().replace(/[()\-_/]/g, ' ').split(/\s+/).filter(w => w.length > 1);
 }
 
-// Vérifie si le type de pièce correspond à la machine de l'intervention
-// Machine format: "Type Fabricant" (ex: "IRM GE", "Arceau Chirurgical Hologic")
-// Piece equipement_type: "Type (détail)" (ex: "IRM", "Arceau Chirurgical (C-Arm)")
-function matchesMachine(machineName: string, pieceType: string): boolean {
-  if (!machineName || !pieceType) return false;
-  const machineWords = coreWords(machineName);
-  // Remove parenthesized parts from piece type (e.g. "(C-Arm)", "(CBCT)", "(DR)")
-  const pieceClean = pieceType.replace(/\([^)]*\)/g, '').trim();
-  const pieceCore = coreWords(pieceClean);
-  if (pieceCore.length === 0) return false;
-  const matchCount = pieceCore.filter(pw => machineWords.some(mw => mw.includes(pw) || pw.includes(mw))).length;
-  return matchCount >= pieceCore.length;
+// Vérifie si le type de pièce correspond à l'équipement de l'intervention
+// Compare directement les types d'équipement
+function matchesMachine(machineEquipmentType: string, pieceEquipmentType: string): boolean {
+  if (!machineEquipmentType || !pieceEquipmentType) return false;
+  
+  // Direct comparison of equipment types
+  const mt = machineEquipmentType.toLowerCase().trim();
+  const pt = pieceEquipmentType.toLowerCase().trim();
+  
+  return mt === pt;
 }
 
 export default function InterventionDetailPage() {
@@ -66,6 +65,7 @@ export default function InterventionDetailPage() {
 
   const [intervention, setIntervention] = useState<any>(null);
   const [allPieces, setAllPieces]       = useState<any[]>([]);
+  const [allEquipements, setAllEquipements] = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState('');
@@ -81,30 +81,80 @@ export default function InterventionDetailPage() {
   const [refuseRaison, setRefuseRaison] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Per-technician data state
+  const [technicianRecords, setTechnicianRecords] = useState<any[]>([]);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
+
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
     description: '', notes: '', type_erreur: '', priorite: '',
     duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
+    start_time: '08:00', end_time: '09:00',  // HH:MM format
+  });
+
+  // Per-technician form
+  const [techForm, setTechForm] = useState({
+    probleme_tech: '',
+    cause_tech: '',
+    solution_tech: '',
+    heure_debut_tech: '08:00',
+    heure_fin_tech: '09:00',
+    duree_minutes_tech: 60,
+    duree_deplacement_tech: 0,
+    notes_tech: '',
+    statut: 'En cours',
   });
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
+    // Get current user name from localStorage (set during login)
+    const userName = localStorage.getItem('savia_site_user_nom') || '';
+    setCurrentUserName(userName);
     loadAll();
   }, [id]);
 
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [all, pieces] = await Promise.all([
+      const [all, pieces, equipements] = await Promise.all([
         api.interventions.list(),
         api.pieces.list(),
+        api.equipements.list(),
       ]);
+
+      console.log('Loaded equipements:', equipements);
+      console.log('Loaded pieces:', pieces);
 
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
 
       setIntervention(found);
-      setAllPieces(pieces as any[]);
+      setAllPieces(Array.isArray(pieces) ? pieces : []);
+      setAllEquipements(Array.isArray(equipements) ? equipements : []);
+      
+      // Load times in HH:MM format from TIME columns
+      let startTime = '08:00';
+      let endTime = '09:00';
+      
+      if (found.start_time) {
+        startTime = found.start_time.substring(0, 5);
+      }
+      
+      if (found.end_time) {
+        endTime = found.end_time.substring(0, 5);
+      }
+      
+      // Calculate duration from times if both are provided
+      let durationMin = 60;
+      if (startTime && endTime) {
+        const [startH, startM] = startTime.split(':').map(Number);
+        const [endH, endM] = endTime.split(':').map(Number);
+        durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+        if (durationMin <= 0) durationMin += 24 * 60;
+        durationMin = Math.max(60, durationMin);
+      }
+      
       setForm({
         statut:           found.statut || 'En cours',
         probleme:         found.probleme || '',
@@ -114,10 +164,24 @@ export default function InterventionDetailPage() {
         notes:            found.notes || '',
         type_erreur:      found.type_erreur || '',
         priorite:         found.priorite || '',
-        duree_minutes:    found.duree_minutes || 0,
-        deplacement:      found.deplacement || 0,
+        duree_minutes:    durationMin,
+        deplacement:      found.duree_deplacement ? found.duree_deplacement / 60 : 0,
         fiche_validation: found.fiche_validation || 'En attente',
+        start_time:       startTime,
+        end_time:         endTime,
       });
+
+      // Try to load technician records (if backend supports it)
+      try {
+        // Check if intervention has technicien to determine mode
+        if (found.technicien) {
+          // Could load from interventions_techniciens, but for now use single-tech mode
+          setUsePerTechnicianMode(false);
+        }
+      } catch (e) {
+        console.debug('Per-tech records not available, using standard mode');
+        setUsePerTechnicianMode(false);
+      }
     } catch {
       setError('Erreur lors du chargement.');
     } finally {
@@ -126,11 +190,30 @@ export default function InterventionDetailPage() {
   };
 
   // Filtrer les pièces : l'equipement_type de la pièce doit correspondre
-  // au nom de la machine de l'intervention (matching intelligent multi-mots)
+  // au type d'équipement de l'équipement de l'intervention
   const filteredPieces = useMemo(() => {
-    if (!intervention?.machine || allPieces.length === 0) return [];
-    return allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''));
-  }, [allPieces, intervention]);
+    if (!intervention?.machine || !allPieces || !allEquipements) {
+      return [];
+    }
+    
+    // Find the equipment for this intervention
+    const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
+    if (!equipment) {
+      return [];
+    }
+    
+    // Get the equipment type - API returns "Type" (capitalized)
+    const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
+    if (!equipmentType) {
+      return [];
+    }
+    
+    // Filter pieces by matching equipment type
+    return allPieces.filter(p => {
+      const pieceType = (p.equipement_type || '').toLowerCase().trim();
+      return equipmentType === pieceType;
+    });
+  }, [allPieces, allEquipements, intervention?.machine]);
 
   const handleQty = (pieceId: number, qty: number) => {
     setPiecesQty(prev => {
@@ -163,12 +246,117 @@ export default function InterventionDetailPage() {
         reference: p.reference || '',
         designation: p.designation || p.nom || '',
       }));
-      await api.interventions.update(id, { ...form, pieces_a_deduire, pieces_rupture, ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) });
+      
+      // Calculate duration from times (HH:MM format)
+      const calculateDuration = (startTime: string, endTime: string): number => {
+        try {
+          const [startH, startM] = startTime.split(':').map(Number);
+          const [endH, endM] = endTime.split(':').map(Number);
+          let duration = (endH * 60 + endM) - (startH * 60 + startM);
+          if (duration <= 0) duration += 24 * 60;  // Handle midnight crossing
+          return Math.max(60, duration);  // Minimum 1 hour billing
+        } catch (e) {
+          return 60;
+        }
+      };
+      
+      const deploymentMinutes = Math.round(form.deplacement * 60);
+      const durationMinutes = calculateDuration(form.start_time, form.end_time);
+      
+      const updatePayload = { 
+        statut: form.statut,
+        probleme: form.probleme,
+        cause: form.cause,
+        solution: form.solution,
+        description: form.description,
+        notes: form.notes,
+        type_erreur: form.type_erreur,
+        priorite: form.priorite,
+        duree_minutes: durationMinutes,
+        start_time: form.start_time,  // Send HH:MM directly
+        end_time: form.end_time,      // Send HH:MM directly
+        deplacement: deploymentMinutes,  // Send in minutes
+        pieces_a_deduire, 
+        pieces_rupture, 
+        ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) 
+      };
+      
+      console.log('🚀 Sending update payload:', updatePayload);
+      console.log('  start_time:', updatePayload.start_time, '(HH:MM format)');
+      console.log('  end_time:', updatePayload.end_time, '(HH:MM format)');
+      console.log('  duree_minutes:', updatePayload.duree_minutes);
+      console.log('  deplacement:', updatePayload.deplacement, 'minutes');
+      
+      await api.interventions.update(id, updatePayload);
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
       setSuccess('Intervention mise à jour !');
       setTimeout(() => router.replace('/interventions'), 1500);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la mise à jour.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveTechnicianData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    // Validation: solution_tech required when marking as Cloturee
+    if (techForm.statut === 'Cloturee' && !techForm.solution_tech.trim()) {
+      setError('La "Solution" est obligatoire pour clôturer votre intervention.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Calculate duration from times
+      const calculateDuration = (startTime: string, endTime: string): number => {
+        try {
+          const [startH, startM] = startTime.split(':').map(Number);
+          const [endH, endM] = endTime.split(':').map(Number);
+          let duration = (endH * 60 + endM) - (startH * 60 + startM);
+          if (duration <= 0) duration += 24 * 60;
+          return Math.max(60, duration);
+        } catch (e) {
+          return 60;
+        }
+      };
+
+      const durationMinutes = calculateDuration(techForm.heure_debut_tech, techForm.heure_fin_tech);
+      const deploymentMinutes = Math.round(techForm.duree_deplacement_tech);
+
+      const payload = {
+        technicien_nom: currentUserName,
+        probleme_tech: techForm.probleme_tech,
+        cause_tech: techForm.cause_tech,
+        solution_tech: techForm.solution_tech,
+        heure_debut_tech: techForm.heure_debut_tech,
+        heure_fin_tech: techForm.heure_fin_tech,
+        duree_minutes_tech: durationMinutes,
+        duree_deplacement_tech: deploymentMinutes,
+        notes_tech: techForm.notes_tech,
+        statut: techForm.statut,  // Can be 'Cloturee' to mark as done
+      };
+
+      console.log('📤 Sending technician data:', payload);
+
+      const response = await api.interventions.updateTechnicianData(id, payload);
+      
+      if (response.status === 'ALL_COMPLETED') {
+        // All technicians done, awaiting admin closure
+        setSuccess(`✅ Tous les techniciens ont complété (${response.completed}/${response.total}). En attente de clôture administrative.`);
+      } else if (response.status === 'PARTIAL') {
+        // Still waiting for others
+        const pending = response.pending_technicians?.join(', ') || '';
+        setSuccess(`✅ Données sauvegardées (${response.completed}/${response.total} techniciens complétés). Restants: ${pending}`);
+      } else {
+        setSuccess('✅ Vos données ont été enregistrées.');
+      }
+      
+      setTimeout(() => router.replace('/interventions'), 2000);
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de la sauvegarde.');
     } finally {
       setSaving(false);
     }
@@ -219,16 +407,31 @@ export default function InterventionDetailPage() {
 
   // Pour la section "en attente de pièce", filtrer d'abord par type d'équipement puis par recherche
   const searchedPieces = useMemo(() => {
-    const base = intervention?.machine
-      ? allPieces.filter(p => matchesMachine(intervention.machine, p.equipement_type || ''))
-      : allPieces;
+    let base: any[] = [];
+    
+    if (intervention?.machine && allEquipements && allPieces) {
+      // Find the equipment for this intervention
+      const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
+      if (equipment) {
+        // Get the equipment type
+        const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
+        if (equipmentType) {
+          // Filter pieces by matching equipment type
+          base = allPieces.filter(p => {
+            const pieceType = (p.equipement_type || '').toLowerCase().trim();
+            return equipmentType === pieceType;
+          });
+        }
+      }
+    }
+    
     if (!searchRupture) return base;
     const q = searchRupture.toLowerCase();
     return base.filter(p =>
       (p.designation || p.nom || '').toLowerCase().includes(q)
       || (p.reference || '').toLowerCase().includes(q)
     );
-  }, [allPieces, intervention, searchRupture]);
+  }, [allPieces, allEquipements, intervention?.machine, searchRupture]);
 
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -368,22 +571,58 @@ export default function InterventionDetailPage() {
                   {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
                 </select>
               </div>
-              <div>
-                <label style={LABEL}><Timer style={ICON_INLINE} /> Durée (heures)</label>
-                <input
-                  type="number" style={INPUT} min={0} step={0.5}
-                  value={form.duree_minutes > 0 ? +(form.duree_minutes / 60).toFixed(2) : 0}
-                  onChange={e => set('duree_minutes', Math.round((parseFloat(e.target.value) || 0) * 60))}
-                />
-              </div>
-              <div>
-                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (heures)</label>
-                <input
-                  type="number" style={INPUT} min={0} step={0.5}
-                  value={form.deplacement}
-                  onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
-                />
-              </div>
+            </div>
+
+            {/* Time pickers with scrollable UI */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+              <TimeScrollPicker 
+                label="Heure de début"
+                value={form.start_time}
+                onChange={(time) => {
+                  set('start_time', time);
+                  // Auto-calculate duration
+                  const [startH, startM] = time.split(':').map(Number);
+                  const [endH, endM] = form.end_time.split(':').map(Number);
+                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                  if (durationMin <= 0) durationMin += 24 * 60;
+                  durationMin = Math.max(60, durationMin);
+                  setForm(f => ({ ...f, duree_minutes: durationMin }));
+                }}
+              />
+              <TimeScrollPicker 
+                label="Heure de fin"
+                value={form.end_time}
+                onChange={(time) => {
+                  set('end_time', time);
+                  // Auto-calculate duration
+                  const [startH, startM] = form.start_time.split(':').map(Number);
+                  const [endH, endM] = time.split(':').map(Number);
+                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                  if (durationMin <= 0) durationMin += 24 * 60;
+                  durationMin = Math.max(60, durationMin);
+                  setForm(f => ({ ...f, duree_minutes: durationMin }));
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
+              <Zap style={{ width: 16, height: 16, color: 'var(--teal)' }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Durée calculée:</span>
+              <span style={{ fontWeight: 700, color: 'var(--teal)', marginLeft: 'auto' }}>
+                {form.duree_minutes > 0 ? (form.duree_minutes / 60).toFixed(2) : 0}h
+              </span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Min 1h</span>
+            </div>
+
+            <div style={{ marginTop: '12px' }}>
+              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                <Car style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Déplacement (heures)
+              </label>
+              <input
+                type="number" style={{ width: '100%', background: '#fff', border: '1px solid var(--border)', borderRadius: '10px', color: 'var(--text)', padding: '12px 14px', fontSize: '1rem', outline: 'none', fontFamily: 'inherit' }} min={0} step={0.5}
+                value={form.deplacement}
+                onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
+              />
             </div>
           </div>
 

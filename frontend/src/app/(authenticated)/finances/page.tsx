@@ -97,7 +97,7 @@ export default function FinancesPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const kpis = data?.kpis || {};
+  // Recalculate KPIs correctly: cout_total = cout_main_oeuvre + cout_pieces (NOT interventions which double-counts)
   const clientsData = useMemo(() => {
     let arr = (data?.clients || []) as any[];
     // Apply table client filter
@@ -113,6 +113,22 @@ export default function FinancesPage() {
       return sortDir === 'asc' ? va - vb : vb - va;
     });
   }, [data, sortCol, sortDir, tableClientFilter, tableSearch]);
+
+  // Correct KPIs: cout_total should be MO + Pieces, not interventions
+  const kpis = useMemo(() => {
+    if (!clientsData || clientsData.length === 0) return data?.kpis || {};
+    
+    // Recalculate cout_total from clients data
+    const totalMainOeuvre = clientsData.reduce((a: number, c: any) => a + (c.cout_main_oeuvre || 0), 0);
+    const totalPieces = clientsData.reduce((a: number, c: any) => a + (c.cout_pieces || 0), 0);
+    const coutTotalCorrect = totalMainOeuvre + totalPieces;
+    
+    // Return modified KPIs with corrected cout_total
+    return {
+      ...(data?.kpis || {}),
+      cout_total: coutTotalCorrect,
+    };
+  }, [data?.kpis, clientsData]);
 
   // Filtered TCO data
   const filteredTco = useMemo(() => {
@@ -142,14 +158,12 @@ export default function FinancesPage() {
       : <ArrowUpDown className="w-3 h-3 opacity-30" />
   );
 
-  // Cost breakdown for chart
+  // Cost breakdown for chart - CORRECTED: only pieces and main d'oeuvre (no interventions)
   const costBreakdown = useMemo(() => {
     if (!clientsData.length) return [];
-    const totInterv = clientsData.reduce((a: number, c: any) => a + (c.cout_interventions || 0), 0);
     const totPieces = clientsData.reduce((a: number, c: any) => a + (c.cout_pieces || 0), 0);
     const totMO = clientsData.reduce((a: number, c: any) => a + (c.cout_main_oeuvre || 0), 0);
     return [
-      { name: 'Interventions', value: totInterv, color: COLORS.red },
       { name: 'Pièces', value: totPieces, color: COLORS.orange },
       { name: 'Main d\'œuvre', value: totMO, color: COLORS.blue },
     ].filter(d => d.value > 0);
@@ -459,7 +473,7 @@ export default function FinancesPage() {
                     <td className="py-3 px-3 font-bold">{c.client}</td>
                     <td className="py-3 px-2 text-center">{c.nb_equipements}</td>
                     <td className="py-3 px-2 text-right text-green-400 font-mono">{FMT(c.revenu_contrats)}</td>
-                    <td className="py-3 px-2 text-right text-red-400 font-mono">{FMT(c.cout_total)}</td>
+                    <td className="py-3 px-2 text-right text-red-400 font-mono">{FMT((c.cout_main_oeuvre || 0) + (c.cout_pieces || 0))}</td>
                     <td className={`py-3 px-2 text-right font-bold font-mono ${c.marge >= 0 ? 'text-green-400' : 'text-red-400'}`}>{FMT(c.marge)}</td>
                     <td className={`py-3 px-2 text-center font-bold ${c.marge_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{c.marge_pct}%</td>
                     <td className="py-3 px-2 text-center">{c.nb_interventions}</td>

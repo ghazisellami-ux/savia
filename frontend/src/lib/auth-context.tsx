@@ -50,6 +50,12 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
     reports: true, contrats: true, admin: true, settings: true, demandes: true,
     finances: true, carte: true, sla: true,
   },
+  'Responsable Technique': {
+    dashboard: true, supervision: true, equipements: true, predictions: true,
+    base_connaissances: true, sav: true, planning: true, pieces: false,
+    reports: true, contrats: false, admin: false, settings: true, demandes: true,
+    finances: false, carte: true, sla: true,
+  },
   Technicien: {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: true,

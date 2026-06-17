@@ -96,7 +96,7 @@ export const dashboard = {
 
 // --- Interventions ---
 export const interventions = {
-  list: (params?: { machine?: string; technicien?: string }) => {
+  list: (params?: { machine?: string; technicien?: string; offset?: number; limit?: number }) => {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return request<Array<Record<string, unknown>>>(`/api/interventions?${qs}`);
   },
@@ -232,6 +232,12 @@ export const planning = {
     request<{ ok: boolean }>('/api/planning', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'PUT', body }),
+  reschedule: (id: number, body: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/planning/${id}/reschedule`, { method: 'PUT', body }),
+  comparateur: (id: number) =>
+    request<Record<string, unknown>>(`/api/planning/${id}/comparateur`),
+  comparateurPeriode: (dateDebut: string, dateFin: string) =>
+    request<Record<string, unknown>>(`/api/planning/comparateur-periode?date_debut=${dateDebut}&date_fin=${dateFin}`),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
@@ -266,6 +272,7 @@ export const fabricants = {
 export const typesEquipement = {
   list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
   create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
+  delete: (id: number) => request<{ ok: boolean }>(`/api/types-equipement-custom/${id}`, { method: 'DELETE' }),
 };
 
 export const typesIntervention = {
@@ -287,8 +294,8 @@ export const admin = {
 export const ai = {
   analyzePerformance: (kpis: Record<string, unknown>, sym: string = "EUR") => 
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
-  analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "") =>
-    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context } }),
+  analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "", equipment_type: string = "") =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context, equipment_type } }),
   analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
   analyzePieces: (pieces: Array<Record<string, unknown>>, sym: string = "TND") =>

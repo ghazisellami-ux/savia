@@ -7,6 +7,8 @@ Replaces Flask api_server.py with modern async endpoints.
 """
 import math
 import os
+import base64
+import tempfile
 import jwt
 import bcrypt
 import logging
@@ -23,14 +25,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from db_engine import (
-    init_db, get_db, read_sql,
+    init_db, get_db, read_sql, _trigger_backup,
     lire_equipements, ajouter_equipement, modifier_equipement, supprimer_equipement,
     lire_interventions, ajouter_intervention, update_intervention_statut, cloturer_intervention,
     lire_pieces, ajouter_piece, modifier_piece, supprimer_piece,
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
     ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee, lire_toutes_pieces_demandees,
-    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat,
+    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat, get_contract_equipements,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
     lire_techniciens, ajouter_technicien, update_technicien, supprimer_technicien,
@@ -43,9 +45,32 @@ from db_engine import (
     lire_fabricants, ajouter_fabricant,
     lire_types_equipement_custom, ajouter_type_equipement_custom,
     lire_types_intervention_custom, ajouter_type_intervention_custom,
+    lire_notification_schedules, sauvegarder_notification_schedules_batch,
 )
 
 logger = logging.getLogger("savia-api")
+
+# ── Helper function to get technician full name from username ─────────
+def _get_technician_fullname(username: str) -> str:
+    """
+    Converts a username to technician full name (nom + prenom).
+    If not found, returns the username as fallback.
+    """
+    if not username:
+        return ""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                (username,)
+            ).fetchone()
+            if row:
+                nom = row.get("nom", "").strip()
+                prenom = row.get("prenom", "").strip()
+                return f"{prenom} {nom}".strip() if prenom else nom
+    except Exception as e:
+        logger.debug(f"Failed to get technician name for {username}: {e}")
+    return username  # Fallback to username if not found
 
 # ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
 def _ensure_dejavu_font():
@@ -125,6 +150,16 @@ def startup():
             conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_photo_data BYTEA")
             conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_validation TEXT DEFAULT 'En attente'")
         logger.info("✅ Migration fiche_photo: colonnes OK")
+    except Exception as e:
+        logger.error(f"❌ Migration fiche_photo échouée: {e}")
+    
+    # Vérifier et ajouter colonnes time persistence
+    try:
+        from db_engine import verifier_et_migrer_schema
+        verifier_et_migrer_schema()
+        logger.info("✅ Migration schema (time persistence): OK")
+    except Exception as e:
+        logger.error(f"❌ Migration schema échouée: {e}")
     except Exception as e:
         logger.info(f"Migration fiche_photo (déjà faite ou erreur): {e}")
     # Migration: planning_id + facture_envoyee on interventions
@@ -277,7 +312,7 @@ def sync_planning_to_interventions():
                 """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
                           pm.type_maintenance
                    FROM planning_maintenance pm
-                   WHERE pm.date_prevue = %s
+                   WHERE pm.date_prevue = ?
                      AND pm.statut = 'Planifiée'
                      AND NOT EXISTS (
                          SELECT 1 FROM interventions i
@@ -301,20 +336,20 @@ def sync_planning_to_interventions():
                     """INSERT INTO interventions
                        (date, machine, technicien, type_intervention, description,
                         statut, priorite, notes, planning_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (today_str, machine, technicien, 'Préventive', description,
                      'En cours', 'Moyenne', notes, pm_id)
                 )
                 # Récupérer l'ID de l'intervention créée
                 new_id_row = conn.execute(
-                    "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                    "SELECT id FROM interventions WHERE planning_id = ? ORDER BY id DESC LIMIT 1",
                     (pm_id,)
                 ).fetchone()
                 new_id = new_id_row['id'] if new_id_row else '?'
 
                 # Mettre à jour le statut du planning
                 conn.execute(
-                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
+                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = ?",
                     (pm_id,)
                 )
 
@@ -465,7 +500,7 @@ def check_facturation_reminders():
                     'type': 'premier',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = ?", (int_id,))
 
             # Rappel SAV : J+8 (2 jours avant deadline)
             elif jours_depuis >= 8 and rappel_level < 2:
@@ -476,7 +511,7 @@ def check_facturation_reminders():
                     'type': 'urgent',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = ?", (int_id,))
 
             # Bot Manager : > 10 jours sans facturation
             if jours_depuis > 10 and rappel_level < 3:
@@ -486,7 +521,7 @@ def check_facturation_reminders():
                     'jours_retard': jours_depuis - 10,
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = %s", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = ?", (int_id,))
 
         # Envoyer notifications SAV
         if sav_alerts:
@@ -535,6 +570,17 @@ def check_sla_alerts():
     - 🔴 Bot Manager : alerte quand une intervention dépasse le SLA du contrat
     """
     from datetime import datetime as _dt
+    
+    def _format_hours(hours: float) -> str:
+        """Format hours as 'X jours Y heures' or just 'X heures'"""
+        if hours < 24:
+            return f"{round(hours)}h"
+        days = int(hours // 24)
+        remaining_hours = int(hours % 24)
+        if remaining_hours == 0:
+            return f"{days}j"
+        return f"{days}j {remaining_hours}h"
+    
     try:
         df_contrats = lire_contrats()
         df_interv = lire_interventions()
@@ -624,7 +670,7 @@ def check_sla_alerts():
             lines = '\n'.join(
                 f"  🔴 <b>#{b['id']}</b> — {b['machine']}"
                 f"\n    👤 {b['client']} | 👷 {b['technicien'] or 'Non assigné'}"
-                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {round(b['elapsed_h'] - b['sla_h'], 1)}h</b>"
+                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {_format_hours(b['elapsed_h'] - b['sla_h'])}</b>"
                 for b in sorted(breached_items, key=lambda x: -x['pct'])
             )
             msg = (
@@ -706,7 +752,7 @@ def _start_garantie_daemon():
         from datetime import date
         try:
             with get_db() as conn:
-                row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (LOCK_KEY,)).fetchone()
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = ?", (LOCK_KEY,)).fetchone()
                 if row:
                     return dict(row)['valeur'] == str(date.today())
             return False
@@ -719,77 +765,127 @@ def _start_garantie_daemon():
         try:
             with get_db() as conn:
                 conn.execute(
-                    """INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
+                    """INSERT INTO config_client (cle, valeur) VALUES (?, ?)
                        ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
                     (LOCK_KEY, str(date.today()))
                 )
         except Exception as e:
             logger.error(f"Failed to mark notification run: {e}")
 
+    def _get_notification_schedule(bot_key: str) -> dict:
+        """Récupère l'horaire de notification pour un bot depuis la base de données."""
+        try:
+            schedule = lire_notification_schedules()
+            for s in schedule:
+                if s.get('bot_key') == bot_key:
+                    return s
+        except Exception as e:
+            logger.debug(f"Failed to get notification schedule for {bot_key}: {e}")
+        
+        # Fallback: horaire par défaut (8h30, tous les jours)
+        return {
+            'bot_key': bot_key,
+            'enabled': 1,
+            'hour': 8,
+            'minute': 30,
+            'days_of_week': '1,2,3,4,5,6,7'
+        }
+
+    def _should_send_notifications_today(schedule: dict) -> bool:
+        """Vérifie si les notifications doivent être envoyées aujourd'hui selon l'horaire."""
+        if schedule.get('enabled') != 1:
+            return False
+        
+        # Vérifier le jour de la semaine (1=Lundi, 7=Dimanche)
+        import datetime as _dt
+        today_weekday = _dt.date.today().isoweekday()  # 1=Monday, 7=Sunday
+        days_str = schedule.get('days_of_week', '1,2,3,4,5,6,7')
+        days_list = [int(d.strip()) for d in days_str.split(',') if d.strip().isdigit()]
+        
+        return today_weekday in days_list
+
     def _run():
         import datetime as _dt
         time.sleep(30)
+        last_run_date = None
+        
         while True:
-            # Les notifications Telegram ne doivent partir qu'une fois par jour
-            if _already_ran_today():
-                logger.info("Notifications daemon: déjà exécuté aujourd'hui, skip (prochain cycle dans 1h)")
-                time.sleep(3600)  # Re-vérifier dans 1h (au cas où minuit passe)
-                continue
+            try:
+                # Récupérer l'horaire de notification depuis la base de données
+                schedule = _get_notification_schedule('telegram')
+                target_hour = schedule.get('hour', 8)
+                target_minute = schedule.get('minute', 30)
 
-            # ── Attendre 8h30 (heure Tunisie UTC+1) avant d'envoyer ──
-            try:
-                from zoneinfo import ZoneInfo
-                tz = ZoneInfo("Africa/Tunis")
-            except Exception:
-                tz = _dt.timezone(_dt.timedelta(hours=1))
-            now_local = _dt.datetime.now(tz)
-            target_hour, target_minute = 8, 30
-            if now_local.hour < target_hour or (now_local.hour == target_hour and now_local.minute < target_minute):
-                target = now_local.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
-                wait_seconds = (target - now_local).total_seconds()
-                logger.info(f"Notifications daemon: en attente jusqu'à 08:30 ({int(wait_seconds)}s)")
-                time.sleep(max(wait_seconds, 0))
+                # Obtenir l'heure actuelle (heure Tunisie UTC+1)
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo("Africa/Tunis")
+                except Exception:
+                    tz = _dt.timezone(_dt.timedelta(hours=1))
+                
+                now_local = _dt.datetime.now(tz)
+                today = now_local.date()
 
-            # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
-            try:
-                sync_planning_to_interventions()
-            except Exception as e:
-                logger.error(f"Planning sync daemon error: {e}")
+                # Vérifier si c'est l'heure d'envoyer les notifications
+                is_target_time = (now_local.hour == target_hour and now_local.minute >= target_minute and now_local.minute < target_minute + 1)
+                
+                # Vérifier si c'est un jour configuré
+                should_send_today = _should_send_notifications_today(schedule)
+                
+                # Vérifier si on a déjà envoyé aujourd'hui
+                already_sent_today = (last_run_date == today)
 
-            try:
-                check_garantie_expiry()
-            except Exception as e:
-                logger.error(f"Garantie daemon error: {e}")
-            try:
-                check_contrat_expiry()
-            except Exception as e:
-                logger.error(f"Contrat daemon error: {e}")
-            try:
-                check_planning_reminder()
-            except Exception as e:
-                logger.error(f"Planning reminder daemon error: {e}")
-            try:
-                check_stock_alerts()
-            except Exception as e:
-                logger.error(f"Stock alerts daemon error: {e}")
-            try:
-                check_facturation_reminders()
-            except Exception as e:
-                logger.error(f"Facturation reminders daemon error: {e}")
-            try:
-                check_sla_alerts()
-            except Exception as e:
-                logger.error(f"SLA alerts daemon error: {e}")
-            try:
-                check_planning_retard()
-            except Exception as e:
-                logger.error(f"Planning retard daemon error: {e}")
+                if is_target_time and should_send_today and not already_sent_today:
+                    logger.info(f"Notifications daemon: déclenchement à {now_local.hour:02d}:{now_local.minute:02d}")
+                    
+                    # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
+                    try:
+                        sync_planning_to_interventions()
+                    except Exception as e:
+                        logger.error(f"Planning sync daemon error: {e}")
 
-            _mark_ran_today()
-            logger.info("Notifications daemon: cycle terminé, prochain dans 1h")
-            time.sleep(3600)  # Vérifier toutes les heures (mais skip si déjà fait aujourd'hui)
+                    try:
+                        check_garantie_expiry()
+                    except Exception as e:
+                        logger.error(f"Garantie daemon error: {e}")
+                    try:
+                        check_contrat_expiry()
+                    except Exception as e:
+                        logger.error(f"Contrat daemon error: {e}")
+                    try:
+                        check_planning_reminder()
+                    except Exception as e:
+                        logger.error(f"Planning reminder daemon error: {e}")
+                    try:
+                        check_stock_alerts()
+                    except Exception as e:
+                        logger.error(f"Stock alerts daemon error: {e}")
+                    try:
+                        check_facturation_reminders()
+                    except Exception as e:
+                        logger.error(f"Facturation reminders daemon error: {e}")
+                    try:
+                        check_sla_alerts()
+                    except Exception as e:
+                        logger.error(f"SLA alerts daemon error: {e}")
+                    try:
+                        check_planning_retard()
+                    except Exception as e:
+                        logger.error(f"Planning retard daemon error: {e}")
+
+                    last_run_date = today
+                    _mark_ran_today()
+                    logger.info("Notifications daemon: cycle terminé")
+                
+                # Attendre 30 secondes avant de vérifier à nouveau
+                time.sleep(30)
+                
+            except Exception as e:
+                logger.error(f"Notifications daemon error: {e}")
+                time.sleep(30)
+                
     threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
-    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, 1x/jour)")
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, horaires configurables)")
 
 
 def check_contrat_expiry():
@@ -870,7 +966,7 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     try:
         with get_db() as conn:
             rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(%s)",
+                "SELECT cle, valeur FROM config_client WHERE cle = ANY(?)",
                 ([token_key, chat_key],)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}
@@ -918,7 +1014,7 @@ def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security))
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT client FROM utilisateurs WHERE username = %s",
+                        "SELECT client FROM utilisateurs WHERE username = ?",
                         (payload.get("sub", ""),)
                     ).fetchone()
                     if row and row["client"]:
@@ -968,7 +1064,7 @@ def root():
 def login(body: LoginRequest):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
+            "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
             (body.username,)
         ).fetchone()
 
@@ -1046,22 +1142,34 @@ def get_dashboard_kpis(
         if not df_clients.empty and "nom" in df_clients.columns:
             nb_clients_all = len(df_clients["nom"].dropna().unique())
 
+        # Create a COPY of df_eq for CURRENT STATUS calculation (not filtered by date)
+        df_eq_for_status = df_eq.copy()
+        
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).str.lower() == effective_client.lower()]
             logger.info(f"After client filter: {len(df_eq)} equipements")
 
         # Filter equipements by region (join with clients table to get region)
         if region and not df_eq.empty and not df_clients.empty:
-            # Get clients in this region
-            clients_in_region = df_clients[
-                df_clients["region"].notna() & 
-                (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
-            ]["nom"].tolist() if "region" in df_clients.columns else []
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
             
             # Filter equipements by these clients
             if clients_in_region and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_region)]
                 logger.info(f"After region filter (via clients): {len(df_eq)} equipements from {len(clients_in_region)} clients")
 
         # Filter equipements by ville (join with clients table to get ville)
@@ -1075,12 +1183,14 @@ def get_dashboard_kpis(
             # Filter equipements by these clients
             if clients_in_ville and "Client" in df_eq.columns:
                 df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+                df_eq_for_status = df_eq_for_status[df_eq_for_status["Client"].astype(str).isin(clients_in_ville)]
                 logger.info(f"After ville filter (via clients): {len(df_eq)} equipements from {len(clients_in_ville)} clients")
 
         # Filter equipements by equipment type
         # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+            df_eq_for_status = df_eq_for_status[df_eq_for_status["Type"].notna() & (df_eq_for_status["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
             logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
         # Filter interventions by client (via matching machines)
@@ -1104,39 +1214,26 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
             logger.info(f"After date filter: {len(df_int)} interventions")
 
-        nb_eq = len(df_eq) if not df_eq.empty else 0
+        nb_eq = len(df_eq_for_status) if not df_eq_for_status.empty else 0
         nb_critiques = 0
-        if not df_eq.empty and "Statut" in df_eq.columns:
-            nb_critiques = len(df_eq[df_eq["Statut"].isin(["Hors Service", "Critique"])])
-
-        nb_interventions = len(df_int) if not df_int.empty else 0
-        cout_total = 0.0
-        mttr = 0.0
-        if not df_int.empty:
-            # Exclure Installation et Formation des KPIs de maintenance
-            TRACABILITE = ['installation', 'formation']
-            df_maint = df_int
-            if "type_intervention" in df_int.columns:
-                df_maint = df_int[~df_int["type_intervention"].str.lower().isin(TRACABILITE)]
-            if "cout" in df_maint.columns:
-                cout_total = float(df_maint["cout"].sum()) if df_maint["cout"].notna().any() else 0
-            if "duree_minutes" in df_maint.columns:
-                durees = df_maint["duree_minutes"].dropna()
-                mttr = round(float(durees.mean()) / 60, 1) if len(durees) > 0 else 0
-
-        # Disponibilité = % équipements opérationnels
         dispo = 100.0
-        statut_col = "Statut" if "Statut" in df_eq.columns else ("statut" if "statut" in df_eq.columns else None)
-        if not df_eq.empty and statut_col:
-            # Exclure tous les équipements non opérationnels (En panne, Hors Service, Critique, etc.)
-            non_op_statuts = {"en panne", "hors service", "critique", "arrêt", "arret"}
-            op = len(df_eq[~df_eq[statut_col].astype(str).str.lower().str.strip().isin(non_op_statuts)])
-            dispo = round((op / nb_eq) * 100, 1) if nb_eq > 0 else 100
+        
+        # Alertes Critiques = CURRENT equipment status (not filtered by month)
+        # Shows all equipment currently in critical/down state
+        if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
+            nb_critiques = len(df_eq_for_status[df_eq_for_status["Statut"].isin(["Hors Service", "Critique"])])
 
-        # MTBF approximation
-        mtbf = 720  # default
-        if nb_interventions > 0 and nb_eq > 0:
-            mtbf = round((nb_eq * 30 * 24) / max(nb_interventions, 1))
+        # Disponibilité = based on interventions in selected period
+        # Equipment with interventions in the period = had issues = not available
+        # Disponibilité = % of equipment that had NO interventions in the period
+        if not df_int.empty and "machine" in df_int.columns:
+            machines_with_issues = df_int["machine"].unique()
+            equipment_with_issues_count = len(machines_with_issues)
+            available_equipment = nb_eq - equipment_with_issues_count
+            dispo = round((available_equipment / nb_eq) * 100, 1) if nb_eq > 0 else 100.0
+        elif nb_eq > 0:
+            # No interventions in period = all equipment available
+            dispo = 100.0
 
         # Count unique clients
         # If NO filters applied: show ALL clients from clients table (66)
@@ -1149,6 +1246,78 @@ def get_dashboard_kpis(
         else:
             # No filters applied: show ALL clients from clients table
             nb_clients = nb_clients_all
+
+        # Calculate intervention-based KPIs
+        nb_interventions = len(df_int) if not df_int.empty else 0
+        
+        # Calculate MTBF (Mean Time Between Failures) - average days between interventions
+        mtbf = 0.0
+        if nb_interventions > 1 and not df_int.empty and "date" in df_int.columns:
+            df_int_sorted = df_int.sort_values("date")
+            dates = pd.to_datetime(df_int_sorted["date"], errors="coerce").dropna()
+            if len(dates) > 1:
+                time_diffs = dates.diff().dropna()
+                avg_days = time_diffs.dt.total_seconds().mean() / (24 * 3600)  # Convert to days
+                mtbf = avg_days * 24 if avg_days > 0 else 0  # Convert to hours
+        
+        # Calculate MTTR (Mean Time To Repair) - average duration of interventions
+        mttr = 0.0
+        if not df_int.empty:
+            # Check for duration column (could be "duree_intervention", "duree", etc.)
+            duration_col = None
+            for col in ["duree_intervention", "duree", "duration", "Duree"]:
+                if col in df_int.columns:
+                    duration_col = col
+                    break
+            
+            if duration_col:
+                durations = pd.to_numeric(df_int[duration_col], errors="coerce").dropna()
+                if len(durations) > 0:
+                    mttr = float(durations.mean())
+        
+        # Calculate total cost = cout_main_oeuvre + cout_pieces (NOT cout_interventions which double-counts)
+        # Only from CLOSED interventions
+        cout_main_oeuvre_total = 0.0
+        cout_pieces_total = 0.0
+        
+        if not df_int.empty:
+            # First filter to only closed interventions
+            status_col = None
+            for col in ["Statut", "statut", "status", "Status"]:
+                if col in df_int.columns:
+                    status_col = col
+                    break
+            
+            if status_col:
+                closed_statuses = {"clôturée", "cloturee", "closed", "resolved", "terminée", "terminee", "complétée", "completee"}
+                df_int_closed = df_int[df_int[status_col].astype(str).str.lower().str.strip().isin(closed_statuses)]
+            else:
+                df_int_closed = df_int
+            
+            # Debug: log available columns
+            logger.info(f"Available intervention columns: {list(df_int_closed.columns)}")
+            
+            # Sum cout_main_oeuvre (column is named "cout" in interventions table)
+            for col in ["cout", "cout_main_oeuvre", "main_oeuvre", "cout_mo", "mo_cost", "cout_MO", "Cout_Main_Oeuvre", "Cout_MO"]:
+                if col in df_int_closed.columns:
+                    mo_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
+                    if len(mo_costs) > 0:
+                        cout_main_oeuvre_total = float(mo_costs.sum())
+                    logger.info(f"Found {col}: total = {cout_main_oeuvre_total}")
+                    break
+            
+            # Sum cout_pieces
+            for col in ["cout_pieces", "pieces", "cout_pieces_utilisees", "pieces_cost", "cout_Pieces", "Cout_Pieces", "Cout_pieces_utilisees", "Cost_Pieces"]:
+                if col in df_int_closed.columns:
+                    pieces_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
+                    if len(pieces_costs) > 0:
+                        cout_pieces_total = float(pieces_costs.sum())
+                    logger.info(f"Found {col}: total = {cout_pieces_total}")
+                    break
+        
+        # Total cost = main d'oeuvre + pièces (no double-counting)
+        cout_total = cout_main_oeuvre_total + cout_pieces_total
+        logger.info(f"Dashboard KPIs: cout_main_oeuvre_total={cout_main_oeuvre_total}, cout_pieces_total={cout_pieces_total}, cout_total={cout_total}")
 
         # Calculate resolution rate (% of closed interventions)
         taux_resolution = 0.0
@@ -1170,8 +1339,8 @@ def get_dashboard_kpis(
             "nb_equipements": nb_eq,
             "nb_critiques": nb_critiques,
             "disponibilite": dispo,
-            "mtbf": mtbf,
-            "mttr": mttr,
+            "mtbf": round(mtbf, 1),
+            "mttr": round(mttr, 1),
             "cout_total": round(cout_total, 2),
             "nb_interventions": nb_interventions,
             "nb_clients": nb_clients,
@@ -1194,8 +1363,19 @@ def get_health_scores(
 ):
     """Compute health scores per equipment based on intervention history."""
     try:
+        # Load data efficiently with selective columns
         df_eq = lire_equipements()
-        df_int = lire_interventions()
+        
+        # Load only necessary intervention columns for scoring
+        with get_db() as conn:
+            int_query = """
+            SELECT i.machine, i.type_intervention, i.date, i.statut
+            FROM interventions i
+            ORDER BY i.date DESC
+            """
+            df_int = read_sql(int_query, conn)
+        
+        df_clients = db_lire_clients()  # Get clients table for region/ville filtering
 
         # Pour Lecteur : forcer le filtre par son client
         effective_client = _get_client_filter(user) or client
@@ -1204,18 +1384,38 @@ def get_health_scores(
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
             df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
 
-        # Filter equipements by region (use renamed column "Region")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if region and not df_eq.empty and "Region" in df_eq.columns:
-            df_eq = df_eq[df_eq["Region"].notna() & (df_eq["Region"].astype(str).str.lower().str.strip() == region.lower().strip())]
+        # Filter equipements by region (join with clients table to get region)
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
 
-        # Filter equipements by ville (use renamed column "Ville")
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
-        if ville and not df_eq.empty and "Ville" in df_eq.columns:
-            df_eq = df_eq[df_eq["Ville"].notna() & (df_eq["Ville"].astype(str).str.lower().str.strip() == ville.lower().strip())]
+        # Filter equipements by ville (join with clients table to get ville)
+        if ville and not df_eq.empty and not df_clients.empty:
+            # Get clients in this ville
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
 
         # Filter equipements by equipment type
-        # Add .str.strip() to handle whitespace and .notna() to handle NULL values
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
 
@@ -1250,42 +1450,71 @@ def get_health_scores(
         if not df_sav.empty and "type_intervention" in df_sav.columns:
             df_sav = df_sav[~df_sav["type_intervention"].str.lower().isin(TRACABILITE)]
 
+        # Get current date for recent intervention calculation
+        import datetime as _dt
+        today = _dt.date.today()
+        thirty_days_ago = today - _dt.timedelta(days=30)
+
         seen_keys = set()
         for _, eq in df_eq.iterrows():
             nom = eq.get("Nom", "")
             client_val = str(eq.get("Client", "") or "")
+            statut = str(eq.get("Statut", "")).lower()
             dedup_key = (nom.lower(), client_val.lower())
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
 
             pannes = 0
+            recent_interventions = 0
             if not df_sav.empty and "machine" in df_sav.columns:
-                pannes = len(df_sav[df_sav["machine"] == nom])
+                # Case-insensitive matching for machine names
+                pannes = len(df_sav[df_sav["machine"].str.lower() == nom.lower()])
+                # Count interventions in last 30 days
+                df_machine = df_sav[df_sav["machine"].str.lower() == nom.lower()]
+                if not df_machine.empty and "date" in df_machine.columns:
+                    df_machine_recent = df_machine[df_machine["date"] >= pd.Timestamp(thirty_days_ago)]
+                    recent_interventions = len(df_machine_recent)
 
-            # Rate-based scoring: pannes per month
-            panne_rate = pannes / period_months if period_months > 0 else pannes
-            if panne_rate <= 0:
+            # Score based on absolute number of pannes in the selected period
+            # Do NOT normalize by period duration - use absolute counts
+            # This ensures monthly view shows actual interventions for that month
+            if pannes <= 0:
                 score = 100
-            elif panne_rate <= 0.25:
+            elif pannes <= 1:
                 score = 90
-            elif panne_rate <= 0.5:
+            elif pannes <= 2:
                 score = 78
-            elif panne_rate <= 1.0:
+            elif pannes <= 3:
                 score = 65
-            elif panne_rate <= 2.0:
+            elif pannes <= 5:
                 score = 48
-            elif panne_rate <= 4.0:
+            elif pannes <= 10:
                 score = 30
-            elif panne_rate <= 8.0:
+            elif pannes <= 15:
                 score = 18
             else:
                 score = 10
 
+            # Apply penalties for critical status and recent interventions
+            # If equipment is in critical status, apply significant penalty
+            if statut in ["critique", "hors service", "en panne"]:
+                score = min(score, 35)  # Cap score at 35 for critical equipment
+                if recent_interventions >= 2:
+                    score = min(score, 20)  # Further reduce if multiple recent interventions
+                elif recent_interventions >= 1:
+                    score = min(score, 25)  # Reduce if at least one recent intervention
+
+            # If equipment has multiple recent interventions (last 30 days), flag as at-risk
+            elif recent_interventions >= 3:
+                score = min(score, 40)  # Flag as at-risk if 3+ interventions in 30 days
+            elif recent_interventions >= 2:
+                score = min(score, 50)  # Moderate risk if 2 interventions in 30 days
+
             tendance = "stable"
-            if panne_rate > 1.0:
+            if pannes > 3:
                 tendance = "baisse"
-            elif panne_rate == 0:
+            elif pannes == 0:
                 tendance = "hausse"
 
             scores.append({
@@ -1298,6 +1527,7 @@ def get_health_scores(
 
         return sorted(scores, key=lambda x: x["score"])
     except Exception as e:
+        logger.error(f"Erreur get_health_scores: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1406,7 +1636,7 @@ def sync_region_ville():
                         ville = str(best_match.get("ville", "")).strip()
                         
                         cur.execute(
-                            "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                            "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
                             (region, ville, equip_id)
                         )
                         fuzzy_matches += 1
@@ -1560,27 +1790,45 @@ def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
 def get_interventions(
     machine: Optional[str] = None,
     technicien: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 200,
     user: dict = Depends(_verify_token),
 ):
+    from db_engine import lire_child_interventions_for_technician
+    
     df = lire_interventions(machine=machine)
+    
     # Si le user est un Technicien → filtrer automatiquement ses interventions
-    if user.get("role") == "Technicien" and not df.empty:
+    # ET inclure ses interventions enfants (temporary child interventions)
+    if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
         # Gère "Dridi Ali" vs "Ali Dridi" et autres variations d'ordre
         name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
-        if name_words and "technicien" in df.columns:
+        if name_words and not df.empty and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
                 lambda t: all(word in t.lower() for word in name_words)
             )]
-        elif not name_words:
-            # Aucun nom disponible → ne rien filtrer (afficher tout)
+        
+        # Also fetch child interventions assigned to this technician
+        try:
+            df_children = lire_child_interventions_for_technician(user_nom_complet)
+            if not df_children.empty:
+                # Combine parent and child interventions
+                import pandas as pd
+                df = pd.concat([df, df_children], ignore_index=True)
+                logger.info(f"Technician {user_nom_complet}: {len(df)} total interventions (parents + children)")
+        except Exception as e:
+            logger.warning(f"Error fetching child interventions for {user_nom_complet}: {e}")
+            # Continue with just parent interventions if children fetch fails
             pass
+        
     elif technicien and not df.empty and "technicien" in df.columns:
         words = technicien.lower().split()
         df = df[df["technicien"].astype(str).apply(
             lambda t: all(w in t.lower() for w in words)
         )]
+    
     # Filtrage par client pour Lecteur
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -1591,11 +1839,48 @@ def get_interventions(
             )
             if "machine" in df.columns:
                 df = df[df["machine"].isin(machines_client)]
+    
+    # Apply pagination (offset + limit)
+    if not df.empty:
+        total = len(df)
+        df = df.iloc[offset:offset + limit]
+    else:
+        total = 0
+    
     return _df_to_records(df)
+
+
+@app.get("/api/interventions/{parent_id}/children")
+def get_child_interventions_endpoint(
+    parent_id: int,
+    user: dict = Depends(_verify_token),
+):
+    """
+    Récupère les interventions enfants d'une intervention parent.
+    Utilisé par PWA pour afficher les technicians assignés à une demande.
+    """
+    from db_engine import get_child_interventions
+    
+    try:
+        children = get_child_interventions(parent_id)
+        return {
+            "success": True,
+            "parent_id": parent_id,
+            "children": children,
+            "count": len(children)
+        }
+    except Exception as e:
+        logger.error(f"Error fetching child interventions for parent {parent_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la récupération des enfants: {str(e)}")
 
 
 @app.post("/api/interventions")
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
+    # Convert technicien username to full name (nom + prenom)
+    technicien_username = body.get("technicien", "")
+    if technicien_username:
+        body["technicien"] = _get_technician_fullname(technicien_username)
+    
     ajouter_intervention(body)
     # Notification Telegram au bot technique
     try:
@@ -1691,14 +1976,52 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 
 
 @app.put("/api/interventions/{intervention_id}")
-def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+def update_intervention(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
+    
+    # Vérifier les permissions : un technicien ne peut éditer que ses interventions
+    if user.get("role") == "Technicien":
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT technicien FROM interventions WHERE id = ?",
+                (intervention_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            current_tech = str(row.get("technicien") or "").strip()
+            user_nom_complet = (user.get("nom") or "").strip()
+            
+            # Vérifier que le technicien est assigné à l'intervention
+            name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+            is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+            
+            if not is_assigned and current_tech:  # Si l'intervention est assignée et ce n'est pas ce technicien
+                raise HTTPException(
+                    status_code=403,
+                    detail="Vous ne pouvez éditer que vos propres interventions"
+                )
+    
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
-        # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref'
+        # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref' ou 'reference'
         raw_pieces = body.get("pieces_a_deduire") or []
         if not isinstance(raw_pieces, list):
             raw_pieces = []
-        pieces_valides = [p for p in raw_pieces if isinstance(p, dict) and p.get("ref")]
+        # Accepter 'ref' ou 'reference', 'qty' ou 'quantite'
+        pieces_valides = []
+        for p in raw_pieces:
+            if isinstance(p, dict):
+                ref = p.get("ref") or p.get("reference")
+                if ref:
+                    pieces_valides.append({
+                        'ref': ref,
+                        'reference': ref,
+                        'qty': p.get("qty") or p.get("quantite") or 0,
+                        'quantite': p.get("qty") or p.get("quantite") or 0,
+                        'designation': p.get("designation", ""),
+                        'prix_unitaire': p.get("prix_unitaire", 0),
+                    })
 
         try:
             ok, msg = cloturer_intervention(
@@ -1708,19 +2031,33 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                 body.get("solution", ""),
                 pieces_a_deduire=pieces_valides if pieces_valides else None,
                 duree_minutes=body.get("duree_minutes", 0),
+                start_time=body.get("start_time"),
+                end_time=body.get("end_time"),
+                duree_deplacement=body.get("deplacement"),  # PWA sends "deplacement"
             )
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
+
+            # --- Update type_erreur if provided ---
+            if body.get("type_erreur"):
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE interventions SET type_erreur = ? WHERE id = ?",
+                        (body.get("type_erreur"), intervention_id)
+                    )
 
             # --- Telegram notification clôture ---
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = %s",
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
                         (intervention_id,)
                     ).fetchone()
                 if row:
                     d = dict(row)
+                    # Convert technicien username to full name
+                    if d.get('technicien'):
+                        d['technicien'] = _get_technician_fullname(d['technicien'])
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
                     notes_raw = str(d.get('notes', '') or '')
                     # Extraire client depuis notes [Client]
@@ -1729,7 +2066,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     if not client_name:
                         try:
                             eq_row = conn.execute(
-                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = %s LIMIT 1",
+                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = ? LIMIT 1",
                                 (d.get('machine', ''),)
                             ).fetchone()
                             if eq_row:
@@ -1776,8 +2113,8 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     conn.execute(
                         """UPDATE demandes_intervention
                            SET statut = 'Résolue',
-                               date_traitement = %s
-                         WHERE intervention_id = %s
+                               date_traitement = ?
+                         WHERE intervention_id = ?
                            AND statut != 'Résolue'""",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), intervention_id)
                     )
@@ -1789,7 +2126,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
             try:
                 with get_db() as conn:
                     prow = conn.execute(
-                        "SELECT planning_id FROM interventions WHERE id = %s",
+                        "SELECT planning_id FROM interventions WHERE id = ?",
                         (intervention_id,)
                     ).fetchone()
                     if prow and prow['planning_id']:
@@ -1797,8 +2134,8 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                         conn.execute(
                             """UPDATE planning_maintenance
                                SET statut = 'Réalisée',
-                                   date_realisee = %s
-                             WHERE id = %s AND statut != 'Réalisée'""",
+                                   date_realisee = ?
+                             WHERE id = ? AND statut != 'Réalisée'""",
                             (datetime.now().strftime("%Y-%m-%d"), pm_id)
                         )
                         logger.info(f"Planning #{pm_id} marqué Réalisée (intervention #{intervention_id} clôturée)")
@@ -1817,12 +2154,15 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         try:
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = %s",
+                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = ?",
                     (intervention_id,)
                 ).fetchone()
             if row:
                 machine = row["machine"] or ""
                 technicien = row["technicien"] or ""
+                # Convert technicien username to full name
+                if technicien:
+                    technicien = _get_technician_fullname(technicien)
                 # Extraire client depuis notes [Client]
                 notes = str(row.get("notes") or "")
                 client = notes[1:notes.index("]")] if notes.startswith("[") and "]" in notes else ""
@@ -1831,7 +2171,7 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
                     try:
                         with get_db() as conn2:
                             eq_row = conn2.execute(
-                                'SELECT client FROM equipements WHERE nom = %s LIMIT 1',
+                                'SELECT client FROM equipements WHERE nom = ? LIMIT 1',
                                 (machine,)
                             ).fetchone()
                             if eq_row:
@@ -1932,21 +2272,76 @@ def update_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
     if new_statut:
         update_intervention_statut(intervention_id, new_statut)
+    
     # Update other fields
     fields = []
     params = []
-    for f in ["technicien", "probleme", "cause", "solution", "pieces_utilisees", "cout",
-              "duree_minutes", "duree_deplacement", "description", "notes", "type_erreur", "priorite",
-              "fiche_validation"]:
-        if f in body:
-            fields.append(f"{f} = %s")
-            params.append(body[f])
+    
+    # Map of field names in request body to database column names
+    field_mapping = {
+        "technicien": "technicien",
+        "probleme": "probleme",
+        "cause": "cause",
+        "solution": "solution",
+        "pieces_utilisees": "pieces_utilisees",
+        "cout": "cout",
+        "duree_minutes": "duree_minutes",
+        "description": "description",
+        "notes": "notes",
+        "type_erreur": "type_erreur",
+        "priorite": "priorite",
+        "fiche_validation": "fiche_validation",
+        "start_time": "start_time",
+        "end_time": "end_time",
+        "deplacement": "duree_deplacement",  # PWA sends "deplacement", map to "duree_deplacement"
+    }
+    
+    for body_field, db_column in field_mapping.items():
+        if body_field in body:
+            value = body[body_field]
+            fields.append(f"{db_column} = ?")
+            params.append(value)
+            logger.info(f"  ✓ {db_column} = {value}")
+    
     if fields:
         params.append(intervention_id)
-        with get_db() as conn:
-            conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = %s", params)
+        logger.info(f"update_intervention #{intervention_id}: fields={fields}, params={params}")
+        try:
+            with get_db() as conn:
+                conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
+            logger.info(f"✅ update_intervention #{intervention_id}: SUCCESS - Updated {len(fields)} fields")
+        except Exception as e:
+            logger.error(f"❌ update_intervention #{intervention_id} FAILED: {e}")
+            raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
     return {"ok": True}
 
+
+@app.delete("/api/interventions/{intervention_id}")
+def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Supprime une intervention (Admin/Manager uniquement)."""
+    # Vérifier les permissions
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(status_code=403, detail="Seuls les Admin/Manager peuvent supprimer une intervention")
+    
+    try:
+        with get_db() as conn:
+            # Vérifier que l'intervention existe
+            row = conn.execute(
+                "SELECT id FROM interventions WHERE id = ?",
+                (intervention_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Supprimer l'intervention
+            conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
+            
+        return {"ok": True, "message": f"Intervention #{intervention_id} supprimée"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur suppression intervention #{intervention_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la suppression: {str(e)}")
 
 
 @app.post("/api/interventions/{intervention_id}/fiche")
@@ -1962,7 +2357,7 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
             (file.filename, binary_data, intervention_id)
         )
     logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
@@ -1989,7 +2384,7 @@ async def upload_photo_alias(intervention_id: int,
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
             (upload.filename, binary_data, intervention_id)
         )
     logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
@@ -2009,7 +2404,7 @@ def download_fiche(intervention_id: int, token: Optional[str] = Query(None), use
     with get_db() as conn:
         try:
             row = conn.execute(
-                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
+                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = ?",
                 (intervention_id,)
             ).fetchone()
         except Exception:
@@ -2071,7 +2466,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
     with get_db() as conn:
         # Vérifier le statut actuel
         row = conn.execute(
-            "SELECT fiche_validation FROM interventions WHERE id = %s",
+            "SELECT fiche_validation FROM interventions WHERE id = ?",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -2080,11 +2475,43 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
         if statut_actuel == "Validée":
             raise HTTPException(status_code=403, detail="Fiche déjà validée — aucune modification possible")
         conn.execute(
-            "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
+            "UPDATE interventions SET fiche_validation = ? WHERE id = ?",
             (nouveau_statut, intervention_id)
         )
     logger.info(f"Fiche #{intervention_id}: validation mise à jour → '{nouveau_statut}' par {user.get('nom', '?')}")
     return {"ok": True, "validation": nouveau_statut}
+
+
+@app.delete("/api/interventions/{intervention_id}/fiche")
+def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Supprime la photo de fiche d'une intervention (Manager/Admin uniquement).
+    Impossible si la fiche est validée."""
+    # Vérifier les permissions
+    user_role = user.get("role", "").strip()
+    if user_role not in {"Admin", "Manager"}:
+        raise HTTPException(status_code=403, detail="Seuls les Managers et Admins peuvent supprimer une fiche")
+    
+    with get_db() as conn:
+        # Vérifier le statut de validation
+        row = conn.execute(
+            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = ?",
+            (intervention_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        
+        statut_validation = (row["fiche_validation"] or "En attente").strip()
+        if statut_validation == "Validée":
+            raise HTTPException(status_code=403, detail="Impossible de supprimer une fiche validée")
+        
+        # Supprimer la fiche
+        conn.execute(
+            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = ?",
+            (intervention_id,)
+        )
+    
+    logger.info(f"Fiche #{intervention_id} supprimée par {user.get('nom', '?')} ({user_role})")
+    return {"ok": True, "message": "Fiche supprimée avec succès"}
 
 
 # ==========================================
@@ -2109,7 +2536,12 @@ def get_demandes(
 
 @app.post("/api/demandes")
 def create_demande(body: dict, user: dict = Depends(_verify_token)):
-    from db_engine import get_db
+    """
+    Crée une demande d'intervention avec support multi-techniciens.
+    Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
+    """
+    from db_engine import get_db, USE_PG
+    
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     demandeur          = body.get("demandeur") or user.get("username", "")
     client             = body.get("client") or ""
@@ -2119,34 +2551,148 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     code_erreur        = body.get("code_erreur") or ""
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
-    technicien_assigne = body.get("technicien_assigne") or ""
-    # Si technicien assigné dès la création → statut "Assignée"
-    statut = body.get("statut") or ("Assignée" if technicien_assigne else "En attente")
+    
+    # Support for multiple technicians: can be string (single) or list (multiple)
+    techniciens_input = body.get("technicien_assigne") or body.get("techniciens") or []
+    if isinstance(techniciens_input, str):
+        techniciens_input = [techniciens_input] if techniciens_input else []
+    
+    # Convert all to full names
+    techniciens_fullnames = []
+    for tech_username in techniciens_input:
+        if tech_username:
+            tech_fullname = _get_technician_fullname(tech_username)
+            techniciens_fullnames.append(tech_fullname)
+    
+    # First tech (for parent intervention)
+    first_tech = techniciens_fullnames[0] if techniciens_fullnames else ""
+    statut = "Assignée" if first_tech else "En attente"
+    
+    # Use correct placeholder based on database type
+    ph = "%s" if USE_PG else "?"
+
+    demande_id = None
+    parent_intervention_id = None
 
     with get_db() as conn:
-        conn.execute("""
+        # Create the DEMAND
+        conn.execute(f"""
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence,
             description, code_erreur, contact_nom, contact_tel,
-            statut, technicien_assigne,
+            statut, ", ".join(techniciens_fullnames),  # All techs in the demand
         ))
-        # Récupérer l'id de la demande créée
+        
+        # Get the newly created demand ID
         new_demande = conn.execute(
             "SELECT id FROM demandes_intervention ORDER BY id DESC LIMIT 1"
         ).fetchone()
         demande_id = new_demande["id"] if new_demande else None
 
-    # --- Notification Telegram ---
+        # --- Create PARENT intervention (visible in table) ---
+        today = datetime.now().strftime("%Y-%m-%d")
+        notes_parent = f"[{client}] Demande #{demande_id}"
+        
+        # Determine if single or multi-tech scenario
+        is_multi_tech = len(techniciens_fullnames) > 1
+        
+        # For single tech: parent is visible with "Assignée" status (technicien sees it and can accept/refuse)
+        # For multi tech: parent is temporary, hidden, tracking status only
+        parent_statut = "Assignée" if not is_multi_tech else "En attente"
+        parent_is_temporary = 1 if is_multi_tech else 0
+        
+        conn.execute(f"""
+            INSERT INTO interventions
+              (date, machine, technicien, type_intervention, description,
+               probleme, code_erreur, statut, priorite, notes,
+               is_temporary, parent_intervention_id)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+        """, (
+            today,
+            equipement,
+            first_tech,  # Primary tech on parent
+            "Corrective",
+            description[:500],
+            description[:500],
+            code_erreur,
+            parent_statut,  # "Assignée" for single tech, "En attente" for multi
+            urgence,
+            notes_parent,
+            parent_is_temporary,  # 0=visible (single), 1=hidden (multi)
+            None,  # parent_intervention_id = NULL (this IS the parent)
+        ))
+        
+        parent_intervention = conn.execute(
+            "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        parent_intervention_id = parent_intervention["id"] if parent_intervention else None
+        
+        # Link demand to parent intervention
+        if parent_intervention_id:
+            conn.execute(
+                f"UPDATE demandes_intervention SET intervention_id = {ph} WHERE id = {ph}",
+                (parent_intervention_id, demande_id)
+            )
+        
+        # --- Create CHILD interventions (one per technician, temporary) - ONLY FOR MULTI-TECH ---
+        if is_multi_tech:
+            for tech_fullname in techniciens_fullnames:
+                conn.execute(f"""
+                    INSERT INTO interventions
+                      (date, machine, technicien, type_intervention, description,
+                       probleme, code_erreur, statut, priorite, notes,
+                       is_temporary, parent_intervention_id)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                """, (
+                    today,
+                    equipement,
+                    tech_fullname,
+                    "Corrective",
+                    description[:500],
+                    description[:500],
+                    code_erreur,
+                    "Assignée",  # Child starts as "Assignée"
+                    urgence,
+                    f"[ENFANT] {notes_parent}",
+                    1,  # is_temporary = TRUE (hidden from main table)
+                    parent_intervention_id,  # Link to parent
+                ))
+                
+                child_intervention = conn.execute(
+                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                child_id = child_intervention["id"] if child_intervention else None
+                
+                # Create entry in interventions_techniciens table WITHIN SAME TRANSACTION
+                if child_id:
+                    conn.execute(f"""
+                        INSERT INTO interventions_techniciens 
+                        (intervention_id, technicien_nom, statut)
+                        VALUES ({ph}, {ph}, 'Assigné')
+                    """, (child_id, tech_fullname))
+                    logger.info(f"Child intervention #{child_id} created for {tech_fullname}")
+        else:
+            # For SINGLE TECH: create entry in interventions_techniciens for the parent
+            conn.execute(f"""
+                INSERT INTO interventions_techniciens 
+                (intervention_id, technicien_nom, statut)
+                VALUES ({ph}, {ph}, 'Assigné')
+            """, (parent_intervention_id, first_tech))
+            logger.info(f"Parent intervention #{parent_intervention_id} assigned to {first_tech}")
+        
+        _trigger_backup()
+
+    # --- Telegram notifications ---
     urg_icon = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
     contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
     code_line    = f"\n\U0001f522 Code erreur : <code>{code_erreur}</code>" if code_erreur else ""
-    tech_line    = f"\n\U0001f477 Assigné à : <b>{technicien_assigne}</b>" if technicien_assigne else ""
+    techs_line   = f"\n\U0001f477 Assigné à : <b>{', '.join(techniciens_fullnames)}</b>" if techniciens_fullnames else ""
     msg = (
         f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
@@ -2155,50 +2701,17 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f4dd Problème : {description[:300]}"
         f"{code_line}"
         f"{contact_line}"
-        f"{tech_line}\n"
+        f"{techs_line}\n"
         f"\U0001f464 Demandeur : <b>{demandeur}</b>\n"
         f"\U0001f550 Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
     _send_telegram_bot("telegram_sav", msg)
-
-    # --- Auto-créer une intervention SAV si technicien assigné dès la création ---
-    if technicien_assigne and demande_id:
-        try:
-            with get_db() as conn:
-                today = datetime.now().strftime("%Y-%m-%d")
-                notes_interv = f"[{client}] Demande #{demande_id}"
-                conn.execute("""
-                    INSERT INTO interventions
-                      (date, machine, technicien, type_intervention, description,
-                       probleme, code_erreur, statut, priorite, notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    today,
-                    equipement,
-                    technicien_assigne,
-                    "Corrective",
-                    description[:500],
-                    description[:500],
-                    code_erreur,
-                    "Assignée",
-                    urgence,
-                    notes_interv,
-                ))
-                new_interv = conn.execute(
-                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                if new_interv:
-                    conn.execute(
-                        "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
-                        (new_interv["id"], demande_id)
-                    )
-                    logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
-        except Exception as e:
-            logger.error(f"Erreur auto-création intervention depuis demande: {e}")
-
-    return {"success": True}
+    
+    logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Parent intervention #{parent_intervention_id}")
+    
+    return {"success": True, "demande_id": demande_id, "parent_intervention_id": parent_intervention_id}
 
 
 @app.put("/api/demandes/{demande_id}/statut")
@@ -2206,22 +2719,25 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     from db_engine import get_db
     nouveau_statut      = body.get("statut") or "En cours"
     technicien_assigne  = body.get("technicien_assigne") or ""
+    # Convert technicien username to full name
+    if technicien_assigne:
+        technicien_assigne = _get_technician_fullname(technicien_assigne)
     notes_traitement    = body.get("notes_traitement") or ""
 
     # Récupérer les données de la demande AVANT mise à jour pour le message
     demande_info = {}
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
+            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = ?",
             (demande_id,)
         ).fetchone()
         if row:
             demande_info = dict(row)
         conn.execute("""
             UPDATE demandes_intervention
-            SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
+            SET statut = ?, technicien_assigne = ?, notes_traitement = ?,
                 date_traitement = CURRENT_TIMESTAMP
-            WHERE id = %s
+            WHERE id = ?
         """, (nouveau_statut, technicien_assigne, notes_traitement, demande_id))
 
     # --- Notification Telegram (tous les changements de statut) ---
@@ -2272,7 +2788,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
             with get_db() as conn:
                 # Vérifier si une intervention existe déjà pour cette demande
                 existing = conn.execute(
-                    "SELECT intervention_id FROM demandes_intervention WHERE id = %s",
+                    "SELECT intervention_id FROM demandes_intervention WHERE id = ?",
                     (demande_id,)
                 ).fetchone()
                 already_linked = existing and existing["intervention_id"]
@@ -2287,7 +2803,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         INSERT INTO interventions
                           (date, machine, technicien, type_intervention, description,
                            probleme, code_erreur, statut, priorite, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         today,
                         equipement,
@@ -2306,7 +2822,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     ).fetchone()
                     if new_interv:
                         conn.execute(
-                            "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
+                            "UPDATE demandes_intervention SET intervention_id = ? WHERE id = ?",
                             (new_interv["id"], demande_id)
                         )
                         logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
@@ -2314,7 +2830,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     # Intervention déjà liée → mettre à jour technicien + statut (ex: réassignation après refus)
                     interv_id = existing["intervention_id"]
                     conn.execute(
-                        "UPDATE interventions SET technicien = %s, statut = %s WHERE id = %s",
+                        "UPDATE interventions SET technicien = ?, statut = ? WHERE id = ?",
                         (technicien_assigne, "Assignée", interv_id)
                     )
                     logger.info(f"Intervention #{interv_id} réassignée à {technicien_assigne} (demande #{demande_id})")
@@ -2324,6 +2840,148 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     return {"success": True}
 
 
+# ------ Technicien Update Per-Technician Data ------
+
+@app.put("/api/interventions/{intervention_id}/technicien-data")
+def update_technicien_data(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """
+    Updates per-technician data in interventions_techniciens table.
+    When technician marks their work as Cloturee, check if all are complete.
+    Only then finalize the parent intervention.
+    
+    Expected body:
+    {
+        "probleme_tech": "...",
+        "cause_tech": "...",
+        "solution_tech": "...",
+        "heure_debut_tech": "HH:MM",
+        "heure_fin_tech": "HH:MM",
+        "duree_minutes_tech": 60,
+        "duree_deplacement_tech": 30,
+        "notes_tech": "...",
+        "statut": "Cloturee" (marks this tech as done)
+    }
+    """
+    from db_engine import (
+        get_db, update_interventions_techniciens, 
+        get_or_create_interventions_techniciens, get_techniciens_status,
+        finalize_intervention_from_techniciens
+    )
+    
+    try:
+        # Get intervention to verify it exists
+        with get_db() as conn:
+            intervention = conn.execute(
+                "SELECT id, machine, technicien FROM interventions WHERE id = ?",
+                (intervention_id,)
+            ).fetchone()
+            
+            if not intervention:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Verify technician permissions
+            if user.get("role") == "Technicien":
+                current_tech = str(intervention.get("technicien") or "").strip()
+                user_nom_complet = (user.get("nom") or "").strip()
+                name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+                is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+                
+                if not is_assigned and current_tech:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Vous ne pouvez éditer que vos propres interventions"
+                    )
+        
+        # Get or create entry for this technician
+        tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
+        get_or_create_interventions_techniciens(intervention_id, tech_nom)
+        
+        # Update the per-technician data
+        success = update_interventions_techniciens(intervention_id, tech_nom, body)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
+        
+        # Get current status
+        status_info = get_techniciens_status(intervention_id)
+        
+        # Check if all technicians are now completed
+        if status_info['is_all_completed']:
+            # All done - aggregate data (but DO NOT close the parent intervention)
+            finalize_result = finalize_intervention_from_techniciens(intervention_id)
+            
+            if finalize_result.get('success'):
+                logger.info(f"✅ Intervention #{intervention_id} data aggregated from all {status_info['total']} technicians")
+                
+                # Send Telegram: ALL TECHNICIANS COMPLETED (but still waiting for admin closure)
+                try:
+                    machine = intervention.get('machine', '')
+                    total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
+                    solutions = finalize_result.get('combined_solution', '')
+                    
+                    msg_tg = (
+                        f"✅ <b>TOUS LES TECHNICIENS COMPLÉTÉS — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>\n"
+                        f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
+                        f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🔧 Solutions : {solutions}\n\n"
+                        f"⏳ En attente de clôture administrative...\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram_bot("telegram_sav", msg_tg)
+                    _send_telegram(msg_tg)
+                except Exception as te:
+                    logger.error(f"Telegram notification error: {te}")
+                
+                return {
+                    "success": True,
+                    "message": "✅ Tous les techniciens ont complété leurs données. Intervention en attente de clôture administrative.",
+                    "intervention_finalized": False,
+                    "status": "ALL_COMPLETED",
+                    "completed": status_info['completed'],
+                    "total": status_info['total']
+                }
+            else:
+                return HTTPException(status_code=500, detail="Erreur lors de l'agrégation")
+        else:
+            # Partial completion - still waiting for others
+            pending_list = ", ".join(status_info['pending_names'])
+            logger.info(f"⏳ Intervention #{intervention_id} partially complete: {status_info['completed']}/{status_info['total']} (pending: {pending_list})")
+            
+            # Send Telegram: PARTIALLY CLOSED
+            try:
+                machine = intervention.get('machine', '')
+                msg_tg = (
+                    f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
+                    f"🏥 Machine : <b>{machine}</b>\n"
+                    f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
+                    f"⏳ Techniciens restants :\n"
+                )
+                for pending_tech in status_info['pending_names']:
+                    msg_tg += f"  • {pending_tech}\n"
+                
+                msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                _send_telegram(msg_tg)
+            except Exception as te:
+                logger.error(f"Telegram notification error: {te}")
+            
+            return {
+                "success": True,
+                "message": f"Données sauvegardées ({status_info['completed']}/{status_info['total']} techniciens complétés)",
+                "intervention_finalized": False,
+                "status": "PARTIAL",
+                "completed": status_info['completed'],
+                "total": status_info['total'],
+                "pending_technicians": status_info['pending_names']
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur update_technicien_data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ------ Technicien Accept / Refuse intervention ------
 
 @app.put("/api/interventions/{intervention_id}/accept")
@@ -2331,14 +2989,14 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
     from db_engine import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
+            "SELECT id, machine, technicien, statut FROM interventions WHERE id = ?",
             (intervention_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
 
         conn.execute(
-            "UPDATE interventions SET statut = %s WHERE id = %s",
+            "UPDATE interventions SET statut = ? WHERE id = ?",
             ("En cours", intervention_id)
         )
 
@@ -2367,7 +3025,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         row = conn.execute(
             """SELECT id, machine, technicien, statut, notes,
                       (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
-               FROM interventions WHERE id = %s""",
+               FROM interventions WHERE id = ?""",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -2379,7 +3037,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
         # Mark intervention back to "En attente" and clear technician
         conn.execute(
-            "UPDATE interventions SET statut = %s, technicien = %s, notes = COALESCE(notes, '') || %s WHERE id = %s",
+            "UPDATE interventions SET statut = ?, technicien = ?, notes = COALESCE(notes, '') || ? WHERE id = ?",
             ("En attente", "", f"\n[REFUS par {tech_name}] {raison}", intervention_id)
         )
 
@@ -2387,8 +3045,8 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         conn.execute("""
             UPDATE demandes_intervention
             SET statut = 'En attente', technicien_assigne = '',
-                notes_traitement = COALESCE(notes_traitement, '') || %s
-            WHERE intervention_id = %s
+                notes_traitement = COALESCE(notes_traitement, '') || ?
+            WHERE intervention_id = ?
         """, (f"\n[REFUS par {tech_name}] {raison}", intervention_id))
 
     # Send Telegram notification
@@ -2628,7 +3286,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
     try:
         with get_db() as conn:
             old = conn.execute(
-                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = %s",
+                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = ?",
                 (piece_id,)
             ).fetchone()
         stock_avant = int(old["stock_actuel"]) if old else None
@@ -2740,7 +3398,21 @@ def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
 def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     # Pour Lecteur : forcer le filtre par son client
     effective_client = _get_client_filter(user) or client
-    return _df_to_records(lire_contrats(client=effective_client))
+    df = lire_contrats(client=effective_client)
+    records = _df_to_records(df)
+    
+    # Enrich each contract with its equipements array
+    for record in records:
+        contrat_id = record.get("id")
+        if contrat_id:
+            try:
+                equipements = get_contract_equipements(contrat_id)
+                record["equipements"] = equipements if equipements else []
+            except Exception as e:
+                logger.debug(f"Could not get equipements for contract {contrat_id}: {e}")
+                record["equipements"] = []
+    
+    return records
 
 
 @app.post("/api/contrats")
@@ -2751,23 +3423,39 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
         try:
             nb_plannings = generer_planning_from_contrat(contrat_id)
             if nb_plannings > 0:
-                logger.info(f"Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées automatiquement")
-                # Notification Telegram
-                recurrence = body.get("recurrence_maintenance", "")
-                equipement = body.get("equipement", "")
-                client = body.get("client", "")
-                date_fin = body.get("date_fin", "")
-                msg = (
-                    f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
-                    f"👤 Client : <b>{client}</b>\n"
-                    + (f"🏥 Équipement : <b>{equipement}</b>\n" if equipement else "")
-                    + f"🔄 Récurrence : <b>{recurrence}</b>\n"
-                    f"📅 Jusqu'au : {date_fin}\n\n"
-                    f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
-                    f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
-                )
-                _send_telegram_bot("telegram_sav", msg)
-                _send_telegram_bot("telegram_manager", msg)
+                logger.info(f"✅ Contrat #{contrat_id}: {nb_plannings} maintenance(s) préventive(s) planifiées")
+                # Notification Telegram - Send in background (non-blocking)
+                def send_telegram_async():
+                    try:
+                        recurrence = body.get("recurrence_maintenance", "")
+                        equipements = body.get("equipements", [])
+                        if isinstance(equipements, str):
+                            equipements = [equipements] if equipements else []
+                        if not equipements:
+                            single_eq = body.get("equipement", "")
+                            if single_eq:
+                                equipements = [single_eq]
+                        equipement_str = ", ".join(equipements) if equipements else "— Non spécifié —"
+                        client = body.get("client", "")
+                        date_fin = body.get("date_fin", "")
+                        msg = (
+                            f"📋 <b>Nouveau Contrat #{contrat_id}</b>\n\n"
+                            f"👤 Client : <b>{client}</b>\n"
+                            f"🏥 Équipement(s) : <b>{equipement_str}</b>\n"
+                            f"🔄 Récurrence : <b>{recurrence}</b>\n"
+                            f"📅 Jusqu'au : {date_fin}\n\n"
+                            f"✅ <b>{nb_plannings} maintenance(s) préventive(s)</b> planifiées automatiquement\n"
+                            f"⚠️ <i>Techniciens non assignés — vous serez notifié 2 semaines avant chaque date</i>"
+                        )
+                        _send_telegram_bot("telegram_sav", msg)
+                        _send_telegram_bot("telegram_manager", msg)
+                        logger.info(f"📨 Telegram notifications sent for contrat #{contrat_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to send Telegram for contrat #{contrat_id}: {e}")
+                
+                import threading
+                telegram_thread = threading.Thread(target=send_telegram_async, daemon=True)
+                telegram_thread.start()
         except Exception as e:
             logger.error(f"Erreur génération planning pour contrat #{contrat_id}: {e}")
     return {"ok": True, "contrat_id": contrat_id, "nb_plannings": nb_plannings}
@@ -2817,6 +3505,17 @@ def get_planning(
     user: dict = Depends(_verify_token),
 ):
     df = lire_planning(machine=machine, statut=statut)
+    
+    # Si le user est un Technicien → filtrer automatiquement ses plannings
+    if user.get("role") == "Technicien" and not df.empty:
+        user_nom_complet = (user.get("nom") or "").strip()
+        # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
+        name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
+        if name_words and "technicien_assigne" in df.columns:
+            df = df[df["technicien_assigne"].astype(str).apply(
+                lambda t: all(word in t.lower() for word in name_words)
+            )]
+    
     # Pour Lecteur : filtrer par les machines de son client
     client_filter = _get_client_filter(user)
     if client_filter and not df.empty:
@@ -2827,8 +3526,6 @@ def get_planning(
             )
             if "machine" in df.columns:
                 df = df[df["machine"].isin(machines_client)]
-            elif "equipement" in df.columns:
-                df = df[df["equipement"].isin(machines_client)]
     return _df_to_records(df)
 
 
@@ -2838,11 +3535,687 @@ def create_planning(body: dict, user: dict = Depends(_verify_token)):
     return {"ok": True}
 
 
+@app.post("/api/planning/sync")
+def force_planning_sync(user: dict = Depends(_verify_token)):
+    """Force la synchronisation planning -> interventions pour aujourd'hui."""
+    created = sync_planning_to_interventions()
+    return {"ok": True, "created": len(created), "interventions": created}
+
+
+@app.post("/api/planning/pdf")
+def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
+    """Generate a maintenance planning PDF using FPDF with proper header.
+    Supports date range filtering."""
+    from io import BytesIO
+    from fastapi.responses import Response
+    from datetime import datetime
+    from fpdf import FPDF
+
+    SAVIA_LOGO = "/app/logo-savia.png"
+
+    try:
+        rows = body.get("rows", [])
+        logger.info(f"[PDF] Received {len(rows)} rows from frontend")
+        filter_label = body.get("filter_label", "Tous les clients")
+        company_name = body.get("company_name", "SAVIA")
+        company_logo = body.get("company_logo", "")
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=10)
+
+        # Page 1: Header with logo
+        pdf.add_page()
+        # Use built-in Arial font instead of DejaVu
+        pdf.set_font("Arial", size=10)
+
+        # Left: SAVIA logo
+        if os.path.exists(SAVIA_LOGO):
+            pdf.image(SAVIA_LOGO, x=10, y=10, w=30)
+        
+        # Right: Company logo (uploaded in admin)
+        if company_logo:
+            try:
+                # company_logo is base64 data URL: "data:image/png;base64,..."
+                if company_logo.startswith('data:'):
+                    # Extract base64 part
+                    base64_data = company_logo.split(',')[1]
+                    image_bytes = base64.b64decode(base64_data)
+                    
+                    # Create temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+                    
+                    # Add company logo to top right (x=160 aligns it to right, y=10, w=35 for width)
+                    pdf.image(tmp_path, x=160, y=10, w=35)
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_path)
+            except Exception as e:
+                logger.warning(f"Failed to add company logo: {e}")
+        
+        # Right: Company info (below logo)
+        pdf.set_xy(120, 50)
+        pdf.set_font("Arial", 'B', size=12)
+        pdf.cell(0, 5, company_name, ln=True, align='R')
+        pdf.set_xy(120, 55)
+        pdf.set_font("Arial", size=9)
+        pdf.cell(0, 4, f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
+        
+        # Title
+        pdf.set_xy(10, 50)
+        pdf.set_font("Arial", 'B', size=16)
+        pdf.cell(0, 10, "PLANNING MAINTENANCE", ln=True)
+        
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 5, f"Filtre: {filter_label}", ln=True)
+        pdf.cell(0, 3, f"Nombre d'interventions: {len(rows)}", ln=True)
+        pdf.ln(5)
+
+        # Table header
+        pdf.set_font("Arial", 'B', size=9)
+        col_widths = [25, 25, 25, 30, 30, 25, 25]
+        headers = ["Date", "Machine", "Type", "Technicien", "Client", "Statut", "Notes"]
+        
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 7, header, border=1, align='C')
+        pdf.ln()
+
+        # Table data
+        pdf.set_font("Arial", size=8)
+        for row in rows:
+            # Use the column names that the frontend sends
+            date_str = row.get("date_planifiee", "")[:10] if row.get("date_planifiee") else ""
+            machine = str(row.get("machine", ""))[:15]
+            type_maint = str(row.get("type_maintenance", ""))[:12]
+            tech = str(row.get("technicien", ""))[:15]  # Frontend sends "technicien", not "technicien_assigne"
+            client = str(row.get("client", ""))[:15]
+            statut = str(row.get("statut", ""))[:10]
+            notes = str(row.get("notes", ""))[:15]
+            
+            pdf.cell(col_widths[0], 6, date_str, border=1, align='C')
+            pdf.cell(col_widths[1], 6, machine, border=1)
+            pdf.cell(col_widths[2], 6, type_maint, border=1)
+            pdf.cell(col_widths[3], 6, tech, border=1)
+            pdf.cell(col_widths[4], 6, client, border=1)
+            pdf.cell(col_widths[5], 6, statut, border=1, align='C')
+            pdf.cell(col_widths[6], 6, notes, border=1)
+            pdf.ln()
+
+        # Footer
+        pdf.set_y(-15)
+        pdf.set_font("Arial", size=8)
+        pdf.cell(0, 5, f"Page {pdf.page_no()}", align='C')
+
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=planning.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"Error generating planning PDF: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating PDF: {str(e)}"
+        )
+
+
+@app.post("/api/planning/comparateur/pdf")
+def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
+    """
+    Generate PDF from comparateur data.
+    Input: comparateur data from GET /api/planning/{id}/comparateur
+    Output: PDF file
+    """
+    try:
+        from fpdf import FPDF
+        from datetime import datetime
+        
+        # Get comparateur data from body
+        data = body
+        
+        # Create PDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("DejaVu", size=12)
+        
+        # Title
+        pdf.set_font("DejaVu", 'B', size=16)
+        pdf.cell(0, 10, "RAPPORT COMPARATEUR PLANNING", ln=True, align='C')
+        pdf.ln(5)
+        
+        # Timestamp
+        pdf.set_font("DejaVu", size=9)
+        pdf.cell(0, 8, f"Généré le: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True)
+        pdf.ln(3)
+        
+        # Equipment info
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "INFORMATIONS ÉQUIPEMENT", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        pdf.cell(0, 7, f"Machine: {data.get('machine', '')}", ln=True)
+        pdf.cell(0, 7, f"Client: {data.get('client', '')}", ln=True)
+        pdf.cell(0, 7, f"Type: {data.get('type_maintenance', '')}", ln=True)
+        pdf.cell(0, 7, f"Description: {data.get('description', '')}", ln=True)
+        pdf.ln(3)
+        
+        # Real planning
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "PLANNING RÉEL (Nouvelle date)", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        real = data.get('real', {})
+        pdf.cell(0, 7, f"Date: {real.get('date', '')}", ln=True)
+        pdf.cell(0, 7, f"Technicien: {real.get('technicien', '')}", ln=True)
+        pdf.cell(0, 7, f"Statut: {real.get('statut', '')}", ln=True)
+        pdf.ln(3)
+        
+        # Ghost planning
+        if data.get('has_ghost'):
+            pdf.set_font("DejaVu", 'B', size=11)
+            pdf.cell(0, 8, "PLANNING DÉCALÉ (Date originale)", ln=True)
+            pdf.set_font("DejaVu", size=10)
+            ghost = data.get('ghost', {})
+            pdf.cell(0, 7, f"Date: {ghost.get('date', '')}", ln=True)
+            pdf.cell(0, 7, f"Technicien: {ghost.get('technicien', '')}", ln=True)
+            pdf.cell(0, 7, f"Statut: {ghost.get('statut', '')}", ln=True)
+            pdf.ln(3)
+        
+        # Differences
+        pdf.set_font("DejaVu", 'B', size=11)
+        pdf.cell(0, 8, "CHANGEMENTS", ln=True)
+        pdf.set_font("DejaVu", size=10)
+        diff = data.get('differences', {})
+        if diff.get('date_changed'):
+            old_date = diff.get('old_date', '')
+            new_date = diff.get('new_date', '')
+            pdf.cell(0, 7, f"Date modifiée: {old_date} → {new_date}", ln=True)
+        if diff.get('technicien_changed'):
+            old_tech = diff.get('old_technicien', 'Non assigné')
+            new_tech = diff.get('new_technicien', 'Non assigné')
+            pdf.cell(0, 7, f"Technicien modifié: {old_tech} → {new_tech}", ln=True)
+        pdf.ln(3)
+        
+        # Reasons
+        reasons = data.get('reasons', [])
+        if reasons:
+            pdf.set_font("DejaVu", 'B', size=11)
+            pdf.cell(0, 8, "RAISONS DU DÉCALAGE", ln=True)
+            pdf.set_font("DejaVu", size=10)
+            for idx, reason in enumerate(reasons, 1):
+                # Use multi_cell for text wrapping
+                pdf.multi_cell(0, 5, f"{idx}. {reason}")
+            pdf.ln(2)
+        
+        # Footer
+        pdf.set_font("DejaVu", size=8)
+        pdf.ln(5)
+        pdf.cell(0, 5, "---", ln=True)
+        pdf.cell(0, 5, "Rapport généré automatiquement par SAVIA", align='C')
+        
+        # Return PDF as blob
+        from io import BytesIO
+        pdf_output = pdf.output(dest='S')
+        # pdf.output(dest='S') returns bytearray in FPDF2
+        if isinstance(pdf_output, bytearray):
+            pdf_bytes = bytes(pdf_output)
+        elif isinstance(pdf_output, str):
+            pdf_bytes = pdf_output.encode('latin-1')
+        else:
+            pdf_bytes = pdf_output
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type='application/pdf',
+            headers={'Content-Disposition': 'attachment; filename=comparateur.pdf'}
+        )
+    except Exception as e:
+        logger.error(f"Error generating comparateur PDF: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating PDF: {str(e)}"
+        )
+
+
+@app.get("/api/planning/{planning_id}/comparateur")
+def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_token)):
+    """
+    Get comparison between real planning and ghost (décalé) entry.
+    Returns data for generating comparateur export (planning réel vs planning décalé).
+    Accepts either the real planning ID or the ghost planning ID.
+    """
+    try:
+        with get_db() as conn:
+            # Check if the provided ID is a ghost entry
+            test_entry = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ?",
+                (planning_id,)
+            ).fetchone()
+            
+            if not test_entry:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Planning entry not found"
+                )
+            
+            # If the provided ID is a ghost entry, use its original_planning_id as the real ID
+            test_dict = dict(test_entry)
+            if test_dict.get("is_ghost"):
+                real_planning_id = test_dict.get("original_planning_id")
+                if not real_planning_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Ghost entry has no associated original planning"
+                    )
+            else:
+                real_planning_id = planning_id
+            
+            # Get the real planning entry
+            real = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                (real_planning_id,)
+            ).fetchone()
+            
+            if not real:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Real planning entry not found"
+                )
+            
+            # Get the ghost entry associated with this planning
+            ghost = conn.execute(
+                "SELECT * FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
+                (real_planning_id,)
+            ).fetchone()
+            
+            # Extract reason from notes (format: "[Raison décalage] text")
+            reason_lines = []
+            if ghost:
+                ghost_notes = ghost.get("notes", "") or ""
+                # Extract all "[Raison décalage]" lines
+                for line in ghost_notes.split("|"):
+                    line = line.strip()
+                    if line.startswith("[Raison décalage]"):
+                        reason = line.replace("[Raison décalage]", "").strip()
+                        reason_lines.append(reason)
+            
+            # Build comparison data
+            real_dict = dict(real) if real else {}
+            ghost_dict = dict(ghost) if ghost else {}
+            
+            comparison = {
+                "planning_id": real_planning_id,
+                "machine": real_dict.get("machine", ""),
+                "client": real_dict.get("client", ""),
+                "type_maintenance": real_dict.get("type_maintenance", ""),
+                "description": real_dict.get("description", ""),
+                
+                # Real planning (new date after reschedule)
+                "real": {
+                    "date": real_dict.get("date_prevue", ""),
+                    "technicien": real_dict.get("technicien_assigne", ""),
+                    "statut": real_dict.get("statut", ""),
+                },
+                
+                # Ghost planning (original date - décalé)
+                "ghost": {
+                    "date": ghost_dict.get("date_prevue", "") if ghost else None,
+                    "technicien": ghost_dict.get("technicien_assigne", "") if ghost else None,
+                    "statut": ghost_dict.get("statut", "") if ghost else None,
+                } if ghost else None,
+                
+                # Differences
+                "differences": {
+                    "date_changed": real_dict.get("date_prevue") != ghost_dict.get("date_prevue") if ghost else False,
+                    "technicien_changed": real_dict.get("technicien_assigne") != ghost_dict.get("technicien_assigne") if ghost else False,
+                    "old_date": ghost_dict.get("date_prevue") if ghost else None,
+                    "new_date": real_dict.get("date_prevue"),
+                    "old_technicien": ghost_dict.get("technicien_assigne") if ghost else None,
+                    "new_technicien": real_dict.get("technicien_assigne"),
+                },
+                
+                # Reschedule reasons (accumulated)
+                "reasons": reason_lines if reason_lines else [],
+                
+                # Meta
+                "has_ghost": ghost is not None,
+            }
+            
+            return comparison
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting planning comparateur for {planning_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching comparateur data: {str(e)}"
+        )
+
+
+@app.get("/api/planning/comparateur-periode")
+def get_planning_comparateur_periode(
+    date_debut: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_fin: str = Query(..., description="End date (YYYY-MM-DD)"),
+    user: dict = Depends(_verify_token)
+):
+    """
+    Get all reschedules (comparisons) within a date range.
+    Returns all ghost entries (décalés) between date_debut and date_fin.
+    """
+    try:
+        # Validate dates
+        try:
+            from datetime import datetime
+            d_debut = datetime.strptime(date_debut, "%Y-%m-%d")
+            d_fin = datetime.strptime(date_fin, "%Y-%m-%d")
+            if d_debut > d_fin:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="date_debut must be before date_fin"
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format. Use YYYY-MM-DD"
+            )
+        
+        with get_db() as conn:
+            # Get all ghost entries (décalés) with their original entries
+            # Filter by ghost entry's date_prevue (the rescheduled date)
+            ghosts = conn.execute(
+                """SELECT * FROM planning_maintenance 
+                   WHERE is_ghost = true 
+                   AND date_prevue BETWEEN ? AND ?
+                   ORDER BY date_prevue ASC""",
+                (date_debut, date_fin)
+            ).fetchall()
+            
+            comparisons = []
+            for ghost_row in ghosts:
+                ghost_dict = dict(ghost_row)
+                original_planning_id = ghost_dict.get("original_planning_id")
+                
+                if not original_planning_id:
+                    continue  # Skip if no original planning
+                
+                # Get the real planning entry
+                real = conn.execute(
+                    "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                    (original_planning_id,)
+                ).fetchone()
+                
+                if not real:
+                    continue
+                
+                real_dict = dict(real)
+                
+                # Extract reason from notes of the REAL entry (not the ghost)
+                # The reschedule reason is stored in the real entry's notes
+                reason_lines = []
+                real_notes = real_dict.get("notes", "") or ""
+                for line in real_notes.split("|"):
+                    line = line.strip()
+                    if line.startswith("[Raison décalage]"):
+                        reason = line.replace("[Raison décalage]", "").strip()
+                        reason_lines.append(reason)
+                
+                # For clarity: ghost = original date, real = rescheduled date
+                # Calculate days difference (rescheduled - original)
+                try:
+                    from datetime import datetime, date
+                    ghost_date = ghost_dict.get("date_prevue")
+                    real_date = real_dict.get("date_prevue")
+                    
+                    # Convert to date objects if they're strings
+                    if isinstance(ghost_date, str):
+                        ghost_date = datetime.strptime(ghost_date, "%Y-%m-%d").date()
+                    if isinstance(real_date, str):
+                        real_date = datetime.strptime(real_date, "%Y-%m-%d").date()
+                    
+                    if ghost_date and real_date:
+                        days_diff = (real_date - ghost_date).days
+                    else:
+                        days_diff = 0
+                except Exception as e:
+                    logger.error(f"Error calculating days diff: {e}, ghost_date={ghost_dict.get('date_prevue')}, real_date={real_dict.get('date_prevue')}")
+                    days_diff = 0
+                
+                comparison = {
+                    "planning_id": original_planning_id,
+                    "ghost_id": ghost_dict.get("id"),
+                    "machine": real_dict.get("machine", ""),
+                    "client": real_dict.get("client", ""),
+                    "type_maintenance": real_dict.get("type_maintenance", ""),
+                    "old_date": ghost_dict.get("date_prevue"),  # Original date (ghost entry)
+                    "new_date": real_dict.get("date_prevue"),   # Rescheduled date (real entry)
+                    "days_difference": days_diff,  # This is now (real - ghost) = newer - older
+                    "old_technicien": ghost_dict.get("technicien_assigne", ""),
+                    "new_technicien": real_dict.get("technicien_assigne", ""),
+                    "statut": real_dict.get("statut", ""),
+                    "reasons": reason_lines if reason_lines else [],
+                }
+                comparisons.append(comparison)
+            
+            return {
+                "total": len(comparisons),
+                "period": {"debut": date_debut, "fin": date_fin},
+                "comparisons": comparisons
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting planning comparateur-periode: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching comparateur data: {str(e)}"
+        )
+
+
 @app.put("/api/planning/{planning_id}")
 def update_planning_status(planning_id: int, body: dict, user: dict = Depends(_verify_token)):
     update_planning_statut(planning_id, body.get("statut", ""), body.get("date_realisee"))
     return {"ok": True}
 
+
+@app.put("/api/planning/{planning_id}/reschedule")
+def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Reschedule an intervention (change date and/or technicians).
+    Only Admin and Manager can perform this action.
+    Creates a greyed-out "Décalé" entry at the old date for audit trail.
+    """
+    # Check authorization (Admin or Manager only)
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Admin and Manager can reschedule interventions"
+        )
+    
+    from db_engine import USE_PG
+    ph = "%s" if USE_PG else "?"  # Placeholder for PostgreSQL or SQLite
+    
+    new_date = body.get("date_planifiee")
+    new_technicians = body.get("technicien_assigne")
+    reason = body.get("reason", "").strip()  # ← Add reason support
+    
+    if not new_date and new_technicians is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least date_planifiee or technicien_assigne must be provided"
+        )
+    
+    try:
+        with get_db() as conn:
+            # Get current planning item
+            current = conn.execute(
+                f"SELECT * FROM planning_maintenance WHERE id = {ph}",
+                (planning_id,)
+            ).fetchone()
+            
+            if not current:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Planning item not found"
+                )
+            
+            old_date = current.get("date_prevue")
+            
+            # Update the main planning entry
+            update_data = {}
+            if new_date:
+                update_data["date_prevue"] = new_date
+            if new_technicians is not None:
+                update_data["technicien_assigne"] = new_technicians
+            
+            # ← Add reason to notes if provided
+            if reason:
+                old_notes = current.get("notes", "")
+                new_notes = f"[Raison décalage] {reason}"
+                if old_notes:
+                    new_notes = f"{old_notes} | {new_notes}"
+                update_data["notes"] = new_notes
+            
+            if update_data:
+                set_clause = ", ".join([f"{k} = {ph}" for k in update_data.keys()])
+                values = list(update_data.values()) + [planning_id]
+                conn.execute(
+                    f"UPDATE planning_maintenance SET {set_clause} WHERE id = {ph}",
+                    values
+                )
+                conn.commit()
+                logger.info(f"Planning {planning_id} updated: {update_data}")
+            
+            # Create a greyed-out "Décalé" entry at the old date AFTER updating (separate transaction)
+            # BUT: Only if the DATE ACTUALLY CHANGED (not if only technicien changed)
+            # AND only if this is NOT already a ghost entry
+            is_current_ghost = current.get("is_ghost", False)
+            
+            # Check if date actually changed (compare as strings for consistency)
+            date_has_changed = new_date and str(new_date) != str(old_date)
+            
+            if date_has_changed and not is_current_ghost:
+                try:
+                    old_machine = current.get("machine", "")
+                    old_client = current.get("client", "")
+                    old_description = current.get("description", "")
+                    old_notes = current.get("notes", "")
+                    old_type = current.get("type_maintenance", "Préventive")
+                    
+                    # Check if a ghost ALREADY EXISTS for this ORIGINAL planning
+                    # Using original_planning_id to link ghost to its source intervention
+                    # This prevents duplicate ghosts when same intervention is rescheduled multiple times
+                    existing_ghost = conn.execute(
+                        f"SELECT id FROM planning_maintenance WHERE original_planning_id = {ph} AND is_ghost = true",
+                        (planning_id,)
+                    ).fetchone()
+                    
+                    if not existing_ghost:
+                        # Create a ghost from the ORIGINAL intervention at the old date
+                        # Set original_planning_id to track that this ghost belongs to planning_id
+                        insert_sql = f"""INSERT INTO planning_maintenance 
+                               (machine, client, date_prevue, technicien_assigne, type_maintenance, 
+                                recurrence, statut, description, notes, is_ghost, original_planning_id)
+                               VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"""
+                        conn.execute(
+                            insert_sql,
+                            (old_machine, old_client, old_date, "", old_type, 
+                             "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True, planning_id)
+                        )
+                        conn.commit()
+                        logger.info(f"✅ Ghost entry created for planning {planning_id}: {old_machine} on {old_date}")
+                    else:
+                        # Ghost already exists - update its notes to accumulate all reschedule reasons
+                        ghost_id = existing_ghost.get("id")
+                        ghost_current = conn.execute(
+                            f"SELECT notes FROM planning_maintenance WHERE id = {ph}",
+                            (ghost_id,)
+                        ).fetchone()
+                        ghost_notes = ghost_current.get("notes", "") if ghost_current else ""
+                        
+                        # Append reason if provided and not already there
+                        if reason:
+                            new_reason_line = f"[Raison décalage] {reason}"
+                            if new_reason_line not in ghost_notes:
+                                if ghost_notes:
+                                    updated_notes = f"{ghost_notes} | {new_reason_line}"
+                                else:
+                                    updated_notes = new_reason_line
+                                conn.execute(
+                                    f"UPDATE planning_maintenance SET notes = {ph} WHERE id = {ph}",
+                                    (updated_notes, ghost_id)
+                                )
+                                conn.commit()
+                                logger.info(f"Ghost {ghost_id} notes updated with reschedule reason")
+                        logger.info(f"Ghost already exists for planning {planning_id}, notes accumulated")
+                except Exception as e:
+                    logger.warning(f"Could not create ghost entry for planning {planning_id}: {e}")
+                    # Don't fail if ghost entry creation fails - main update already succeeded
+            
+            # Log audit
+            log_audit(
+                user.get("username", "unknown"),
+                "RESCHEDULE_PLANNING",
+                f"Planning {planning_id}: {update_data}"
+            )
+            
+            # Send Telegram notification to assigned technicians
+            if new_technicians:
+                try:
+                    machine = current.get("machine", "?")
+                    client = current.get("client", "")
+                    tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
+                    
+                    msg = (
+                        f"🔧 <b>Nouvelle Intervention Assignée</b>\n"
+                        f"<i>{len(tech_list)} technicien(s) assigné(s) :</i>\n\n"
+                    )
+                    
+                    for tech in tech_list:
+                        msg += f"  • <b>{tech}</b>\n"
+                    
+                    msg += (
+                        f"\n<b>Détails :</b>\n"
+                        f"  📦 Équipement : {machine}\n"
+                    )
+                    if client:
+                        msg += f"  🏢 Client : {client}\n"
+                    if new_date:
+                        msg += f"  📅 Date : {new_date}\n"
+                    if reason:
+                        msg += f"  💬 Raison : {reason}\n"
+                    
+                    msg += f"\n📱 Consultez le PWA pour plus de détails."
+                    
+                    # Send to general telegram bot (technicien will receive it)
+                    _send_telegram_bot("telegram", msg)
+                    logger.info(f"Telegram notification sent to {len(tech_list)} technician(s) for planning {planning_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to send Telegram notification for planning {planning_id}: {e}")
+            
+            # Auto-sync planning to interventions (create intervention if date is today)
+            try:
+                sync_planning_to_interventions()
+            except Exception as e:
+                logger.warning(f"Planning sync after reschedule failed: {e}")
+            
+            return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rescheduling planning {planning_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error rescheduling intervention: {str(e)}"
+        )
 
 @app.delete("/api/planning/{planning_id}")
 def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
@@ -2862,157 +4235,13 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 
 @app.post("/api/planning/pdf")
-def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a maintenance planning PDF using FPDF with proper header."""
-    from io import BytesIO
-    from fastapi.responses import Response
-    import base64 as _b64
-    import urllib.request as _ur
-
-    SAVIA_LOGO = "/app/logo-savia.png"
-
-    try:
-        rows = body.get("rows", [])
-        filter_label = body.get("filter_label", "Tous les clients")
-        company_name = body.get("company_name", "SAVIA")
-        company_logo = body.get("company_logo", "")
-
-        # Client logo
-        _client_logo_io = None
-        if company_logo:
-            try:
-                clogo = company_logo.strip()
-                if clogo.startswith("data:"):
-                    _b64_part = clogo.split(",", 1)[1] if "," in clogo else clogo
-                    _client_logo_io = BytesIO(_b64.b64decode(_b64_part))
-                elif clogo.startswith("http"):
-                    req_ = _ur.Request(clogo, headers={"User-Agent": "Mozilla/5.0"})
-                    with _ur.urlopen(req_, timeout=6) as _r:
-                        _client_logo_io = BytesIO(_r.read())
-            except Exception:
-                pass
-
-        display_name = company_name if company_name and company_name != "SAVIA" else "SAVIA"
-
-        pdf = SaviaPDF(orientation="L", unit="mm", format="A4")
-        pdf.set_header_data(
-            SAVIA_LOGO, _client_logo_io,
-            company_name if company_name != "SAVIA" else "",
-            "",
-            report_title="PLANNING DE MAINTENANCE"
-        )
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.set_top_margin(pdf.HEADER_H + 10)
-        pdf.add_page()
-        W = pdf.w - 20
-
-        today_str = datetime.now().strftime("%d/%m/%Y")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
-        pdf.cell(W, 5, _sanitize(f"Filtre : {filter_label}  |  G\u00e9n\u00e9r\u00e9 le {today_str}  |  {len(rows)} maintenance(s)"), align="C")
-        pdf.ln(8)
-
-        # Table header
-        col_widths = [25, 50, 55, 40, 35, 30, 30]  # Date, Client, Equipement, Technicien, Type, Récurrence, Statut
-        headers = ["Date", "Client", "\u00c9quipement", "Technicien", "Type", "R\u00e9currence", "Statut"]
-
-        pdf.set_fill_color(15, 118, 110)
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 8)
-        for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-        pdf.ln()
-
-        # Table rows
-        pdf.set_text_color(30, 40, 60)
-        pdf.set_font("Helvetica", "", 7.5)
-        for idx, row in enumerate(rows):
-            if pdf.get_y() > pdf.h - 20:
-                pdf.add_page()
-                pdf.set_fill_color(15, 118, 110)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_font("Helvetica", "B", 8)
-                for i, h in enumerate(headers):
-                    pdf.cell(col_widths[i], 7, _sanitize(h), border=1, fill=True, align="C")
-                pdf.ln()
-                pdf.set_text_color(30, 40, 60)
-                pdf.set_font("Helvetica", "", 7.5)
-
-            # Alternate row colors
-            if idx % 2 == 0:
-                pdf.set_fill_color(248, 250, 252)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
-            date_val = str(row.get("date_planifiee", "") or "")[:10]
-            client_val = str(row.get("client", "") or "\u2014")
-            machine_val = str(row.get("machine", "") or "\u2014")
-            tech_val = str(row.get("technicien", "") or "\u2014")
-            type_val = str(row.get("type_maintenance", "") or "\u2014")
-            recurrence_val = str(row.get("recurrence", "") or "")
-            if recurrence_val == "Aucune":
-                recurrence_val = "\u2014"
-            statut_val = str(row.get("statut", "") or "\u2014")
-
-            # Check overdue
-            is_overdue = False
-            if date_val and statut_val not in ["R\u00e9alis\u00e9e", "Termin\u00e9e", "Annul\u00e9e"]:
-                try:
-                    if datetime.strptime(date_val, "%Y-%m-%d") < datetime.now():
-                        is_overdue = True
-                        statut_val = "En retard"
-                except Exception:
-                    pass
-
-            vals = [date_val, client_val, machine_val, tech_val, type_val, recurrence_val, statut_val]
-            for i, v in enumerate(vals):
-                # Color statut cell
-                if i == 6:
-                    if is_overdue or "retard" in statut_val.lower():
-                        pdf.set_text_color(153, 27, 27)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val in ["R\u00e9alis\u00e9e", "Termin\u00e9e"]:
-                        pdf.set_text_color(6, 95, 70)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    elif statut_val == "En cours":
-                        pdf.set_text_color(146, 64, 14)
-                        pdf.set_font("Helvetica", "B", 7.5)
-                    else:
-                        pdf.set_text_color(30, 64, 175)
-                        pdf.set_font("Helvetica", "B", 7.5)
-
-                pdf.cell(col_widths[i], 6.5, _sanitize(v[:30]), border="B", fill=True, align="C" if i in [0, 5, 6] else "L")
-
-                if i == 6:
-                    pdf.set_text_color(30, 40, 60)
-                    pdf.set_font("Helvetica", "", 7.5)
-            pdf.ln()
-
-        # Footer
-        pdf.set_y(-25)
-        pdf.set_font("Helvetica", "I", 7)
-        pdf.set_text_color(140, 150, 165)
-        pdf.cell(W, 4, _sanitize(f"Ce document est g\u00e9n\u00e9r\u00e9 automatiquement par {display_name} - {today_str}"), align="C")
-
-        buf = BytesIO()
-        pdf.output(buf)
-        buf.seek(0)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=planning_maintenance_{datetime.now().strftime('%Y%m%d')}.pdf"}
-        )
-    except Exception as e:
-        logging.error(f"Planning PDF error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
-
-
 @app.post("/api/interventions/{intervention_id}/factured")
+
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = %s",
+            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = ?",
             (intervention_id,)
         )
     return {"ok": True}
@@ -3110,45 +4339,127 @@ Réponds en JSON: [{{"code":"ERR001","message":"...","type":"Hardware","cause":"
 async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import error codes from an uploaded Excel/CSV file."""
     import io
+    
+    def sanitize_text(text: str) -> str:
+        """Nettoie le texte en fixant les problèmes de mojibake et caractères corrompus."""
+        if not text:
+            return text
+        
+        # ÉTAPE 1: Détecter et réparer la mojibake UTF-8 mal décodée
+        # Pattern: caractères UTF-8 multi-bytes mal interprétés comme latin-1
+        # Ex: "â€¯" (U+00E2 U+0080 U+00AF) = corruption de U+203F (overline)
+        try:
+            # Essayer de ré-encoder en latin-1 puis décoder en UTF-8
+            # Cela répare souvent les problèmes de mojibake
+            text = text.encode('latin-1', errors='ignore').decode('utf-8', errors='replace')
+        except Exception:
+            pass
+        
+        # ÉTAPE 2: Remplacer les caractères de typographie spéciaux par ASCII
+        char_map = {
+            ''': "'",           # apostrophe courbe
+            ''': "'",           # autre apostrophe
+            '"': '"',           # guillemet ouvrant courbe
+            '"': '"',           # guillemet fermant courbe
+            '–': '-',           # tiret court
+            '—': '--',          # tiret long
+            '«': '"',           # guillemet français
+            '»': '"',           # guillemet français
+            '‹': '<',           # chevron ouvrant
+            '›': '>',           # chevron fermant
+            '\u00A0': ' ',      # espace insécable
+            '\u2000': ' ',      # en quad
+            '\u2001': ' ',      # em quad
+            '\u2002': ' ',      # en space
+            '\u2003': ' ',      # em space
+            '\u2004': ' ',      # three-per-em space
+            '\u2005': ' ',      # four-per-em space
+            '\u2006': ' ',      # six-per-em space
+            '\u2007': ' ',      # figure space
+            '\u2008': ' ',      # punctuation space
+            '\u2009': ' ',      # thin space
+            '\u200A': ' ',      # hair space
+            '\u200B': '',       # zero-width space
+            '\u200C': '',       # zero-width non-joiner
+            '\u200D': '',       # zero-width joiner
+            '\u3000': ' ',      # ideographic space
+            '\ufeff': '',       # BOM
+        }
+        
+        for old_char, new_char in char_map.items():
+            text = text.replace(old_char, new_char)
+        
+        # ÉTAPE 3: Supprimer les caractères de contrôle sauf newline et tab
+        text = ''.join(c if ord(c) >= 32 or c in '\n\t\r' else '' for c in text)
+        
+        # ÉTAPE 4: Convertir en NFD (décomposé) puis en NFC (composé) pour normaliser
+        import unicodedata
+        text = unicodedata.normalize('NFC', text)
+        
+        # ÉTAPE 5: Nettoyer les espaces multiples
+        text = ' '.join(text.split())
+        
+        return text
+    
     filename = file.filename or ""
     content = await file.read()
 
     try:
         if filename.endswith(".csv"):
             import csv
-            text = content.decode("utf-8", errors="replace")
+            # Essayer différents encodages
+            text = None
+            for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
+                try:
+                    text = content.decode(encoding)
+                    break
+                except (UnicodeDecodeError, AttributeError):
+                    continue
+            
+            if text is None:
+                text = content.decode('utf-8', errors='replace')
+            
+            text = sanitize_text(text)
             reader = csv.DictReader(io.StringIO(text))
             rows = list(reader)
+        
         elif filename.endswith((".xlsx", ".xls")):
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
             ws = wb.active
-            headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            headers = [sanitize_text(str(c.value or "").strip()) for c in next(ws.iter_rows(min_row=1, max_row=1))]
             rows = []
             for row in ws.iter_rows(min_row=2, values_only=True):
-                rows.append({headers[i]: (str(v) if v else "") for i, v in enumerate(row) if i < len(headers)})
+                row_dict = {}
+                for i, v in enumerate(row):
+                    if i < len(headers):
+                        val = str(v) if v else ""
+                        row_dict[headers[i]] = sanitize_text(val)
+                rows.append(row_dict)
+        
         elif filename.endswith(".pdf"):
-            # Parse PDF text using PyMuPDF (fitz)
             try:
                 import fitz
                 doc = fitz.open(stream=content, filetype="pdf")
                 full_text = "\n".join(page.get_text() for page in doc)
             except Exception:
                 full_text = content.decode("utf-8", errors="replace")
+            full_text = sanitize_text(full_text)
             rows = _parse_text_to_rows(full_text)
+        
         elif filename.endswith((".docx", ".doc")):
-            # Parse Word text
             try:
                 import docx
                 doc = docx.Document(io.BytesIO(content))
-                full_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-                # Also check tables
+                full_text = "\n".join(sanitize_text(p.text) for p in doc.paragraphs if p.text.strip())
                 for table in doc.tables:
                     for row in table.rows:
-                        full_text += "\n" + " | ".join(cell.text for cell in row.cells)
+                        full_text += "\n" + " | ".join(sanitize_text(cell.text) for cell in row.cells)
             except Exception:
                 full_text = content.decode("utf-8", errors="replace")
+            full_text = sanitize_text(full_text)
             rows = _parse_text_to_rows(full_text)
+        
         else:
             raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV, XLSX, PDF ou DOCX.")
 
@@ -3169,24 +4480,24 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         imported = 0
         with get_db() as conn:
             for row in rows:
-                code = row.get(col_map.get("code", ""), "").strip()
+                code = sanitize_text(row.get(col_map.get("code", ""), "").strip())
                 if not code:
                     continue
-                msg = row.get(col_map.get("message", ""), "")
-                typ = row.get(col_map.get("type", ""), "Hardware")
-                cause = row.get(col_map.get("cause", ""), "")
-                solution = row.get(col_map.get("solution", ""), "")
-                priorite = row.get(col_map.get("priorite", ""), "MOYENNE")
+                msg = sanitize_text(row.get(col_map.get("message", ""), ""))
+                typ = sanitize_text(row.get(col_map.get("type", ""), "Hardware"))
+                cause = sanitize_text(row.get(col_map.get("cause", ""), ""))
+                solution = sanitize_text(row.get(col_map.get("solution", ""), ""))
+                priorite = sanitize_text(row.get(col_map.get("priorite", ""), "MOYENNE"))
 
                 # Insert or update codes_erreurs
                 conn.execute(
-                    "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
+                    "INSERT INTO codes_erreurs (code, message, type) VALUES (?, ?, ?) "
                     "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
                     (code, msg, typ)
                 )
                 # Insert or update solutions
                 conn.execute(
-                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (%s, %s, %s, %s) "
+                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (?, ?, ?, ?) "
                     "ON CONFLICT (code) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
                     (code, cause, solution, priorite)
                 )
@@ -3197,6 +4508,20 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur d'import: {str(e)}")
+
+
+@app.delete("/api/knowledge/{code}")
+def delete_knowledge_code(code: str, user: dict = Depends(_verify_token)):
+    """Supprimer un code d'erreur spécifique et ses solutions."""
+    try:
+        with get_db() as conn:
+            # Supprimer la solution d'abord (FK contraint) - utiliser mot_cle
+            conn.execute("DELETE FROM solutions WHERE mot_cle = ?", (code,))
+            # Puis le code d'erreur - utiliser code
+            conn.execute("DELETE FROM codes_erreurs WHERE code = ?", (code,))
+        return {"ok": True, "message": f"Code {code} supprimé avec succès."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur de suppression: {str(e)}")
 
 
 # ==========================================
@@ -3252,7 +4577,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             existing = conn.execute(
-                "SELECT id FROM logs_uploaded WHERE content_hash = %s AND equipement = %s",
+                "SELECT id FROM logs_uploaded WHERE content_hash = ? AND equipement = ?",
                 (content_hash, equipement)
             ).fetchone()
             if existing:
@@ -3260,7 +4585,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
                 # Update parsed_errors on duplicate if not already stored
                 if parsed_errors_str:
                     conn.execute(
-                        "UPDATE logs_uploaded SET parsed_errors = %s WHERE id = %s AND (parsed_errors IS NULL OR parsed_errors = '')",
+                        "UPDATE logs_uploaded SET parsed_errors = ? WHERE id = ? AND (parsed_errors IS NULL OR parsed_errors = '')",
                         (parsed_errors_str, eid)
                     )
                 return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
@@ -3282,13 +4607,13 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
             # Métadonnées en PostgreSQL
             cursor = conn.execute(
                 """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
                 (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
             )
             new_row = cursor.fetchone()
             new_id = (new_row["id"] if isinstance(new_row, dict) else new_row[0]) if new_row else None
             conn.execute(
-                "INSERT INTO audit_log (username, action, details) VALUES (%s, %s, %s)",
+                "INSERT INTO audit_log (username, action, details) VALUES (?, ?, ?)",
                 (username, "Upload Log", f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)")
             )
             return {"ok": True, "id": new_id, "s3_key": s3_key,
@@ -3305,7 +4630,7 @@ def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
         with get_db() as conn:
             if equipement:
                 rows = conn.execute(
-                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = %s ORDER BY uploaded_at DESC",
+                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = ? ORDER BY uploaded_at DESC",
                     (equipement,)
                 ).fetchall()
             else:
@@ -3326,7 +4651,7 @@ def get_log(log_id: int, user: dict = Depends(_verify_token)):
     """Récupère le contenu d'un log depuis S3/MinIO."""
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = %s", (log_id,)).fetchone()
+            row = conn.execute("SELECT s3_key, equipement, filename, parsed_errors FROM logs_uploaded WHERE id = ?", (log_id,)).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Log non trouvé")
             # Support both dict (PG) and tuple (SQLite) rows
@@ -3381,9 +4706,10 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token)):
     code_erreur = body.get("code_erreur", "")
     message_erreur = body.get("message_erreur", "")
     log_context = body.get("log_context", "")
+    equipment_type = body.get("equipment_type", "")
 
     try:
-        result = get_ai_suggestion(code_erreur, message_erreur, machine, log_context=log_context)
+        result = get_ai_suggestion(code_erreur, message_erreur, machine, log_context=log_context, equipment_type=equipment_type)
         import json
         if isinstance(result, str):
             try:
@@ -4079,7 +5405,7 @@ def get_users(user: dict = Depends(_verify_token)):
 @app.post("/api/admin/users")
 def create_user(body: dict, user: dict = Depends(_verify_token)):
     # Validate role
-    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager']
+    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire']
     role = body.get("role", "Lecteur")
     if role not in valid_roles:
         return {"error": f"Invalid role. Must be one of: {', '.join(valid_roles)}"}, 400
@@ -4215,23 +5541,72 @@ def get_settings(user: dict = Depends(_verify_token)):
 
 
 @app.put("/api/settings")
-def update_settings(body: dict, user: dict = Depends(_verify_token)):
+def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token)):
     try:
+        logger.info(f"[UPDATE_SETTINGS] Received body: {body}")
         with get_db() as conn:
             for k, v in body.items():
+                logger.info(f"[UPDATE_SETTINGS] Saving key='{k}', value_type={type(v).__name__}, value_length={len(str(v))}")
                 # Use SQLite-compatible syntax with ? placeholder
+                # Note: PgCursorWrapper translates ? to ? and EXCLUDED handles both SQLite and PostgreSQL
                 conn.execute(
                     """
                     INSERT INTO config_client (cle, valeur) VALUES (?, ?)
-                    ON CONFLICT (cle) DO UPDATE SET valeur = excluded.valeur
+                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
                     """,
                     (k, str(v))
                 )
+                logger.info(f"[UPDATE_SETTINGS] Successfully saved key='{k}'")
+        logger.info(f"[UPDATE_SETTINGS] All settings saved successfully")
         return {"ok": True}
     except Exception as e:
         import traceback
-        logger.error(f"Erreur update_settings: {e}\n{traceback.format_exc()}")
+        logger.error(f"[UPDATE_SETTINGS] Error: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
+
+
+# ==========================================
+# NOTIFICATION SCHEDULES
+# ==========================================
+
+@app.get("/api/notification-schedules")
+def get_notification_schedules(user: dict = Depends(_verify_token)):
+    """Récupère tous les horaires de notification pour les bots Telegram."""
+    try:
+        schedules = lire_notification_schedules()
+        
+        # Si aucun horaire n'existe, initialiser avec les valeurs par défaut
+        if not schedules:
+            default_bots = ['telegram', 'telegram_sav', 'telegram_manager', 'telegram_stock']
+            for bot_key in default_bots:
+                sauvegarder_notification_schedule(bot_key, 1, 8, 30, '1,2,3,4,5,6,7')
+            schedules = lire_notification_schedules()
+        
+        return {"ok": True, "schedules": schedules}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_notification_schedules: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur lecture horaires: {e}")
+
+
+@app.put("/api/notification-schedules")
+def update_notification_schedules(body: dict, user: dict = Depends(_verify_token)):
+    """Sauvegarde les horaires de notification pour les bots Telegram.
+    
+    Body format:
+    {
+        "telegram": {"enabled": 1, "hour": 8, "minute": 30, "days_of_week": "1,2,3,4,5,6,7"},
+        "telegram_sav": {...},
+        ...
+    }
+    """
+    try:
+        sauvegarder_notification_schedules_batch(body)
+        return {"ok": True}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur update_notification_schedules: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde horaires: {e}")
 
 
 # ==========================================
@@ -4240,48 +5615,404 @@ def update_settings(body: dict, user: dict = Depends(_verify_token)):
 
 @app.get("/api/clients")
 def get_clients(user: dict = Depends(_verify_token)):
-    """List clients from the dedicated clients table, enriched with equipment stats."""
-    df_clients = db_lire_clients()
-    df_eq = lire_equipements()
-    df_int = lire_interventions()
+    """List clients from the dedicated clients table, enriched with equipment stats using SQL aggregates."""
+    try:
+        with get_db() as conn:
+            # Get all clients from clients table
+            df_clients = read_sql("SELECT * FROM clients ORDER BY nom", conn)
+            
+            if df_clients.empty:
+                return []
+            
+            # Get equipment stats by client (using exact string match, case-insensitive)
+            eq_stats_query = """
+            SELECT 
+                client,
+                COUNT(*) as nb_eq,
+                SUM(CASE WHEN statut IN ('Hors Service', 'Critique') THEN 1 ELSE 0 END) as nb_hs
+            FROM equipements
+            WHERE client IS NOT NULL AND client != ''
+            GROUP BY client
+            """
+            df_eq_stats = read_sql(eq_stats_query, conn)
+            
+            # Get intervention stats by client
+            int_stats_query = """
+            SELECT 
+                e.client,
+                COUNT(DISTINCT i.id) as nb_int
+            FROM interventions i
+            JOIN equipements e ON e.nom = i.machine
+            WHERE e.client IS NOT NULL AND e.client != ''
+            GROUP BY e.client
+            """
+            df_int_stats = read_sql(int_stats_query, conn)
+            
+            # Build result with enriched data
+            result = []
+            for _, row in df_clients.iterrows():
+                client_name = row.get("nom", "")
+                
+                # Find stats for this client (case-insensitive match)
+                eq_stat = None
+                if not df_eq_stats.empty:
+                    eq_stat = df_eq_stats[df_eq_stats["client"].str.lower() == client_name.lower()].iloc[0] if len(df_eq_stats[df_eq_stats["client"].str.lower() == client_name.lower()]) > 0 else None
+                
+                int_stat = None
+                if not df_int_stats.empty:
+                    int_stat = df_int_stats[df_int_stats["client"].str.lower() == client_name.lower()].iloc[0] if len(df_int_stats[df_int_stats["client"].str.lower() == client_name.lower()]) > 0 else None
+                
+                # Calculate health score
+                nb_eq = int(eq_stat.get("nb_eq", 0)) if eq_stat is not None else 0
+                nb_hs = int(eq_stat.get("nb_hs", 0)) if eq_stat is not None else 0
+                score_sante = max(0, round(((nb_eq - nb_hs) / nb_eq * 100))) if nb_eq > 0 else 100
+                
+                nb_int = int(int_stat.get("nb_int", 0)) if int_stat is not None else 0
+                
+                result.append({
+                    "id": row.get("id"),
+                    "nom": client_name,
+                    "code_client": row.get("code_client", ""),
+                    "matricule_fiscale": row.get("matricule_fiscale", ""),
+                    "ville": row.get("ville", ""),
+                    "region": row.get("region", ""),
+                    "contact": row.get("contact", ""),
+                    "telephone": row.get("telephone", ""),
+                    "adresse": row.get("adresse", ""),
+                    "type_client": row.get("type_client", ""),
+                    "international": bool(row.get("international", False)),
+                    "nb_equipements": nb_eq,
+                    "nb_interventions": nb_int,
+                    "score_sante": score_sante,
+                })
+            
+            return result
+    except Exception as e:
+        logger.error(f"Erreur get_clients: {e}")
+        return []
 
-    result = []
-    if not df_clients.empty:
-        for _, row in df_clients.iterrows():
-            client_name = row.get("nom", "")
-            client_data = {
-                "id": row.get("id"),
-                "nom": client_name,
-                "code_client": row.get("code_client", ""),
-                "matricule_fiscale": row.get("matricule_fiscale", ""),
-                "ville": row.get("ville", ""),
-                "region": row.get("region", ""),
-                "contact": row.get("contact", ""),
-                "telephone": row.get("telephone", ""),
-                "adresse": row.get("adresse", ""),
-                "type_client": row.get("type_client", ""),
-                "international": bool(row.get("international", False)),
-            }
-            # Enrich with equipment stats
-            nb_eq = 0
-            score = 100
-            nb_int = 0
-            if not df_eq.empty and "Client" in df_eq.columns:
-                eq_client = df_eq[df_eq["Client"] == client_name]
-                nb_eq = len(eq_client)
-                if nb_eq > 0:
-                    nb_hs = len(eq_client[eq_client["Statut"].isin(["Hors Service", "Critique"])]) if "Statut" in eq_client.columns else 0
-                    score = max(0, round(((nb_eq - nb_hs) / nb_eq) * 100))
-                    if not df_int.empty and "machine" in df_int.columns:
-                        machines = eq_client["Nom"].tolist() if "Nom" in eq_client.columns else []
-                        nb_int = len(df_int[df_int["machine"].isin(machines)])
 
-            client_data["nb_equipements"] = nb_eq
-            client_data["nb_interventions"] = nb_int
-            client_data["score_sante"] = score
-            result.append(client_data)
+@app.get("/api/dashboard/equipment-types")
+def get_dashboard_equipment_types(
+    client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Get equipment types filtered by client, region, and ville."""
+    try:
+        df_eq = lire_equipements()
+        df_clients = db_lire_clients()
+        equipment_types = set()
+        
+        # Pour Lecteur : forcer le filtre par son client
+        effective_client = _get_client_filter(user) or client
 
-    return result
+        # Filter equipements by client
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+
+        # Filter equipements by region (join with clients table to get region)
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                # Get international clients
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                # Get clients in this region
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+
+        # Filter equipements by ville (join with clients table to get ville)
+        if ville and not df_eq.empty and not df_clients.empty:
+            # Get clients in this ville
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            # Filter equipements by these clients
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+
+        # Extract equipment types from filtered equipements
+        if not df_eq.empty and "Type" in df_eq.columns:
+            equipment_types.update(
+                df_eq["Type"]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+                .tolist()
+            )
+        
+        # Return sorted list
+        return sorted([t for t in equipment_types if t])
+    except Exception as e:
+        logger.error(f"Failed to get equipment types: {e}")
+        return []
+
+
+@app.get("/api/dashboard/regions")
+def get_dashboard_regions(user: dict = Depends(_verify_token)):
+    """Get all existing regions from clients table - ONLY the 4 main regions."""
+    try:
+        df_clients = db_lire_clients()
+        regions = set()
+        
+        # List of valid regions
+        VALID_REGIONS = {"sud", "centre", "nord"}
+        
+        if not df_clients.empty:
+            # Add regular regions - ONLY if they match the 4 valid regions
+            if "region" in df_clients.columns:
+                client_regions = df_clients["region"].dropna().astype(str).str.strip().str.lower().unique().tolist()
+                for r in client_regions:
+                    if r in VALID_REGIONS:
+                        regions.add(r.capitalize())  # Capitalize: sud → Sud
+            
+            # Add International if any client has international=True
+            if "international" in df_clients.columns:
+                if (df_clients["international"].astype(bool)).any():
+                    regions.add("International")
+        
+        # Return sorted list - ONLY the 4 main regions
+        return sorted(list(regions))
+    except Exception as e:
+        logger.error(f"Failed to get regions: {e}")
+        return []
+
+
+@app.get("/api/dashboard/villes")
+def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_verify_token)):
+    """Get all existing villes, optionally filtered by region."""
+    try:
+        df_clients = db_lire_clients()
+        villes = set()
+        
+        if not df_clients.empty and region:
+            # IMPORTANT: Only return villes when a region is specified
+            # Filter by region
+            if region.lower() == "international":
+                # Get villes from international clients
+                if "international" in df_clients.columns and "ville" in df_clients.columns:
+                    international_clients = df_clients[
+                        df_clients["international"].astype(bool) == True
+                    ]
+                    villes.update(
+                        international_clients["ville"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .unique()
+                        .tolist()
+                    )
+            else:
+                # Get villes from clients in this region
+                if "region" in df_clients.columns and "ville" in df_clients.columns:
+                    region_clients = df_clients[
+                        df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip()
+                    ]
+                    villes.update(
+                        region_clients["ville"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .unique()
+                        .tolist()
+                    )
+        
+        # Return sorted list - ONLY villes, no regions
+        return sorted([v for v in villes if v and v.lower() not in ["sud", "centre", "nord", "international"]])
+    except Exception as e:
+        logger.error(f"Failed to get villes: {e}")
+        return []
+
+
+@app.get("/api/dashboard/availability-trend")
+def get_availability_trend(
+    client: Optional[str] = None,
+    region: Optional[str] = None,
+    ville: Optional[str] = None,
+    equipment_type: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Calculate real availability trend for the last 6 months based on interventions."""
+    try:
+        from datetime import datetime, timedelta
+        import calendar
+        
+        df_eq = lire_equipements()
+        df_int = lire_interventions()
+        df_clients = db_lire_clients()
+        
+        # Apply same filters as KPI endpoint
+        effective_client = _get_client_filter(user) or client
+        
+        # Filter equipements by client
+        if effective_client and not df_eq.empty and "Client" in df_eq.columns:
+            df_eq = df_eq[df_eq["Client"].astype(str).str.lower() == effective_client.lower()]
+        
+        # Filter equipements by region
+        if region and not df_eq.empty and not df_clients.empty:
+            if region.lower() == "international":
+                clients_in_region = df_clients[
+                    df_clients["international"].notna() & 
+                    (df_clients["international"].astype(bool) == True)
+                ]["nom"].tolist() if "international" in df_clients.columns else []
+            else:
+                clients_in_region = df_clients[
+                    df_clients["region"].notna() & 
+                    (df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip())
+                ]["nom"].tolist() if "region" in df_clients.columns else []
+            
+            if clients_in_region and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_region)]
+        
+        # Filter equipements by ville
+        if ville and not df_eq.empty and not df_clients.empty:
+            clients_in_ville = df_clients[
+                df_clients["ville"].notna() & 
+                (df_clients["ville"].astype(str).str.lower().str.strip() == ville.lower().strip())
+            ]["nom"].tolist() if "ville" in df_clients.columns else []
+            
+            if clients_in_ville and "Client" in df_eq.columns:
+                df_eq = df_eq[df_eq["Client"].astype(str).isin(clients_in_ville)]
+        
+        # Filter equipements by equipment type
+        if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
+            df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
+        
+        nb_eq = len(df_eq) if not df_eq.empty else 0
+        
+        # If no equipment, return default data
+        if nb_eq == 0:
+            today = datetime.now()
+            trend_data = []
+            for i in range(5, -1, -1):
+                month_date = today - timedelta(days=30*i)
+                month_name = calendar.month_name[month_date.month][:3]
+                trend_data.append({"mois": month_name, "dispo": 0})
+            return {"ok": True, "trend": trend_data}
+        
+        # Get all machines for filtered equipements
+        machines = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
+        
+        # Filter interventions by machines
+        if machines and not df_int.empty and "machine" in df_int.columns:
+            df_int = df_int[df_int["machine"].isin(machines)]
+        
+        # Parse dates
+        if not df_int.empty and "date" in df_int.columns:
+            df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
+        
+        # Calculate availability for each month
+        today = datetime.now()
+        trend_data = []
+        
+        for i in range(5, -1, -1):
+            month_date = today - timedelta(days=30*i)
+            month_name = calendar.month_name[month_date.month][:3]
+            month_start = month_date.replace(day=1)
+            month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            
+            # Count interventions in this month
+            if not df_int.empty:
+                month_int = df_int[(df_int["date"] >= month_start) & (df_int["date"] <= month_end)]
+                nb_interventions = len(month_int)
+            else:
+                nb_interventions = 0
+            
+            # Calculate availability: assume 100% if no issues, decrease by 2% per intervention as rough estimate
+            # More sophisticated: count "Terminée" status as available, others as not available
+            availability = 100.0
+            if not df_int.empty and nb_interventions > 0:
+                # Count interventions that are NOT "Terminée" (corrective or in-progress)
+                if "statut" in df_int.columns:
+                    unfinished = len(month_int[month_int["statut"].astype(str).str.lower() != "terminée"])
+                    # Rough estimate: each unfinished intervention reduces availability by 2%
+                    availability = max(0, 100.0 - (unfinished * 2.0))
+                else:
+                    availability = max(0, 100.0 - (nb_interventions * 2.0))
+            
+            trend_data.append({"mois": month_name, "dispo": round(availability, 1)})
+        
+        return {"ok": True, "trend": trend_data}
+    except Exception as e:
+        import traceback
+        logger.error(f"Erreur get_availability_trend: {e}\n{traceback.format_exc()}")
+        # Return default trend data on error
+        today = datetime.now()
+        trend_data = []
+        for i in range(5, -1, -1):
+            month_date = today - timedelta(days=30*i)
+            month_name = calendar.month_name[month_date.month][:3]
+            trend_data.append({"mois": month_name, "dispo": 0})
+        return {"ok": True, "trend": trend_data}
+
+
+@app.get("/api/dashboard/clients-by-region")
+def get_clients_by_region(region: Optional[str] = None, user: dict = Depends(_verify_token)):
+    """Get all clients, optionally filtered by region."""
+    try:
+        df_clients = db_lire_clients()
+        clients = set()
+        
+        if not df_clients.empty and "nom" in df_clients.columns:
+            if region:
+                # Filter by region
+                if region.lower() == "international":
+                    # Get international clients
+                    if "international" in df_clients.columns:
+                        international_clients = df_clients[
+                            df_clients["international"].astype(bool) == True
+                        ]
+                        clients.update(
+                            international_clients["nom"]
+                            .dropna()
+                            .astype(str)
+                            .str.strip()
+                            .unique()
+                            .tolist()
+                        )
+                else:
+                    # Get clients in this region
+                    if "region" in df_clients.columns:
+                        region_clients = df_clients[
+                            df_clients["region"].astype(str).str.lower().str.strip() == region.lower().strip()
+                        ]
+                        clients.update(
+                            region_clients["nom"]
+                            .dropna()
+                            .astype(str)
+                            .str.strip()
+                            .unique()
+                            .tolist()
+                        )
+            else:
+                # Get all clients
+                clients.update(
+                    df_clients["nom"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .unique()
+                    .tolist()
+                )
+        
+        # Return sorted list
+        return sorted([c for c in clients if c])
+    except Exception as e:
+        logger.error(f"Failed to get clients by region: {e}")
+        return []
 
 
 @app.post("/api/clients")
@@ -4415,22 +6146,6 @@ try:
     import s3_storage
 except ImportError:
     s3_storage = None
-
-
-@app.get("/api/logs")
-def api_list_logs(machine: Optional[str] = None, user=Depends(_verify_token)):
-    """List all logs from S3, optionally filtered by machine name."""
-    if not s3_storage or not s3_storage.S3_AVAILABLE:
-        s3_storage and s3_storage._init_s3()
-    if not s3_storage or not s3_storage.S3_AVAILABLE:
-        return []
-
-    prefix = "logs/"
-    if machine:
-        # Search across all date folders for this machine
-        all_files = s3_storage.list_files(prefix)
-        return [f for f in all_files if f"/{machine.replace(' ', '_')}/" in f["key"] or machine.replace(' ', '_') in f["key"]]
-    return s3_storage.list_files(prefix)
 
 
 @app.delete("/api/logs")
@@ -4651,8 +6366,13 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
         if data.kpis:
             box_w, box_h, margin_ = 64, 16, 5
             kpi_y = pdf.get_y()
+            # Centrer les KPIs au milieu de la page
+            num_kpis = len(data.kpis[:4])
+            total_width = num_kpis * box_w + (num_kpis - 1) * margin_
+            start_x = (pdf.w - total_width) / 2  # Centrer horizontalement
+            
             for i, kpi in enumerate(data.kpis[:4]):
-                kx = 10 + i * (box_w + margin_)
+                kx = start_x + i * (box_w + margin_)
                 color = kpi.get("color", [15, 118, 110])
                 # Support both hex string "#RRGGBB" and [r,g,b] list
                 if isinstance(color, str) and color.startswith("#") and len(color) >= 7:
@@ -5144,7 +6864,8 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         equip_type = (matched_equip or {}).get("Type", "") or (matched_equip or {}).get("type", "") or str(interv.get("type_intervention", "-"))
         duree_min = int(interv.get("duree_minutes", 0) or 0)
         duree_h = round(duree_min / 60, 2) if duree_min else 0
-        deplacement = interv.get("deplacement", 0) or 0
+        deplacement_min = int(interv.get("duree_deplacement", 0) or 0)
+        deplacement_h = round(deplacement_min / 60, 2) if deplacement_min else 0
 
         # Fetch client region/ville
         client_region = ""
@@ -5152,7 +6873,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         if client_name:
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         client_region = dict(cl_row).get("region", "") or ""
                         client_ville = dict(cl_row).get("ville", "") or ""
@@ -5191,175 +6912,264 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
 
         # Date line
         pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(100, 120, 140)
+        # INFORMATION PRINCIPALE - Two columns layout
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        
         date_str = str(interv.get("date", ""))[:10]
-        pdf.cell(W, 5, _sanitize(f"Date : {date_str}"), align="C")
-        pdf.ln(8)
-
-        # ── SECTION: CLIENT & EQUIPEMENT ──
-        y0 = pdf.get_y()
-        pdf.set_fill_color(242, 252, 250)
-        pdf.set_draw_color(180, 220, 215)
-        pdf.set_line_width(0.3)
-        pdf.rect(10, y0, W, 58, style="FD")
-        pdf.set_xy(14, y0 + 2)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(W - 8, 6, "INFORMATIONS CLIENT & EQUIPEMENT")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(30, 40, 60)
-
-        left_x = 14
-        right_x = pdf.w / 2 + 5
-        row_h = 7
-
+        intervention_id = str(interv.get("id", ""))
+        technicien = str(interv.get("technicien", "-")).strip()
+        
         # Left column
-        for i, (label, value) in enumerate([
-            ("Client", _sanitize(client_name or "-")),
-            ("Equipement", _sanitize(str(interv.get("machine", "-")))),
-            ("N. de serie", _sanitize(str(num_serie))),
-            ("Type equipement", _sanitize(str(equip_type))),
-        ]):
-            pdf.set_xy(left_x, y0 + 9 + i * row_h)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(25, row_h, _sanitize(label + " :"))
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(60, row_h, value[:40])
+        left_x = 14
+        right_col_x = pdf.w / 2 + 5
+        line_h = 5
+        y_start = pdf.get_y()
+        
+        # LEFT COLUMN: Date, Client, Equipement, Marque/Modele, N° Serie
+        pdf.set_xy(left_x, y_start)
+        pdf.cell(70, line_h, _sanitize(f"Date: {date_str}"))
+        
+        pdf.set_xy(left_x, y_start + 5)
+        pdf.cell(70, line_h, _sanitize(f"Client: {client_name or '-'}"))
+        
+        pdf.set_xy(left_x, y_start + 10)
+        pdf.cell(70, line_h, _sanitize(f"Equipement: {str(interv.get('machine', '-'))[:35]}"))
+        
+        pdf.set_xy(left_x, y_start + 15)
+        pdf.cell(70, line_h, _sanitize(f"Marque/Modele: {str(equip_type or '-')[:30]}"))
+        
+        pdf.set_xy(left_x, y_start + 20)
+        pdf.cell(70, line_h, _sanitize(f"N° Serie: {str(num_serie or '-')[:25]}"))
+        
+        # RIGHT COLUMN: Technicien, Garantie, Contrat
+        pdf.set_xy(right_col_x, y_start)
+        pdf.cell(70, line_h, _sanitize(f"Technicien: {technicien}"))
+        
+        pdf.set_xy(right_col_x, y_start + 5)
+        pdf.cell(70, line_h, _sanitize(f"Garantie: {'OUI' if sous_garantie else 'NON'}"))
+        
+        pdf.set_xy(right_col_x, y_start + 10)
+        pdf.cell(70, line_h, _sanitize(f"Contrat: {'OUI' if sous_contrat else 'NON'}"))
+        
+        # Move down after info section
+        pdf.set_y(y_start + 28)
 
-        # Right column
-        for i, (label, value, color) in enumerate([
-            ("Region", _sanitize(client_region or "-"), (30, 40, 60)),
-            ("Ville", _sanitize(client_ville or "-"), (30, 40, 60)),
-            ("Sous garantie", "Oui" if sous_garantie else "Non", (22, 163, 74) if sous_garantie else (200, 50, 50)),
-            ("Sous contrat", "Oui" if sous_contrat else "Non", (22, 163, 74) if sous_contrat else (200, 50, 50)),
-            ("Technicien", _sanitize(str(interv.get("technicien", "-"))), (30, 40, 60)),
-        ]):
-            pdf.set_xy(right_x, y0 + 9 + i * row_h)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(30, 40, 60)
-            pdf.cell(28, row_h, _sanitize(label + " :"))
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.set_text_color(*color)
-            pdf.cell(40, row_h, value[:35])
-        pdf.set_text_color(30, 40, 60)
-
-        # ── SECTION: DETAILS INTERVENTION ──
-        pdf.set_y(y0 + 62)
-        y1 = pdf.get_y()
-        pdf.set_fill_color(240, 245, 255)
-        pdf.set_draw_color(180, 200, 230)
-        pdf.rect(10, y1, W, 30, style="FD")
-        pdf.set_xy(14, y1 + 2)
+        # TRAVAUX EFFECTUES - Table with Date, Start, End, Travel
         pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(30, 80, 170)
-        pdf.cell(W - 8, 6, "DETAILS INTERVENTION")
-        pdf.set_text_color(30, 40, 60)
-
-        details = [
-            ("Type", _sanitize(str(interv.get("type_intervention", "-")))),
-            ("Statut", _sanitize(str(interv.get("statut", "-")))),
-            ("Priorite", _sanitize(str(interv.get("priorite", "-")))),
-        ]
-        details_r = [
-            ("Duree (h)", f"{duree_h}h"),
-            ("Deplacement (h)", f"{deplacement}h"),
-        ]
-        for i, (label, value) in enumerate(details):
-            pdf.set_xy(left_x, y1 + 10 + i * 6)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(22, 6, label + " :")
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(50, 6, value[:35])
-        for i, (label, value) in enumerate(details_r):
-            pdf.set_xy(right_x, y1 + 10 + i * 6)
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(30, 6, label + " :")
-            pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(30, 6, value)
-
-        # ── SECTION: DIAGNOSTIC ──
-        pdf.set_y(y1 + 34)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(180, 100, 0)
-        pdf.cell(W, 6, "DIAGNOSTIC")
-        pdf.ln(7)
-        pdf.set_text_color(30, 40, 60)
-
-        for label, key in [("Description", "description"), ("Probleme", "probleme"), ("Cause", "cause"), ("Solution", "solution")]:
-            val = str(interv.get(key, "") or "").strip()
-            if val:
-                pdf.set_font("Helvetica", "B", 8)
-                pdf.cell(25, 5, _sanitize(label + " :"))
-                pdf.set_font("Helvetica", "", 8.5)
-                pdf.multi_cell(W - 35, 5, _sanitize(val[:500]))
-                pdf.ln(1)
-
-        code_err = str(interv.get("code_erreur", "") or "").strip()
-        type_err = str(interv.get("type_erreur", "") or "").strip()
-        if code_err:
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.cell(25, 5, "Code erreur :")
-            pdf.set_font("Helvetica", "", 8.5)
-            txt = code_err + (f" ({type_err})" if type_err else "")
-            pdf.cell(80, 5, _sanitize(txt))
-            pdf.ln(6)
-
-        # ── SECTION: PIECES UTILISEES ──
-        pdf.ln(3)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(30, 100, 180)
-        pdf.cell(W, 6, "PIECES UTILISEES")
-        pdf.ln(6)
-        pdf.set_text_color(30, 40, 60)
-
-        pieces = str(interv.get("pieces_utilisees", "") or "").strip()
-        if pieces:
-            pdf.set_font("Helvetica", "", 8.5)
-            pdf.multi_cell(W, 5, _sanitize(pieces[:600]))
-        else:
-            pdf.set_font("Helvetica", "I", 8.5)
-            pdf.set_text_color(150, 160, 170)
-            pdf.cell(W, 5, "Aucune piece utilisee")
-            pdf.set_text_color(30, 40, 60)
-
-        # ── SECTION: SIGNATURES ──
-        sig_y = max(pdf.get_y() + 12, pdf.h - 55)
-        if sig_y > pdf.h - 20:
-            pdf.add_page()
-            sig_y = pdf.get_y() + 10
-
-        pdf.set_xy(10, sig_y - 4)
-        pdf.set_draw_color(15, 118, 110)
-        pdf.set_line_width(0.5)
-        pdf.line(10, sig_y - 4, pdf.w - 10, sig_y - 4)
-
-        pdf.set_xy(14, sig_y)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(15, 118, 110)
-        pdf.cell(W, 5, "SIGNATURES")
-        pdf.set_text_color(30, 40, 60)
-        sig_y += 8
-
-        col1 = 14
-        col2 = pdf.w / 3 + 5
-        col3 = (pdf.w / 3) * 2 + 2
-        box_w = 52
-        box_h = 28
-
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 6, "Travaux Effectues")
+        pdf.ln(7)  # Increased space before table
+        
+        # Table header
         pdf.set_font("Helvetica", "B", 8)
-        pdf.set_xy(col1, sig_y)
-        pdf.cell(box_w, 5, "Technicien")
-        pdf.set_xy(col2, sig_y)
-        pdf.cell(box_w, 5, "Responsable Technique")
-        pdf.set_xy(col3, sig_y)
-        pdf.cell(box_w, 5, "Cachet & Signature Client")
+        pdf.set_fill_color(200, 200, 200)
+        pdf.set_text_color(0, 0, 0)
+        col_widths = [35, 30, 30, 30, 50]
+        headers = ["Date", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution Appliquee"]
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 6, header, border=1, align="C", fill=True)
+        pdf.ln(6)
+        
+        # Table data row
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Extract time data - USE start_time and end_time from database, with fallbacks
+        date_val = date_str
+        
+        # Get start_time and end_time directly from database (TIME type columns)
+        start_time = str(interv.get("start_time", "") or "").strip()
+        if not start_time or start_time == "None" or start_time == "00:00":
+            # Fallback: try to extract from date_debut_intervention
+            start_time_fb = str(interv.get("date_debut_intervention", "") or "").strip()
+            if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 16:
+                start_time = start_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
+            else:
+                # Second fallback: use date field
+                start_time_fb2 = str(interv.get("date", "") or "").strip()
+                if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 16:
+                    start_time = start_time_fb2[11:16]  # Extract HH:MM
+                else:
+                    start_time = "-"
+        else:
+            # Ensure we only have HH:MM (remove seconds if present)
+            if len(start_time) > 5 and start_time[5] == ':':
+                start_time = start_time[:5]  # Remove :SS
+        
+        end_time = str(interv.get("end_time", "") or "").strip()
+        if not end_time or end_time == "None" or end_time == "00:00":
+            # Fallback: use date_cloture
+            end_time_fb = str(interv.get("date_cloture", "") or "").strip()
+            if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 16:
+                end_time = end_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
+            else:
+                end_time = "-"
+        else:
+            # Ensure we only have HH:MM (remove seconds if present)
+            if len(end_time) > 5 and end_time[5] == ':':
+                end_time = end_time[:5]  # Remove :SS
+        
+        # Trajet: duree_deplacement is in MINUTES, convert to hours
+        trajet = f"{round(deplacement_min / 60, 1)}" if deplacement_min > 0 else "-"
+        description = _sanitize(str(interv.get("solution", ""))[:50])  # Solution field
+        
+        # Row with borders - SANITIZE ALL VALUES
+        pdf.cell(col_widths[0], 6, _sanitize(date_val), border=1)
+        pdf.cell(col_widths[1], 6, _sanitize(start_time), border=1)
+        pdf.cell(col_widths[2], 6, _sanitize(end_time), border=1)
+        pdf.cell(col_widths[3], 6, _sanitize(trajet), border=1)
+        pdf.cell(col_widths[4], 6, description, border=1)
+        pdf.ln(6)
+        
+        # Add empty rows for manual fill (per model)
+        for _ in range(2):
+            pdf.cell(col_widths[0], 6, "", border=1)
+            pdf.cell(col_widths[1], 6, "", border=1)
+            pdf.cell(col_widths[2], 6, "", border=1)
+            pdf.cell(col_widths[3], 6, "", border=1)
+            pdf.cell(col_widths[4], 6, "", border=1)
+            pdf.ln(6)
+        
+        pdf.ln(8)
+        
+        # STATUT INTERVENTION - MOVED AFTER TABLE, IN BOLD
+        pdf.set_font("Helvetica", "B", 10)  # Bold
+        pdf.set_text_color(0, 0, 0)
+        statut_val = str(interv.get("statut", "-"))
+        status_map = {
+            "Clôturee": "Clôturee",
+            "En cours": "En cours",
+            "En attente de piece": "En attente de piece",
+        }
+        display_status = status_map.get(statut_val, statut_val)
+        pdf.cell(W, 5, _sanitize(f"Statut: {display_status}"))
+        pdf.ln(8)
+        
+        # PIECES UTILISEES / REFERENCES TABLE
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 6, "References - Pieces Utilisees")
+        pdf.ln(7)  # Increased space before table
+        
+        # Table header - INCREASED REFERENCE COLUMN WIDTH
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_fill_color(200, 200, 200)
+        pdf.set_text_color(0, 0, 0)
+        ref_col_widths = [50, 15, 100]  # Increased reference from 30 to 50
+        ref_headers = ["Reference", "Qte", "Designation"]
+        for i, header in enumerate(ref_headers):
+            pdf.cell(ref_col_widths[i], 6, header, border=1, align="C", fill=True)
+        pdf.ln(6)
+        
+        # Parse pieces data - USE PIPE DELIMITER - SHOW MORE TEXT
+        pdf.set_font("Helvetica", "", 7)  # Smaller font for pieces
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(0, 0, 0)
+        
+        pieces = str(interv.get("pieces_utilisees", "") or "").strip()
+        row_count = 0
+        if pieces:
+            pieces_lines = pieces.split('\n')  # Multiple pieces separated by newlines
+            for piece_line in pieces_lines[:8]:  # Max 8 rows
+                if piece_line.strip():
+                    # Parse format: "Product | Ref: XXX | Fournisseur: YYY | Qty: Z"
+                    parts = piece_line.split('|')
+                    
+                    # Extract each part
+                    product_name = _sanitize(parts[0].strip()[:80]) if len(parts) > 0 else "-"
+                    
+                    # Find reference and quantity
+                    ref_val = "-"
+                    qty_val = "-"
+                    for part in parts[1:]:
+                        part_lower = part.lower()
+                        if "ref:" in part_lower:
+                            ref_val = _sanitize(part.replace("Ref:", "").replace("ref:", "").strip()[:45])  # Increased from 30 to 45
+                        if "qty:" in part_lower:
+                            qty_val = _sanitize(part.replace("Qty:", "").replace("qty:", "").strip()[:10])
+                    
+                    # Full designation includes product name
+                    desc_val = product_name
+                    
+                    pdf.cell(ref_col_widths[0], 6, ref_val, border=1)
+                    pdf.cell(ref_col_widths[1], 6, qty_val, border=1)
+                    pdf.cell(ref_col_widths[2], 6, desc_val, border=1)
+                    pdf.ln(6)
+                    row_count += 1
+        
+        # Add empty rows for manual fill
+        for _ in range(max(0, 8 - row_count)):
+            pdf.cell(ref_col_widths[0], 6, "", border=1)
+            pdf.cell(ref_col_widths[1], 6, "", border=1)
+            pdf.cell(ref_col_widths[2], 6, "", border=1)
+            pdf.ln(6)
+        
+        pdf.ln(8)
+        
+        # OBSERVATIONS section
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 5, "Observations:")
+        pdf.ln(6)
+        
+        # Add 2 extended dotted lines for client to write observations
+        pdf.set_font("Helvetica", "", 9)
+        for _ in range(2):
+            # Create a dotted line that extends to the right edge
+            # Each dot is about 1.5-2 characters wide, so we need about 130-150 dots for full width
+            dots = "." * 150
+            pdf.cell(W, 5, dots)
+            pdf.ln(5)
 
-        sig_y += 6
-        pdf.set_draw_color(200, 210, 220)
+        # SIGNATURES SECTION
+        pdf.ln(8)
+        sig_start_y = pdf.get_y()
+        
+        if sig_start_y > pdf.h - 60:
+            pdf.add_page()
+            sig_start_y = pdf.get_y()
+        
+        # Separator line
+        pdf.set_draw_color(0, 0, 0)
+        pdf.set_line_width(0.5)
+        pdf.line(10, sig_start_y, pdf.w - 10, sig_start_y)
+        
+        pdf.set_y(sig_start_y + 3)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(W, 5, "Signatures & Approbations")
+        pdf.ln(8)
+        
+        # Three signature labels on ONE line
+        col1_x = 18
+        col2_x = pdf.w / 3 + 10
+        col3_x = (pdf.w / 3) * 2 + 2
+        box_w = 45
+        box_h = 22
+        label_y = pdf.get_y()
+        
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Position labels horizontally
+        pdf.set_xy(col1_x, label_y)
+        pdf.cell(box_w, 5, "Visa Intervenant", align="C")
+        
+        pdf.set_xy(col2_x, label_y)
+        pdf.cell(box_w, 5, "Visa Client", align="C")
+        
+        pdf.set_xy(col3_x, label_y)
+        pdf.cell(box_w, 5, "Visa Administration", align="C")
+        
+        # Draw signature boxes below each label
+        box_y = label_y + 6
+        pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.3)
-        pdf.rect(col1, sig_y, box_w, box_h, style="D")
-        pdf.rect(col2, sig_y, box_w, box_h, style="D")
-        pdf.rect(col3, sig_y, box_w, box_h, style="D")
+        pdf.rect(col1_x, box_y, box_w, box_h, style="D")
+        pdf.rect(col2_x, box_y, box_w, box_h, style="D")
+        pdf.rect(col3_x, box_y, box_w, box_h, style="D")
 
         # Footer
         pdf.set_auto_page_break(auto=False)
@@ -5367,15 +7177,15 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         for pg in range(1, total_pages + 1):
             pdf.page = pg
-            pdf.set_xy(10, pdf.h - 11)
-            pdf.set_draw_color(200, 205, 220)
-            pdf.set_line_width(0.3)
-            pdf.line(10, pdf.h - 11, pdf.w - 10, pdf.h - 11)
+            pdf.set_xy(10, pdf.h - 12)
+            pdf.set_draw_color(150, 180, 180)
+            pdf.set_line_width(0.5)
+            pdf.line(10, pdf.h - 12, pdf.w - 10, pdf.h - 12)
             pdf.set_xy(10, pdf.h - 9)
             pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(160, 170, 190)
-            pdf.cell(pdf.w - 40, 5, _sanitize(f"Genere par {company_name} - {now_str}"), align="L")
-            pdf.cell(30, 5, f"Page {pg} / {total_pages}", align="R")
+            pdf.set_text_color(120, 140, 150)
+            pdf.cell(pdf.w - 40, 5, _sanitize(f"Généré par {company_name} - {now_str}"), align="L")
+            pdf.cell(30, 5, f"Page {pg}/{total_pages}", align="R")
 
         pdf_bytes = bytes(pdf.output())
         _fn = f"fiche_intervention_{interv_id}"
@@ -5429,7 +7239,7 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         if client_name and client_name != "-":
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         d = dict(cl_row)
                         client_region = d.get("region", "") or ""
@@ -5727,7 +7537,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             try:
                 with get_db() as conn:
                     cl_row = conn.execute(
-                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = %s LIMIT 1",
+                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = ? LIMIT 1",
                         (client_name,)
                     ).fetchone()
                     if cl_row:
@@ -6239,16 +8049,15 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
             except (ValueError, TypeError) as e:
                 raise HTTPException(400, f"Erreur: {str(e)}")
             
-            # Calculate labor cost from duration
-            cout_mo = float((duree_totale / 60.0) * taux)
+            # Calculate labor cost from duration (for recalculation with current rate)
+            cout_mo_recalculated = float((duree_totale / 60.0) * taux)
             
-            # cout_interv already includes labor + parts, so we need to extract the service cost
             # Service cost = Total intervention cost - Labor cost - Parts cost
-            cout_service = max(0, float(cout_interv) - cout_mo - float(cout_pieces))
+            cout_service = max(0, float(cout_interv) - cout_mo_recalculated - float(cout_pieces))
 
-            # Total cost = Service cost + Labor cost + Parts cost (no double-counting)
-            cout_total = cout_service + cout_mo + float(cout_pieces)
-            marge = float(revenu) - cout_total
+            # Total cost remains the same
+            cout_total_final = cout_service + cout_mo_recalculated + float(cout_pieces)
+            marge = float(revenu) - cout_total_final
             marge_pct = round((marge / float(revenu) * 100), 1) if float(revenu) > 0 else 0.0
 
             nb_equip = int(len(df_equip[df_equip["Client"] == cl])) if not df_equip.empty else 0
@@ -6259,8 +8068,8 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 "revenu_contrats": round(float(revenu), 0),
                 "cout_interventions": round(float(cout_service), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
-                "cout_main_oeuvre": round(float(cout_mo), 0),
-                "cout_total": round(float(cout_total), 0),
+                "cout_main_oeuvre": round(float(cout_mo_recalculated), 0),
+                "cout_total": round(float(cout_total_final), 0),
                 "marge": round(float(marge), 0),
                 "marge_pct": float(marge_pct),
                 "nb_interventions": int(nb_interv),
@@ -6426,6 +8235,7 @@ def map_sites(user: dict = Depends(_verify_token)):
     try:
         df_equip = lire_equipements()
         df_interv = lire_interventions()
+        df_plan = lire_planning()  # ← Load ONCE before the loop
 
         sites = {}
         if df_equip.empty:
@@ -6488,7 +8298,6 @@ def map_sites(user: dict = Depends(_verify_token)):
             # Next planned maintenance
             prochaine_maintenance = None
             try:
-                df_plan = lire_planning()
                 if not df_plan.empty and "machine" in df_plan.columns:
                     today = datetime.now().strftime("%Y-%m-%d")
                     planned = df_plan[(df_plan["machine"].isin(machines)) & 
@@ -6505,8 +8314,8 @@ def map_sites(user: dict = Depends(_verify_token)):
 
             result.append({
                 **site,
-                "latitude": lat,
-                "longitude": lng,
+                "latitude": float(lat) if lat and lat == lat else None,  # Check for NaN
+                "longitude": float(lng) if lng and lng == lng else None,  # Check for NaN
                 "ville": assigned_ville,
                 "equipements": site["equipements"][:20],  # Limit for performance
                 "score_sante": score,

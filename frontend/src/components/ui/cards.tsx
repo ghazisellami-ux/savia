@@ -5,14 +5,31 @@
 import { clsx } from 'clsx';
 
 interface KpiCardProps {
-  icon: React.ReactNode;
-  value: string;
-  label: string;
-  variant?: 'default' | 'danger' | 'success' | 'warning';
+  icon?: React.ReactNode;
+  value?: string;
+  label?: string;
+  variant?: 'default' | 'danger' | 'success' | 'warning' | 'skeleton';
   tooltip?: string;
 }
 
 export function KpiCard({ icon, value, label, variant = 'default', tooltip }: KpiCardProps) {
+  // Skeleton variant - shows grayed out placeholder
+  if (variant === 'skeleton') {
+    return (
+      <div
+        className={clsx(
+          'glass rounded-xl p-4 text-center transition-all duration-300',
+          'border-savia-border/20 opacity-50',
+          'animate-pulse'
+        )}
+      >
+        <div className="text-2xl mb-1 text-savia-text-dim">⚙️</div>
+        <div className="text-xl font-extrabold text-savia-text-dim tracking-tight">0</div>
+        <div className="text-xs text-savia-text-dim mt-1 leading-tight">Chargement...</div>
+      </div>
+    );
+  }
+
   const borderColor = {
     default: 'border-savia-accent/20',
     danger: 'border-savia-danger/30',

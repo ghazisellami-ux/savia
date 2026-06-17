@@ -6,6 +6,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { useCanSeeCosts } from '@/lib/use-role-guard';
+import { useDashboardFilters } from '@/lib/use-dashboard-filters';
 import { KpiCard, HealthBadge, SectionCard } from '@/components/ui/cards';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -65,13 +66,19 @@ const ERROR_TYPE_COLORS: Record<string, string> = {
 // --- Helpers ---
 function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
   if (mode === 'mensuel') {
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0); // last day of month
+    // Use string formatting to avoid timezone issues with Date objects
+    const monthStr = String(month).padStart(2, '0');
+    const date_start = `${year}-${monthStr}-01`;
+    
+    // Calculate last day of month without timezone conversion
+    const lastDay = new Date(year, month, 0).getDate();
+    const date_end = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+    
     return {
-      date_start: start.toISOString().substring(0, 10),
-      date_end: end.toISOString().substring(0, 10),
-      label: `${String(month).padStart(2, '0')}/${year}`,
-      rangeLabel: `${String(start.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} → ${String(end.getDate()).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year} (${end.getDate()}j)`,
+      date_start,
+      date_end,
+      label: `${monthStr}/${year}`,
+      rangeLabel: `01/${monthStr}/${year} → ${String(lastDay).padStart(2, '0')}/${monthStr}/${year} (${lastDay}j)`,
     };
   } else {
     return {
@@ -96,19 +103,20 @@ function getLast6Months(month: number, year: number) {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { filterOptions, isLoadingFilters, getEquipmentTypesForFilters } = useDashboardFilters();
 
   // --- Filter state ---
   const now = new Date();
   const isLecteur = user?.role === 'Lecteur';
   const canSeeCosts = useCanSeeCosts();
   const [selectedClient, setSelectedClient] = useState(user?.role === 'Lecteur' ? (user?.client || '') : '');
-  const [selectedRegion, setSelectedRegion] = useState('');
-  const [selectedVille, setSelectedVille] = useState('');
   const [selectedEquipType, setSelectedEquipType] = useState('');
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
-  const [clientList, setClientList] = useState<string[]>([]);
+
+  // --- Dynamic equipment types for current client ---
+  const [equipmentTypesForFilters, setEquipmentTypesForFilters] = useState<string[]>([]);
 
   // --- Data state ---
   const [kpis, setKpis] = useState<KpiData>({
@@ -119,122 +127,263 @@ export default function DashboardPage() {
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [trendData, setTrendData] = useState<any[]>([]);
+
+  // --- Charger les types d'équipement filtrés quand le client change ---
+  useEffect(() => {
+    getEquipmentTypesForFilters(selectedClient, undefined, undefined).then(types => {
+      setEquipmentTypesForFilters(types);
+      // Reset selectedEquipType si le type sélectionné n'est plus disponible
+      if (selectedEquipType && !types.includes(selectedEquipType)) {
+        setSelectedEquipType('');
+      }
+    });
+  }, [selectedClient, getEquipmentTypesForFilters]);
 
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
 
-  // --- Load clients and equipments for filter options ---
-  const [allClients, setAllClients] = useState<any[]>([]);
-  const [allEquipments, setAllEquipments] = useState<any[]>([]);
+  // --- Cache for full unfiltered data (loaded once per date range) ---
+  const [fullData, setFullData] = useState<{
+    kpis: any;
+    healthScores: any;
+    interventions: any;
+  } | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
+  // --- Load cached KPI data on mount ---
   useEffect(() => {
-    Promise.all([
-      clientsApi.list().catch(() => []),
-      equipements.list().catch(() => [])
-    ]).then(([clients, equips]) => {
-      setAllClients(clients || []);
-      setAllEquipments(equips || []);
-    });
+    // Note: Cache is removed to ensure fresh data when date range changes
+    // This was causing stale data to be displayed when switching months/years
+    setIsInitialLoading(false);
   }, []);
 
-  // --- Load clients once ---
+  // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
-    clientsApi.list().then((res: any[]) => {
-      const names = res.map((c: any) => c.nom || c.Nom || '').filter(Boolean);
-      setClientList(names);
-    }).catch(() => {});
-  }, []);
-
-  // --- Derived filter lists ---
-  const regionList = useMemo(() => {
-    const regions = new Set<string>();
-    // Get regions from clients
-    allClients.forEach((c: any) => {
-      if (c.region) regions.add(c.region);
-    });
-    // Also get from equipments (use uppercase Region)
-    allEquipments.forEach((e: any) => {
-      if (e.Region) regions.add(e.Region);
-    });
-    return Array.from(regions).sort();
-  }, [allClients, allEquipments]);
-
-  const villeList = useMemo(() => {
-    const villes = new Set<string>();
-    // Get villes from clients
-    allClients.forEach((c: any) => {
-      if (!selectedRegion || c.region === selectedRegion) {
-        if (c.ville) villes.add(c.ville);
-      }
-    });
-    // Also get from equipments (use uppercase Ville)
-    allEquipments.forEach((e: any) => {
-      if (!selectedRegion || e.Region === selectedRegion) {
-        if (e.Ville) villes.add(e.Ville);
-      }
-    });
-    return Array.from(villes).sort();
-  }, [allClients, allEquipments, selectedRegion]);
-
-  const equipTypeList = useMemo(() => {
-    const types = new Set<string>();
-    allEquipments.forEach((e: any) => {
-      if (e.Type || e.type) types.add(e.Type || e.type);
-    });
-    return Array.from(types).sort();
-  }, [allEquipments]);
-
-  // --- Load data when filters change ---
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params: any = {
-        date_start: dateRange.date_start,
-        date_end: dateRange.date_end,
-      };
-      if (selectedClient) params.client = selectedClient;
-      if (selectedRegion) params.region = selectedRegion;
-      if (selectedVille) params.ville = selectedVille;
-      if (selectedEquipType) params.equipment_type = selectedEquipType;
-
-      const [kpiData, healthData, intervData] = await Promise.all([
-        dashboard.kpis(params),
-        dashboard.healthScores(params),
-        interventionsApi.list(),
-      ]);
+    // Clear cache when date range changes to force fresh data
+    localStorage.removeItem('dashboard_kpi_cache');
+    
+    const loadFullData = async () => {
+      setIsInitialLoading(true);
       
-      setKpis(kpiData as any);
-      setHealthScores(healthData);
-      setAllInterventions(intervData || []);
-
-      // Filter interventions for timeline display
-      let filtered = (intervData || []);
-      const validMachines = healthData.map((h: any) => h.machine);
-      
-      if (validMachines.length > 0) {
-        filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
-      } else {
-        filtered = [];
+      try {
+        // ALWAYS load with date range parameters, even without filters
+        const [kpiData, healthData] = await Promise.all([
+          dashboard.kpis({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
+          dashboard.healthScores({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
+        ]);
+        
+        const newData = {
+          kpis: kpiData,
+          healthScores: healthData,
+          interventions: [],
+        };
+        
+        // Set data immediately with empty interventions
+        setFullData(newData);
+        setIsInitialLoading(false);
+        
+        // Load interventions in background (can be slow)
+        try {
+          const intervData = await interventionsApi.list();
+          setFullData(prev => prev ? {
+            ...prev,
+            interventions: intervData || [],
+          } : null);
+        } catch (err) {
+          console.error("Failed to load interventions", err);
+        }
+      } catch (err) {
+        console.error("Failed to load KPIs and health scores", err);
+        setIsInitialLoading(false);
       }
-      
-      // Date filter
-      filtered = filtered.filter((i: any) => {
-        const d = i.date?.substring(0, 10);
-        if (!d) return false;
-        return d >= dateRange.date_start && d <= dateRange.date_end;
-      });
+    };
+    loadFullData();
+  }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi]);
 
-      setRecentInterv(
-        filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
-      );
-    } catch (err) {
-      console.error("Failed to load dashboard data", err);
-    } finally {
-      setIsLoading(false);
+  // --- Filter cached data when filters change (instant update) ---
+  useEffect(() => {
+    if (!fullData) return;
+
+    // If only client filter is applied, filter client-side (instant)
+    if (selectedClient && !selectedEquipType) {
+      setIsLoading(true);
+      try {
+        // Filter health scores by client
+        const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
+
+        // Filter interventions by client machines
+        const validMachines = filteredHealth.map((h: any) => h.machine);
+        let filteredInterv = fullData.interventions;
+        if (validMachines.length > 0) {
+          filteredInterv = filteredInterv.filter((i: any) => validMachines.includes(i.machine));
+        } else {
+          filteredInterv = [];
+        }
+
+        // Compute ALL KPIs from filtered data
+        const nb_eq = filteredHealth.length;
+        const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
+        const disponibilite = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
+        const nb_interventions = filteredInterv.length;
+        const nb_cloturees = filteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
+        const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 100) : 0;
+
+        // Calculate MTBF and MTTR from filtered interventions
+        let mtbf = 0, mttr = 0;
+        if (filteredInterv.length > 0) {
+          const durations = filteredInterv
+            .filter((i: any) => i.duree_intervention)
+            .map((i: any) => parseFloat(i.duree_intervention) || 0);
+          if (durations.length > 0) {
+            mttr = durations.reduce((a: number, b: number) => a + b, 0) / durations.length;
+          }
+          // MTBF = average time between failures (simplified: total days / number of interventions)
+          if (filteredInterv.length > 1) {
+            const dates = filteredInterv
+              .map((i: any) => new Date(i.date).getTime())
+              .sort((a: number, b: number) => a - b);
+            const daysBetween = [];
+            for (let i = 1; i < dates.length; i++) {
+              daysBetween.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
+            }
+            if (daysBetween.length > 0) {
+              mtbf = daysBetween.reduce((a: number, b: number) => a + b, 0) / daysBetween.length * 24; // convert to hours
+            }
+          }
+        }
+
+        setKpis({
+          nb_equipements: nb_eq,
+          nb_critiques: nb_critiques,
+          disponibilite: disponibilite,
+          mtbf: mtbf,
+          mttr: mttr,
+          cout_total: 0, // Can't calculate from client-side data
+          nb_interventions: nb_interventions,
+          nb_clients: 1, // Only 1 client selected
+          taux_resolution: taux_resolution,
+        });
+        setHealthScores(filteredHealth);
+        setAllInterventions(filteredInterv);
+        
+        // Filter interventions by date range for display
+        const dateFilteredInterv = filteredInterv.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+        
+        setRecentInterv(
+          dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } catch (err) {
+        console.error("Failed to filter data", err);
+      } finally {
+        setIsLoading(false);
+      }
+      return;
     }
-  }, [dateRange, selectedClient, selectedRegion, selectedVille, selectedEquipType]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+    // If no filters or equipment type filter, use full data or call API
+    if (!selectedClient && !selectedEquipType) {
+      // No filters - use full data but filter by date range
+      setIsLoading(true);
+      try {
+        setKpis(fullData.kpis);
+        setHealthScores(fullData.healthScores);
+        setAllInterventions(fullData.interventions);
+        
+        // Filter interventions by date range for display
+        const dateFilteredInterv = fullData.interventions.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+        
+        setRecentInterv(
+          dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // Equipment type filter - call API
+    setIsLoading(true);
+    const loadFilteredData = async () => {
+      try {
+        const params: any = {
+          date_start: dateRange.date_start,
+          date_end: dateRange.date_end,
+        };
+        if (selectedClient) params.client = selectedClient;
+        if (selectedEquipType) params.equipment_type = selectedEquipType;
+
+        const [kpiData, healthData, intervData] = await Promise.all([
+          dashboard.kpis(params),
+          dashboard.healthScores(params),
+          interventionsApi.list(),
+        ]);
+
+        setKpis(kpiData as any);
+        setHealthScores(healthData);
+        setAllInterventions(intervData || []);
+
+        // Filter interventions for timeline display by date range AND by machines
+        let filtered = (intervData || []);
+        const validMachines = healthData.map((h: any) => h.machine);
+
+        if (validMachines.length > 0) {
+          filtered = filtered.filter((i: any) => validMachines.includes(i.machine));
+        } else {
+          filtered = [];
+        }
+        
+        // Filter by date range
+        filtered = filtered.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+
+        setRecentInterv(
+          filtered.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
+        );
+      } catch (err) {
+        console.error("Failed to load filtered data", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadFilteredData();
+  }, [selectedClient, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
+
+  // --- Load availability trend data ---
+  useEffect(() => {
+    const loadTrendData = async () => {
+      try {
+        const params: any = {};
+        if (selectedClient) params.client = selectedClient;
+        if (selectedEquipType) params.equipment_type = selectedEquipType;
+        
+        const response = await fetch(`/api/dashboard/availability-trend?${new URLSearchParams(params).toString()}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('savia_token') || ''}`,
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.trend) {
+            setTrendData(data.trend);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load trend data", err);
+      }
+    };
+    
+    loadTrendData();
+  }, [selectedClient, selectedEquipType]);
 
   // --- Computed values ---
   const scoreGlobal = useMemo(() => {
@@ -278,6 +427,20 @@ export default function DashboardPage() {
     let totalWithErrorType = 0;
 
     allInterventions.forEach((interv: any) => {
+      // Check if intervention is within date range
+      // Use date_cloture for closed interventions, date for others
+      const dateToCheck = (interv.statut || '').toLowerCase().includes('clotur') 
+        ? (interv.date_cloture || interv.date)
+        : interv.date;
+      
+      if (dateToCheck) {
+        const d = dateToCheck.substring(0, 10);
+        if (d < dateRange.date_start || d > dateRange.date_end) {
+          return; // Skip if outside date range
+        }
+      }
+
+      // Get error type from type_erreur field
       const errorType = (interv.type_erreur || '').trim();
       if (errorType) {
         errorTypeCount[errorType] = (errorTypeCount[errorType] || 0) + 1;
@@ -298,7 +461,7 @@ export default function DashboardPage() {
         color: ERROR_TYPE_COLORS[name] || '#64748b',
       }))
       .sort((a, b) => b.value - a.value); // Sort by percentage descending
-  }, [allInterventions]);
+  }, [allInterventions, dateRange]);
 
   // Gauge data for RadialBarChart
   const gaugeData = [{ name: 'Santé', value: scoreGlobal, fill: scoreGlobal >= 60 ? '#2dd4bf' : scoreGlobal >= 30 ? '#f59e0b' : '#ef4444' }];
@@ -306,7 +469,7 @@ export default function DashboardPage() {
   // Available years
   const yearOptions = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
 
-  if (isLoading) {
+  if (isLoadingFilters) {
     return (
       <div className="flex justify-center items-center h-64">
         <Loader2 className="w-8 h-8 animate-spin text-savia-accent" />
@@ -330,8 +493,8 @@ export default function DashboardPage() {
       </div>
 
       {/* ===== FILTER BAR ===== */}
-      <div className="glass rounded-xl p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+      <div className={`glass rounded-xl p-4 space-y-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
           {/* Client Filter — masqué pour Lecteur (données auto-filtrées) */}
           {!isLecteur && (
             <div>
@@ -343,42 +506,11 @@ export default function DashboardPage() {
                 onChange={e => setSelectedClient(e.target.value)}
                 className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
               >
-                <option value="">Tous</option>
-                {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="">Tous les clients</option>
+                {filterOptions.clients.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
-
-          {/* Region Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-              <MapPin className="w-3.5 h-3.5" /> Région
-            </label>
-            <select
-              value={selectedRegion}
-              onChange={e => { setSelectedRegion(e.target.value); setSelectedVille(''); }}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
-            >
-              <option value="">Tous</option>
-              {regionList.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-
-          {/* Ville Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">
-              <MapPin className="w-3.5 h-3.5" /> Ville
-            </label>
-            <select
-              value={selectedVille}
-              onChange={e => setSelectedVille(e.target.value)}
-              disabled={!selectedRegion}
-              className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none disabled:opacity-50"
-            >
-              <option value="">Tous</option>
-              {villeList.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </div>
 
           {/* Equipment Type Filter */}
           <div>
@@ -390,8 +522,12 @@ export default function DashboardPage() {
               onChange={e => setSelectedEquipType(e.target.value)}
               className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 outline-none"
             >
-              <option value="">Tous</option>
-              {equipTypeList.map(t => <option key={t} value={t}>{t}</option>)}
+              <option value="">Tous les types</option>
+              {equipmentTypesForFilters && equipmentTypesForFilters.length > 0 ? (
+                equipmentTypesForFilters.map(t => <option key={t} value={t}>{t}</option>)
+              ) : (
+                <option disabled>Aucun type disponible</option>
+              )}
             </select>
           </div>
 
@@ -458,8 +594,9 @@ export default function DashboardPage() {
         </div>
 
         {/* Period Summary */}
-        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-savia-accent/5 border border-savia-accent/20 flex-wrap">
           <Filter className="w-4 h-4 text-savia-accent" />
+          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-savia-accent" />}
           <span className="text-sm font-semibold text-savia-accent">
             Période : {dateRange.label}
           </span>
@@ -468,14 +605,19 @@ export default function DashboardPage() {
           </span>
           {selectedClient && (
             <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              {selectedClient}
+              Client: {selectedClient}
+            </span>
+          )}
+          {selectedEquipType && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-500/10 text-orange-400 border border-orange-500/20">
+              Type: {selectedEquipType}
             </span>
           )}
         </div>
       </div>
 
       {/* KPIs Row - Top 4 */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
         <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
         <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
@@ -483,7 +625,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs Row - Bottom 4 */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.nb_interventions)} label="Interventions" />
         <KpiCard icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux Résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="% interventions clôturées" />
         <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
@@ -793,27 +935,29 @@ export default function DashboardPage() {
 
       {/* Disponibilité Trend */}
       <SectionCard title={<span className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-green-400" /> Tendance Disponibilité (6 mois)</span>}>
-        <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={[
-            { mois: 'Jan', dispo: 97.2 }, { mois: 'Fév', dispo: 96.5 },
-            { mois: 'Mar', dispo: 95.8 }, { mois: 'Avr', dispo: 97.1 },
-            { mois: 'Mai', dispo: 98.0 }, { mois: 'Jun', dispo: 96.8 },
-          ]}>
-            <defs>
-              <linearGradient id="dispoGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
-            <YAxis domain={[94, 100]} stroke={CHART_STYLE.text} fontSize={12} />
-            <Tooltip
-              contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
-              formatter={(value) => [`${value}%`, 'Disponibilité']}
-            />
-            <Area type="monotone" dataKey="dispo" stroke={CHART_STYLE.accent} fill="url(#dispoGrad)" strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
+        {trendData.length === 0 ? (
+          <div className="h-[200px] flex items-center justify-center text-savia-text-muted">
+            Chargement des données...
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={trendData}>
+              <defs>
+                <linearGradient id="dispoGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={CHART_STYLE.accent} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={CHART_STYLE.accent} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="mois" stroke={CHART_STYLE.text} fontSize={12} />
+              <YAxis domain={[0, 100]} stroke={CHART_STYLE.text} fontSize={12} />
+              <Tooltip
+                contentStyle={{ background: CHART_STYLE.bg, border: `1px solid ${CHART_STYLE.grid}`, borderRadius: 8, color: '#f1f5f9' }}
+                formatter={(value) => [`${value}%`, 'Disponibilité']}
+              />
+              <Area type="monotone" dataKey="dispo" stroke={CHART_STYLE.accent} fill="url(#dispoGrad)" strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </SectionCard>
 
       {/* Footer */}

@@ -1,7 +1,9 @@
 'use client';
-import { Camera, CheckCircle, Clock, Eye, Download } from 'lucide-react';
+import { Camera, CheckCircle, Clock, Eye, Download, Trash2, Upload, X } from 'lucide-react';
+import { useState, useRef } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { interventions } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 const API = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -12,8 +14,16 @@ interface Props {
 
 export function FichesSigneesTab({ fiches, setFiches }: Props) {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
+  const { user } = useAuth();
+  const [uploadingId, setUploadingId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  
   // Seulement celles avec photo jointe
   const fichesAvecPhoto = fiches.filter((f: any) => f.has_fiche);
+  
+  // Vérifier si l'utilisateur peut supprimer/modifier
+  const canManageFiches = user?.role === 'Admin' || user?.role === 'Manager';
 
   const handleValidation = async (id: number) => {
     if (!window.confirm(`Valider définitivement la fiche #${id} ?\n⚠️ Cette action est irréversible.`)) return;
@@ -23,6 +33,52 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
       setFiches(updated);
     } catch (err: any) {
       alert(err?.message || 'Erreur lors de la validation');
+    }
+  };
+
+  const handleDeleteFiche = async (id: number) => {
+    if (!window.confirm(`Supprimer la fiche #${id} ?\n⚠️ Cette action est irréversible.`)) return;
+    try {
+      const response = await fetch(`/api/interventions/${id}/fiche`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Erreur lors de la suppression');
+      }
+      const updated = await interventions.listFiches();
+      setFiches(updated);
+      alert('Fiche supprimée avec succès');
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de la suppression');
+    }
+  };
+
+  const handleUploadFiche = async (id: number, file: File) => {
+    if (!file) return;
+    setUploadingId(id);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch(`/api/interventions/${id}/fiche`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Erreur lors de l\'upload');
+      }
+      const updated = await interventions.listFiches();
+      setFiches(updated);
+      alert('Fiche mise à jour avec succès');
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de l\'upload');
+    } finally {
+      setUploadingId(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
     }
   };
 
@@ -96,6 +152,15 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                       className="w-11 h-11 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition-colors" title="Télécharger">
                       <Download className="w-5 h-5 text-white" />
                     </a>
+                    {canManageFiches && !isValidee && (
+                      <button
+                        onClick={() => handleDeleteFiche(f.id)}
+                        className="w-11 h-11 rounded-full bg-red-500/30 hover:bg-red-500/50 flex items-center justify-center transition-colors"
+                        title="Supprimer la fiche"
+                      >
+                        <Trash2 className="w-5 h-5 text-red-300" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -128,13 +193,70 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                           <Clock className="w-4 h-4 flex-shrink-0" />
                           <p className="text-xs font-medium">En attente de validation</p>
                         </div>
-                        <button
-                          onClick={() => handleValidation(Number(f.id))}
-                          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-green-500/15 hover:bg-green-500/25 text-green-400 text-xs font-bold transition-colors cursor-pointer border border-green-500/30"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          Marquer comme validée
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleValidation(Number(f.id))}
+                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-green-500/15 hover:bg-green-500/25 text-green-400 text-xs font-bold transition-colors cursor-pointer border border-green-500/30"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            Valider
+                          </button>
+                          {canManageFiches && (
+                            <button
+                              onClick={() => handleDeleteFiche(Number(f.id))}
+                              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 text-xs font-bold transition-colors cursor-pointer border border-red-500/30"
+                              title="Supprimer la fiche"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Supprimer
+                            </button>
+                          )}
+                        </div>
+                        {canManageFiches && (
+                          <div className="flex gap-2 pt-2 border-t border-savia-border/20">
+                            <button
+                              onClick={() => fileInputRef.current?.click()}
+                              disabled={uploadingId === f.id}
+                              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 text-xs font-bold transition-colors cursor-pointer border border-blue-500/30 disabled:opacity-50"
+                              title="Uploader une nouvelle photo"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                              {uploadingId === f.id ? 'Upload...' : 'Uploader'}
+                            </button>
+                            <button
+                              onClick={() => cameraInputRef.current?.click()}
+                              disabled={uploadingId === f.id}
+                              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-400 text-xs font-bold transition-colors cursor-pointer border border-purple-500/30 disabled:opacity-50"
+                              title="Prendre une photo avec la caméra"
+                            >
+                              <Camera className="w-3.5 h-3.5" />
+                              {uploadingId === f.id ? 'Caméra...' : 'Caméra'}
+                            </button>
+                          </div>
+                        )}
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              handleUploadFiche(f.id, e.target.files[0]);
+                            }
+                          }}
+                        />
+                        <input
+                          ref={cameraInputRef}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) {
+                              handleUploadFiche(f.id, e.target.files[0]);
+                            }
+                          }}
+                        />
                       </div>
                     )}
                   </div>
