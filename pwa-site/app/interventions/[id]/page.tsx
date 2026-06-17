@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { isLoggedIn } from '@/lib/auth';
+import { isLoggedIn, getUser } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import TimeScrollPicker from '@/components/TimeScrollPicker';
@@ -46,6 +46,31 @@ function coreWords(s: string): string[] {
   return s.toLowerCase().replace(/[()\-_/]/g, ' ').split(/\s+/).filter(w => w.length > 1);
 }
 
+// Robust name matching that handles reversed names like "Ghazi Sellami" vs "Sellami Ghazi"
+function namesMatch(name1: string, name2: string): boolean {
+  if (!name1 || !name2) return false;
+  
+  const n1Lower = name1.toLowerCase().trim();
+  const n2Lower = name2.toLowerCase().trim();
+  
+  // Exact match
+  if (n1Lower === n2Lower) return true;
+  
+  // Split into words and get meaningful words (length > 1)
+  const words1 = n1Lower.split(/\s+/).filter(w => w.length > 1);
+  const words2 = n2Lower.split(/\s+/).filter(w => w.length > 1);
+  
+  // If different number of words, can't match (unless one is subset)
+  if (words1.length === 0 || words2.length === 0) return false;
+  
+  // Check if all words in name1 exist in name2 (handles reversed order)
+  const allWords1InName2 = words1.every(w1 => words2.some(w2 => w1 === w2));
+  const allWords2InName1 = words2.every(w2 => words1.some(w1 => w2 === w1));
+  
+  // Both should match if they're the same person in different order
+  return allWords1InName2 && allWords2InName1;
+}
+
 // Vérifie si le type de pièce correspond à l'équipement de l'intervention
 // Compare directement les types d'équipement
 function matchesMachine(machineEquipmentType: string, pieceEquipmentType: string): boolean {
@@ -84,7 +109,10 @@ export default function InterventionDetailPage() {
   // Per-technician data state
   const [technicianRecords, setTechnicianRecords] = useState<any[]>([]);
   const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserTechId, setCurrentUserTechId] = useState<number | null>(null); // Store the tech ID
   const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
+  const [activeTabTech, setActiveTabTech] = useState(''); // Track active technician tab
+  const [allTechnicians, setAllTechnicians] = useState<string[]>([]); // All technicians for this intervention
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
@@ -108,14 +136,23 @@ export default function InterventionDetailPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
-    // Get current user name from localStorage (set during login)
-    const userName = localStorage.getItem('savia_site_user_nom') || '';
+    // Get current user name from auth helper
+    const user = getUser();
+    const userName = user?.nom || '';
     setCurrentUserName(userName);
-    loadAll();
-  }, [id]);
+    console.log('📝 Current user from auth:', { userName, user });
+  }, []);
+
+  // Separate effect for loading data - waits for currentUserName to be set
+  useEffect(() => {
+    if (currentUserName) {
+      loadAll();
+    }
+  }, [currentUserName, id]);
 
   const loadAll = async () => {
     setLoading(true);
+    console.log('🔄 loadAll() started with currentUserName:', currentUserName);
     try {
       const [all, pieces, equipements] = await Promise.all([
         api.interventions.list(),
@@ -132,6 +169,30 @@ export default function InterventionDetailPage() {
       setIntervention(found);
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
+      
+      // Parse technicians from comma-separated field
+      const techniciens = (found.technicien || '').split(',').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
+      console.log('📋 Parsed technicians:', techniciens);
+      console.log('🧑 Current user name:', currentUserName);
+      
+      setAllTechnicians(techniciens);
+      
+      // Set active tab to current user's technician, fallback to first if not found
+      if (techniciens.length > 0) {
+        setUsePerTechnicianMode(true);
+        
+        // Find current user's tab using robust name matching (handles reversed names)
+        const currentUserTab = techniciens.find((tech: string) => {
+          const matches = namesMatch(currentUserName, tech);
+          console.log(`  Checking match: namesMatch("${currentUserName}", "${tech}") = ${matches}`);
+          return matches;
+        });
+        
+        console.log('✅ Matched user tab:', currentUserTab, 'fallback to first:', techniciens[0]);
+        setActiveTabTech(currentUserTab || techniciens[0]);
+      } else {
+        setUsePerTechnicianMode(false);
+      }
       
       // Load times in HH:MM format from TIME columns
       let startTime = '08:00';
@@ -171,16 +232,55 @@ export default function InterventionDetailPage() {
         end_time:         endTime,
       });
 
-      // Try to load technician records (if backend supports it)
-      try {
-        // Check if intervention has technicien to determine mode
-        if (found.technicien) {
-          // Could load from interventions_techniciens, but for now use single-tech mode
-          setUsePerTechnicianMode(false);
+      // Load technician records if multi-tech mode
+      if (techniciens.length > 0) {
+        try {
+          const techRecords = await api.interventions.getTechnicianData(id);
+          setTechnicianRecords(techRecords || []);
+          
+          // Find current user's tech record and store the ID
+          const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          if (currentUserRec?.id) {
+            setCurrentUserTechId(currentUserRec.id);
+            console.log('✅ Stored current user tech ID:', currentUserRec.id);
+          }
+          
+          // Pre-populate techForm with technician-specific data if available
+          // Otherwise use shared intervention data as fallback
+          if (currentUserRec && currentUserRec.probleme_tech) {
+            // Use technician-specific data (already saved)
+            setTechForm({
+              probleme_tech: currentUserRec.probleme_tech || '',
+              cause_tech: currentUserRec.cause_tech || '',
+              solution_tech: currentUserRec.solution_tech || '',
+              heure_debut_tech: currentUserRec.heure_debut_tech || '08:00',
+              heure_fin_tech: currentUserRec.heure_fin_tech || '09:00',
+              duree_minutes_tech: currentUserRec.duree_minutes_tech || 60,
+              duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
+              notes_tech: currentUserRec.notes_tech || '',
+              statut: currentUserRec.statut || 'En cours',
+            });
+            console.log('📋 Pre-populated tech form from saved technician data:', {
+              probleme_tech: currentUserRec.probleme_tech,
+              cause_tech: currentUserRec.cause_tech,
+              solution_tech: currentUserRec.solution_tech,
+              statut: currentUserRec.statut,
+            });
+          } else {
+            // No saved data yet, use shared intervention data as template
+            setTechForm(prevForm => ({
+              ...prevForm,
+              probleme_tech: found.probleme || '',
+              cause_tech: found.cause || '',
+              solution_tech: found.solution || '',
+              notes_tech: found.notes || '',
+            }));
+            console.log('📋 Pre-populated tech form from shared intervention data (fallback)');
+          }
+        } catch (e) {
+          console.debug('Per-tech records not available:', e);
+          setTechnicianRecords([]);
         }
-      } catch (e) {
-        console.debug('Per-tech records not available, using standard mode');
-        setUsePerTechnicianMode(false);
       }
     } catch {
       setError('Erreur lors du chargement.');
@@ -328,6 +428,7 @@ export default function InterventionDetailPage() {
 
       const payload = {
         technicien_nom: currentUserName,
+        technicien_id: currentUserTechId, // Send the ID for reliable updating
         probleme_tech: techForm.probleme_tech,
         cause_tech: techForm.cause_tech,
         solution_tech: techForm.solution_tech,
@@ -340,21 +441,62 @@ export default function InterventionDetailPage() {
       };
 
       console.log('📤 Sending technician data:', payload);
-
+      
       const response = await api.interventions.updateTechnicianData(id, payload);
       
       if (response.status === 'ALL_COMPLETED') {
         // All technicians done, awaiting admin closure
         setSuccess(`✅ Tous les techniciens ont complété (${response.completed}/${response.total}). En attente de clôture administrative.`);
       } else if (response.status === 'PARTIAL') {
-        // Still waiting for others
-        const pending = response.pending_technicians?.join(', ') || '';
+        // Still waiting for others - deduplicate names that are the same (reversed order)
+        const pendingList = response.pending_technicians || [];
+        const uniquePending: string[] = [];
+        
+        for (const tech of pendingList) {
+          // Check if this tech name already exists in unique list (using robust name matching)
+          const isDuplicate = uniquePending.some(existing => namesMatch(existing, tech));
+          if (!isDuplicate) {
+            uniquePending.push(tech);
+          }
+        }
+        
+        const pending = uniquePending.join(', ') || '';
         setSuccess(`✅ Données sauvegardées (${response.completed}/${response.total} techniciens complétés). Restants: ${pending}`);
       } else {
         setSuccess('✅ Vos données ont été enregistrées.');
       }
       
-      setTimeout(() => router.replace('/interventions'), 2000);
+      setTimeout(async () => {
+        // Reload technician data to show updated values
+        try {
+          console.log('🔄 Reloading technician data...');
+          const techRecords = await api.interventions.getTechnicianData(id);
+          console.log('📋 Fresh tech records:', techRecords);
+          
+          setTechnicianRecords(techRecords || []);
+          
+          // Find current user's record and update form with fresh data
+          const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          if (currentUserRec) {
+            console.log('✅ Found current user record:', currentUserRec);
+            // Update form with fresh data from database
+            setTechForm({
+              probleme_tech: currentUserRec.probleme_tech || '',
+              cause_tech: currentUserRec.cause_tech || '',
+              solution_tech: currentUserRec.solution_tech || '',
+              heure_debut_tech: currentUserRec.heure_debut_tech || '08:00',
+              heure_fin_tech: currentUserRec.heure_fin_tech || '09:00',
+              duree_minutes_tech: currentUserRec.duree_minutes_tech || 60,
+              duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
+              notes_tech: currentUserRec.notes_tech || '',
+              statut: currentUserRec.statut || 'En cours',
+            });
+            console.log('✅ Updated tech form with fresh data');
+          }
+        } catch (e) {
+          console.error('Error reloading tech data:', e);
+        }
+      }, 500);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la sauvegarde.');
     } finally {
@@ -367,6 +509,27 @@ export default function InterventionDetailPage() {
   const isClotured    = form.statut === 'Cloturee';
   const isAttenteP    = form.statut === 'En attente de piece';
   const isAssignee    = form.statut === 'Assignée';
+
+  // Get current technician's data from records (using robust name matching)
+  const getCurrentTechData = (): any => {
+    if (!activeTabTech || technicianRecords.length === 0) return {};
+    return technicianRecords.find((r: any) => namesMatch(r.technicien_nom, activeTabTech)) || {};
+  };
+
+  // Check if current user is the active tab technician (using robust name matching)
+  const isCurrentUserActiveTech = currentUserName && activeTabTech && namesMatch(currentUserName, activeTabTech);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 Multi-tech Debug:', {
+      currentUserName,
+      activeTabTech,
+      usePerTechnicianMode,
+      isCurrentUserActiveTech,
+      isAssignee,
+      showForm: usePerTechnicianMode && isCurrentUserActiveTech && !isAssignee,
+    });
+  }, [currentUserName, activeTabTech, usePerTechnicianMode, isCurrentUserActiveTech, isAssignee]);
 
   const handleAccept = async () => {
     setActionLoading(true);
@@ -479,6 +642,139 @@ export default function InterventionDetailPage() {
           </div>
         )}
 
+        {/* TABS FOR MULTI-TECH INTERVENTIONS */}
+        {usePerTechnicianMode && allTechnicians.length > 0 && (
+          <div style={{ marginBottom: '16px', display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '8px', borderBottom: '2px solid var(--border)' }}>
+            {allTechnicians.map((tech: string, idx: number) => {
+              // Use robust name matching to find tech data
+              const techData = technicianRecords.find((r: any) => namesMatch(r.technicien_nom || '', tech));
+              const isActive = namesMatch(activeTabTech, tech);
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setActiveTabTech(tech)}
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: '10px 10px 0 0',
+                    border: isActive ? '2px solid var(--teal)' : '2px solid transparent',
+                    borderBottom: isActive ? 'none' : '2px solid var(--border)',
+                    background: isActive ? 'rgba(86,124,141,0.1)' : '#fff',
+                    color: isActive ? 'var(--teal)' : 'var(--text-muted)',
+                    fontWeight: isActive ? 700 : 500,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.2s',
+                  }}>
+                  <span>{tech}</span>
+                  {techData?.statut === 'Cloturee' && (
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#22C55E', marginLeft: '4px' }} title="Complété"></span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* MULTI-TECH FORM (per-technician data entry) */}
+        {usePerTechnicianMode && isCurrentUserActiveTech && !isAssignee && (
+          <form onSubmit={handleSaveTechnicianData}>
+            {/* Diagnostic Section */}
+            <div style={SECTION}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Mon Diagnostic ({activeTabTech})</h3>
+              {[
+                { key: 'probleme_tech', label: 'Problème constaté', ph: 'Symptômes observés...' },
+                { key: 'cause_tech', label: 'Cause racine', ph: 'Analyse de la cause...' },
+                { key: 'solution_tech', label: 'Solution appliquée', ph: 'Actions correctives...' },
+              ].map(({ key, label, ph }) => (
+                <div key={key} style={{ marginBottom: '12px' }}>
+                  <label style={LABEL}>{label}{key === 'solution_tech' && techForm.statut === 'Cloturee' && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}</label>
+                  <textarea
+                    style={{ ...INPUT, resize: 'vertical', borderColor: key === 'solution_tech' && techForm.statut === 'Cloturee' && !techForm.solution_tech ? '#ef4444' : undefined }}
+                    rows={2}
+                    placeholder={ph}
+                    value={(techForm as any)[key]}
+                    onChange={e => setTechForm(f => ({ ...f, [key as any]: e.target.value }))}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Time & Duration Section */}
+            <div style={SECTION}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Clock style={{ width: 16, height: 16 }} /> Temps</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={LABEL}><Clock style={ICON_INLINE} /> Début (HH:MM)</label>
+                  <input type="time" style={INPUT} value={techForm.heure_debut_tech} onChange={e => setTechForm(f => ({ ...f, heure_debut_tech: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={LABEL}><Clock style={ICON_INLINE} /> Fin (HH:MM)</label>
+                  <input type="time" style={INPUT} value={techForm.heure_fin_tech} onChange={e => setTechForm(f => ({ ...f, heure_fin_tech: e.target.value }))} />
+                </div>
+              </div>
+              <div>
+                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en minutes)</label>
+                <input type="number" style={INPUT} min={0} value={techForm.duree_deplacement_tech} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: parseInt(e.target.value) || 0 }))} />
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div style={SECTION}>
+              <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes personnelles</label>
+              <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder="Observations, remarques..." value={techForm.notes_tech} onChange={e => setTechForm(f => ({ ...f, notes_tech: e.target.value }))} />
+            </div>
+
+            {/* Status */}
+            <div style={SECTION}>
+              <label style={LABEL}>Mon Statut</label>
+              <select style={INPUT} value={techForm.statut} onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}>
+                <option value="En cours">En cours</option>
+                <option value="Cloturee">Intervention terminée</option>
+              </select>
+            </div>
+
+            {/* Error */}
+            {error && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={saving}
+              style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer Mes Données</>}
+            </button>
+          </form>
+        )}
+
+        {/* READ-ONLY VIEW FOR OTHER TECHNICIANS */}
+        {usePerTechnicianMode && !isCurrentUserActiveTech && (
+          <div style={SECTION}>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '12px' }}>Données de {activeTabTech}</h3>
+            {(() => {
+              const techData = getCurrentTechData();
+              if (!techData || !techData.technicien_nom) {
+                return <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Pas encore de données pour ce technicien.</p>;
+              }
+              console.log("ss", techData)
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
+                  <div><strong>Problème:</strong> {techData.probleme_tech || '—'}</div>
+                  <div><strong>Cause:</strong> {techData.cause_tech || '—'}</div>
+                  <div><strong>Solution:</strong> {techData.solution_tech || '—'}</div>
+                  <div><strong>Horaires:</strong> {techData.heure_debut_tech} à {techData.heure_fin_tech}</div>
+                  <div><strong>Durée:</strong> {techData.duree_minutes_tech} min | <strong>Déplacement:</strong> {techData.duree_deplacement_tech} min</div>
+                  <div><strong>Statut:</strong> <span style={{ ...statutStyle, padding: '4px 12px', borderRadius: '6px', display: 'inline-block' }}>{techData.statut}</span></div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
         {/* ⓪ Accept/Refuse banner for Assignée interventions */}
         {isAssignee && (
           <div style={{ ...SECTION, border: '2px solid #7C3AED', background: 'rgba(168,85,247,0.04)' }}>
@@ -533,8 +829,8 @@ export default function InterventionDetailPage() {
         {error && !isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
         {error && isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px', marginTop: '-8px' }}>{error}</p>}
 
-        {/* Only show full form when NOT in Assignée status (already accepted or other statuts) */}
-        {!isAssignee && <form onSubmit={handleSave}>
+        {/* Only show full form when NOT in Assignée status AND NOT in multi-tech mode */}
+        {!isAssignee && !usePerTechnicianMode && <form onSubmit={handleSave}>
 
           {/* ① Diagnostic */}
           <div style={SECTION}>
