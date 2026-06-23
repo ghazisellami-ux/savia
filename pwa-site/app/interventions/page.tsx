@@ -31,8 +31,32 @@ export default function InterventionsPage() {
       const techName = user?.nom || user?.username || '';
       const res = await api.interventions.list({ technicien: techName });
 
-      // Trier par date décroissante (plus récentes en premier)
+      // Normaliser et définir l'ordre des statuts
+      // Accepter les variations (Assignée, Assigné, etc.)
+      const statusOrder = {
+        'Assignée': 1,
+        'Assigné': 1,
+        'En attente de piece': 2,
+        'En attente de pièce': 2,
+        'En cours': 3,
+        'Cloturee': 4,
+        'Clôturée': 4,
+      };
+
+      // Trier : d'abord par statut (selon l'ordre défini), puis par date décroissante
       const sorted = (res as any[]).sort((a, b) => {
+        const statusA = (a.statut || '').trim();
+        const statusB = (b.statut || '').trim();
+        
+        const orderA = statusOrder[statusA as keyof typeof statusOrder] ?? 999;
+        const orderB = statusOrder[statusB as keyof typeof statusOrder] ?? 999;
+        
+        // Si les statuts sont différents, trier par ordre de statut
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        
+        // Si les statuts sont identiques, trier par date (plus récentes en premier)
         const da = new Date(a.date || a.date_intervention || a.created_at || 0).getTime();
         const db = new Date(b.date || b.date_intervention || b.created_at || 0).getTime();
         return db - da;
@@ -53,7 +77,8 @@ export default function InterventionsPage() {
     if (!s) {
       setFiltered(data);
     } else {
-      setFiltered(data.filter(i => i.statut === s));
+      const filtered = data.filter(i => i.statut === s);
+      setFiltered(filtered);
     }
   };
 
