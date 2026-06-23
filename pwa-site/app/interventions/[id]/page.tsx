@@ -132,6 +132,7 @@ export default function InterventionDetailPage() {
     duree_deplacement_tech: 0,
     notes_tech: '',
     statut: 'En cours',
+    type_erreur_tech: '',
   });
 
   useEffect(() => {
@@ -259,6 +260,7 @@ export default function InterventionDetailPage() {
               duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
               notes_tech: currentUserRec.notes_tech || '',
               statut: currentUserRec.statut || 'En cours',
+              type_erreur_tech: currentUserRec.type_erreur_tech || '',
             });
             console.log('📋 Pre-populated tech form from saved technician data:', {
               probleme_tech: currentUserRec.probleme_tech,
@@ -274,6 +276,7 @@ export default function InterventionDetailPage() {
               cause_tech: found.cause || '',
               solution_tech: found.solution || '',
               notes_tech: found.notes || '',
+              type_erreur_tech: found.type_erreur || '',
             }));
             console.log('📋 Pre-populated tech form from shared intervention data (fallback)');
           }
@@ -438,6 +441,7 @@ export default function InterventionDetailPage() {
         duree_deplacement_tech: deploymentMinutes,
         notes_tech: techForm.notes_tech,
         statut: techForm.statut,  // Can be 'Cloturee' to mark as done
+        type_erreur_tech: techForm.type_erreur_tech,
       };
 
       console.log('📤 Sending technician data:', payload);
@@ -490,6 +494,7 @@ export default function InterventionDetailPage() {
               duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
               notes_tech: currentUserRec.notes_tech || '',
               statut: currentUserRec.statut || 'En cours',
+              type_erreur_tech: currentUserRec.type_erreur_tech || '',
             });
             console.log('✅ Updated tech form with fresh data');
           }
@@ -702,6 +707,14 @@ export default function InterventionDetailPage() {
                   />
                 </div>
               ))}
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={LABEL}>Type d&apos;erreur</label>
+                <select style={INPUT} value={techForm.type_erreur_tech} onChange={e => setTechForm(f => ({ ...f, type_erreur_tech: e.target.value }))}>
+                  <option value="">— Aucun —</option>
+                  {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
             </div>
 
             {/* Time & Duration Section */}
@@ -717,6 +730,25 @@ export default function InterventionDetailPage() {
                   <input type="time" style={INPUT} value={techForm.heure_fin_tech} onChange={e => setTechForm(f => ({ ...f, heure_fin_tech: e.target.value }))} />
                 </div>
               </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginBottom: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
+                <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
+                <div>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
+                    {(() => {
+                      const [startH, startM] = techForm.heure_debut_tech.split(':').map(Number);
+                      const [endH, endM] = techForm.heure_fin_tech.split(':').map(Number);
+                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      if (durationMin <= 0) durationMin += 24 * 60;
+                      durationMin = Math.max(60, durationMin);
+                      return (durationMin / 60).toFixed(1);
+                    })()}h
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
+              </div>
+
               <div>
                 <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en minutes)</label>
                 <input type="number" style={INPUT} min={0} value={techForm.duree_deplacement_tech} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: parseInt(e.target.value) || 0 }))} />
@@ -859,14 +891,12 @@ export default function InterventionDetailPage() {
               </div>
             ))}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={LABEL}>Type d&apos;erreur</label>
-                <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
-                  <option value="">— Aucun —</option>
-                  {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
-                </select>
-              </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={LABEL}>Type d&apos;erreur</label>
+              <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
+                <option value="">— Aucun —</option>
+                {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
+              </select>
             </div>
 
             {/* Time pickers with scrollable UI */}
@@ -901,13 +931,15 @@ export default function InterventionDetailPage() {
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
-              <Zap style={{ width: 16, height: 16, color: 'var(--teal)' }} />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Durée calculée:</span>
-              <span style={{ fontWeight: 700, color: 'var(--teal)', marginLeft: 'auto' }}>
-                {form.duree_minutes > 0 ? (form.duree_minutes / 60).toFixed(2) : 0}h
-              </span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Min 1h</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
+              <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
+              <div>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
+                  {(form.duree_minutes / 60).toFixed(1)}h
+                </div>
+              </div>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
             </div>
 
             <div style={{ marginTop: '12px' }}>

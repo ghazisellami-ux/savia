@@ -2690,7 +2690,7 @@ def verifier_et_migrer_schema():
             conn.set_client_encoding('UTF8')
             cur = conn.cursor()
             
-            # Colonnes à vérifier/ajouter
+            # Colonnes à vérifier/ajouter (interventions table)
             missing_cols = [
                 ("start_time", "TIME"),
                 ("end_time", "TIME"),
@@ -2705,6 +2705,20 @@ def verifier_et_migrer_schema():
                     logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée.")
                 except psycopg2.Error as e:
                     logger.debug(f"Migration PostgreSQL colonne {col}: {e}")
+                    conn.rollback()
+            
+            # Colonnes à vérifier/ajouter (interventions_techniciens table)
+            tech_cols = [
+                ("type_erreur_tech", "TEXT DEFAULT ''"),
+            ]
+            
+            for col, type_def in tech_cols:
+                try:
+                    cur.execute(f"ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS {col} {type_def}")
+                    conn.commit()
+                    logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée à interventions_techniciens.")
+                except psycopg2.Error as e:
+                    logger.debug(f"Migration PostgreSQL colonne {col} interventions_techniciens: {e}")
                     conn.rollback()
             
             cur.close()
@@ -2771,6 +2785,19 @@ def verifier_et_migrer_schema():
             """)
         except Exception:
             pass
+
+        # Vérifier colonnes table interventions_techniciens
+        try:
+            cursor = conn.execute("PRAGMA table_info(interventions_techniciens)")
+            tech_int_cols = [row["name"] for row in cursor.fetchall()]
+            if "type_erreur_tech" not in tech_int_cols:
+                try:
+                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN type_erreur_tech TEXT DEFAULT ''")
+                    print("Migration: Ajout de la colonne 'type_erreur_tech' à la table 'interventions_techniciens'.")
+                except Exception as e:
+                    print(f"Erreur migration interventions_techniciens: {e}")
+        except Exception as e:
+            print(f"Erreur vérification interventions_techniciens: {e}")
 
 # ==========================================
 # FONCTIONS CRUD — TECHNICIENS
@@ -3808,7 +3835,7 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         allowed_fields = [
             'statut', 'probleme_tech', 'cause_tech', 'solution_tech',
             'heure_debut_tech', 'heure_fin_tech', 'duree_minutes_tech',
-            'duree_deplacement_tech', 'notes_tech'
+            'duree_deplacement_tech', 'notes_tech', 'type_erreur_tech'
         ]
         
         for field in allowed_fields:
@@ -4231,6 +4258,10 @@ def finalize_intervention_from_techniciens(intervention_id):
         solutions = [t.get('solution_tech', '').strip() for t in completed_techs if t.get('solution_tech', '').strip()]
         combined_solution = " | ".join(solutions) if solutions else ""
         
+        # Get the first type_erreur_tech from completed technicians (if any)
+        first_error_type = next((t.get('type_erreur_tech', '').strip() for t in completed_techs 
+                                 if t.get('type_erreur_tech', '').strip()), '')
+        
         # ✅ AUTOMATICALLY CLOSE the parent intervention (statut = 'Cloturee')
         # This is the key change - we now close it instead of leaving it "En cours"
         date_cloture = datetime.now().isoformat()
@@ -4241,9 +4272,10 @@ def finalize_intervention_from_techniciens(intervention_id):
                 duree_minutes = ?,
                 duree_deplacement = ?,
                 solution = CASE WHEN solution = '' THEN ? ELSE solution END,
+                type_erreur = CASE WHEN type_erreur = '' OR type_erreur IS NULL THEN ? ELSE type_erreur END,
                 date_cloture = ?
             WHERE id = ?
-        """, (total_duree, total_deplacement, combined_solution, date_cloture, intervention_id))
+        """, (total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, intervention_id))
         
         logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {total_count} technicians completed")
         
