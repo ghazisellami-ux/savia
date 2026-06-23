@@ -961,13 +961,15 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     bot_key: 'telegram' (technicien), 'telegram_sav', 'telegram_manager', 'telegram_stock'
     """
     import urllib.request, urllib.parse, json as _json
+    from db_engine import USE_PG
     token_key = f"{bot_key}_token"
     chat_key = f"{bot_key}_chat_id"
     try:
         with get_db() as conn:
+            # Use database-agnostic query (SQLite + PostgreSQL compatible)
             rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(?)",
-                ([token_key, chat_key],)
+                "SELECT cle, valeur FROM config_client WHERE cle = ? OR cle = ?",
+                (token_key, chat_key)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}
         token   = config.get(token_key, "").strip()
@@ -2598,7 +2600,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
 
         # --- Create SINGLE SHARED intervention (visible to all assigned technicians) ---
         # NEW APPROACH: One intervention for ALL technicians instead of N children
-        today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         notes_intervention = f"[{client}] Demande #{demande_id}"
         
         # Store all technicians in technicien field (comma-separated for reference)
@@ -2612,7 +2614,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                is_temporary, parent_intervention_id)
             VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
-            today,
+            now,
             equipement,
             all_techs_str,  # Store all technician names
             "Corrective",
@@ -2672,7 +2674,6 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
-    _send_telegram_bot("telegram_sav", msg)
     
     logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Intervention PARTAGÉE #{intervention_id}")
     
@@ -2760,7 +2761,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
 
                 if not already_linked:
                     # Créer l'intervention
-                    today = datetime.now().strftime("%Y-%m-%d")
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     notes_interv = f"[{client}] Demande #{demande_id}"
                     if notes_traitement:
                         notes_interv += f" — {notes_traitement}"
@@ -2770,7 +2771,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                            probleme, code_erreur, statut, priorite, notes)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        today,
+                        now,
                         equipement,
                         technicien_assigne,
                         "Corrective",
@@ -2888,25 +2889,47 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             if finalize_result.get('success'):
                 logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {status_info['total']} technicians completed")
                 
-                # Send Telegram: INTERVENTION CLOSED
+                # Send Telegram: INTERVENTION CLOSED - À FACTURER
                 try:
                     machine = intervention.get('machine', '')
                     total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
                     solutions = finalize_result.get('combined_solution', '')
                     
-                    msg_tg = (
+                    # Get client info from notes or equipement
+                    notes_raw = str(intervention.get('notes', '') or '')
+                    client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
+                    client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
+                    
+                    # Message for SAV team: À facturer
+                    msg_sav = (
+                        f"📋 <b>Intervention À facturer — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>"
+                        f"{client_line}\n"
+                        f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
+                        f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🔧 Solutions : {solutions}\n\n"
+                        f"✅ Intervention fermée automatiquement\n"
+                        f"💰 <i>Délai de facturation : 10 jours</i>\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram_bot("telegram_sav", msg_sav)
+                    logger.info(f"✅ Telegram SAV message sent: Intervention #{intervention_id} à facturer")
+                    
+                    # Message for technicians: INTERVENTION CLÔTURÉE
+                    msg_tech = (
                         f"✅ <b>INTERVENTION CLÔTURÉE — #{intervention_id}</b>\n\n"
-                        f"🏥 Machine : <b>{machine}</b>\n"
+                        f"🏥 Machine : <b>{machine}</b>"
+                        f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
                         f"🔧 Solutions : {solutions}\n\n"
                         f"✅ Intervention fermée automatiquement\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram_bot("telegram_sav", msg_tg)
-                    _send_telegram(msg_tg)
+                    _send_telegram(msg_tech)
+                    logger.info(f"✅ Telegram TECH message sent: Intervention #{intervention_id} clôturée")
                 except Exception as te:
-                    logger.error(f"Telegram notification error: {te}")
+                    logger.warning(f"⚠️ Closing telegram notifications failed: {te}")
                 
                 return {
                     "success": True,
@@ -2939,8 +2962,9 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 
                 msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 _send_telegram(msg_tg)
+                logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
             except Exception as te:
-                logger.error(f"Telegram notification error: {te}")
+                logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
             
             logger.info(f"   ✓ Returning PARTIAL response with {len(status_info['pending_names'])} pending: {status_info['pending_names']}")
             return {

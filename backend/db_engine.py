@@ -1944,7 +1944,7 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("cout", 0.0),
             intervention_dict.get("duree_minutes", 0),
             intervention_dict.get("code_erreur") or "",
-            intervention_dict.get("statut", "Terminée"),
+            intervention_dict.get("statut", "Assignée"),
             intervention_dict.get("notes") or "",
             intervention_dict.get("type_erreur") or "",
             intervention_dict.get("priorite") or "",
