@@ -3007,18 +3007,24 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 
                 logger.info(f"   ✅ Manual piece requests created successfully")
                 
-                # Send Telegram notification
+                # Send Telegram notification (same format as single-tech mode)
                 try:
                     pm_list = [f"  • {p.get('reference','')} — {p.get('designation','')}" for p in pieces_manuelles_list if p.get("reference")]
                     if pm_list:
+                        client_line_m = f"\n👤 Client : <b>{client}</b>" if client else ""
                         msg_tg_m = (
-                            f"📋 <b>Demande pièce manuelle — #{intervention_id}</b>\n\n"
-                            f"Pièces demandées :\n" + "\n".join(pm_list) + f"\n\n"
+                            f"🆕 <b>DEMANDE PIÈCE NON RÉFÉRENCÉE — #{intervention_id}</b>\n\n"
+                            f"🏥 Machine : <b>{machine}</b>"
+                            f"{client_line_m}\n"
+                            f"👷 Technicien : <b>{tech_nom}</b>\n"
+                            f"🔩 Pièces demandées :\n" + "\n".join(pm_list) + "\n\n"
+                            f"⚠️ Ces pièces ne sont pas dans le stock — à commander\n"
                             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                         )
+                        # Send to both stock bot and tech bot (same as single-tech mode)
                         _send_telegram_bot("telegram_stock", msg_tg_m)
-                        _send_telegram(msg_tg_m)
-                        logger.info(f"📋 Manual piece notification sent")
+                        _send_telegram_bot("telegram", msg_tg_m)
+                        logger.info(f"📋 Manual piece notifications sent to both bots")
                 except Exception as tg_err:
                     logger.warning(f"   ⚠️ Telegram manual piece notification failed: {tg_err}")
             except Exception as e:
@@ -3115,23 +3121,27 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             pending_list = ", ".join(status_info['pending_names'])
             logger.info(f"⏳ Intervention #{intervention_id} partially complete: {status_info['completed']}/{status_info['total']} (pending: {pending_list})")
             
-            # Send Telegram: PARTIALLY CLOSED
-            try:
-                machine = intervention.get('machine', '')
-                msg_tg = (
-                    f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
-                    f"🏥 Machine : <b>{machine}</b>\n"
-                    f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
-                    f"⏳ Techniciens restants :\n"
-                )
-                for pending_tech in status_info['pending_names']:
-                    msg_tg += f"  • {pending_tech}\n"
-                
-                msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                _send_telegram(msg_tg)
-                logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
-            except Exception as te:
-                logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
+            # Send Telegram: PARTIALLY CLOSED - but only if this technician marked as "Cloturee"
+            # Don't send if technician marked as "En attente de piece"
+            if body.get("statut") == "Cloturee":
+                try:
+                    machine = intervention.get('machine', '')
+                    msg_tg = (
+                        f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>\n"
+                        f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
+                        f"⏳ Techniciens restants :\n"
+                    )
+                    for pending_tech in status_info['pending_names']:
+                        msg_tg += f"  • {pending_tech}\n"
+                    
+                    msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    _send_telegram(msg_tg)
+                    logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
+                except Exception as te:
+                    logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
+            else:
+                logger.info(f"   ✓ Technician marked as '{body.get('statut')}' - no partial closure telegram sent")
             
             logger.info(f"   ✓ Returning PARTIAL response with {len(status_info['pending_names'])} pending: {status_info['pending_names']}")
             return {
