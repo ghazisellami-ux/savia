@@ -2991,33 +2991,51 @@ def ajouter_contrat(contrat_dict):
         
         # Insert and retrieve ID in a single operation - works for both SQLite and PostgreSQL
         ph = "%s" if USE_PG else "?"
-        result = conn.execute(f"""
-            INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
-                sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
-                pieces_incluses, avec_pieces)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-        """, (
-            contrat_dict.get("client", ""),
-            contrat_dict.get("type_contrat", "Standard"),
-            contrat_dict.get("date_debut", ""),
-            contrat_dict.get("date_fin", ""),
-            contrat_dict.get("sla_temps_reponse_h", 24),
-            contrat_dict.get("interventions_incluses", -1),
-            contrat_dict.get("montant", 0.0),
-            contrat_dict.get("conditions", ""),
-            contrat_dict.get("notes", ""),
-            contrat_dict.get("fichier_contrat", ""),
-            first_equipment,
-            contrat_dict.get("recurrence_maintenance", ""),
-            contrat_dict.get("date_premiere_maintenance", ""),
-            contrat_dict.get("statut", "Actif"),
-            pieces_incluses,
-            1 if contrat_dict.get("avec_pieces") else 0,
-        ))
+        try:
+            conn.execute(f"""
+                INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
+                    sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                    pieces_incluses, avec_pieces)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """, (
+                contrat_dict.get("client", ""),
+                contrat_dict.get("type_contrat", "Standard"),
+                contrat_dict.get("date_debut", ""),
+                contrat_dict.get("date_fin", ""),
+                contrat_dict.get("sla_temps_reponse_h", 24),
+                contrat_dict.get("interventions_incluses", -1),
+                contrat_dict.get("montant", 0.0),
+                contrat_dict.get("conditions", ""),
+                contrat_dict.get("notes", ""),
+                contrat_dict.get("fichier_contrat", ""),
+                first_equipment,
+                contrat_dict.get("recurrence_maintenance", ""),
+                contrat_dict.get("date_premiere_maintenance", ""),
+                contrat_dict.get("statut", "Actif"),
+                pieces_incluses,
+                1 if contrat_dict.get("avec_pieces") else 0,
+            ))
+        except Exception as e:
+            logger.error(f"Error inserting contrat: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+        
         # Retrieve the newly created contrat ID - PostgreSQL RealDictCursor returns dict-like rows
-        row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
-        contrat_id = row["id"] if row else None
+        try:
+            row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
+            contrat_id = row["id"] if row else None
+            logger.info(f"✅ Contrat created with ID: {contrat_id}")
+        except Exception as e:
+            logger.error(f"Error retrieving contrat ID: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+        
+        if not contrat_id:
+            logger.error("Failed to retrieve contrat ID after insertion")
+            return None
         
         # Insert equipments into junction table
         for eq in equipements:
@@ -3042,10 +3060,14 @@ def ajouter_contrat(contrat_dict):
                                 f"INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph})",
                                 (contrat_id, eq_id)
                             )
+                        logger.debug(f"Equipment {eq} (ID: {eq_id}) linked to contrat {contrat_id}")
+                    else:
+                        logger.warning(f"Equipment '{eq}' not found in equipements table")
                 except Exception as e:
                     logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
     
     _trigger_backup()
+    logger.info(f"✅ Contrat #{contrat_id} saved successfully with {len(equipements)} equipment(s)")
     return contrat_id
 
 
