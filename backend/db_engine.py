@@ -2722,6 +2722,35 @@ def verifier_et_migrer_schema():
                     logger.debug(f"Migration PostgreSQL colonne {col} interventions_techniciens: {e}")
                     conn.rollback()
             
+            # Migration: Update CHECK constraint for interventions_techniciens.statut to include "En attente de piece"
+            try:
+                cur.execute("""
+                    SELECT constraint_name FROM information_schema.table_constraints 
+                    WHERE table_name = 'interventions_techniciens' AND constraint_type = 'CHECK'
+                """)
+                constraint_result = cur.fetchone()
+                if constraint_result:
+                    constraint_name = constraint_result[0]
+                    # Drop old constraint
+                    cur.execute(f"ALTER TABLE interventions_techniciens DROP CONSTRAINT {constraint_name}")
+                    conn.commit()
+                    logger.info(f"Migration PostgreSQL: Ancien CHECK constraint '{constraint_name}' supprimé.")
+                
+                # Add new constraint with "En attente de piece"
+                cur.execute("""
+                    ALTER TABLE interventions_techniciens 
+                    ADD CONSTRAINT interventions_techniciens_statut_check 
+                    CHECK (statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece'))
+                """)
+                conn.commit()
+                logger.info("Migration PostgreSQL: CHECK constraint mis à jour pour interventions_techniciens.statut")
+            except psycopg2.Error as e:
+                logger.debug(f"Migration PostgreSQL CHECK constraint: {e}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
             cur.close()
             conn.close()
         except Exception as e:
