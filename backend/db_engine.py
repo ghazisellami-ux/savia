@@ -2710,6 +2710,7 @@ def verifier_et_migrer_schema():
             # Colonnes à vérifier/ajouter (interventions_techniciens table)
             tech_cols = [
                 ("type_erreur_tech", "TEXT DEFAULT ''"),
+                ("pieces_a_deduire", "TEXT DEFAULT ''"),  # JSON array of pieces
             ]
             
             for col, type_def in tech_cols:
@@ -2796,6 +2797,13 @@ def verifier_et_migrer_schema():
                     print("Migration: Ajout de la colonne 'type_erreur_tech' à la table 'interventions_techniciens'.")
                 except Exception as e:
                     print(f"Erreur migration interventions_techniciens: {e}")
+            # Add pieces_a_deduire column for spare parts tracking per technician
+            if "pieces_a_deduire" not in tech_int_cols:
+                try:
+                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN pieces_a_deduire TEXT DEFAULT ''")
+                    print("Migration: Ajout de la colonne 'pieces_a_deduire' à la table 'interventions_techniciens'.")
+                except Exception as e:
+                    print(f"Erreur migration pieces_a_deduire: {e}")
         except Exception as e:
             print(f"Erreur vérification interventions_techniciens: {e}")
 
@@ -3211,6 +3219,9 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         # NOTE: La migration cout_pieces est dans verifier_et_migrer_schema(), PAS ici.
         # Un ALTER TABLE échoué invalide la transaction PostgreSQL !
 
+        # Use correct SQL placeholder based on database type
+        ph = "%s" if USE_PG else "?"
+
         # 1. Gestion du Stock + calcul coût pièces
         synthese_pieces = []
         total_cout_pieces = 0.0
@@ -3229,7 +3240,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                     
                     # Chercher la pièce dans la base de données pour obtenir les infos complètes
                     piece_row = conn.execute(
-                        "SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = %s LIMIT 1",
+                        f"SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = {ph} LIMIT 1",
                         (ref,)
                     ).fetchone()
                     
@@ -3240,10 +3251,10 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                         fournisseur = piece_row.get('fournisseur', fournisseur)
                     
                     # Déduire le stock
-                    conn.execute("""
+                    conn.execute(f"""
                         UPDATE pieces_rechange
-                        SET stock_actuel = stock_actuel - %s
-                        WHERE reference = %s
+                        SET stock_actuel = stock_actuel - {ph}
+                        WHERE reference = {ph}
                     """, (qty, ref))
                     
                     cout_piece = prix * qty
@@ -3308,12 +3319,12 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         sql = f"""
             UPDATE interventions
             SET {", ".join(set_clauses)}
-            WHERE id=%s
+            WHERE id={ph}
         """
         conn.execute(sql, update_values)
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
-        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()
+        row = conn.execute(f"SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id={ph}", (intervention_id,)).fetchone()
         code_erreur = row["code_erreur"] if row else ""
 
         # 4. Auto-Learning : Alimenter la table solutions si un code erreur existe
@@ -3321,9 +3332,9 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         type_intervention = row["type_intervention"] if row else ""
         type_erreur_val = row["type_erreur"] if row else "Hardware"
         if code_erreur and type_intervention != "Formation":
-            conn.execute("""
+            conn.execute(f"""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     cause=excluded.cause,
                     solution=excluded.solution,
@@ -3835,14 +3846,21 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         allowed_fields = [
             'statut', 'probleme_tech', 'cause_tech', 'solution_tech',
             'heure_debut_tech', 'heure_fin_tech', 'duree_minutes_tech',
-            'duree_deplacement_tech', 'notes_tech', 'type_erreur_tech'
+            'duree_deplacement_tech', 'notes_tech', 'type_erreur_tech',
+            'pieces_a_deduire'  # JSON array of pieces to deduct
         ]
         
         for field in allowed_fields:
             if field in data and field != 'technicien_id':
+                # Serialize pieces_a_deduire as JSON if it's a list
+                value = data[field]
+                if field == 'pieces_a_deduire' and isinstance(value, list):
+                    import json
+                    value = json.dumps(value)
+                
                 updates.append(f"{field} = {ph}")
-                params.append(data[field])
-                logger.debug(f"    {field}: {data[field]}")
+                params.append(value)
+                logger.debug(f"    {field}: {value if field != 'pieces_a_deduire' else '(JSON array)'}")
         
         if not updates:
             logger.warning(f"  ⚠️ No fields to update!")
@@ -4213,10 +4231,13 @@ def finalize_intervention_from_techniciens(intervention_id):
                 all(w in words1 for w in words2))
     
     with get_db() as conn:
+        # Use correct SQL placeholder based on database type
+        ph = "%s" if USE_PG else "?"
+        
         # Get ALL technician records (only aggregate Cloturee ones)
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT * FROM interventions_techniciens 
-            WHERE intervention_id = ?
+            WHERE intervention_id = {ph}
             ORDER BY technicien_nom
         """, (intervention_id,)).fetchall()
         
@@ -4262,20 +4283,62 @@ def finalize_intervention_from_techniciens(intervention_id):
         first_error_type = next((t.get('type_erreur_tech', '').strip() for t in completed_techs 
                                  if t.get('type_erreur_tech', '').strip()), '')
         
+        # Aggregate pieces from all technicians
+        import json
+        all_pieces_used = []
+        for tech in completed_techs:
+            pieces_json = tech.get('pieces_a_deduire', '')
+            if pieces_json and isinstance(pieces_json, str):
+                try:
+                    pieces_list = json.loads(pieces_json)
+                    if isinstance(pieces_list, list):
+                        all_pieces_used.extend(pieces_list)
+                except json.JSONDecodeError:
+                    logger.debug(f"Could not parse pieces_a_deduire for tech {tech.get('technicien_nom')}: {pieces_json}")
+        
+        # Format pieces for pieces_utilisees - deduplicate by ref and sum quantities
+        pieces_by_ref = {}
+        for piece in all_pieces_used:
+            if isinstance(piece, dict):
+                ref = piece.get('ref') or piece.get('reference', '')
+                qty = int(piece.get('qty') or piece.get('quantite') or 0)
+                
+                if ref and qty > 0:
+                    if ref not in pieces_by_ref:
+                        pieces_by_ref[ref] = {
+                            'ref': ref,
+                            'qty': 0,
+                            'designation': piece.get('designation', ref),
+                            'fournisseur': piece.get('fournisseur', ''),
+                            'prix_unitaire': float(piece.get('prix_unitaire', 0) or 0)
+                        }
+                    pieces_by_ref[ref]['qty'] += qty
+        
+        # Format pieces for display
+        formatted_pieces = []
+        for ref, piece_info in pieces_by_ref.items():
+            # Format: Désignation | Ref: XXX | Fournisseur: YYY | Qty: Z
+            piece_line = f"{piece_info['designation']} | Ref: {piece_info['ref']} | Fournisseur: {piece_info['fournisseur']} | Qty: {piece_info['qty']}"
+            formatted_pieces.append(piece_line)
+        
+        pieces_utilisees_str = "\n".join(formatted_pieces) if formatted_pieces else ""
+        logger.info(f"Aggregated {len(formatted_pieces)} unique pieces for intervention {intervention_id}: {pieces_utilisees_str}")
+        
         # ✅ AUTOMATICALLY CLOSE the parent intervention (statut = 'Cloturee')
         # This is the key change - we now close it instead of leaving it "En cours"
         date_cloture = datetime.now().isoformat()
         
-        conn.execute("""
+        conn.execute(f"""
             UPDATE interventions 
-            SET statut = 'Cloturee',
-                duree_minutes = ?,
-                duree_deplacement = ?,
-                solution = CASE WHEN solution = '' THEN ? ELSE solution END,
-                type_erreur = CASE WHEN type_erreur = '' OR type_erreur IS NULL THEN ? ELSE type_erreur END,
-                date_cloture = ?
-            WHERE id = ?
-        """, (total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, intervention_id))
+            SET statut = {ph},
+                duree_minutes = {ph},
+                duree_deplacement = {ph},
+                solution = CASE WHEN solution = '' THEN {ph} ELSE solution END,
+                type_erreur = CASE WHEN type_erreur = '' OR type_erreur IS NULL THEN {ph} ELSE type_erreur END,
+                date_cloture = {ph},
+                pieces_utilisees = {ph}
+            WHERE id = {ph}
+        """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, intervention_id))
         
         logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {total_count} technicians completed")
         

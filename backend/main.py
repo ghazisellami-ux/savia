@@ -2875,6 +2875,32 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
         
+        # Deduct stock if technician marked as Cloturee and pieces are provided
+        if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):
+            try:
+                pieces_list = body.get("pieces_a_deduire", [])
+                logger.info(f"   📦 Deducting stock for {len(pieces_list)} pieces...")
+                
+                with get_db() as conn:
+                    for piece in pieces_list:
+                        if not isinstance(piece, dict):
+                            continue
+                        ref = piece.get('ref') or piece.get('reference') or ''
+                        qty = int(piece.get('qty') or piece.get('quantite') or 0)
+                        
+                        if qty > 0 and ref:
+                            logger.info(f"      Deducting: {ref} qty={qty}")
+                            conn.execute("""
+                                UPDATE pieces_rechange
+                                SET stock_actuel = stock_actuel - %s
+                                WHERE reference = %s
+                            """, (qty, ref))
+                
+                logger.info(f"   ✅ Stock deducted successfully")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error deducting stock: {e}")
+                # Don't fail the whole request if stock deduction fails
+        
         # Consolidate any duplicate technician records (with reversed names)
         consolidate_technician_duplicates(intervention_id)
         
@@ -2891,14 +2917,28 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 
                 # Send Telegram: INTERVENTION CLOSED - À FACTURER
                 try:
-                    machine = intervention.get('machine', '')
+                    # Fetch updated intervention data with pieces_utilisees
+                    with get_db() as conn:
+                        updated_row = conn.execute(
+                            "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
+                            (intervention_id,)
+                        ).fetchone()
+                    
+                    if updated_row:
+                        d = dict(updated_row)
+                    else:
+                        d = {'machine': machine, 'pieces_utilisees': ''}
+                    
+                    machine = d.get('machine', '')
                     total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
                     solutions = finalize_result.get('combined_solution', '')
+                    pieces = str(d.get('pieces_utilisees', '') or '').strip()
                     
                     # Get client info from notes or equipement
-                    notes_raw = str(intervention.get('notes', '') or '')
+                    notes_raw = str(d.get('notes', '') or intervention.get('notes', '') or '')
                     client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
                     client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
+                    pieces_line = f"\n🔩 Pièces : {pieces}" if pieces else ""
                     
                     # Message for SAV team: À facturer
                     msg_sav = (
@@ -2907,7 +2947,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
-                        f"🔧 Solutions : {solutions}\n\n"
+                        f"🔧 Solutions : {solutions}"
+                        f"{pieces_line}\n"
                         f"✅ Intervention fermée automatiquement\n"
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
@@ -2922,7 +2963,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
-                        f"🔧 Solutions : {solutions}\n\n"
+                        f"🔧 Solutions : {solutions}"
+                        f"{pieces_line}\n"
                         f"✅ Intervention fermée automatiquement\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )

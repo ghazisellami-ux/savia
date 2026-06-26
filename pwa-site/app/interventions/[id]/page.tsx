@@ -161,8 +161,9 @@ export default function InterventionDetailPage() {
         api.equipements.list(),
       ]);
 
-      console.log('Loaded equipements:', equipements);
-      console.log('Loaded pieces:', pieces);
+      console.log('✅ Loaded equipements:', equipements);
+      console.log('✅ Loaded pieces:', pieces);
+      console.log('  └─ Sample piece:', pieces?.[0] ? { reference: pieces[0].reference, designation: pieces[0].designation, equipement_type: pieces[0].equipement_type } : 'none');
 
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
@@ -170,6 +171,20 @@ export default function InterventionDetailPage() {
       setIntervention(found);
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
+      
+      // DEBUG: Show equipment info
+      const foundEquipment = (Array.isArray(equipements) ? equipements : []).find((eq: any) => (eq.Nom || eq.nom) === found.machine);
+      console.log('🔍 Intervention machine:', found.machine);
+      console.log('🔍 Found equipment:', foundEquipment ? { Nom: foundEquipment.Nom || foundEquipment.nom, Type: foundEquipment.Type || foundEquipment.type } : 'NOT FOUND');
+      if (foundEquipment) {
+        const equipmentType = (foundEquipment.Type || foundEquipment.type || '').toLowerCase().trim();
+        console.log('🔍 Equipment type (normalized):', equipmentType);
+        const matchingPieces = (Array.isArray(pieces) ? pieces : []).filter((p: any) => {
+          const pieceType = (p.equipement_type || '').toLowerCase().trim();
+          return equipmentType === pieceType;
+        });
+        console.log(`🔍 Matching pieces: ${matchingPieces.length} out of ${pieces?.length || 0}`);
+      }
       
       // Parse technicians from comma-separated field
       const techniciens = (found.technicien || '').split(',').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
@@ -179,7 +194,8 @@ export default function InterventionDetailPage() {
       setAllTechnicians(techniciens);
       
       // Set active tab to current user's technician, fallback to first if not found
-      if (techniciens.length > 0) {
+      // Multi-tech mode is only active if there are 2 or more technicians
+      if (techniciens.length > 1) {
         setUsePerTechnicianMode(true);
         
         // Find current user's tab using robust name matching (handles reversed names)
@@ -233,6 +249,45 @@ export default function InterventionDetailPage() {
         end_time:         endTime,
       });
 
+      // Load previously used parts from intervention data
+      if (found.pieces_utilisees) {
+        try {
+          console.log('📦 Found pieces_utilisees:', found.pieces_utilisees);
+          // Parse pieces_utilisees string format: "ref1 (qty) | ref2 (qty)"
+          const pieceLines = String(found.pieces_utilisees || '').split('\n').filter(l => l.trim());
+          const previouslyUsedQty: PiecesQty = {};
+          
+          for (const line of pieceLines) {
+            // Try to extract reference and quantity from line
+            // Format might be: "Designation | Ref: XXX | ... | Qty: Z"
+            const refMatch = line.match(/Ref:\s*([^\s|]+)/i);
+            const qtyMatch = line.match(/Qty:\s*(\d+)/i);
+            
+            if (refMatch && qtyMatch) {
+              const ref = refMatch[1];
+              const qty = parseInt(qtyMatch[1], 10);
+              
+              // Find piece by reference
+              const piece = allPieces.find(p => 
+                (p.reference || '').toLowerCase() === ref.toLowerCase()
+              );
+              
+              if (piece) {
+                previouslyUsedQty[piece.id] = qty;
+                console.log(`✅ Loaded previously used part: ${piece.reference} qty=${qty}`);
+              }
+            }
+          }
+          
+          if (Object.keys(previouslyUsedQty).length > 0) {
+            setPiecesQty(previouslyUsedQty);
+            console.log('📦 Restored pieces_utilisees to state:', previouslyUsedQty);
+          }
+        } catch (e) {
+          console.debug('Error parsing pieces_utilisees:', e);
+        }
+      }
+
       // Load technician records if multi-tech mode
       if (techniciens.length > 0) {
         try {
@@ -268,6 +323,39 @@ export default function InterventionDetailPage() {
               solution_tech: currentUserRec.solution_tech,
               statut: currentUserRec.statut,
             });
+            
+            // Load previously used pieces for this technician
+            if (currentUserRec.pieces_a_deduire) {
+              try {
+                const storedPieces = JSON.parse(currentUserRec.pieces_a_deduire);
+                console.log('📦 Loaded pieces_a_deduire from tech record:', storedPieces);
+                
+                if (Array.isArray(storedPieces)) {
+                  const previouslyUsedQty: PiecesQty = {};
+                  for (const p of storedPieces) {
+                    const ref = p.ref || p.reference;
+                    const qty = parseInt(p.qty || p.quantite || 0, 10);
+                    
+                    // Find piece by reference
+                    const piece = allPieces.find(pc => 
+                      (pc.reference || '').toLowerCase() === (ref || '').toLowerCase()
+                    );
+                    
+                    if (piece && qty > 0) {
+                      previouslyUsedQty[piece.id] = qty;
+                      console.log(`✅ Loaded piece: ${piece.reference} qty=${qty}`);
+                    }
+                  }
+                  
+                  if (Object.keys(previouslyUsedQty).length > 0) {
+                    setPiecesQty(previouslyUsedQty);
+                    console.log('📦 Restored pieces_a_deduire to state:', previouslyUsedQty);
+                  }
+                }
+              } catch (e) {
+                console.debug('Error parsing tech pieces_a_deduire:', e);
+              }
+            }
           } else {
             // No saved data yet, use shared intervention data as template
             setTechForm(prevForm => ({
@@ -296,26 +384,37 @@ export default function InterventionDetailPage() {
   // au type d'équipement de l'équipement de l'intervention
   const filteredPieces = useMemo(() => {
     if (!intervention?.machine || !allPieces || !allEquipements) {
+      console.debug('🔍 filteredPieces: missing data', { machine: intervention?.machine, piecesCount: allPieces?.length, equipementsCount: allEquipements?.length });
       return [];
     }
     
     // Find the equipment for this intervention
     const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
     if (!equipment) {
+      console.debug('🔍 filteredPieces: equipment not found for machine:', intervention.machine);
       return [];
     }
     
     // Get the equipment type - API returns "Type" (capitalized)
     const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
     if (!equipmentType) {
+      console.debug('🔍 filteredPieces: no equipment type found', { equipment });
       return [];
     }
     
+    console.debug('🔍 filteredPieces: filtering with equipmentType:', equipmentType);
+    console.debug('🔍 All pieces:', allPieces.map(p => ({ ref: p.reference, type: p.equipement_type })));
+    
     // Filter pieces by matching equipment type
-    return allPieces.filter(p => {
+    const filtered = allPieces.filter(p => {
       const pieceType = (p.equipement_type || '').toLowerCase().trim();
-      return equipmentType === pieceType;
+      const matches = equipmentType === pieceType;
+      if (!matches) console.debug(`  ❌ ${p.reference}: "${pieceType}" !== "${equipmentType}"`);
+      return matches;
     });
+    
+    console.debug(`✅ Filtered ${filtered.length} pieces from ${allPieces.length}`);
+    return filtered;
   }, [allPieces, allEquipements, intervention?.machine]);
 
   const handleQty = (pieceId: number, qty: number) => {
@@ -342,7 +441,16 @@ export default function InterventionDetailPage() {
     try {
       const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
         const p = allPieces.find(x => x.id === Number(pieceId));
-        return { id: Number(pieceId), reference: p?.reference || '', quantite: qty };
+        return { 
+          id: Number(pieceId), 
+          ref: p?.reference || '',
+          reference: p?.reference || '',
+          qty: qty,
+          quantite: qty,
+          designation: p?.designation || p?.nom || '',
+          prix_unitaire: p?.prix_unitaire || 0,
+          fournisseur: p?.fournisseur || '',
+        };
       });
       const pieces_rupture = piecesRupture.map(p => ({
         id: p.id,
@@ -429,6 +537,21 @@ export default function InterventionDetailPage() {
       const durationMinutes = calculateDuration(techForm.heure_debut_tech, techForm.heure_fin_tech);
       const deploymentMinutes = Math.round(techForm.duree_deplacement_tech);
 
+      // Always collect selected pieces (for stock deduction when tech closes)
+      const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
+        const p = allPieces.find(x => x.id === Number(pieceId));
+        return { 
+          id: Number(pieceId), 
+          ref: p?.reference || '',
+          reference: p?.reference || '',
+          qty: qty,
+          quantite: qty,
+          designation: p?.designation || p?.nom || '',
+          prix_unitaire: p?.prix_unitaire || 0,
+          fournisseur: p?.fournisseur || '',
+        };
+      });
+
       const payload = {
         technicien_nom: currentUserName,
         technicien_id: currentUserTechId, // Send the ID for reliable updating
@@ -442,6 +565,7 @@ export default function InterventionDetailPage() {
         notes_tech: techForm.notes_tech,
         statut: techForm.statut,  // Can be 'Cloturee' to mark as done
         type_erreur_tech: techForm.type_erreur_tech,
+        pieces_a_deduire,  // Include pieces (deducted when tech closes)
       };
 
       console.log('📤 Sending technician data:', payload);
@@ -760,6 +884,73 @@ export default function InterventionDetailPage() {
               <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes personnelles</label>
               <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder="Observations, remarques..." value={techForm.notes_tech} onChange={e => setTechForm(f => ({ ...f, notes_tech: e.target.value }))} />
             </div>
+
+            {/* Pièces de rechange — Multi-tech mode */}
+            {filteredPieces.length > 0 && (
+              <div style={SECTION}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                    <Wrench style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Pièces de rechange
+                  </h3>
+                  {selectedCount > 0 && (
+                    <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
+                      {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
+                  <Tag style={{ width: 12, height: 12, display: 'inline-block', verticalAlign: '-1px', marginRight: '4px' }} /> {intervention?.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
+                </p>
+
+                {/* 3 pièces visibles, défilement pour le reste */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
+                  {filteredPieces.map((p: any) => {
+                    const qty = piecesQty[p.id] || 0;
+                    const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                    const rupture = enStock === 0;
+                    return (
+                      <div key={p.id} style={{
+                        background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa',
+                        border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`,
+                        borderRadius: '10px', padding: '10px 12px',
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        opacity: rupture && qty === 0 ? 0.55 : 1,
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {p.designation || p.nom}
+                          </p>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {p.reference}</span>
+                            <span style={{
+                              fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                              background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                              color: rupture ? 'var(--danger)' : '#15803D',
+                            }}>
+                              {rupture ? <><AlertTriangle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {enStock} en stock</>}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <button type="button" onClick={() => handleQty(p.id, qty - 1)} disabled={qty === 0}
+                            style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            −
+                          </button>
+                          <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>
+                            {qty}
+                          </span>
+                          <button type="button" onClick={() => handleQty(p.id, qty + 1)}
+                            style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: rupture ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: rupture ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Status */}
             <div style={SECTION}>
