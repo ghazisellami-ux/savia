@@ -874,8 +874,8 @@ export default function InterventionDetailPage() {
               </div>
 
               <div>
-                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en minutes)</label>
-                <input type="number" style={INPUT} min={0} value={techForm.duree_deplacement_tech} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: parseInt(e.target.value) || 0 }))} />
+                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en heures)</label>
+                <input type="number" style={INPUT} min={0} step={0.5} value={techForm.duree_deplacement_tech === 0 ? '0' : (techForm.duree_deplacement_tech / 60).toFixed(2)} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: Math.round(parseFloat(e.target.value) * 60) || 0 }))} />
               </div>
             </div>
 
@@ -983,14 +983,57 @@ export default function InterventionDetailPage() {
               if (!techData || !techData.technicien_nom) {
                 return <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Pas encore de données pour ce technicien.</p>;
               }
+              
+              // Helper to extract HH:MM format (remove seconds)
+              const formatTime = (time: string) => time ? time.substring(0, 5) : '—';
+              
+              // Helper to format duration in hours
+              const formatDuration = (minutes: number) => {
+                if (!minutes) return '0h';
+                const hours = (minutes / 60).toFixed(2);
+                return hours.endsWith('.00') ? hours.slice(0, -3) + 'h' : hours + 'h';
+              };
+              
+              // Helper to format deployment in hours (fixing the 0 bug)
+              const formatDeployment = (minutes: number) => {
+                if (!minutes || minutes === 0) return '0h';
+                const hours = (minutes / 60).toFixed(2);
+                return hours.endsWith('.00') ? hours.slice(0, -3) + 'h' : hours + 'h';
+              };
+              
+              // Parse pieces_a_deduire JSON if available
+              let usedPieces: any[] = [];
+              if (techData.pieces_a_deduire) {
+                try {
+                  const parsed = typeof techData.pieces_a_deduire === 'string' 
+                    ? JSON.parse(techData.pieces_a_deduire) 
+                    : techData.pieces_a_deduire;
+                  usedPieces = Array.isArray(parsed) ? parsed : [];
+                } catch (e) {
+                  console.debug('Could not parse pieces_a_deduire:', e);
+                }
+              }
+              
               console.log("ss", techData)
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
                   <div><strong>Problème:</strong> {techData.probleme_tech || '—'}</div>
                   <div><strong>Cause:</strong> {techData.cause_tech || '—'}</div>
                   <div><strong>Solution:</strong> {techData.solution_tech || '—'}</div>
-                  <div><strong>Horaires:</strong> {techData.heure_debut_tech} à {techData.heure_fin_tech}</div>
-                  <div><strong>Durée:</strong> {techData.duree_minutes_tech} min | <strong>Déplacement:</strong> {techData.duree_deplacement_tech} min</div>
+                  <div><strong>Horaires:</strong> {formatTime(techData.heure_debut_tech)} à {formatTime(techData.heure_fin_tech)}</div>
+                  <div><strong>Durée:</strong> {formatDuration(techData.duree_minutes_tech)} | <strong>Déplacement:</strong> {formatDeployment(techData.duree_deplacement_tech)}</div>
+                  {usedPieces.length > 0 && (
+                    <div>
+                      <strong>Pièces utilisées:</strong>
+                      <div style={{ marginLeft: '12px', marginTop: '6px', display: 'grid', gap: '6px' }}>
+                        {usedPieces.map((piece: any, idx: number) => (
+                          <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                            • {piece.designation || piece.ref} | Ref: {piece.ref || piece.reference} | Qty: {piece.qty || piece.quantite}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div><strong>Statut:</strong> <span style={{ ...statutStyle, padding: '4px 12px', borderRadius: '6px', display: 'inline-block' }}>{techData.statut}</span></div>
                 </div>
               );
