@@ -42,9 +42,12 @@ export default function InterventionCard({ id, machine, client, statut, type, da
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
         <div>
-          <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--navy)' }}>{machine}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--navy)' }}>{machine}</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-dim)', background: 'rgba(86,124,141,0.1)', padding: '2px 8px', borderRadius: '4px' }}>#{id}</span>
+          </div>
           {offline && (
-            <span style={{ marginLeft: '6px', background: 'rgba(245,158,11,0.15)', color: '#B45309', fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px' }}>OFFLINE</span>
+            <span style={{ marginTop: '4px', marginLeft: '0px', background: 'rgba(245,158,11,0.15)', color: '#B45309', fontSize: '0.65rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>OFFLINE</span>
           )}
         </div>
         <span style={{ ...s, fontSize: '0.7rem', fontWeight: 700, padding: '3px 10px', borderRadius: '20px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>

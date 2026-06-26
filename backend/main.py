@@ -961,13 +961,15 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     bot_key: 'telegram' (technicien), 'telegram_sav', 'telegram_manager', 'telegram_stock'
     """
     import urllib.request, urllib.parse, json as _json
+    from db_engine import USE_PG
     token_key = f"{bot_key}_token"
     chat_key = f"{bot_key}_chat_id"
     try:
         with get_db() as conn:
+            # Use database-agnostic query (SQLite + PostgreSQL compatible)
             rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ANY(?)",
-                ([token_key, chat_key],)
+                "SELECT cle, valeur FROM config_client WHERE cle = ? OR cle = ?",
+                (token_key, chat_key)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}
         token   = config.get(token_key, "").strip()
@@ -2552,10 +2554,11 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
     
-    # Support for multiple technicians: can be string (single) or list (multiple)
+    # Support for multiple technicians: can be string (single/comma-separated) or list (multiple)
     techniciens_input = body.get("technicien_assigne") or body.get("techniciens") or []
     if isinstance(techniciens_input, str):
-        techniciens_input = [techniciens_input] if techniciens_input else []
+        # If it's a comma-separated string, split it
+        techniciens_input = [t.strip() for t in techniciens_input.split(",")] if techniciens_input else []
     
     # Convert all to full names
     techniciens_fullnames = []
@@ -2595,17 +2598,14 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         ).fetchone()
         demande_id = new_demande["id"] if new_demande else None
 
-        # --- Create PARENT intervention (visible in table) ---
-        today = datetime.now().strftime("%Y-%m-%d")
-        notes_parent = f"[{client}] Demande #{demande_id}"
+        # --- Create SINGLE SHARED intervention (visible to all assigned technicians) ---
+        # NEW APPROACH: One intervention for ALL technicians instead of N children
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        notes_intervention = f"[{client}] Demande #{demande_id}"
         
-        # Determine if single or multi-tech scenario
-        is_multi_tech = len(techniciens_fullnames) > 1
-        
-        # For single tech: parent is visible with "Assignée" status (technicien sees it and can accept/refuse)
-        # For multi tech: parent is temporary, hidden, tracking status only
-        parent_statut = "Assignée" if not is_multi_tech else "En attente"
-        parent_is_temporary = 1 if is_multi_tech else 0
+        # Store all technicians in technicien field (comma-separated for reference)
+        # Each tech will update their own row in interventions_techniciens
+        all_techs_str = ", ".join(techniciens_fullnames)
         
         conn.execute(f"""
             INSERT INTO interventions
@@ -2614,77 +2614,44 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                is_temporary, parent_intervention_id)
             VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
-            today,
+            now,
             equipement,
-            first_tech,  # Primary tech on parent
+            all_techs_str,  # Store all technician names
             "Corrective",
             description[:500],
             description[:500],
             code_erreur,
-            parent_statut,  # "Assignée" for single tech, "En attente" for multi
+            "Assignée",  # Always "Assignée" for multi-tech shared intervention
             urgence,
-            notes_parent,
-            parent_is_temporary,  # 0=visible (single), 1=hidden (multi)
-            None,  # parent_intervention_id = NULL (this IS the parent)
+            notes_intervention,
+            0,  # is_temporary = FALSE (visible to all technicians)
+            None,  # No parent - this is a standalone intervention
         ))
         
-        parent_intervention = conn.execute(
+        intervention = conn.execute(
             "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        parent_intervention_id = parent_intervention["id"] if parent_intervention else None
+        intervention_id = intervention["id"] if intervention else None
         
-        # Link demand to parent intervention
-        if parent_intervention_id:
+        # Link demand to intervention
+        if intervention_id:
             conn.execute(
                 f"UPDATE demandes_intervention SET intervention_id = {ph} WHERE id = {ph}",
-                (parent_intervention_id, demande_id)
+                (intervention_id, demande_id)
             )
         
-        # --- Create CHILD interventions (one per technician, temporary) - ONLY FOR MULTI-TECH ---
-        if is_multi_tech:
+        # --- Populate interventions_techniciens table: one row per technician ---
+        # This table tracks per-technician data (hours, solution, statut)
+        if intervention_id:
             for tech_fullname in techniciens_fullnames:
                 conn.execute(f"""
-                    INSERT INTO interventions
-                      (date, machine, technicien, type_intervention, description,
-                       probleme, code_erreur, statut, priorite, notes,
-                       is_temporary, parent_intervention_id)
-                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                """, (
-                    today,
-                    equipement,
-                    tech_fullname,
-                    "Corrective",
-                    description[:500],
-                    description[:500],
-                    code_erreur,
-                    "Assignée",  # Child starts as "Assignée"
-                    urgence,
-                    f"[ENFANT] {notes_parent}",
-                    1,  # is_temporary = TRUE (hidden from main table)
-                    parent_intervention_id,  # Link to parent
-                ))
-                
-                child_intervention = conn.execute(
-                    "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                child_id = child_intervention["id"] if child_intervention else None
-                
-                # Create entry in interventions_techniciens table WITHIN SAME TRANSACTION
-                if child_id:
-                    conn.execute(f"""
-                        INSERT INTO interventions_techniciens 
-                        (intervention_id, technicien_nom, statut)
-                        VALUES ({ph}, {ph}, 'Assigné')
-                    """, (child_id, tech_fullname))
-                    logger.info(f"Child intervention #{child_id} created for {tech_fullname}")
-        else:
-            # For SINGLE TECH: create entry in interventions_techniciens for the parent
-            conn.execute(f"""
-                INSERT INTO interventions_techniciens 
-                (intervention_id, technicien_nom, statut)
-                VALUES ({ph}, {ph}, 'Assigné')
-            """, (parent_intervention_id, first_tech))
-            logger.info(f"Parent intervention #{parent_intervention_id} assigned to {first_tech}")
+                    INSERT INTO interventions_techniciens 
+                    (intervention_id, technicien_nom, statut)
+                    VALUES ({ph}, {ph}, 'Assigné')
+                """, (intervention_id, tech_fullname))
+                logger.info(f"[MULTI-TECH] Technician '{tech_fullname}' assigned to intervention #{intervention_id}")
+            
+            logger.info(f"[MULTI-TECH] Intervention #{intervention_id} created as SHARED with {len(techniciens_fullnames)} technicians: {all_techs_str}")
         
         _trigger_backup()
 
@@ -2707,11 +2674,10 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
-    _send_telegram_bot("telegram_sav", msg)
     
-    logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Parent intervention #{parent_intervention_id}")
+    logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Intervention PARTAGÉE #{intervention_id}")
     
-    return {"success": True, "demande_id": demande_id, "parent_intervention_id": parent_intervention_id}
+    return {"success": True, "demande_id": demande_id, "intervention_id": intervention_id}
 
 
 @app.put("/api/demandes/{demande_id}/statut")
@@ -2795,7 +2761,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
 
                 if not already_linked:
                     # Créer l'intervention
-                    today = datetime.now().strftime("%Y-%m-%d")
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     notes_interv = f"[{client}] Demande #{demande_id}"
                     if notes_traitement:
                         notes_interv += f" — {notes_traitement}"
@@ -2805,7 +2771,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                            probleme, code_erreur, statut, priorite, notes)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        today,
+                        now,
                         equipement,
                         technicien_assigne,
                         "Corrective",
@@ -2865,8 +2831,12 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
     from db_engine import (
         get_db, update_interventions_techniciens, 
         get_or_create_interventions_techniciens, get_techniciens_status,
-        finalize_intervention_from_techniciens
+        finalize_intervention_from_techniciens, consolidate_technician_duplicates
     )
+    
+    logger.info(f"🔵 PUT /api/interventions/{intervention_id}/technicien-data CALLED")
+    logger.info(f"   User: {user.get('nom')} (role: {user.get('role')})")
+    logger.info(f"   Body: {body}")
     
     try:
         # Get intervention to verify it exists
@@ -2894,56 +2864,128 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         
         # Get or create entry for this technician
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
+        logger.info(f"   ✓ Tech name: {tech_nom}")
+        
         get_or_create_interventions_techniciens(intervention_id, tech_nom)
         
         # Update the per-technician data
         success = update_interventions_techniciens(intervention_id, tech_nom, body)
+        logger.info(f"   ✓ Update result: {success}")
         
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
+        
+        # Deduct stock if technician marked as Cloturee and pieces are provided
+        if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):
+            try:
+                pieces_list = body.get("pieces_a_deduire", [])
+                logger.info(f"   📦 Deducting stock for {len(pieces_list)} pieces...")
+                
+                with get_db() as conn:
+                    for piece in pieces_list:
+                        if not isinstance(piece, dict):
+                            continue
+                        ref = piece.get('ref') or piece.get('reference') or ''
+                        qty = int(piece.get('qty') or piece.get('quantite') or 0)
+                        
+                        if qty > 0 and ref:
+                            logger.info(f"      Deducting: {ref} qty={qty}")
+                            conn.execute("""
+                                UPDATE pieces_rechange
+                                SET stock_actuel = stock_actuel - %s
+                                WHERE reference = %s
+                            """, (qty, ref))
+                
+                logger.info(f"   ✅ Stock deducted successfully")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error deducting stock: {e}")
+                # Don't fail the whole request if stock deduction fails
+        
+        # Consolidate any duplicate technician records (with reversed names)
+        consolidate_technician_duplicates(intervention_id)
         
         # Get current status
         status_info = get_techniciens_status(intervention_id)
         
         # Check if all technicians are now completed
         if status_info['is_all_completed']:
-            # All done - aggregate data (but DO NOT close the parent intervention)
+            # All done - aggregate data AND automatically close the parent intervention
             finalize_result = finalize_intervention_from_techniciens(intervention_id)
             
             if finalize_result.get('success'):
-                logger.info(f"✅ Intervention #{intervention_id} data aggregated from all {status_info['total']} technicians")
+                logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {status_info['total']} technicians completed")
                 
-                # Send Telegram: ALL TECHNICIANS COMPLETED (but still waiting for admin closure)
+                # Send Telegram: INTERVENTION CLOSED - À FACTURER
                 try:
-                    machine = intervention.get('machine', '')
+                    # Fetch updated intervention data with pieces_utilisees
+                    with get_db() as conn:
+                        updated_row = conn.execute(
+                            "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
+                            (intervention_id,)
+                        ).fetchone()
+                    
+                    if updated_row:
+                        d = dict(updated_row)
+                    else:
+                        d = {'machine': machine, 'pieces_utilisees': ''}
+                    
+                    machine = d.get('machine', '')
                     total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
                     solutions = finalize_result.get('combined_solution', '')
+                    pieces = str(d.get('pieces_utilisees', '') or '').strip()
                     
-                    msg_tg = (
-                        f"✅ <b>TOUS LES TECHNICIENS COMPLÉTÉS — #{intervention_id}</b>\n\n"
-                        f"🏥 Machine : <b>{machine}</b>\n"
+                    # Get client info from notes or equipement
+                    notes_raw = str(d.get('notes', '') or intervention.get('notes', '') or '')
+                    client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
+                    client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
+                    pieces_line = f"\n🔩 Pièces : {pieces}" if pieces else ""
+                    
+                    # Message for SAV team: À facturer
+                    msg_sav = (
+                        f"📋 <b>Intervention À facturer — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>"
+                        f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
-                        f"🔧 Solutions : {solutions}\n\n"
-                        f"⏳ En attente de clôture administrative...\n"
+                        f"🔧 Solutions : {solutions}"
+                        f"{pieces_line}\n"
+                        f"✅ Intervention fermée automatiquement\n"
+                        f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram_bot("telegram_sav", msg_tg)
-                    _send_telegram(msg_tg)
+                    _send_telegram_bot("telegram_sav", msg_sav)
+                    logger.info(f"✅ Telegram SAV message sent: Intervention #{intervention_id} à facturer")
+                    
+                    # Message for technicians: INTERVENTION CLÔTURÉE
+                    msg_tech = (
+                        f"✅ <b>INTERVENTION CLÔTURÉE — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>"
+                        f"{client_line}\n"
+                        f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
+                        f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🔧 Solutions : {solutions}"
+                        f"{pieces_line}\n"
+                        f"✅ Intervention fermée automatiquement\n"
+                        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    )
+                    _send_telegram(msg_tech)
+                    logger.info(f"✅ Telegram TECH message sent: Intervention #{intervention_id} clôturée")
                 except Exception as te:
-                    logger.error(f"Telegram notification error: {te}")
+                    logger.warning(f"⚠️ Closing telegram notifications failed: {te}")
                 
                 return {
                     "success": True,
-                    "message": "✅ Tous les techniciens ont complété leurs données. Intervention en attente de clôture administrative.",
-                    "intervention_finalized": False,
-                    "status": "ALL_COMPLETED",
+                    "message": f"✅ Tous les techniciens ont complété! Intervention #{intervention_id} clôturée automatiquement.",
+                    "intervention_finalized": True,
+                    "status": "CLOSED",
                     "completed": status_info['completed'],
                     "total": status_info['total']
                 }
             else:
-                return HTTPException(status_code=500, detail="Erreur lors de l'agrégation")
+                logger.error(f"❌ Finalization failed: {finalize_result}")
+                return HTTPException(status_code=500, detail="Erreur lors de la finalisation")
         else:
+            logger.info(f"   ✓ Partial completion: {status_info['completed']}/{status_info['total']}")
             # Partial completion - still waiting for others
             pending_list = ", ".join(status_info['pending_names'])
             logger.info(f"⏳ Intervention #{intervention_id} partially complete: {status_info['completed']}/{status_info['total']} (pending: {pending_list})")
@@ -2962,9 +3004,11 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 
                 msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 _send_telegram(msg_tg)
+                logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
             except Exception as te:
-                logger.error(f"Telegram notification error: {te}")
+                logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
             
+            logger.info(f"   ✓ Returning PARTIAL response with {len(status_info['pending_names'])} pending: {status_info['pending_names']}")
             return {
                 "success": True,
                 "message": f"Données sauvegardées ({status_info['completed']}/{status_info['total']} techniciens complétés)",
@@ -2976,9 +3020,146 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             }
         
     except HTTPException:
+        logger.error(f"❌ HTTPException in update_technicien_data")
         raise
     except Exception as e:
-        logger.error(f"Erreur update_technicien_data: {e}")
+        logger.error(f"❌ Erreur update_technicien_data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/interventions/{intervention_id}/techniciens")
+def get_intervention_techniciens(intervention_id: int, user: dict = Depends(_verify_token)):
+    """
+    Récupère tous les enregistrements de techniciens pour une intervention.
+    Retourne les données per-technician depuis interventions_techniciens table.
+    """
+    from db_engine import get_db, get_interventions_techniciens
+    
+    try:
+        # Verify intervention exists
+        with get_db() as conn:
+            intervention = conn.execute(
+                "SELECT id FROM interventions WHERE id = %s",
+                (intervention_id,)
+            ).fetchone()
+            
+            if not intervention:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        
+        # Get technician records
+        tech_records = get_interventions_techniciens(intervention_id)
+        
+        # Convert to list of dicts for JSON serialization
+        result = []
+        for record in tech_records:
+            result.append(dict(record) if hasattr(record, 'keys') else record)
+        
+        return result
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur get_intervention_techniciens: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/interventions/{intervention_id}/techniciens-aggregated")
+def get_intervention_techniciens_aggregated(intervention_id: int, user: dict = Depends(_verify_token)):
+    """
+    Retourne les données agrégées de tous les techniciens pour une intervention.
+    Utilisé pour afficher un tableau récapitulatif et générer les PDFs multi-tech.
+    
+    Retourne:
+    {
+        "intervention_id": int,
+        "total_duree_minutes": int (somme de tous),
+        "total_duree_deplacement": int (somme de tous),
+        "tous_solutions": [{"technicien": str, "solution": str}],
+        "statut_completion": bool (tous complétés?),
+        "techniciens": [
+            {
+                "nom": str,
+                "probleme": str,
+                "cause": str,
+                "solution": str,
+                "heure_debut": str (HH:MM),
+                "heure_fin": str (HH:MM),
+                "duree_minutes": int,
+                "duree_deplacement": int,
+                "statut": str
+            }
+        ]
+    }
+    """
+    from db_engine import get_db, get_interventions_techniciens
+    
+    try:
+        # Verify intervention exists
+        with get_db() as conn:
+            intervention = conn.execute(
+                "SELECT id, statut FROM interventions WHERE id = %s",
+                (intervention_id,)
+            ).fetchone()
+            
+            if not intervention:
+                raise HTTPException(status_code=404, detail="Intervention non trouvée")
+        
+        # Get all technician records
+        tech_records = get_interventions_techniciens(intervention_id)
+        
+        # Aggregate data
+        total_duree = 0
+        total_deplacement = 0
+        solutions_list = []
+        all_completed = True
+        techniciens_data = []
+        
+        for record in tech_records:
+            rec_dict = dict(record) if hasattr(record, 'keys') else record
+            
+            duree = int(rec_dict.get('duree_minutes_tech') or 0)
+            deplacement = int(rec_dict.get('duree_deplacement_tech') or 0)
+            
+            total_duree += duree
+            total_deplacement += deplacement
+            
+            statut = str(rec_dict.get('statut') or 'En cours')
+            if statut != 'Cloturee':
+                all_completed = False
+            
+            solution = str(rec_dict.get('solution_tech') or '')
+            if solution.strip():
+                solutions_list.append({
+                    "technicien": rec_dict.get('technicien_nom', 'Unknown'),
+                    "solution": solution
+                })
+            
+            # Build tech data entry
+            techniciens_data.append({
+                "nom": rec_dict.get('technicien_nom', 'Unknown'),
+                "probleme": str(rec_dict.get('probleme_tech') or ''),
+                "cause": str(rec_dict.get('cause_tech') or ''),
+                "solution": solution,
+                "heure_debut": str(rec_dict.get('heure_debut_tech') or ''),
+                "heure_fin": str(rec_dict.get('heure_fin_tech') or ''),
+                "duree_minutes": duree,
+                "duree_deplacement": deplacement,
+                "statut": statut
+            })
+        
+        return {
+            "intervention_id": intervention_id,
+            "total_duree_minutes": total_duree,
+            "total_duree_deplacement": total_deplacement,
+            "tous_solutions": solutions_list,
+            "statut_completion": all_completed,
+            "techniciens": techniciens_data
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur get_intervention_techniciens_aggregated: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -6788,13 +6969,17 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
 
 @app.post("/api/interventions/{interv_id}/fiche-pdf")
 def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
-    """Generate a professional intervention fiche PDF with all details, logos, and signature areas."""
+    """Generate a professional intervention fiche PDF with all details, logos, and signature areas.
+    
+    For multi-technician interventions, includes a table with one row per technician.
+    """
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
     from io import BytesIO
     from fastapi.responses import Response
     import base64 as _b64
     import urllib.request as _ur
+    from db_engine import get_interventions_techniciens
 
     SAVIA_LOGO = "/app/logo-savia.png"
 
@@ -6808,6 +6993,20 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
                 interv = match.iloc[0].to_dict()
         if not interv:
             raise HTTPException(status_code=404, detail="Intervention non trouvee")
+
+        # Check if multi-technician intervention (has comma-separated techniciens)
+        technicien_str = str(interv.get("technicien", "")).strip()
+        technicians = [t.strip() for t in technicien_str.split(",") if t.strip()]
+        is_multi_tech = len(technicians) > 1
+        
+        # Load technician records if multi-tech
+        tech_records = []
+        if is_multi_tech:
+            try:
+                tech_records = get_interventions_techniciens(interv_id)
+            except Exception as e:
+                logger.debug(f"Could not load tech records: {e}")
+                tech_records = []
 
         # Fetch equipment to determine warranty and serial number
         df_equip = lire_equipements()
@@ -6958,78 +7157,110 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         # TRAVAUX EFFECTUES - Table with Date, Start, End, Travel
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(W, 6, "Travaux Effectues")
+        if is_multi_tech:
+            pdf.cell(W, 6, "Travaux Effectues (Multi-Technicien)")
+        else:
+            pdf.cell(W, 6, "Travaux Effectues")
         pdf.ln(7)  # Increased space before table
         
-        # Table header
+        # Table header - Add Technicien column for multi-tech
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_fill_color(200, 200, 200)
         pdf.set_text_color(0, 0, 0)
-        col_widths = [35, 30, 30, 30, 50]
-        headers = ["Date", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution Appliquee"]
+        
+        if is_multi_tech:
+            # Multi-tech table: Technicien, Debut, Fin, Trajet, Solution
+            col_widths = [30, 25, 25, 25, 50]
+            headers = ["Technicien", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution"]
+        else:
+            # Single-tech table: Date, Debut, Fin, Trajet, Solution
+            col_widths = [35, 30, 30, 30, 50]
+            headers = ["Date", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution Appliquee"]
+        
         for i, header in enumerate(headers):
             pdf.cell(col_widths[i], 6, header, border=1, align="C", fill=True)
         pdf.ln(6)
         
-        # Table data row
+        # Table data rows
         pdf.set_font("Helvetica", "", 8)
         pdf.set_fill_color(255, 255, 255)
         pdf.set_text_color(0, 0, 0)
         
-        # Extract time data - USE start_time and end_time from database, with fallbacks
-        date_val = date_str
-        
-        # Get start_time and end_time directly from database (TIME type columns)
-        start_time = str(interv.get("start_time", "") or "").strip()
-        if not start_time or start_time == "None" or start_time == "00:00":
-            # Fallback: try to extract from date_debut_intervention
-            start_time_fb = str(interv.get("date_debut_intervention", "") or "").strip()
-            if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 16:
-                start_time = start_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
-            else:
-                # Second fallback: use date field
-                start_time_fb2 = str(interv.get("date", "") or "").strip()
-                if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 16:
-                    start_time = start_time_fb2[11:16]  # Extract HH:MM
+        if is_multi_tech and tech_records:
+            # Multi-tech mode: one row per technician from interventions_techniciens
+            for tech_record in tech_records:
+                rec_dict = dict(tech_record) if hasattr(tech_record, 'keys') else tech_record
+                
+                tech_nom = str(rec_dict.get('technicien_nom', 'Unknown'))[:20]
+                heure_debut = str(rec_dict.get('heure_debut_tech', '-') or '-')[:5]
+                heure_fin = str(rec_dict.get('heure_fin_tech', '-') or '-')[:5]
+                duree_depl_min = int(rec_dict.get('duree_deplacement_tech', 0) or 0)
+                trajet = f"{round(duree_depl_min / 60, 1)}" if duree_depl_min > 0 else "-"
+                solution = _sanitize(str(rec_dict.get('solution_tech', ''))[:50])
+                
+                pdf.cell(col_widths[0], 6, _sanitize(tech_nom), border=1)
+                pdf.cell(col_widths[1], 6, _sanitize(heure_debut), border=1)
+                pdf.cell(col_widths[2], 6, _sanitize(heure_fin), border=1)
+                pdf.cell(col_widths[3], 6, _sanitize(trajet), border=1)
+                pdf.cell(col_widths[4], 6, solution, border=1)
+                pdf.ln(6)
+        else:
+            # Single-tech mode: original behavior
+            # Extract time data - USE start_time and end_time from database, with fallbacks
+            date_val = date_str
+            
+            # Get start_time and end_time directly from database (TIME type columns)
+            start_time = str(interv.get("start_time", "") or "").strip()
+            if not start_time or start_time == "None" or start_time == "00:00":
+                # Fallback: try to extract from date_debut_intervention
+                start_time_fb = str(interv.get("date_debut_intervention", "") or "").strip()
+                if start_time_fb and start_time_fb != "None" and len(start_time_fb) >= 16:
+                    start_time = start_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
                 else:
-                    start_time = "-"
-        else:
-            # Ensure we only have HH:MM (remove seconds if present)
-            if len(start_time) > 5 and start_time[5] == ':':
-                start_time = start_time[:5]  # Remove :SS
-        
-        end_time = str(interv.get("end_time", "") or "").strip()
-        if not end_time or end_time == "None" or end_time == "00:00":
-            # Fallback: use date_cloture
-            end_time_fb = str(interv.get("date_cloture", "") or "").strip()
-            if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 16:
-                end_time = end_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
+                    # Second fallback: use date field
+                    start_time_fb2 = str(interv.get("date", "") or "").strip()
+                    if start_time_fb2 and start_time_fb2 != "None" and len(start_time_fb2) >= 16:
+                        start_time = start_time_fb2[11:16]  # Extract HH:MM
+                    else:
+                        start_time = "-"
             else:
-                end_time = "-"
-        else:
-            # Ensure we only have HH:MM (remove seconds if present)
-            if len(end_time) > 5 and end_time[5] == ':':
-                end_time = end_time[:5]  # Remove :SS
+                # Ensure we only have HH:MM (remove seconds if present)
+                if len(start_time) > 5 and start_time[5] == ':':
+                    start_time = start_time[:5]  # Remove :SS
+            
+            end_time = str(interv.get("end_time", "") or "").strip()
+            if not end_time or end_time == "None" or end_time == "00:00":
+                # Fallback: use date_cloture
+                end_time_fb = str(interv.get("date_cloture", "") or "").strip()
+                if end_time_fb and end_time_fb != "None" and len(end_time_fb) >= 16:
+                    end_time = end_time_fb[11:16]  # Extract HH:MM (indices 11-16 exclusive)
+                else:
+                    end_time = "-"
+            else:
+                # Ensure we only have HH:MM (remove seconds if present)
+                if len(end_time) > 5 and end_time[5] == ':':
+                    end_time = end_time[:5]  # Remove :SS
+            
+            # Trajet: duree_deplacement is in MINUTES, convert to hours
+            trajet = f"{round(deplacement_min / 60, 1)}" if deplacement_min > 0 else "-"
+            description = _sanitize(str(interv.get("solution", ""))[:50])  # Solution field
+            
+            # Row with borders - SANITIZE ALL VALUES
+            pdf.cell(col_widths[0], 6, _sanitize(date_val), border=1)
+            pdf.cell(col_widths[1], 6, _sanitize(start_time), border=1)
+            pdf.cell(col_widths[2], 6, _sanitize(end_time), border=1)
+            pdf.cell(col_widths[3], 6, _sanitize(trajet), border=1)
+            pdf.cell(col_widths[4], 6, description, border=1)
+            pdf.ln(6)
         
-        # Trajet: duree_deplacement is in MINUTES, convert to hours
-        trajet = f"{round(deplacement_min / 60, 1)}" if deplacement_min > 0 else "-"
-        description = _sanitize(str(interv.get("solution", ""))[:50])  # Solution field
-        
-        # Row with borders - SANITIZE ALL VALUES
-        pdf.cell(col_widths[0], 6, _sanitize(date_val), border=1)
-        pdf.cell(col_widths[1], 6, _sanitize(start_time), border=1)
-        pdf.cell(col_widths[2], 6, _sanitize(end_time), border=1)
-        pdf.cell(col_widths[3], 6, _sanitize(trajet), border=1)
-        pdf.cell(col_widths[4], 6, description, border=1)
-        pdf.ln(6)
-        
-        # Add empty rows for manual fill (per model)
-        for _ in range(2):
-            pdf.cell(col_widths[0], 6, "", border=1)
-            pdf.cell(col_widths[1], 6, "", border=1)
-            pdf.cell(col_widths[2], 6, "", border=1)
-            pdf.cell(col_widths[3], 6, "", border=1)
-            pdf.cell(col_widths[4], 6, "", border=1)
+        # Add empty rows for manual fill (per model) - only for single-tech
+        if not is_multi_tech:
+            for _ in range(2):
+                pdf.cell(col_widths[0], 6, "", border=1)
+                pdf.cell(col_widths[1], 6, "", border=1)
+                pdf.cell(col_widths[2], 6, "", border=1)
+                pdf.cell(col_widths[3], 6, "", border=1)
+                pdf.cell(col_widths[4], 6, "", border=1)
             pdf.ln(6)
         
         pdf.ln(8)

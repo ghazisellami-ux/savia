@@ -47,7 +47,7 @@ export default function NouvelleInterventionPage() {
 
   const [form, setForm] = useState({
     client: '', machine: '', technicien_assigne: '', type_intervention: 'Corrective',
-    statut: 'En cours', description: '', probleme: '', cause: '', solution: '',
+    statut: 'Assignée', description: '', probleme: '', cause: '', solution: '',
     duree: 0, deplacement: 0, code_erreur: '', type_erreur: '', priorite: '',
     pieces_utilisees: [] as number[], notes: '', validation_client: 'En attente',
   });
@@ -166,6 +166,7 @@ export default function NouvelleInterventionPage() {
               <div>
                 <label style={LABEL}>Statut</label>
                 <select style={INPUT} value={form.statut} onChange={e => set('statut', e.target.value)}>
+                  <option>Assignée</option>
                   <option>En cours</option>
                   <option>En attente de piece</option>
                   <option>Cloturee</option>

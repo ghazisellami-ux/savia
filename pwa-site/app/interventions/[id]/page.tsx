@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { isLoggedIn } from '@/lib/auth';
+import { isLoggedIn, getUser } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import TimeScrollPicker from '@/components/TimeScrollPicker';
@@ -46,6 +46,31 @@ function coreWords(s: string): string[] {
   return s.toLowerCase().replace(/[()\-_/]/g, ' ').split(/\s+/).filter(w => w.length > 1);
 }
 
+// Robust name matching that handles reversed names like "Ghazi Sellami" vs "Sellami Ghazi"
+function namesMatch(name1: string, name2: string): boolean {
+  if (!name1 || !name2) return false;
+  
+  const n1Lower = name1.toLowerCase().trim();
+  const n2Lower = name2.toLowerCase().trim();
+  
+  // Exact match
+  if (n1Lower === n2Lower) return true;
+  
+  // Split into words and get meaningful words (length > 1)
+  const words1 = n1Lower.split(/\s+/).filter(w => w.length > 1);
+  const words2 = n2Lower.split(/\s+/).filter(w => w.length > 1);
+  
+  // If different number of words, can't match (unless one is subset)
+  if (words1.length === 0 || words2.length === 0) return false;
+  
+  // Check if all words in name1 exist in name2 (handles reversed order)
+  const allWords1InName2 = words1.every(w1 => words2.some(w2 => w1 === w2));
+  const allWords2InName1 = words2.every(w2 => words1.some(w1 => w2 === w1));
+  
+  // Both should match if they're the same person in different order
+  return allWords1InName2 && allWords2InName1;
+}
+
 // Vérifie si le type de pièce correspond à l'équipement de l'intervention
 // Compare directement les types d'équipement
 function matchesMachine(machineEquipmentType: string, pieceEquipmentType: string): boolean {
@@ -84,7 +109,10 @@ export default function InterventionDetailPage() {
   // Per-technician data state
   const [technicianRecords, setTechnicianRecords] = useState<any[]>([]);
   const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserTechId, setCurrentUserTechId] = useState<number | null>(null); // Store the tech ID
   const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
+  const [activeTabTech, setActiveTabTech] = useState(''); // Track active technician tab
+  const [allTechnicians, setAllTechnicians] = useState<string[]>([]); // All technicians for this intervention
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
@@ -104,18 +132,28 @@ export default function InterventionDetailPage() {
     duree_deplacement_tech: 0,
     notes_tech: '',
     statut: 'En cours',
+    type_erreur_tech: '',
   });
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
-    // Get current user name from localStorage (set during login)
-    const userName = localStorage.getItem('savia_site_user_nom') || '';
+    // Get current user name from auth helper
+    const user = getUser();
+    const userName = user?.nom || '';
     setCurrentUserName(userName);
-    loadAll();
-  }, [id]);
+    console.log('📝 Current user from auth:', { userName, user });
+  }, []);
+
+  // Separate effect for loading data - waits for currentUserName to be set
+  useEffect(() => {
+    if (currentUserName) {
+      loadAll();
+    }
+  }, [currentUserName, id]);
 
   const loadAll = async () => {
     setLoading(true);
+    console.log('🔄 loadAll() started with currentUserName:', currentUserName);
     try {
       const [all, pieces, equipements] = await Promise.all([
         api.interventions.list(),
@@ -123,8 +161,9 @@ export default function InterventionDetailPage() {
         api.equipements.list(),
       ]);
 
-      console.log('Loaded equipements:', equipements);
-      console.log('Loaded pieces:', pieces);
+      console.log('✅ Loaded equipements:', equipements);
+      console.log('✅ Loaded pieces:', pieces);
+      console.log('  └─ Sample piece:', pieces?.[0] ? { reference: pieces[0].reference, designation: pieces[0].designation, equipement_type: pieces[0].equipement_type } : 'none');
 
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
@@ -132,6 +171,45 @@ export default function InterventionDetailPage() {
       setIntervention(found);
       setAllPieces(Array.isArray(pieces) ? pieces : []);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
+      
+      // DEBUG: Show equipment info
+      const foundEquipment = (Array.isArray(equipements) ? equipements : []).find((eq: any) => (eq.Nom || eq.nom) === found.machine);
+      console.log('🔍 Intervention machine:', found.machine);
+      console.log('🔍 Found equipment:', foundEquipment ? { Nom: foundEquipment.Nom || foundEquipment.nom, Type: foundEquipment.Type || foundEquipment.type } : 'NOT FOUND');
+      if (foundEquipment) {
+        const equipmentType = (foundEquipment.Type || foundEquipment.type || '').toLowerCase().trim();
+        console.log('🔍 Equipment type (normalized):', equipmentType);
+        const matchingPieces = (Array.isArray(pieces) ? pieces : []).filter((p: any) => {
+          const pieceType = (p.equipement_type || '').toLowerCase().trim();
+          return equipmentType === pieceType;
+        });
+        console.log(`🔍 Matching pieces: ${matchingPieces.length} out of ${pieces?.length || 0}`);
+      }
+      
+      // Parse technicians from comma-separated field
+      const techniciens = (found.technicien || '').split(',').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
+      console.log('📋 Parsed technicians:', techniciens);
+      console.log('🧑 Current user name:', currentUserName);
+      
+      setAllTechnicians(techniciens);
+      
+      // Set active tab to current user's technician, fallback to first if not found
+      // Multi-tech mode is only active if there are 2 or more technicians
+      if (techniciens.length > 1) {
+        setUsePerTechnicianMode(true);
+        
+        // Find current user's tab using robust name matching (handles reversed names)
+        const currentUserTab = techniciens.find((tech: string) => {
+          const matches = namesMatch(currentUserName, tech);
+          console.log(`  Checking match: namesMatch("${currentUserName}", "${tech}") = ${matches}`);
+          return matches;
+        });
+        
+        console.log('✅ Matched user tab:', currentUserTab, 'fallback to first:', techniciens[0]);
+        setActiveTabTech(currentUserTab || techniciens[0]);
+      } else {
+        setUsePerTechnicianMode(false);
+      }
       
       // Load times in HH:MM format from TIME columns
       let startTime = '08:00';
@@ -171,16 +249,129 @@ export default function InterventionDetailPage() {
         end_time:         endTime,
       });
 
-      // Try to load technician records (if backend supports it)
-      try {
-        // Check if intervention has technicien to determine mode
-        if (found.technicien) {
-          // Could load from interventions_techniciens, but for now use single-tech mode
-          setUsePerTechnicianMode(false);
+      // Load previously used parts from intervention data
+      if (found.pieces_utilisees) {
+        try {
+          console.log('📦 Found pieces_utilisees:', found.pieces_utilisees);
+          // Parse pieces_utilisees string format: "ref1 (qty) | ref2 (qty)"
+          const pieceLines = String(found.pieces_utilisees || '').split('\n').filter(l => l.trim());
+          const previouslyUsedQty: PiecesQty = {};
+          
+          for (const line of pieceLines) {
+            // Try to extract reference and quantity from line
+            // Format might be: "Designation | Ref: XXX | ... | Qty: Z"
+            const refMatch = line.match(/Ref:\s*([^\s|]+)/i);
+            const qtyMatch = line.match(/Qty:\s*(\d+)/i);
+            
+            if (refMatch && qtyMatch) {
+              const ref = refMatch[1];
+              const qty = parseInt(qtyMatch[1], 10);
+              
+              // Find piece by reference
+              const piece = allPieces.find(p => 
+                (p.reference || '').toLowerCase() === ref.toLowerCase()
+              );
+              
+              if (piece) {
+                previouslyUsedQty[piece.id] = qty;
+                console.log(`✅ Loaded previously used part: ${piece.reference} qty=${qty}`);
+              }
+            }
+          }
+          
+          if (Object.keys(previouslyUsedQty).length > 0) {
+            setPiecesQty(previouslyUsedQty);
+            console.log('📦 Restored pieces_utilisees to state:', previouslyUsedQty);
+          }
+        } catch (e) {
+          console.debug('Error parsing pieces_utilisees:', e);
         }
-      } catch (e) {
-        console.debug('Per-tech records not available, using standard mode');
-        setUsePerTechnicianMode(false);
+      }
+
+      // Load technician records if multi-tech mode
+      if (techniciens.length > 0) {
+        try {
+          const techRecords = await api.interventions.getTechnicianData(id);
+          setTechnicianRecords(techRecords || []);
+          
+          // Find current user's tech record and store the ID
+          const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          if (currentUserRec?.id) {
+            setCurrentUserTechId(currentUserRec.id);
+            console.log('✅ Stored current user tech ID:', currentUserRec.id);
+          }
+          
+          // Pre-populate techForm with technician-specific data if available
+          // Otherwise use shared intervention data as fallback
+          if (currentUserRec && currentUserRec.probleme_tech) {
+            // Use technician-specific data (already saved)
+            setTechForm({
+              probleme_tech: currentUserRec.probleme_tech || '',
+              cause_tech: currentUserRec.cause_tech || '',
+              solution_tech: currentUserRec.solution_tech || '',
+              heure_debut_tech: currentUserRec.heure_debut_tech || '08:00',
+              heure_fin_tech: currentUserRec.heure_fin_tech || '09:00',
+              duree_minutes_tech: currentUserRec.duree_minutes_tech || 60,
+              duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
+              notes_tech: currentUserRec.notes_tech || '',
+              statut: currentUserRec.statut || 'En cours',
+              type_erreur_tech: currentUserRec.type_erreur_tech || '',
+            });
+            console.log('📋 Pre-populated tech form from saved technician data:', {
+              probleme_tech: currentUserRec.probleme_tech,
+              cause_tech: currentUserRec.cause_tech,
+              solution_tech: currentUserRec.solution_tech,
+              statut: currentUserRec.statut,
+            });
+            
+            // Load previously used pieces for this technician
+            if (currentUserRec.pieces_a_deduire) {
+              try {
+                const storedPieces = JSON.parse(currentUserRec.pieces_a_deduire);
+                console.log('📦 Loaded pieces_a_deduire from tech record:', storedPieces);
+                
+                if (Array.isArray(storedPieces)) {
+                  const previouslyUsedQty: PiecesQty = {};
+                  for (const p of storedPieces) {
+                    const ref = p.ref || p.reference;
+                    const qty = parseInt(p.qty || p.quantite || 0, 10);
+                    
+                    // Find piece by reference
+                    const piece = allPieces.find(pc => 
+                      (pc.reference || '').toLowerCase() === (ref || '').toLowerCase()
+                    );
+                    
+                    if (piece && qty > 0) {
+                      previouslyUsedQty[piece.id] = qty;
+                      console.log(`✅ Loaded piece: ${piece.reference} qty=${qty}`);
+                    }
+                  }
+                  
+                  if (Object.keys(previouslyUsedQty).length > 0) {
+                    setPiecesQty(previouslyUsedQty);
+                    console.log('📦 Restored pieces_a_deduire to state:', previouslyUsedQty);
+                  }
+                }
+              } catch (e) {
+                console.debug('Error parsing tech pieces_a_deduire:', e);
+              }
+            }
+          } else {
+            // No saved data yet, use shared intervention data as template
+            setTechForm(prevForm => ({
+              ...prevForm,
+              probleme_tech: found.probleme || '',
+              cause_tech: found.cause || '',
+              solution_tech: found.solution || '',
+              notes_tech: found.notes || '',
+              type_erreur_tech: found.type_erreur || '',
+            }));
+            console.log('📋 Pre-populated tech form from shared intervention data (fallback)');
+          }
+        } catch (e) {
+          console.debug('Per-tech records not available:', e);
+          setTechnicianRecords([]);
+        }
       }
     } catch {
       setError('Erreur lors du chargement.');
@@ -193,26 +384,37 @@ export default function InterventionDetailPage() {
   // au type d'équipement de l'équipement de l'intervention
   const filteredPieces = useMemo(() => {
     if (!intervention?.machine || !allPieces || !allEquipements) {
+      console.debug('🔍 filteredPieces: missing data', { machine: intervention?.machine, piecesCount: allPieces?.length, equipementsCount: allEquipements?.length });
       return [];
     }
     
     // Find the equipment for this intervention
     const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
     if (!equipment) {
+      console.debug('🔍 filteredPieces: equipment not found for machine:', intervention.machine);
       return [];
     }
     
     // Get the equipment type - API returns "Type" (capitalized)
     const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
     if (!equipmentType) {
+      console.debug('🔍 filteredPieces: no equipment type found', { equipment });
       return [];
     }
     
+    console.debug('🔍 filteredPieces: filtering with equipmentType:', equipmentType);
+    console.debug('🔍 All pieces:', allPieces.map(p => ({ ref: p.reference, type: p.equipement_type })));
+    
     // Filter pieces by matching equipment type
-    return allPieces.filter(p => {
+    const filtered = allPieces.filter(p => {
       const pieceType = (p.equipement_type || '').toLowerCase().trim();
-      return equipmentType === pieceType;
+      const matches = equipmentType === pieceType;
+      if (!matches) console.debug(`  ❌ ${p.reference}: "${pieceType}" !== "${equipmentType}"`);
+      return matches;
     });
+    
+    console.debug(`✅ Filtered ${filtered.length} pieces from ${allPieces.length}`);
+    return filtered;
   }, [allPieces, allEquipements, intervention?.machine]);
 
   const handleQty = (pieceId: number, qty: number) => {
@@ -239,7 +441,16 @@ export default function InterventionDetailPage() {
     try {
       const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
         const p = allPieces.find(x => x.id === Number(pieceId));
-        return { id: Number(pieceId), reference: p?.reference || '', quantite: qty };
+        return { 
+          id: Number(pieceId), 
+          ref: p?.reference || '',
+          reference: p?.reference || '',
+          qty: qty,
+          quantite: qty,
+          designation: p?.designation || p?.nom || '',
+          prix_unitaire: p?.prix_unitaire || 0,
+          fournisseur: p?.fournisseur || '',
+        };
       });
       const pieces_rupture = piecesRupture.map(p => ({
         id: p.id,
@@ -326,8 +537,24 @@ export default function InterventionDetailPage() {
       const durationMinutes = calculateDuration(techForm.heure_debut_tech, techForm.heure_fin_tech);
       const deploymentMinutes = Math.round(techForm.duree_deplacement_tech);
 
+      // Always collect selected pieces (for stock deduction when tech closes)
+      const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
+        const p = allPieces.find(x => x.id === Number(pieceId));
+        return { 
+          id: Number(pieceId), 
+          ref: p?.reference || '',
+          reference: p?.reference || '',
+          qty: qty,
+          quantite: qty,
+          designation: p?.designation || p?.nom || '',
+          prix_unitaire: p?.prix_unitaire || 0,
+          fournisseur: p?.fournisseur || '',
+        };
+      });
+
       const payload = {
         technicien_nom: currentUserName,
+        technicien_id: currentUserTechId, // Send the ID for reliable updating
         probleme_tech: techForm.probleme_tech,
         cause_tech: techForm.cause_tech,
         solution_tech: techForm.solution_tech,
@@ -337,24 +564,68 @@ export default function InterventionDetailPage() {
         duree_deplacement_tech: deploymentMinutes,
         notes_tech: techForm.notes_tech,
         statut: techForm.statut,  // Can be 'Cloturee' to mark as done
+        type_erreur_tech: techForm.type_erreur_tech,
+        pieces_a_deduire,  // Include pieces (deducted when tech closes)
       };
 
       console.log('📤 Sending technician data:', payload);
-
+      
       const response = await api.interventions.updateTechnicianData(id, payload);
       
       if (response.status === 'ALL_COMPLETED') {
         // All technicians done, awaiting admin closure
         setSuccess(`✅ Tous les techniciens ont complété (${response.completed}/${response.total}). En attente de clôture administrative.`);
       } else if (response.status === 'PARTIAL') {
-        // Still waiting for others
-        const pending = response.pending_technicians?.join(', ') || '';
+        // Still waiting for others - deduplicate names that are the same (reversed order)
+        const pendingList = response.pending_technicians || [];
+        const uniquePending: string[] = [];
+        
+        for (const tech of pendingList) {
+          // Check if this tech name already exists in unique list (using robust name matching)
+          const isDuplicate = uniquePending.some(existing => namesMatch(existing, tech));
+          if (!isDuplicate) {
+            uniquePending.push(tech);
+          }
+        }
+        
+        const pending = uniquePending.join(', ') || '';
         setSuccess(`✅ Données sauvegardées (${response.completed}/${response.total} techniciens complétés). Restants: ${pending}`);
       } else {
         setSuccess('✅ Vos données ont été enregistrées.');
       }
       
-      setTimeout(() => router.replace('/interventions'), 2000);
+      setTimeout(async () => {
+        // Reload technician data to show updated values
+        try {
+          console.log('🔄 Reloading technician data...');
+          const techRecords = await api.interventions.getTechnicianData(id);
+          console.log('📋 Fresh tech records:', techRecords);
+          
+          setTechnicianRecords(techRecords || []);
+          
+          // Find current user's record and update form with fresh data
+          const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          if (currentUserRec) {
+            console.log('✅ Found current user record:', currentUserRec);
+            // Update form with fresh data from database
+            setTechForm({
+              probleme_tech: currentUserRec.probleme_tech || '',
+              cause_tech: currentUserRec.cause_tech || '',
+              solution_tech: currentUserRec.solution_tech || '',
+              heure_debut_tech: currentUserRec.heure_debut_tech || '08:00',
+              heure_fin_tech: currentUserRec.heure_fin_tech || '09:00',
+              duree_minutes_tech: currentUserRec.duree_minutes_tech || 60,
+              duree_deplacement_tech: currentUserRec.duree_deplacement_tech || 0,
+              notes_tech: currentUserRec.notes_tech || '',
+              statut: currentUserRec.statut || 'En cours',
+              type_erreur_tech: currentUserRec.type_erreur_tech || '',
+            });
+            console.log('✅ Updated tech form with fresh data');
+          }
+        } catch (e) {
+          console.error('Error reloading tech data:', e);
+        }
+      }, 500);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la sauvegarde.');
     } finally {
@@ -367,6 +638,27 @@ export default function InterventionDetailPage() {
   const isClotured    = form.statut === 'Cloturee';
   const isAttenteP    = form.statut === 'En attente de piece';
   const isAssignee    = form.statut === 'Assignée';
+
+  // Get current technician's data from records (using robust name matching)
+  const getCurrentTechData = (): any => {
+    if (!activeTabTech || technicianRecords.length === 0) return {};
+    return technicianRecords.find((r: any) => namesMatch(r.technicien_nom, activeTabTech)) || {};
+  };
+
+  // Check if current user is the active tab technician (using robust name matching)
+  const isCurrentUserActiveTech = currentUserName && activeTabTech && namesMatch(currentUserName, activeTabTech);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 Multi-tech Debug:', {
+      currentUserName,
+      activeTabTech,
+      usePerTechnicianMode,
+      isCurrentUserActiveTech,
+      isAssignee,
+      showForm: usePerTechnicianMode && isCurrentUserActiveTech && !isAssignee,
+    });
+  }, [currentUserName, activeTabTech, usePerTechnicianMode, isCurrentUserActiveTech, isAssignee]);
 
   const handleAccept = async () => {
     setActionLoading(true);
@@ -479,6 +771,233 @@ export default function InterventionDetailPage() {
           </div>
         )}
 
+        {/* TABS FOR MULTI-TECH INTERVENTIONS */}
+        {usePerTechnicianMode && allTechnicians.length > 0 && (
+          <div style={{ marginBottom: '16px', display: 'flex', gap: '4px', overflowX: 'auto', paddingBottom: '8px', borderBottom: '2px solid var(--border)' }}>
+            {allTechnicians.map((tech: string, idx: number) => {
+              // Use robust name matching to find tech data
+              const techData = technicianRecords.find((r: any) => namesMatch(r.technicien_nom || '', tech));
+              const isActive = namesMatch(activeTabTech, tech);
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setActiveTabTech(tech)}
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: '10px 10px 0 0',
+                    border: isActive ? '2px solid var(--teal)' : '2px solid transparent',
+                    borderBottom: isActive ? 'none' : '2px solid var(--border)',
+                    background: isActive ? 'rgba(86,124,141,0.1)' : '#fff',
+                    color: isActive ? 'var(--teal)' : 'var(--text-muted)',
+                    fontWeight: isActive ? 700 : 500,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.2s',
+                  }}>
+                  <span>{tech}</span>
+                  {techData?.statut === 'Cloturee' && (
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#22C55E', marginLeft: '4px' }} title="Complété"></span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* MULTI-TECH FORM (per-technician data entry) */}
+        {usePerTechnicianMode && isCurrentUserActiveTech && !isAssignee && (
+          <form onSubmit={handleSaveTechnicianData}>
+            {/* Diagnostic Section */}
+            <div style={SECTION}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Mon Diagnostic ({activeTabTech})</h3>
+              {[
+                { key: 'probleme_tech', label: 'Problème constaté', ph: 'Symptômes observés...' },
+                { key: 'cause_tech', label: 'Cause racine', ph: 'Analyse de la cause...' },
+                { key: 'solution_tech', label: 'Solution appliquée', ph: 'Actions correctives...' },
+              ].map(({ key, label, ph }) => (
+                <div key={key} style={{ marginBottom: '12px' }}>
+                  <label style={LABEL}>{label}{key === 'solution_tech' && techForm.statut === 'Cloturee' && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}</label>
+                  <textarea
+                    style={{ ...INPUT, resize: 'vertical', borderColor: key === 'solution_tech' && techForm.statut === 'Cloturee' && !techForm.solution_tech ? '#ef4444' : undefined }}
+                    rows={2}
+                    placeholder={ph}
+                    value={(techForm as any)[key]}
+                    onChange={e => setTechForm(f => ({ ...f, [key as any]: e.target.value }))}
+                  />
+                </div>
+              ))}
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={LABEL}>Type d&apos;erreur</label>
+                <select style={INPUT} value={techForm.type_erreur_tech} onChange={e => setTechForm(f => ({ ...f, type_erreur_tech: e.target.value }))}>
+                  <option value="">— Aucun —</option>
+                  {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Time & Duration Section */}
+            <div style={SECTION}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Clock style={{ width: 16, height: 16 }} /> Temps</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={LABEL}><Clock style={ICON_INLINE} /> Début (HH:MM)</label>
+                  <input type="time" style={INPUT} value={techForm.heure_debut_tech} onChange={e => setTechForm(f => ({ ...f, heure_debut_tech: e.target.value }))} />
+                </div>
+                <div>
+                  <label style={LABEL}><Clock style={ICON_INLINE} /> Fin (HH:MM)</label>
+                  <input type="time" style={INPUT} value={techForm.heure_fin_tech} onChange={e => setTechForm(f => ({ ...f, heure_fin_tech: e.target.value }))} />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginBottom: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
+                <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
+                <div>
+                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
+                    {(() => {
+                      const [startH, startM] = techForm.heure_debut_tech.split(':').map(Number);
+                      const [endH, endM] = techForm.heure_fin_tech.split(':').map(Number);
+                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
+                      if (durationMin <= 0) durationMin += 24 * 60;
+                      durationMin = Math.max(60, durationMin);
+                      return (durationMin / 60).toFixed(1);
+                    })()}h
+                  </div>
+                </div>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
+              </div>
+
+              <div>
+                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en minutes)</label>
+                <input type="number" style={INPUT} min={0} value={techForm.duree_deplacement_tech} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: parseInt(e.target.value) || 0 }))} />
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div style={SECTION}>
+              <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes personnelles</label>
+              <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder="Observations, remarques..." value={techForm.notes_tech} onChange={e => setTechForm(f => ({ ...f, notes_tech: e.target.value }))} />
+            </div>
+
+            {/* Pièces de rechange — Multi-tech mode */}
+            {filteredPieces.length > 0 && (
+              <div style={SECTION}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                    <Wrench style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Pièces de rechange
+                  </h3>
+                  {selectedCount > 0 && (
+                    <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
+                      {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
+                  <Tag style={{ width: 12, height: 12, display: 'inline-block', verticalAlign: '-1px', marginRight: '4px' }} /> {intervention?.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
+                </p>
+
+                {/* 3 pièces visibles, défilement pour le reste */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
+                  {filteredPieces.map((p: any) => {
+                    const qty = piecesQty[p.id] || 0;
+                    const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                    const rupture = enStock === 0;
+                    return (
+                      <div key={p.id} style={{
+                        background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa',
+                        border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`,
+                        borderRadius: '10px', padding: '10px 12px',
+                        display: 'flex', alignItems: 'center', gap: '10px',
+                        opacity: rupture && qty === 0 ? 0.55 : 1,
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {p.designation || p.nom}
+                          </p>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {p.reference}</span>
+                            <span style={{
+                              fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                              background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                              color: rupture ? 'var(--danger)' : '#15803D',
+                            }}>
+                              {rupture ? <><AlertTriangle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {enStock} en stock</>}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <button type="button" onClick={() => handleQty(p.id, qty - 1)} disabled={qty === 0}
+                            style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            −
+                          </button>
+                          <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>
+                            {qty}
+                          </span>
+                          <button type="button" onClick={() => handleQty(p.id, qty + 1)}
+                            style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: rupture ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: rupture ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Status */}
+            <div style={SECTION}>
+              <label style={LABEL}>Mon Statut</label>
+              <select style={INPUT} value={techForm.statut} onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}>
+                <option value="En cours">En cours</option>
+                <option value="Cloturee">Intervention terminée</option>
+              </select>
+            </div>
+
+            {/* Error */}
+            {error && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={saving}
+              style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer Mes Données</>}
+            </button>
+          </form>
+        )}
+
+        {/* READ-ONLY VIEW FOR OTHER TECHNICIANS */}
+        {usePerTechnicianMode && !isCurrentUserActiveTech && (
+          <div style={SECTION}>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '12px' }}>Données de {activeTabTech}</h3>
+            {(() => {
+              const techData = getCurrentTechData();
+              if (!techData || !techData.technicien_nom) {
+                return <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Pas encore de données pour ce technicien.</p>;
+              }
+              console.log("ss", techData)
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
+                  <div><strong>Problème:</strong> {techData.probleme_tech || '—'}</div>
+                  <div><strong>Cause:</strong> {techData.cause_tech || '—'}</div>
+                  <div><strong>Solution:</strong> {techData.solution_tech || '—'}</div>
+                  <div><strong>Horaires:</strong> {techData.heure_debut_tech} à {techData.heure_fin_tech}</div>
+                  <div><strong>Durée:</strong> {techData.duree_minutes_tech} min | <strong>Déplacement:</strong> {techData.duree_deplacement_tech} min</div>
+                  <div><strong>Statut:</strong> <span style={{ ...statutStyle, padding: '4px 12px', borderRadius: '6px', display: 'inline-block' }}>{techData.statut}</span></div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
         {/* ⓪ Accept/Refuse banner for Assignée interventions */}
         {isAssignee && (
           <div style={{ ...SECTION, border: '2px solid #7C3AED', background: 'rgba(168,85,247,0.04)' }}>
@@ -533,8 +1052,8 @@ export default function InterventionDetailPage() {
         {error && !isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
         {error && isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px', marginTop: '-8px' }}>{error}</p>}
 
-        {/* Only show full form when NOT in Assignée status (already accepted or other statuts) */}
-        {!isAssignee && <form onSubmit={handleSave}>
+        {/* Only show full form when NOT in Assignée status AND NOT in multi-tech mode */}
+        {!isAssignee && !usePerTechnicianMode && <form onSubmit={handleSave}>
 
           {/* ① Diagnostic */}
           <div style={SECTION}>
@@ -563,14 +1082,12 @@ export default function InterventionDetailPage() {
               </div>
             ))}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={LABEL}>Type d&apos;erreur</label>
-                <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
-                  <option value="">— Aucun —</option>
-                  {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
-                </select>
-              </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={LABEL}>Type d&apos;erreur</label>
+              <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
+                <option value="">— Aucun —</option>
+                {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
+              </select>
             </div>
 
             {/* Time pickers with scrollable UI */}
@@ -605,13 +1122,15 @@ export default function InterventionDetailPage() {
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.08)', border: '1px solid var(--border)' }}>
-              <Zap style={{ width: 16, height: 16, color: 'var(--teal)' }} />
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Durée calculée:</span>
-              <span style={{ fontWeight: 700, color: 'var(--teal)', marginLeft: 'auto' }}>
-                {form.duree_minutes > 0 ? (form.duree_minutes / 60).toFixed(2) : 0}h
-              </span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Min 1h</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
+              <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
+              <div>
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
+                  {(form.duree_minutes / 60).toFixed(1)}h
+                </div>
+              </div>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
             </div>
 
             <div style={{ marginTop: '12px' }}>

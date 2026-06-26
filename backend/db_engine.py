@@ -1944,7 +1944,7 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("cout", 0.0),
             intervention_dict.get("duree_minutes", 0),
             intervention_dict.get("code_erreur") or "",
-            intervention_dict.get("statut", "Terminée"),
+            intervention_dict.get("statut", "Assignée"),
             intervention_dict.get("notes") or "",
             intervention_dict.get("type_erreur") or "",
             intervention_dict.get("priorite") or "",
@@ -2690,7 +2690,7 @@ def verifier_et_migrer_schema():
             conn.set_client_encoding('UTF8')
             cur = conn.cursor()
             
-            # Colonnes à vérifier/ajouter
+            # Colonnes à vérifier/ajouter (interventions table)
             missing_cols = [
                 ("start_time", "TIME"),
                 ("end_time", "TIME"),
@@ -2705,6 +2705,21 @@ def verifier_et_migrer_schema():
                     logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée.")
                 except psycopg2.Error as e:
                     logger.debug(f"Migration PostgreSQL colonne {col}: {e}")
+                    conn.rollback()
+            
+            # Colonnes à vérifier/ajouter (interventions_techniciens table)
+            tech_cols = [
+                ("type_erreur_tech", "TEXT DEFAULT ''"),
+                ("pieces_a_deduire", "TEXT DEFAULT ''"),  # JSON array of pieces
+            ]
+            
+            for col, type_def in tech_cols:
+                try:
+                    cur.execute(f"ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS {col} {type_def}")
+                    conn.commit()
+                    logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée à interventions_techniciens.")
+                except psycopg2.Error as e:
+                    logger.debug(f"Migration PostgreSQL colonne {col} interventions_techniciens: {e}")
                     conn.rollback()
             
             cur.close()
@@ -2771,6 +2786,26 @@ def verifier_et_migrer_schema():
             """)
         except Exception:
             pass
+
+        # Vérifier colonnes table interventions_techniciens
+        try:
+            cursor = conn.execute("PRAGMA table_info(interventions_techniciens)")
+            tech_int_cols = [row["name"] for row in cursor.fetchall()]
+            if "type_erreur_tech" not in tech_int_cols:
+                try:
+                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN type_erreur_tech TEXT DEFAULT ''")
+                    print("Migration: Ajout de la colonne 'type_erreur_tech' à la table 'interventions_techniciens'.")
+                except Exception as e:
+                    print(f"Erreur migration interventions_techniciens: {e}")
+            # Add pieces_a_deduire column for spare parts tracking per technician
+            if "pieces_a_deduire" not in tech_int_cols:
+                try:
+                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN pieces_a_deduire TEXT DEFAULT ''")
+                    print("Migration: Ajout de la colonne 'pieces_a_deduire' à la table 'interventions_techniciens'.")
+                except Exception as e:
+                    print(f"Erreur migration pieces_a_deduire: {e}")
+        except Exception as e:
+            print(f"Erreur vérification interventions_techniciens: {e}")
 
 # ==========================================
 # FONCTIONS CRUD — TECHNICIENS
@@ -3184,6 +3219,9 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         # NOTE: La migration cout_pieces est dans verifier_et_migrer_schema(), PAS ici.
         # Un ALTER TABLE échoué invalide la transaction PostgreSQL !
 
+        # Use correct SQL placeholder based on database type
+        ph = "%s" if USE_PG else "?"
+
         # 1. Gestion du Stock + calcul coût pièces
         synthese_pieces = []
         total_cout_pieces = 0.0
@@ -3202,7 +3240,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                     
                     # Chercher la pièce dans la base de données pour obtenir les infos complètes
                     piece_row = conn.execute(
-                        "SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = %s LIMIT 1",
+                        f"SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = {ph} LIMIT 1",
                         (ref,)
                     ).fetchone()
                     
@@ -3213,10 +3251,10 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
                         fournisseur = piece_row.get('fournisseur', fournisseur)
                     
                     # Déduire le stock
-                    conn.execute("""
+                    conn.execute(f"""
                         UPDATE pieces_rechange
-                        SET stock_actuel = stock_actuel - %s
-                        WHERE reference = %s
+                        SET stock_actuel = stock_actuel - {ph}
+                        WHERE reference = {ph}
                     """, (qty, ref))
                     
                     cout_piece = prix * qty
@@ -3281,12 +3319,12 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         sql = f"""
             UPDATE interventions
             SET {", ".join(set_clauses)}
-            WHERE id=%s
+            WHERE id={ph}
         """
         conn.execute(sql, update_values)
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
-        row = conn.execute("SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id=%s", (intervention_id,)).fetchone()
+        row = conn.execute(f"SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id={ph}", (intervention_id,)).fetchone()
         code_erreur = row["code_erreur"] if row else ""
 
         # 4. Auto-Learning : Alimenter la table solutions si un code erreur existe
@@ -3294,9 +3332,9 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         type_intervention = row["type_intervention"] if row else ""
         type_erreur_val = row["type_erreur"] if row else "Hardware"
         if code_erreur and type_intervention != "Formation":
-            conn.execute("""
+            conn.execute(f"""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     cause=excluded.cause,
                     solution=excluded.solution,
@@ -3667,6 +3705,7 @@ def sauvegarder_notification_schedules_batch(schedules):
 def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
     """
     Récupère ou crée un enregistrement interventions_techniciens pour un technicien.
+    Uses robust name matching to handle reversed name orders (e.g., "Ghazi Sellami" vs "Sellami Ghazi").
     
     Args:
         intervention_id: ID de l'intervention
@@ -3675,20 +3714,45 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
     Returns:
         dict: Enregistrement with id, intervention_id, technicien_nom, statut, etc.
     """
+    def names_match(name1, name2):
+        """Check if two names refer to the same person (handles reversed order)"""
+        if not name1 or not name2:
+            return False
+        
+        n1 = str(name1).lower().strip()
+        n2 = str(name2).lower().strip()
+        
+        # Exact match
+        if n1 == n2:
+            return True
+        
+        # Split into words (>1 char)
+        words1 = [w for w in n1.split() if len(w) > 1]
+        words2 = [w for w in n2.split() if len(w) > 1]
+        
+        if not words1 or not words2:
+            return False
+        
+        # Check if all words match (handles reversed order)
+        return (all(w in words2 for w in words1) and 
+                all(w in words1 for w in words2))
+    
     # Use correct placeholder based on database type
     ph = "%s" if USE_PG else "?"
     
     with get_db() as conn:
-        # Check if entry exists
-        row = conn.execute(f"""
+        # Get ALL records for this intervention
+        rows = conn.execute(f"""
             SELECT * FROM interventions_techniciens 
-            WHERE intervention_id = {ph} AND technicien_nom = {ph}
-        """, (intervention_id, technicien_nom)).fetchone()
+            WHERE intervention_id = {ph}
+        """, (intervention_id,)).fetchall()
         
-        if row:
-            return dict(row)
+        # Check if entry exists (using robust name matching)
+        for row in rows:
+            if names_match(row['technicien_nom'], technicien_nom):
+                return dict(row)
         
-        # Create new entry
+        # Create new entry if not found
         conn.execute(f"""
             INSERT INTO interventions_techniciens 
             (intervention_id, technicien_nom, statut)
@@ -3708,46 +3772,114 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
 def update_interventions_techniciens(intervention_id, technicien_nom, data):
     """
     Met à jour les données per-technician pour une intervention.
+    Now uses ID-based lookup instead of name matching for reliability.
     
     Args:
         intervention_id: ID de l'intervention
-        technicien_nom: Nom complet du technicien
+        technicien_nom: Nom complet du technicien (used to find the ID)
         data: Dict with keys like probleme_tech, solution_tech, duree_minutes_tech, etc.
+              Can optionally include 'technicien_id' to bypass name matching
     
     Returns:
         bool: Success
     """
+    def names_match(name1, name2):
+        """Check if two names refer to the same person (handles reversed order)"""
+        if not name1 or not name2:
+            return False
+        
+        n1 = str(name1).lower().strip()
+        n2 = str(name2).lower().strip()
+        
+        # Exact match
+        if n1 == n2:
+            return True
+        
+        # Split into words (>1 char)
+        words1 = [w for w in n1.split() if len(w) > 1]
+        words2 = [w for w in n2.split() if len(w) > 1]
+        
+        if not words1 or not words2:
+            return False
+        
+        # Check if all words match (handles reversed order)
+        return (all(w in words2 for w in words1) and 
+                all(w in words1 for w in words2))
+    
+    ph = "%s" if USE_PG else "?"
+    
     with get_db() as conn:
         # Ensure the record exists
         get_or_create_interventions_techniciens(intervention_id, technicien_nom)
         
-        # Build update query
+        # Try to find the record ID first - use the ID if provided in data
+        record_id = data.get('technicien_id')
+        logger.info(f"🔍 update_interventions_techniciens: looking for tech '{technicien_nom}' (provided ID: {record_id})")
+        
+        if not record_id:
+            # Find matching technician using fuzzy matching by name
+            rows = conn.execute(f"""
+                SELECT id, technicien_nom FROM interventions_techniciens 
+                WHERE intervention_id = {ph}
+            """, (intervention_id,)).fetchall()
+            
+            logger.info(f"  📋 Found {len(rows)} technician records for intervention {intervention_id}")
+            
+            for row in rows:
+                row_dict = dict(row)
+                tech_name_in_db = row_dict.get('technicien_nom')
+                logger.info(f"    Checking: '{tech_name_in_db}' vs '{technicien_nom}' -> {names_match(tech_name_in_db, technicien_nom)}")
+                
+                if tech_name_in_db and names_match(tech_name_in_db, technicien_nom):
+                    record_id = row_dict['id']
+                    logger.info(f"    ✅ MATCHED! Using record ID: {record_id}")
+                    break
+        
+        if not record_id:
+            logger.warning(f"❌ No matching technician record found for '{technicien_nom}' in intervention {intervention_id}")
+            return False
+        
+        # Build update query using ID (most reliable)
         updates = []
         params = []
         
         allowed_fields = [
             'statut', 'probleme_tech', 'cause_tech', 'solution_tech',
             'heure_debut_tech', 'heure_fin_tech', 'duree_minutes_tech',
-            'duree_deplacement_tech', 'notes_tech'
+            'duree_deplacement_tech', 'notes_tech', 'type_erreur_tech',
+            'pieces_a_deduire'  # JSON array of pieces to deduct
         ]
         
         for field in allowed_fields:
-            if field in data:
-                updates.append(f"{field} = ?")
-                params.append(data[field])
+            if field in data and field != 'technicien_id':
+                # Serialize pieces_a_deduire as JSON if it's a list
+                value = data[field]
+                if field == 'pieces_a_deduire' and isinstance(value, list):
+                    import json
+                    value = json.dumps(value)
+                
+                updates.append(f"{field} = {ph}")
+                params.append(value)
+                logger.debug(f"    {field}: {value if field != 'pieces_a_deduire' else '(JSON array)'}")
         
         if not updates:
+            logger.warning(f"  ⚠️ No fields to update!")
             return False
         
-        params.extend([intervention_id, technicien_nom])
+        params.append(record_id)
         
         query = f"""
             UPDATE interventions_techniciens 
             SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
-            WHERE intervention_id = ? AND technicien_nom = ?
+            WHERE id = {ph}
         """
         
-        conn.execute(query, params)
+        logger.info(f"  🔄 Executing UPDATE for record ID {record_id}")
+        logger.debug(f"     Query: {query}")
+        logger.debug(f"     Params: {params}")
+        
+        result = conn.execute(query, params)
+        logger.info(f"  ✅ Updated technician record ID {record_id} in intervention {intervention_id}")
         _trigger_backup()
         return True
 
@@ -3826,22 +3958,143 @@ def calculate_intervention_totals(intervention_id):
         return {'total_duree_minutes': 0, 'total_duree_deplacement': 0}
 
 
+def consolidate_technician_duplicates(intervention_id):
+    """
+    Consolidates duplicate technician records (with reversed names) into one.
+    When Sellami Ghazi and Ghazi Sellami exist, keeps one and merges data from both.
+    
+    Args:
+        intervention_id: ID de l'intervention
+    
+    Returns:
+        int: Number of duplicates consolidated
+    """
+    def names_match(name1, name2):
+        """Check if two names refer to the same person (handles reversed order)"""
+        if not name1 or not name2:
+            return False
+        
+        n1 = str(name1).lower().strip()
+        n2 = str(name2).lower().strip()
+        
+        if n1 == n2:
+            return True
+        
+        words1 = [w for w in n1.split() if len(w) > 1]
+        words2 = [w for w in n2.split() if len(w) > 1]
+        
+        if not words1 or not words2:
+            return False
+        
+        return (all(w in words2 for w in words1) and 
+                all(w in words1 for w in words2))
+    
+    ph = "%s" if USE_PG else "?"
+    consolidated = 0
+    
+    with get_db() as conn:
+        # Get all records for this intervention
+        rows = conn.execute(f"""
+            SELECT id, technicien_nom, statut FROM interventions_techniciens 
+            WHERE intervention_id = {ph}
+            ORDER BY id ASC
+        """, (intervention_id,)).fetchall()
+        
+        techs = [dict(r) for r in rows]
+        processed = set()
+        
+        for i, tech1 in enumerate(techs):
+            if tech1['id'] in processed:
+                continue
+            
+            tech1_id = tech1['id']
+            tech1_name = tech1['technicien_nom']
+            tech1_status = tech1['statut']
+            
+            # Find all duplicates of this technician
+            duplicates = []
+            for j, tech2 in enumerate(techs):
+                if i == j or tech2['id'] in processed:
+                    continue
+                
+                if names_match(tech1_name, tech2['technicien_nom']):
+                    duplicates.append(tech2)
+            
+            # If duplicates found, consolidate
+            if duplicates:
+                logger.info(f"  🔄 Consolidating {tech1_name}: found {len(duplicates)} duplicate(s)")
+                
+                # If primary is not Cloturee but a duplicate is, promote the duplicate
+                if tech1_status != 'Cloturee':
+                    for dup in duplicates:
+                        if dup['statut'] == 'Cloturee':
+                            # Copy Cloturee status to primary
+                            conn.execute(f"""
+                                UPDATE interventions_techniciens 
+                                SET statut = 'Cloturee'
+                                WHERE id = {ph}
+                            """, (tech1_id,))
+                            tech1_status = 'Cloturee'
+                            logger.info(f"    ✅ Promoted primary record to Cloturee")
+                            break
+                
+                # Delete duplicate records
+                for dup in duplicates:
+                    conn.execute(f"""
+                        DELETE FROM interventions_techniciens 
+                        WHERE id = {ph}
+                    """, (dup['id'],))
+                    processed.add(dup['id'])
+                    consolidated += 1
+                    logger.info(f"    🗑️ Deleted duplicate record ID {dup['id']}: {dup['technicien_nom']}")
+        
+        if consolidated > 0:
+            _trigger_backup()
+            logger.info(f"  ✅ Consolidated {consolidated} duplicate technician records for intervention {intervention_id}")
+        
+        return consolidated
+
+
 def get_techniciens_status(intervention_id):
     """
     Gets the status of all technicians for an intervention.
     Returns completed count, total count, and list of pending technicians.
+    Deduplicates technician names with reversed word order (e.g., "Ghazi Sellami" vs "Sellami Ghazi").
     
     Args:
         intervention_id: ID de l'intervention
     
     Returns:
         dict: {
-            'total': total number of technicians,
+            'total': total number of unique technicians,
             'completed': number completed (statut='Cloturee'),
-            'pending_names': list of technician names not yet completed,
+            'pending_names': list of unique technician names not yet completed,
             'is_all_completed': bool
         }
     """
+    def names_match(name1, name2):
+        """Check if two names refer to the same person (handles reversed order)"""
+        if not name1 or not name2:
+            return False
+        
+        n1 = name1.lower().strip()
+        n2 = name2.lower().strip()
+        
+        # Exact match
+        if n1 == n2:
+            return True
+        
+        # Split into words (>1 char)
+        words1 = [w for w in n1.split() if len(w) > 1]
+        words2 = [w for w in n2.split() if len(w) > 1]
+        
+        if not words1 or not words2:
+            return False
+        
+        # Check if all words match (handles reversed order)
+        return (all(w in words2 for w in words1) and 
+                all(w in words1 for w in words2))
+    
     with get_db() as conn:
         rows = conn.execute("""
             SELECT technicien_nom, statut FROM interventions_techniciens 
@@ -3850,9 +4103,20 @@ def get_techniciens_status(intervention_id):
         """, (intervention_id,)).fetchall()
         
         techs = [dict(r) for r in rows]
-        total = len(techs)
-        completed = sum(1 for t in techs if t.get('statut') == 'Cloturee')
-        pending = [t['technicien_nom'] for t in techs if t.get('statut') != 'Cloturee']
+        
+        # Deduplicate technicians with reversed names
+        unique_techs = []
+        for tech in techs:
+            tech_name = tech['technicien_nom']
+            # Check if this technician already exists in unique list
+            is_duplicate = any(names_match(unique['technicien_nom'], tech_name) 
+                             for unique in unique_techs)
+            if not is_duplicate:
+                unique_techs.append(tech)
+        
+        total = len(unique_techs)
+        completed = sum(1 for t in unique_techs if t.get('statut') == 'Cloturee')
+        pending = [t['technicien_nom'] for t in unique_techs if t.get('statut') != 'Cloturee']
         
         return {
             'total': total,
@@ -3927,7 +4191,8 @@ def lire_child_interventions_for_technician(technician_name):
 def finalize_intervention_from_techniciens(intervention_id):
     """
     Finalizes an intervention by aggregating all technician data.
-    Should be called when ALL technicians have marked as Cloturee.
+    When ALL technicians mark as Cloturee, AUTOMATICALLY closes the parent intervention.
+    Deduplicates technician names with reversed word order.
     
     Args:
         intervention_id: ID de l'intervention
@@ -3942,11 +4207,37 @@ def finalize_intervention_from_techniciens(intervention_id):
             'total': int
         }
     """
+    def names_match(name1, name2):
+        """Check if two names refer to the same person (handles reversed order)"""
+        if not name1 or not name2:
+            return False
+        
+        n1 = name1.lower().strip()
+        n2 = name2.lower().strip()
+        
+        # Exact match
+        if n1 == n2:
+            return True
+        
+        # Split into words (>1 char)
+        words1 = [w for w in n1.split() if len(w) > 1]
+        words2 = [w for w in n2.split() if len(w) > 1]
+        
+        if not words1 or not words2:
+            return False
+        
+        # Check if all words match (handles reversed order)
+        return (all(w in words2 for w in words1) and 
+                all(w in words1 for w in words2))
+    
     with get_db() as conn:
+        # Use correct SQL placeholder based on database type
+        ph = "%s" if USE_PG else "?"
+        
         # Get ALL technician records (only aggregate Cloturee ones)
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT * FROM interventions_techniciens 
-            WHERE intervention_id = ?
+            WHERE intervention_id = {ph}
             ORDER BY technicien_nom
         """, (intervention_id,)).fetchall()
         
@@ -3956,9 +4247,19 @@ def finalize_intervention_from_techniciens(intervention_id):
         
         techs = [dict(r) for r in rows]
         
-        # Check if ALL are completed
-        completed_count = sum(1 for t in techs if t.get('statut') == 'Cloturee')
-        total_count = len(techs)
+        # Deduplicate technicians with reversed names
+        unique_techs = []
+        for tech in techs:
+            tech_name = tech['technicien_nom']
+            # Check if this technician already exists in unique list
+            is_duplicate = any(names_match(unique['technicien_nom'], tech_name) 
+                             for unique in unique_techs)
+            if not is_duplicate:
+                unique_techs.append(tech)
+        
+        # Check if ALL are completed (using deduplicated count)
+        completed_count = sum(1 for t in unique_techs if t.get('statut') == 'Cloturee')
+        total_count = len(unique_techs)
         
         if completed_count != total_count:
             logger.info(f"Intervention {intervention_id}: Only {completed_count}/{total_count} completed, not finalizing yet")
@@ -3970,7 +4271,7 @@ def finalize_intervention_from_techniciens(intervention_id):
             }
         
         # Aggregate data from completed technicians
-        completed_techs = [t for t in techs if t.get('statut') == 'Cloturee']
+        completed_techs = [t for t in unique_techs if t.get('statut') == 'Cloturee']
         total_duree = sum(t.get('duree_minutes_tech') or 0 for t in completed_techs)
         total_deplacement = sum(t.get('duree_deplacement_tech') or 0 for t in completed_techs)
         
@@ -3978,15 +4279,80 @@ def finalize_intervention_from_techniciens(intervention_id):
         solutions = [t.get('solution_tech', '').strip() for t in completed_techs if t.get('solution_tech', '').strip()]
         combined_solution = " | ".join(solutions) if solutions else ""
         
-        # Update main intervention record (aggregate data but DO NOT close it)
-        # The intervention stays "En cours" until admin closes it manually
-        conn.execute("""
+        # Get the first type_erreur_tech from completed technicians (if any)
+        first_error_type = next((t.get('type_erreur_tech', '').strip() for t in completed_techs 
+                                 if t.get('type_erreur_tech', '').strip()), '')
+        
+        # Aggregate pieces from all technicians
+        import json
+        all_pieces_used = []
+        for tech in completed_techs:
+            pieces_json = tech.get('pieces_a_deduire', '')
+            if pieces_json and isinstance(pieces_json, str):
+                try:
+                    pieces_list = json.loads(pieces_json)
+                    if isinstance(pieces_list, list):
+                        all_pieces_used.extend(pieces_list)
+                except json.JSONDecodeError:
+                    logger.debug(f"Could not parse pieces_a_deduire for tech {tech.get('technicien_nom')}: {pieces_json}")
+        
+        # Format pieces for pieces_utilisees - deduplicate by ref and sum quantities
+        pieces_by_ref = {}
+        for piece in all_pieces_used:
+            if isinstance(piece, dict):
+                ref = piece.get('ref') or piece.get('reference', '')
+                qty = int(piece.get('qty') or piece.get('quantite') or 0)
+                
+                if ref and qty > 0:
+                    if ref not in pieces_by_ref:
+                        pieces_by_ref[ref] = {
+                            'ref': ref,
+                            'qty': 0,
+                            'designation': piece.get('designation', ref),
+                            'fournisseur': piece.get('fournisseur', ''),
+                            'prix_unitaire': float(piece.get('prix_unitaire', 0) or 0)
+                        }
+                    pieces_by_ref[ref]['qty'] += qty
+        
+        # Format pieces for display
+        formatted_pieces = []
+        for ref, piece_info in pieces_by_ref.items():
+            # Format: Désignation | Ref: XXX | Fournisseur: YYY | Qty: Z
+            piece_line = f"{piece_info['designation']} | Ref: {piece_info['ref']} | Fournisseur: {piece_info['fournisseur']} | Qty: {piece_info['qty']}"
+            formatted_pieces.append(piece_line)
+        
+        pieces_utilisees_str = "\n".join(formatted_pieces) if formatted_pieces else ""
+        logger.info(f"Aggregated {len(formatted_pieces)} unique pieces for intervention {intervention_id}: {pieces_utilisees_str}")
+        
+        # ✅ AUTOMATICALLY CLOSE the parent intervention (statut = 'Cloturee')
+        # This is the key change - we now close it instead of leaving it "En cours"
+        date_cloture = datetime.now().isoformat()
+        
+        conn.execute(f"""
             UPDATE interventions 
-            SET duree_minutes = ?,
-                duree_deplacement = ?,
-                solution = CASE WHEN solution = '' THEN ? ELSE solution END
-            WHERE id = ?
-        """, (total_duree, total_deplacement, combined_solution, intervention_id))
+            SET statut = {ph},
+                duree_minutes = {ph},
+                duree_deplacement = {ph},
+                solution = CASE WHEN solution = '' THEN {ph} ELSE solution END,
+                type_erreur = CASE WHEN type_erreur = '' OR type_erreur IS NULL THEN {ph} ELSE type_erreur END,
+                date_cloture = {ph},
+                pieces_utilisees = {ph}
+            WHERE id = {ph}
+        """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, intervention_id))
+        
+        logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {total_count} technicians completed")
+        
+        conn.commit()
+        _trigger_backup()
+        
+        return {
+            'success': True,
+            'total_duree_minutes': total_duree,
+            'total_duree_deplacement': total_deplacement,
+            'combined_solution': combined_solution,
+            'completed': completed_count,
+            'total': total_count
+        }
         
         _trigger_backup()
         logger.info(f"✅ Intervention {intervention_id} fully finalized: {total_count} technicians, {total_duree} minutes total")
