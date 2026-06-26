@@ -3060,6 +3060,8 @@ def generer_planning_from_contrat(contrat_id):
     Retourne le nombre d'entrées créées.
     """
     from dateutil.relativedelta import relativedelta
+    import logging
+    logger = logging.getLogger("db_engine")
 
     RECURRENCE_DELTAS = {
         "Hebdomadaire": relativedelta(weeks=1),
@@ -3072,76 +3074,97 @@ def generer_planning_from_contrat(contrat_id):
     with get_db() as conn:
         ph = "%s" if USE_PG else "?"
         
-        row = conn.execute(
-            f"SELECT * FROM contrats WHERE id = {ph}", (contrat_id,)
-        ).fetchone()
-        if not row:
-            return 0
-
-        contrat = dict(row)
-        recurrence = (contrat.get("recurrence_maintenance") or "").strip()
-        if not recurrence or recurrence not in RECURRENCE_DELTAS:
-            return 0
-
-        date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
-        date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
-        client = contrat.get("client", "")
-
-        if not date_fin_str or not date_premiere_str:
-            return 0
-
         try:
-            from datetime import date as _date
-            date_premiere = _date.fromisoformat(date_premiere_str)
-            date_fin = _date.fromisoformat(date_fin_str)
-        except ValueError:
+            row = conn.execute(
+                f"SELECT * FROM contrats WHERE id = {ph}", (contrat_id,)
+            ).fetchone()
+            if not row:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} not found")
+                return 0
+
+            contrat = dict(row)
+            recurrence = (contrat.get("recurrence_maintenance") or "").strip()
+            if not recurrence or recurrence not in RECURRENCE_DELTAS:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} has invalid or missing recurrence: {recurrence}")
+                return 0
+
+            date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
+            date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
+            client = contrat.get("client", "")
+
+            if not date_fin_str or not date_premiere_str:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} missing dates. date_fin={date_fin_str}, date_premiere={date_premiere_str}")
+                return 0
+
+            try:
+                from datetime import date as _date
+                date_premiere = _date.fromisoformat(date_premiere_str)
+                date_fin = _date.fromisoformat(date_fin_str)
+            except ValueError as ve:
+                logger.error(f"generer_planning: Invalid date format for contrat #{contrat_id}: {ve}")
+                return 0
+
+            # Récupérer tous les équipements du contrat
+            equipements_rows = conn.execute(
+                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                    LEFT JOIN equipements e ON ce.equipement_id = e.id
+                    WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
+                (contrat_id,)
+            ).fetchall()
+            
+            if equipements_rows:
+                equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+            else:
+                # Fallback: utiliser l'équipement du contrat (pour rétrocompatibilité)
+                equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
+            
+            if not equipements:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} has no equipments")
+                return 0  # Aucun équipement à planifier
+
+            delta = RECURRENCE_DELTAS[recurrence]
+            count = 0
+
+            # Générer planning pour CHAQUE équipement
+            for equipement in equipements:
+                if not equipement:
+                    logger.warning(f"generer_planning: Skipping empty equipement name for contrat #{contrat_id}")
+                    continue
+                    
+                current_date = date_premiere
+                while current_date <= date_fin:
+                    try:
+                        conn.execute(f"""
+                            INSERT INTO planning_maintenance
+                                (machine, client, type_maintenance, description,
+                                 date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
+                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                        """, (
+                            equipement,
+                            client,
+                            "Préventive",
+                            f"MP Contrat #{contrat_id} — {equipement}",
+                            current_date.isoformat(),
+                            "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
+                            recurrence,
+                            contrat_id,
+                            "Planifiée",
+                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id}",
+                        ))
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"generer_planning: Error inserting planning for {equipement} on {current_date}: {e}")
+                    
+                    current_date = current_date + delta
+
+            logger.info(f"✅ generer_planning: Generated {count} planning entries for contrat #{contrat_id} across {len(equipements)} equipements")
+            return count
+            
+        except Exception as e:
+            logger.error(f"generer_planning: Unexpected error for contrat #{contrat_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return 0
-
-        # Récupérer tous les équipements du contrat
-        equipements_rows = conn.execute(
-            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
-                LEFT JOIN equipements e ON ce.equipement_id = e.id
-                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
-            (contrat_id,)
-        ).fetchall()
-        
-        if equipements_rows:
-            equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
-        else:
-            # Fallback: utiliser l'équipement du contrat (pour rétrocompatibilité)
-            equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
-        
-        if not equipements:
-            return 0  # Aucun équipement à planifier
-
-        delta = RECURRENCE_DELTAS[recurrence]
-        count = 0
-
-        # Générer planning pour CHAQUE équipement
-        for equipement in equipements:
-            current_date = date_premiere
-            while current_date <= date_fin:
-                conn.execute(f"""
-                    INSERT INTO planning_maintenance
-                        (machine, client, type_maintenance, description,
-                         date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
-                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                """, (
-                    equipement,
-                    client,
-                    "Préventive",
-                    f"MP Contrat #{contrat_id} — {equipement}",
-                    current_date.isoformat(),
-                    "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
-                    recurrence,
-                    contrat_id,
-                    "Planifiée",
-                    f"[{client}] Généré automatiquement depuis contrat #{contrat_id}",
-                ))
-                count += 1
-                current_date = current_date + delta
-
-    return count
 
 
 def modifier_contrat(contrat_id, contrat_dict):
