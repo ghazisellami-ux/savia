@@ -2840,6 +2840,10 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
     
     try:
         # Get intervention to verify it exists
+        machine = None
+        client = None
+        technicien = None
+        
         with get_db() as conn:
             intervention = conn.execute(
                 "SELECT id, machine, technicien FROM interventions WHERE id = ?",
@@ -2848,6 +2852,21 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             
             if not intervention:
                 raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Extract intervention data
+            machine = intervention.get("machine", "")
+            technicien = intervention.get("technicien", "")
+            
+            # Get client from equipements table (joined by machine name)
+            try:
+                eq_row = conn.execute(
+                    "SELECT client FROM equipements WHERE nom = ? LIMIT 1",
+                    (machine,)
+                ).fetchone()
+                if eq_row:
+                    client = dict(eq_row).get('client', '') or ''
+            except Exception:
+                client = ''
             
             # Verify technician permissions
             if user.get("role") == "Technicien":
@@ -2900,6 +2919,112 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             except Exception as e:
                 logger.warning(f"   ⚠️ Error deducting stock: {e}")
                 # Don't fail the whole request if stock deduction fails
+
+        # Handle pieces_rupture if technician marked as "En attente de piece"
+        if body.get("statut") == "En attente de piece" and body.get("pieces_rupture"):
+            try:
+                pieces_rupture_list = body.get("pieces_rupture", [])
+                logger.info(f"   🔴 Creating rupture badges for {len(pieces_rupture_list)} pieces...")
+                
+                with get_db() as conn:
+                    for piece in pieces_rupture_list:
+                        if not isinstance(piece, dict):
+                            continue
+                        ref = piece.get('reference', '')
+                        designation = piece.get('designation', '')
+                        
+                        if ref:
+                            # Create rupture notification (same as mode single tech)
+                            conn.execute("""
+                                INSERT INTO notif_rupture (intervention_id, reference, designation, created_at)
+                                VALUES (?, ?, ?, datetime('now'))
+                            """, (intervention_id, ref, designation))
+                            logger.info(f"      Created rupture badge: {ref} - {designation}")
+                
+                logger.info(f"   ✅ Rupture badges created successfully")
+                
+                # Send Telegram notification
+                try:
+                    pieces_txt = ""
+                    if pieces_rupture_list:
+                        pieces_txt = "\n".join([f"  • {p.get('reference', '')} — {p.get('designation', '')}" for p in pieces_rupture_list if p.get("reference")])
+                    
+                    if pieces_txt:
+                        msg_tg = (
+                            f"🔴 <b>Pièce(s) en rupture — #{intervention_id}</b>\n\n"
+                            f"⚠️ Pièces manquantes :\n{pieces_txt}\n\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        _send_telegram_bot("telegram_stock", msg_tg)
+                        _send_telegram("📬 " + msg_tg)
+                        logger.info(f"📬 Rupture notification sent")
+                except Exception as tg_err:
+                    logger.warning(f"   ⚠️ Telegram rupture notification failed: {tg_err}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error handling rupture pieces: {e}")
+                # Don't fail the whole request if rupture handling fails
+
+        # Handle pieces_manuelles (manual/non-referenced pieces) - multi-tech mode
+        if body.get("pieces_manuelles"):
+            try:
+                pieces_manuelles_list = body.get("pieces_manuelles", [])
+                logger.info(f"   📋 Creating manual piece requests for {len(pieces_manuelles_list)} pieces...")
+                
+                for piece in pieces_manuelles_list:
+                    if not isinstance(piece, dict):
+                        continue
+                    ref = piece.get('reference', '').strip()
+                    designation = piece.get('designation', '').strip()
+                    
+                    if ref:
+                        # Create manual piece request (same as mode single tech, using same function)
+                        # Use tech_nom (current technician) instead of original technicien
+                        ajouter_piece_demandee({
+                            "reference": ref,
+                            "designation": designation,
+                            "intervention_id": intervention_id,
+                            "equipement": machine,
+                            "client": client,
+                            "technicien": tech_nom,  # Use current tech submitting, not original
+                            "probleme": "",
+                        })
+                        # Notification gestionnaire (same as single-tech mode)
+                        ajouter_notification_piece({
+                            "type": "piece_rupture",
+                            "intervention_id": intervention_id,
+                            "piece_reference": ref,
+                            "piece_nom": designation,
+                            "intervention_ref": f"#{intervention_id}",
+                            "equipement": machine,
+                            "client": client,
+                            "technicien": tech_nom,  # Use current tech submitting
+                            "message": f"🆕 Pièce non référencée demandée: {ref} ({designation}) "
+                                       f"pour intervention #{intervention_id} sur {machine}",
+                            "source": "sav",
+                            "destination": "gestionnaire",
+                        })
+                        logger.info(f"      Created manual piece request: {ref} - {designation}")
+                
+                logger.info(f"   ✅ Manual piece requests created successfully")
+                
+                # Send Telegram notification
+                try:
+                    pm_list = [f"  • {p.get('reference','')} — {p.get('designation','')}" for p in pieces_manuelles_list if p.get("reference")]
+                    if pm_list:
+                        msg_tg_m = (
+                            f"📋 <b>Demande pièce manuelle — #{intervention_id}</b>\n\n"
+                            f"Pièces demandées :\n" + "\n".join(pm_list) + f"\n\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        _send_telegram_bot("telegram_stock", msg_tg_m)
+                        _send_telegram(msg_tg_m)
+                        logger.info(f"📋 Manual piece notification sent")
+                except Exception as tg_err:
+                    logger.warning(f"   ⚠️ Telegram manual piece notification failed: {tg_err}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error handling manual pieces: {e}")
+                # Don't fail the whole request if manual piece handling fails
+                # Don't fail the whole request if manual piece handling fails
         
         # Consolidate any duplicate technician records (with reversed names)
         consolidate_technician_duplicates(intervention_id)
