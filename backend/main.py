@@ -2840,6 +2840,10 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
     
     try:
         # Get intervention to verify it exists
+        machine = None
+        client = None
+        technicien = None
+        
         with get_db() as conn:
             intervention = conn.execute(
                 "SELECT id, machine, technicien FROM interventions WHERE id = ?",
@@ -2848,6 +2852,21 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             
             if not intervention:
                 raise HTTPException(status_code=404, detail="Intervention non trouvée")
+            
+            # Extract intervention data
+            machine = intervention.get("machine", "")
+            technicien = intervention.get("technicien", "")
+            
+            # Get client from equipements table (joined by machine name)
+            try:
+                eq_row = conn.execute(
+                    "SELECT client FROM equipements WHERE nom = ? LIMIT 1",
+                    (machine,)
+                ).fetchone()
+                if eq_row:
+                    client = dict(eq_row).get('client', '') or ''
+            except Exception:
+                client = ''
             
             # Verify technician permissions
             if user.get("role") == "Technicien":
@@ -2900,6 +2919,118 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             except Exception as e:
                 logger.warning(f"   ⚠️ Error deducting stock: {e}")
                 # Don't fail the whole request if stock deduction fails
+
+        # Handle pieces_rupture if technician marked as "En attente de piece"
+        if body.get("statut") == "En attente de piece" and body.get("pieces_rupture"):
+            try:
+                pieces_rupture_list = body.get("pieces_rupture", [])
+                logger.info(f"   🔴 Creating rupture badges for {len(pieces_rupture_list)} pieces...")
+                
+                with get_db() as conn:
+                    for piece in pieces_rupture_list:
+                        if not isinstance(piece, dict):
+                            continue
+                        ref = piece.get('reference', '')
+                        designation = piece.get('designation', '')
+                        
+                        if ref:
+                            # Create rupture notification (same as mode single tech)
+                            conn.execute("""
+                                INSERT INTO notif_rupture (intervention_id, reference, designation, created_at)
+                                VALUES (?, ?, ?, datetime('now'))
+                            """, (intervention_id, ref, designation))
+                            logger.info(f"      Created rupture badge: {ref} - {designation}")
+                
+                logger.info(f"   ✅ Rupture badges created successfully")
+                
+                # Send Telegram notification
+                try:
+                    pieces_txt = ""
+                    if pieces_rupture_list:
+                        pieces_txt = "\n".join([f"  • {p.get('reference', '')} — {p.get('designation', '')}" for p in pieces_rupture_list if p.get("reference")])
+                    
+                    if pieces_txt:
+                        msg_tg = (
+                            f"🔴 <b>Pièce(s) en rupture — #{intervention_id}</b>\n\n"
+                            f"⚠️ Pièces manquantes :\n{pieces_txt}\n\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        _send_telegram_bot("telegram_stock", msg_tg)
+                        _send_telegram("📬 " + msg_tg)
+                        logger.info(f"📬 Rupture notification sent")
+                except Exception as tg_err:
+                    logger.warning(f"   ⚠️ Telegram rupture notification failed: {tg_err}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error handling rupture pieces: {e}")
+                # Don't fail the whole request if rupture handling fails
+
+        # Handle pieces_manuelles (manual/non-referenced pieces) - multi-tech mode
+        if body.get("pieces_manuelles"):
+            try:
+                pieces_manuelles_list = body.get("pieces_manuelles", [])
+                logger.info(f"   📋 Creating manual piece requests for {len(pieces_manuelles_list)} pieces...")
+                
+                for piece in pieces_manuelles_list:
+                    if not isinstance(piece, dict):
+                        continue
+                    ref = piece.get('reference', '').strip()
+                    designation = piece.get('designation', '').strip()
+                    
+                    if ref:
+                        # Create manual piece request (same as mode single tech, using same function)
+                        # Use tech_nom (current technician) instead of original technicien
+                        ajouter_piece_demandee({
+                            "reference": ref,
+                            "designation": designation,
+                            "intervention_id": intervention_id,
+                            "equipement": machine,
+                            "client": client,
+                            "technicien": tech_nom,  # Use current tech submitting, not original
+                            "probleme": "",
+                        })
+                        # Notification gestionnaire (same as single-tech mode)
+                        ajouter_notification_piece({
+                            "type": "piece_rupture",
+                            "intervention_id": intervention_id,
+                            "piece_reference": ref,
+                            "piece_nom": designation,
+                            "intervention_ref": f"#{intervention_id}",
+                            "equipement": machine,
+                            "client": client,
+                            "technicien": tech_nom,  # Use current tech submitting
+                            "message": f"🆕 Pièce non référencée demandée: {ref} ({designation}) "
+                                       f"pour intervention #{intervention_id} sur {machine}",
+                            "source": "sav",
+                            "destination": "gestionnaire",
+                        })
+                        logger.info(f"      Created manual piece request: {ref} - {designation}")
+                
+                logger.info(f"   ✅ Manual piece requests created successfully")
+                
+                # Send Telegram notification (same format as single-tech mode)
+                try:
+                    pm_list = [f"  • {p.get('reference','')} — {p.get('designation','')}" for p in pieces_manuelles_list if p.get("reference")]
+                    if pm_list:
+                        client_line_m = f"\n👤 Client : <b>{client}</b>" if client else ""
+                        msg_tg_m = (
+                            f"🆕 <b>DEMANDE PIÈCE NON RÉFÉRENCÉE — #{intervention_id}</b>\n\n"
+                            f"🏥 Machine : <b>{machine}</b>"
+                            f"{client_line_m}\n"
+                            f"👷 Technicien : <b>{tech_nom}</b>\n"
+                            f"🔩 Pièces demandées :\n" + "\n".join(pm_list) + "\n\n"
+                            f"⚠️ Ces pièces ne sont pas dans le stock — à commander\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        # Send to both stock bot and tech bot (same as single-tech mode)
+                        _send_telegram_bot("telegram_stock", msg_tg_m)
+                        _send_telegram_bot("telegram", msg_tg_m)
+                        logger.info(f"📋 Manual piece notifications sent to both bots")
+                except Exception as tg_err:
+                    logger.warning(f"   ⚠️ Telegram manual piece notification failed: {tg_err}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error handling manual pieces: {e}")
+                # Don't fail the whole request if manual piece handling fails
+                # Don't fail the whole request if manual piece handling fails
         
         # Consolidate any duplicate technician records (with reversed names)
         consolidate_technician_duplicates(intervention_id)
@@ -2990,23 +3121,27 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             pending_list = ", ".join(status_info['pending_names'])
             logger.info(f"⏳ Intervention #{intervention_id} partially complete: {status_info['completed']}/{status_info['total']} (pending: {pending_list})")
             
-            # Send Telegram: PARTIALLY CLOSED
-            try:
-                machine = intervention.get('machine', '')
-                msg_tg = (
-                    f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
-                    f"🏥 Machine : <b>{machine}</b>\n"
-                    f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
-                    f"⏳ Techniciens restants :\n"
-                )
-                for pending_tech in status_info['pending_names']:
-                    msg_tg += f"  • {pending_tech}\n"
-                
-                msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                _send_telegram(msg_tg)
-                logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
-            except Exception as te:
-                logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
+            # Send Telegram: PARTIALLY CLOSED - but only if this technician marked as "Cloturee"
+            # Don't send if technician marked as "En attente de piece"
+            if body.get("statut") == "Cloturee":
+                try:
+                    machine = intervention.get('machine', '')
+                    msg_tg = (
+                        f"⏳ <b>INTERVENTION PARTIELLEMENT CLÔTURÉE — #{intervention_id}</b>\n\n"
+                        f"🏥 Machine : <b>{machine}</b>\n"
+                        f"✅ Techniciens complétés : <b>{status_info['completed']}/{status_info['total']}</b>\n"
+                        f"⏳ Techniciens restants :\n"
+                    )
+                    for pending_tech in status_info['pending_names']:
+                        msg_tg += f"  • {pending_tech}\n"
+                    
+                    msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    _send_telegram(msg_tg)
+                    logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
+                except Exception as te:
+                    logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
+            else:
+                logger.info(f"   ✓ Technician marked as '{body.get('statut')}' - no partial closure telegram sent")
             
             logger.info(f"   ✓ Returning PARTIAL response with {len(status_info['pending_names'])} pending: {status_info['pending_names']}")
             return {
@@ -8467,6 +8602,12 @@ def map_sites(user: dict = Depends(_verify_token)):
         df_equip = lire_equipements()
         df_interv = lire_interventions()
         df_plan = lire_planning()  # ← Load ONCE before the loop
+        
+        # Load clients to get ville and region info
+        try:
+            df_clients = db_lire_clients()
+        except:
+            df_clients = None
 
         sites = {}
         if df_equip.empty:
@@ -8477,6 +8618,17 @@ def map_sites(user: dict = Depends(_verify_token)):
             if not cl:
                 continue
             if cl not in sites:
+                # Get ville and region from clients table if available
+                ville = ""
+                if df_clients is not None and not df_clients.empty:
+                    client_row = df_clients[df_clients["nom"] == cl]
+                    if not client_row.empty:
+                        ville = client_row.iloc[0].get("ville", "") or ""
+                
+                # Fallback to equipment ville if client ville not found
+                if not ville:
+                    ville = eq.get("Ville", eq.get("ville", ""))
+                
                 sites[cl] = {
                     "client": cl,
                     "equipements": [],
@@ -8484,7 +8636,7 @@ def map_sites(user: dict = Depends(_verify_token)):
                     "latitude": eq.get("latitude", None),
                     "longitude": eq.get("longitude", None),
                     "adresse": eq.get("adresse", ""),
-                    "ville": eq.get("Ville", eq.get("ville", "")),
+                    "ville": ville,
                 }
             nom = eq.get("Nom", "")
             statut = eq.get("Statut", eq.get("statut", "Actif"))
