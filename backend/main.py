@@ -8602,6 +8602,12 @@ def map_sites(user: dict = Depends(_verify_token)):
         df_equip = lire_equipements()
         df_interv = lire_interventions()
         df_plan = lire_planning()  # ← Load ONCE before the loop
+        
+        # Load clients to get ville and region info
+        try:
+            df_clients = db_lire_clients()
+        except:
+            df_clients = None
 
         sites = {}
         if df_equip.empty:
@@ -8612,6 +8618,17 @@ def map_sites(user: dict = Depends(_verify_token)):
             if not cl:
                 continue
             if cl not in sites:
+                # Get ville and region from clients table if available
+                ville = ""
+                if df_clients is not None and not df_clients.empty:
+                    client_row = df_clients[df_clients["nom"] == cl]
+                    if not client_row.empty:
+                        ville = client_row.iloc[0].get("ville", "") or ""
+                
+                # Fallback to equipment ville if client ville not found
+                if not ville:
+                    ville = eq.get("Ville", eq.get("ville", ""))
+                
                 sites[cl] = {
                     "client": cl,
                     "equipements": [],
@@ -8619,7 +8636,7 @@ def map_sites(user: dict = Depends(_verify_token)):
                     "latitude": eq.get("latitude", None),
                     "longitude": eq.get("longitude", None),
                     "adresse": eq.get("adresse", ""),
-                    "ville": eq.get("Ville", eq.get("ville", "")),
+                    "ville": ville,
                 }
             nom = eq.get("Nom", "")
             statut = eq.get("Statut", eq.get("statut", "Actif"))
