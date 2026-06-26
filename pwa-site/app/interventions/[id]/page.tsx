@@ -99,9 +99,13 @@ export default function InterventionDetailPage() {
   const [photoPreview, setPhotoPreview] = useState('');
   const [piecesQty, setPiecesQty]       = useState<PiecesQty>({});
   const [piecesRupture, setPiecesRupture] = useState<any[]>([]); // pièces demandées (rupture)
+  const [piecesRuptureMultiTech, setPiecesRuptureMultiTech] = useState<any[]>([]); // pièces rupture multi-tech
   const [searchRupture, setSearchRupture] = useState('');
+  const [searchRuptureMultiTech, setSearchRuptureMultiTech] = useState(''); // pour la recherche multi-tech
   const [manualPieces, setManualPieces] = useState<{reference: string; designation: string}[]>([]);
   const [manualPieceForm, setManualPieceForm] = useState({reference: '', designation: ''});
+  const [manualPiecesMultiTech, setManualPiecesMultiTech] = useState<{reference: string; designation: string}[]>([]); // pièces manuelles multi-tech
+  const [manualPieceFormMultiTech, setManualPieceFormMultiTech] = useState({reference: '', designation: ''}); // formulaire pièces manuelles multi-tech
   const [showRefuseForm, setShowRefuseForm] = useState(false);
   const [refuseRaison, setRefuseRaison] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
@@ -552,6 +556,15 @@ export default function InterventionDetailPage() {
         };
       });
 
+      // Collect pieces rupture if status = "En attente de piece"
+      const pieces_rupture_tech = techForm.statut === 'En attente de piece' 
+        ? piecesRuptureMultiTech.map(p => ({
+          id: p.id,
+          reference: p.reference || '',
+          designation: p.designation || p.nom || '',
+        }))
+        : [];
+
       const payload = {
         technicien_nom: currentUserName,
         technicien_id: currentUserTechId, // Send the ID for reliable updating
@@ -563,9 +576,11 @@ export default function InterventionDetailPage() {
         duree_minutes_tech: durationMinutes,
         duree_deplacement_tech: deploymentMinutes,
         notes_tech: techForm.notes_tech,
-        statut: techForm.statut,  // Can be 'Cloturee' to mark as done
+        statut: techForm.statut,  // Can be 'Cloturee' or 'En attente de piece' to mark as waiting
         type_erreur_tech: techForm.type_erreur_tech,
         pieces_a_deduire,  // Include pieces (deducted when tech closes)
+        pieces_rupture: pieces_rupture_tech,  // Include rupture pieces if waiting
+        ...(manualPiecesMultiTech.length > 0 ? { pieces_manuelles: manualPiecesMultiTech } : {}) // Include manual pieces
       };
 
       console.log('📤 Sending technician data:', payload);
@@ -697,6 +712,12 @@ export default function InterventionDetailPage() {
     );
   };
 
+  const toggleRuptureMultiTech = (p: any) => {
+    setPiecesRuptureMultiTech(prev =>
+      prev.find(x => x.id === p.id) ? prev.filter(x => x.id !== p.id) : [...prev, p]
+    );
+  };
+
   // Pour la section "en attente de pièce", filtrer d'abord par type d'équipement puis par recherche
   const searchedPieces = useMemo(() => {
     let base: any[] = [];
@@ -724,6 +745,31 @@ export default function InterventionDetailPage() {
       || (p.reference || '').toLowerCase().includes(q)
     );
   }, [allPieces, allEquipements, intervention?.machine, searchRupture]);
+
+  // Same as searchedPieces but for multi-tech mode
+  const searchedPiecesMultiTech = useMemo(() => {
+    let base: any[] = [];
+    
+    if (intervention?.machine && allEquipements && allPieces) {
+      const equipment = allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention.machine);
+      if (equipment) {
+        const equipmentType = (equipment.Type || equipment.type || '').toLowerCase().trim();
+        if (equipmentType) {
+          base = allPieces.filter(p => {
+            const pieceType = (p.equipement_type || '').toLowerCase().trim();
+            return equipmentType === pieceType;
+          });
+        }
+      }
+    }
+    
+    if (!searchRuptureMultiTech) return base;
+    const q = searchRuptureMultiTech.toLowerCase();
+    return base.filter(p =>
+      (p.designation || p.nom || '').toLowerCase().includes(q)
+      || (p.reference || '').toLowerCase().includes(q)
+    );
+  }, [allPieces, allEquipements, intervention?.machine, searchRuptureMultiTech]);
 
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -957,9 +1003,130 @@ export default function InterventionDetailPage() {
               <label style={LABEL}>Mon Statut</label>
               <select style={INPUT} value={techForm.statut} onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}>
                 <option value="En cours">En cours</option>
+                <option value="En attente de piece">En attente de pièce</option>
                 <option value="Cloturee">Intervention terminée</option>
               </select>
             </div>
+
+            {/* Pièces requises — visible uniquement quand statut = En attente de piece (multi-tech) */}
+            {techForm.statut === 'En attente de piece' && (
+              <div style={{ ...SECTION, border: '2px dashed #B45309', background: 'rgba(245,158,11,0.03)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                    <AlertTriangle style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Pièces requises (rupture)
+                  </h3>
+                  {piecesRuptureMultiTech.length > 0 && (
+                    <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px', animation: 'pulse 2s infinite' }}>
+                      {piecesRuptureMultiTech.length} sélectionnée{piecesRuptureMultiTech.length > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+                <p style={{ fontSize: '0.72rem', color: '#B45309', background: 'rgba(245,158,11,0.08)', padding: '6px 10px', borderRadius: '8px', marginBottom: '10px' }}>
+                  Sélectionnez les pièces nécessaires — un badge rouge sera créé dans Pièces de rechange
+                </p>
+
+                {/* Recherche */}
+                <input
+                  type="search"
+                  placeholder="Rechercher une pièce..."
+                  value={searchRuptureMultiTech}
+                  onChange={e => setSearchRuptureMultiTech(e.target.value)}
+                  style={{ ...INPUT, marginBottom: '10px' }}
+                />
+
+                {/* Liste des pièces */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', maxHeight: '280px', overflowY: 'auto' }}>
+                  {searchedPiecesMultiTech.length === 0 && (
+                    <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', padding: '12px' }}>Aucune pièce trouvée</p>
+                  )}
+                  {searchedPiecesMultiTech.map((p: any) => {
+                    const enStock = Number(p.stock_actuel ?? p.stock ?? 0);
+                    const rupture = enStock === 0;
+                    const selected = !!piecesRuptureMultiTech.find(x => x.id === p.id);
+                    return (
+                      <button key={p.id} type="button" onClick={() => toggleRuptureMultiTech(p)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '10px',
+                          padding: '10px 12px', borderRadius: '10px', border: 'none',
+                          background: selected ? (rupture ? 'rgba(239,68,68,0.08)' : 'rgba(86,124,141,0.08)') : '#fafafa',
+                          outline: selected ? `2px solid ${rupture ? '#ef4444' : 'var(--teal)'}` : '2px solid transparent',
+                          cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
+                        }}>
+                        <span style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center' }}>{selected ? <CheckCircle style={{ width: 18, height: 18, color: '#15803D' }} /> : (rupture ? <AlertTriangle style={{ width: 18, height: 18, color: '#B45309' }} /> : <CircleDot style={{ width: 18, height: 18, color: 'var(--text-dim)' }} />)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {p.designation || p.nom}
+                          </p>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {p.reference}</span>
+                            <span style={{
+                              fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px',
+                              background: rupture ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)',
+                              color: rupture ? '#ef4444' : '#15803D',
+                            }}>
+                              {rupture ? <><AlertTriangle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {enStock} en stock</>}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Manual pieces section — visible uniquement quand statut = En attente de piece */}
+            {techForm.statut === 'En attente de piece' && (
+              <div style={{ marginTop: '14px', borderTop: '1px solid rgba(37,99,235,0.2)', paddingTop: '14px', ...SECTION }}>
+                <p style={{ fontSize: '0.78rem', fontWeight: 700, color: '#2563EB', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  🆕 Demander une pièce non référencée
+                </p>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Référence"
+                    value={manualPieceFormMultiTech.reference}
+                    onChange={e => setManualPieceFormMultiTech(f => ({ ...f, reference: e.target.value }))}
+                    style={{ ...INPUT, flex: 0.4 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Description"
+                    value={manualPieceFormMultiTech.designation}
+                    onChange={e => setManualPieceFormMultiTech(f => ({ ...f, designation: e.target.value }))}
+                    style={{ ...INPUT, flex: 0.6 }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (manualPieceFormMultiTech.reference.trim()) {
+                      setManualPiecesMultiTech(prev => [...prev, {reference: manualPieceFormMultiTech.reference.trim(), designation: manualPieceFormMultiTech.designation.trim() || manualPieceFormMultiTech.reference.trim()}]);
+                      setManualPieceFormMultiTech({reference: '', designation: ''});
+                    }
+                  }}
+                  style={{ width: '100%', padding: '10px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer', marginBottom: manualPiecesMultiTech.length > 0 ? '8px' : '0' }}
+                >
+                  + Ajouter à la demande
+                </button>
+                {manualPiecesMultiTech.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    {manualPiecesMultiTech.map((mp, idx) => (
+                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.2)', borderRadius: '8px', padding: '8px 12px', marginBottom: '4px' }}>
+                        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--navy)' }}>
+                          <strong>{mp.reference}</strong> — {mp.designation}
+                        </span>
+                        <button type="button" onClick={() => setManualPiecesMultiTech(prev => prev.filter((_, i) => i !== idx))}
+                          style={{ background: 'none', border: 'none', color: '#ef4444', fontWeight: 700, fontSize: '1rem', cursor: 'pointer', padding: '2px 6px' }}>✕</button>
+                      </div>
+                    ))}
+                    <p style={{ fontSize: '0.7rem', color: '#2563EB', fontWeight: 600, marginTop: '6px' }}>
+                      📨 {manualPiecesMultiTech.length} pièce(s) non référencée(s) — notification dès disponibilité
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Error */}
             {error && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
