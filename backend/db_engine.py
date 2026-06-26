@@ -3128,8 +3128,7 @@ def generer_planning_from_contrat(contrat_id):
 
             # Récupérer tous les équipements du contrat
             equipements_rows = conn.execute(
-                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
-                    LEFT JOIN equipements e ON ce.equipement_id = e.id
+                f"""SELECT ce.equipement_nom as equipement_nom FROM contrats_equipements ce
                     WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
                 (contrat_id,)
             ).fetchall()
