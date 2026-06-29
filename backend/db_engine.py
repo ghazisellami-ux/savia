@@ -1,6 +1,5 @@
 import os
 import re
-import sqlite3
 import logging
 import pandas as pd
 from datetime import datetime
@@ -15,10 +14,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("db_engine")
 
-DB_PATH = os.path.join(BASE_DIR, "sic_radiologie.db")
-
+# PostgreSQL Configuration (required for operation)
 # Construct DATABASE_URL from environment variables with proper URL encoding
-# This handles special characters in passwords correctly
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:
     # Try to construct from individual environment variables
@@ -32,284 +29,180 @@ if not DATABASE_URL:
         # URL-encode the password to handle special characters
         encoded_password = quote(pg_password, safe='')
         DATABASE_URL = f"postgresql://{pg_user}:{encoded_password}@{pg_host}:{pg_port}/{pg_db}"
-        logger.info(f"Constructed DATABASE_URL from environment variables: postgresql://{pg_user}:***@{pg_host}:{pg_port}/{pg_db}")
+        logger.info(f"Constructed DATABASE_URL: postgresql://{pg_user}:***@{pg_host}:{pg_port}/{pg_db}")
+    else:
+        logger.error("DATABASE_URL not set and cannot be constructed from environment variables")
 
-# Détecter le mode (Dual-Mode - Pillier 1)
-USE_PG = bool(DATABASE_URL)
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    logger.error("psycopg2 not found. Application requires psycopg2 to connect to PostgreSQL.")
 
-if USE_PG:
-    try:
-        import psycopg2
-        import psycopg2.extras
-    except ImportError:
-        logger.error("psycopg2 non trouvé. Le mode PostgreSQL ne fonctionnera pas.")
+
+# ---- Minimal wrapper for psycopg2 for backward compatibility ----
+class PgConnWrapper:
+    """Adds SQLite-like .execute() and .executescript() methods to psycopg2 connection."""
+    
+    def __init__(self, pg_conn):
+        self._conn = pg_conn
+    
+    def _translate_sql(self, sql):
+        """Translate SQLite SQL to PostgreSQL SQL."""
+        # Convert ? to %s
+        sql = sql.replace("?", "%s")
+        # Convert to nothing (PostgreSQL uses SERIAL)
+        sql = re.sub(r'\s+AUTOINCREMENT', '', sql, flags=re.IGNORECASE)
+        # Convert INTEGER PRIMARY KEY to SERIAL PRIMARY KEY
+        sql = re.sub(r'INTEGER\s+PRIMARY\s+KEY(?!\s+AUTOINCREMENT)', 'SERIAL PRIMARY KEY', sql, flags=re.IGNORECASE)
+        # Convert BYTEA to BYTEA
+        sql = re.sub(r'\bBLOB\b', 'BYTEA', sql)
+        # Skip PRAGMA statements (PostgreSQL specific)
+        if sql.strip().upper().startswith("PRAGMA"):
+            return None
+        # Convert INSERT OR IGNORE to INSERT (with ON CONFLICT for PostgreSQL)
+        # This will be handled case-by-case
+        sql = re.sub(r'INSERT\s+OR\s+IGNORE', 'INSERT', sql, flags=re.IGNORECASE)
+        return sql
+    
+    def execute(self, sql, params=None):
+        """Execute a single statement (returns cursor for compatibility)."""
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Translate SQL
+        sql = self._translate_sql(sql)
+        if sql is None:
+            # PRAGMA statement, skip it
+            return cur
+        cur.execute(sql, params)
+        return cur
+    
+    def executescript(self, sql):
+        """Execute multiple statements separated by semicolons with SAVEPOINT isolation."""
+        # Split by semicolons and execute each statement
+        statements = [s.strip() for s in sql.split(";") if s.strip()]
+        
+        for i, stmt in enumerate(statements):
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            # Translate SQL
+            stmt = self._translate_sql(stmt)
+            if stmt is None:
+                # PRAGMA statement, skip it
+                continue
+            
+            try:
+                # Use SAVEPOINT for each statement to allow failures without aborting transaction
+                sp_name = f"sp_{i}"
+                cur.execute(f"SAVEPOINT {sp_name}")
+                cur.execute(stmt)
+                cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+            except Exception as e:
+                try:
+                    # Rollback the savepoint if statement failed
+                    cur.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+                except Exception:
+                    pass
+                
+                # Log but continue (benign errors like "already exists")
+                err_msg = str(e).lower()
+                if any(x in err_msg for x in ["already exists", "duplicate", "does not exist"]):
+                    logger.debug(f"[executescript] Benign error ignored: {e}")
+                else:
+                    logger.debug(f"[executescript] Statement {i} failed: {e}")
+        
+        return self._conn.cursor()
+    
+    def executemany(self, sql, seq_of_params):
+        """Execute statement multiple times."""
+        cur = self._conn.cursor()
+        sql = self._translate_sql(sql)
+        for params in seq_of_params:
+            cur.execute(sql, params)
+        return cur
+    
+    def cursor(self):
+        """Return a psycopg2 cursor."""
+        return self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    def commit(self):
+        """Commit transaction."""
+        self._conn.commit()
+    
+    def rollback(self):
+        """Rollback transaction."""
+        self._conn.rollback()
+    
+    def close(self):
+        """Close connection."""
+        self._conn.close()
+    
+    @property
+    def _raw(self):
+        """Raw connection for direct access."""
+        return self._conn
 
 
 def _trigger_backup():
     """
-    Déclenche un backup GitHub automatique après chaque écriture.
-    
-    Logic:
-        Vérifie si le mode PostgreSQL est actif (pas de backup fichier).
-        Tente d'importer et d'exécuter la fonction d'auto-backup.
+    Backup n'est pas nécessaire en mode PostgreSQL (géré par le serveur).
+    Cette fonction est conservée pour compatibilité mais est un no-op.
     """
-    if USE_PG:
-        return
-    try:
-        from data_sync import auto_backup_si_necessaire
-        auto_backup_si_necessaire()
-    except Exception as e:
-        # Logging non critique car data_sync est optionnel
-        logger.debug(f"Backup non disponible: {e}")
+    pass
 
 
-# ---- Wrapper PostgreSQL pour compatibilité SQLite (Pattern Proxy - Pillier 1) ----
 
-class PgCursorWrapper:
-    """
-    Wraps a psycopg2 cursor to accept SQLite-style `?` placeholders.
-    
-    Logic:
-        Traduit les requêtes SQL à la volée pour supporter les spécificités 
-        de PostgreSQL (SERIAL vs AUTOINCREMENT, %s vs ?).
-    """
-
-    def __init__(self, cursor):
-        self._cursor = cursor
-        self._last_sql_was_skipped = False
-
-    def _translate(self, sql, params=None):
-        """Traduit SQL SQLite vers PostgreSQL."""
-        sql = sql.replace("?", "%s")
-        sql = sql.replace("AUTOINCREMENT", "")
-        sql = sql.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
-        sql = re.sub(r'\bBLOB\b', 'BYTEA', sql)
-        if sql.strip().upper().startswith("PRAGMA"):
-            return None, None
-        sql = re.sub(r"INSERT\s+OR\s+IGNORE", "INSERT", sql, flags=re.IGNORECASE)
-        return sql, params
-
-    def execute(self, sql, params=None):
-        """Exécute une commande avec traduction automatique et SAVEPOINT."""
-        sql, params = self._translate(sql, params)
-        if sql is None:
-            self._last_sql_was_skipped = True
-            return self
-        
-        self._last_sql_was_skipped = False
-        # Use SAVEPOINT for DDL/DML that might fail benignly (migrations)
-        sql_upper = sql.strip().upper()
-        use_savepoint = sql_upper.startswith(("ALTER", "INSERT", "CREATE"))
-        
-        try:
-            if use_savepoint:
-                self._cursor.execute("SAVEPOINT exec_sp")
-            self._cursor.execute(sql, params)
-            if use_savepoint:
-                self._cursor.execute("RELEASE SAVEPOINT exec_sp")
-        except Exception as e:
-            err_str = str(e).lower()
-            benign = ("duplicate key", "unique", "already exists",
-                      "does not exist", "duplicate column")
-            if use_savepoint and any(msg in err_str for msg in benign):
-                try:
-                    self._cursor.execute("ROLLBACK TO SAVEPOINT exec_sp")
-                except Exception:
-                    pass
-                logger.debug(f"[PG] Benign error ignored: {str(e)[:80]}")
-            else:
-                logger.error(f"[PG] SQL Execution Error: {e} | SQL: {sql[:100]}...")
-                raise
-        return self
-
-    def executescript(self, sql):
-        """Exécute un script multi-statements avec SAVEPOINTs pour isolation."""
-        statements = [s.strip() for s in sql.split(";") if s.strip()]
-        logger.info(f"[PG] executescript: {len(statements)} statements to execute")
-        success_count = 0
-        for i, stmt in enumerate(statements):
-            translated, _ = self._translate(stmt)
-            if translated:
-                try:
-                    self._cursor.execute(f"SAVEPOINT sp_{i}")
-                    self._cursor.execute(translated)
-                    self._cursor.execute(f"RELEASE SAVEPOINT sp_{i}")
-                    success_count += 1
-                except Exception as e:
-                    try:
-                        self._cursor.execute(f"ROLLBACK TO SAVEPOINT sp_{i}")
-                    except Exception:
-                        pass
-                    logger.warning(f"[PG] Stmt {i} FAILED: {str(e)[:120]}")
-                    logger.debug(f"[PG] Failed SQL: {translated[:150]}")
-        logger.info(f"[PG] executescript done: {success_count}/{len(statements)} succeeded")
-        self._last_sql_was_skipped = False
-        return self
-
-    def executemany(self, sql, seq_of_params):
-        """Exécute une commande pour plusieurs séquences de paramètres."""
-        sql, _ = self._translate(sql)
-        if sql is None:
-            self._last_sql_was_skipped = True
-            return self
-        
-        self._last_sql_was_skipped = False
-        for params in seq_of_params:
-            try:
-                self._cursor.execute(sql, params)
-            except Exception as e:
-                logger.error(f"[PG] executemany error: {e}")
-        return self
-
-    def fetchone(self):
-        """Récupère une seule ligne du résultat."""
-        if self._last_sql_was_skipped:
-            return None
-        try:
-            return self._cursor.fetchone()
-        except Exception:
-            return None
-
-    def fetchall(self):
-        """Récupère toutes les lignes du résultat."""
-        if self._last_sql_was_skipped:
-            return []
-        try:
-            return self._cursor.fetchall()
-        except Exception:
-            return []
-
-    @property
-    def description(self):
-        return self._cursor.description
-
-    @property
-    def lastrowid(self):
-        """Retourne le dernier ID inséré."""
-        try:
-            self._cursor.execute("SELECT lastval()")
-            row = self._cursor.fetchone()
-            if row:
-                return list(row.values())[0]
-            return None
-        except Exception:
-            return None
-
-
-class PgConnectionWrapper:
-    """Wraps a psycopg2 connection to mimic sqlite3.Connection API."""
-
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, sql, params=None):
-        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        wrapper = PgCursorWrapper(cursor)
-        return wrapper.execute(sql, params)
-
-    def executescript(self, sql):
-        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        wrapper = PgCursorWrapper(cursor)
-        return wrapper.executescript(sql)
-
-    def executemany(self, sql, seq_of_params):
-        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        wrapper = PgCursorWrapper(cursor)
-        return wrapper.executemany(sql, seq_of_params)
-
-    def commit(self):
-        self._conn.commit()
-
-    def rollback(self):
-        self._conn.rollback()
-
-    def close(self):
-        self._conn.close()
-
-    def cursor(self):
-        return self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    @property
-    def _raw(self):
-        return self._conn
 
 
 def read_sql(query, conn, params=None):
     """
-    Lecture SQL compatible SQLite et PostgreSQL.
+    Lecture SQL compatible PostgreSQL.
     
     Args:
-        query (str): Requête SQL (avec placeholders ?).
-        conn (sqlite3.Connection | PgConnectionWrapper): Connexion active.
+        query (str): Requête SQL (avec placeholders ? ou %s).
+        conn (PgConnWrapper): Connexion PostgreSQL wrappée.
         params (tuple, optional): Paramètres de la requête.
         
     Returns:
         pd.DataFrame: Résultats sous forme de DataFrame.
     """
-    if USE_PG:
-        raw_conn = conn._raw if hasattr(conn, '_raw') else conn
-        pg_query = query.replace("?", "%s")
-        try:
-            return pd.read_sql_query(pg_query, raw_conn, params=params)
-        except Exception as e:
-            logger.error(f"Erreur read_sql (PG): {e}")
-            return pd.DataFrame()
     try:
-        return pd.read_sql_query(query, conn, params=params)
+        # Get raw connection if wrapped
+        raw_conn = conn._raw if hasattr(conn, '_raw') else conn
+        # PostgreSQL uses %s placeholders
+        pg_query = query.replace("?", "%s")
+        return pd.read_sql_query(pg_query, raw_conn, params=params)
     except Exception as e:
-        logger.error(f"Erreur read_sql (SQLite): {e}")
+        logger.error(f"Erreur read_sql: {e}")
         return pd.DataFrame()
 
 
 @contextmanager
 def get_db():
     """
-    Context manager pour les connexions DB (SQLite ou PostgreSQL).
+    Context manager pour les connexions DB (PostgreSQL uniquement).
     
     Logic:
-        Initialise la connexion, définit le mode journalier (WAL pour SQLite),
+        Initialise la connexion PostgreSQL, gère l'encodage client UTF8,
         et gère le commit/rollback automatique en cas d'erreur.
-        Gère l'encodage client UTF8 pour PostgreSQL.
     
     Yields:
-        sqlite3.Connection | PgConnectionWrapper: La connexion active.
+        PgConnWrapper: Wrapper autour psycopg2.connection pour compatibilité SQLite.
     """
-    if USE_PG:
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.set_client_encoding('UTF8')
+        wrapped = PgConnWrapper(conn)
         try:
-            conn = psycopg2.connect(DATABASE_URL)
-            conn.set_client_encoding('UTF8')
-            wrapped = PgConnectionWrapper(conn)
-            try:
-                yield wrapped
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Transaction DB échouée (PG): {e}")
-                raise
-            finally:
-                conn.close()
+            yield wrapped
+            conn.commit()
         except Exception as e:
-            logger.error(f"Impossible de se connecter à PostgreSQL: {e}")
+            conn.rollback()
+            logger.error(f"Transaction DB échouée: {e}")
             raise
-    else:
-        try:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA foreign_keys=ON")
-            try:
-                yield conn
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Transaction DB échouée (SQLite): {e}")
-                raise
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error(f"Impossible de se connecter à SQLite: {e}")
-            raise
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Impossible de se connecter à PostgreSQL: {e}")
+        raise
 
 
 def init_db():
@@ -318,7 +211,7 @@ def init_db():
         conn.executescript("""
         -- Codes d'erreurs hexadécimaux
         CREATE TABLE IF NOT EXISTS codes_erreurs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             code TEXT NOT NULL UNIQUE,
             message TEXT DEFAULT '',
             niveau TEXT DEFAULT 'ATTENTION',
@@ -328,7 +221,7 @@ def init_db():
 
         -- Solutions associées aux erreurs
         CREATE TABLE IF NOT EXISTS solutions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             mot_cle TEXT NOT NULL UNIQUE,
             type TEXT DEFAULT 'Hardware',
             priorite TEXT DEFAULT 'MOYENNE',
@@ -343,7 +236,7 @@ def init_db():
 
         -- Clients (table dédiée)
         CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL UNIQUE,
             matricule_fiscale TEXT DEFAULT '',
             ville TEXT DEFAULT '',
@@ -355,7 +248,7 @@ def init_db():
 
         -- Parc d'équipements
         CREATE TABLE IF NOT EXISTS equipements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL,
             type TEXT DEFAULT '',
             fabricant TEXT DEFAULT '',
@@ -371,7 +264,7 @@ def init_db():
 
         -- Interventions de maintenance
         CREATE TABLE IF NOT EXISTS interventions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             machine TEXT NOT NULL,
             technicien TEXT DEFAULT '',
@@ -393,7 +286,7 @@ def init_db():
 
         -- Techniciens (détails étendus)
         CREATE TABLE IF NOT EXISTS techniciens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT UNIQUE,  -- Lien optionnel vers utilisateurs
             nom TEXT NOT NULL,
             prenom TEXT NOT NULL,
@@ -407,7 +300,7 @@ def init_db():
 
         -- Utilisateurs
         CREATE TABLE IF NOT EXISTS utilisateurs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             nom_complet TEXT DEFAULT '',
@@ -421,7 +314,7 @@ def init_db():
 
         -- Journal d'audit
         CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             username TEXT DEFAULT 'system',
             action TEXT NOT NULL,
@@ -432,7 +325,7 @@ def init_db():
 
         -- Audit Trail IA (EU AI Act Article 12)
         CREATE TABLE IF NOT EXISTS ai_audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             model_version TEXT NOT NULL,
             prompt_hash TEXT DEFAULT '',
@@ -442,7 +335,7 @@ def init_db():
 
         -- Feedback sur les prédictions (HITL — Human-in-the-Loop)
         CREATE TABLE IF NOT EXISTS prediction_feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             machine TEXT NOT NULL,
             date_predite TEXT NOT NULL,
@@ -454,7 +347,7 @@ def init_db():
 
         -- Planning de maintenance préventive
         CREATE TABLE IF NOT EXISTS planning_maintenance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             machine TEXT NOT NULL,
             client TEXT DEFAULT '',
             type_maintenance TEXT DEFAULT 'Préventive',
@@ -471,7 +364,7 @@ def init_db():
 
         -- Pièces de rechange
         CREATE TABLE IF NOT EXISTS pieces_rechange (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             reference TEXT NOT NULL UNIQUE,
             designation TEXT NOT NULL,
             equipement_type TEXT DEFAULT '',
@@ -490,15 +383,14 @@ def init_db():
         );
 
         -- Insérer config par défaut si absente
-        INSERT OR IGNORE INTO config_client (cle, valeur) VALUES
-            ('nom_organisation', 'SIC Radiologie'),
+        INSERT INTO config_client (cle, valeur) VALUES ('nom_organisation', 'SIC Radiologie') ON CONFLICT DO NOTHING,
             ('logo_path', ''),
             ('langue', 'fr'),
             ('theme', 'dark');
 
         -- Télémétrie IoT
         CREATE TABLE IF NOT EXISTS telemetry (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             machine TEXT NOT NULL,
             sensor_type TEXT NOT NULL,
@@ -527,7 +419,7 @@ def init_db():
 
         -- Logs uploadés (Supervision) — content stocké dans S3/MinIO
         CREATE TABLE IF NOT EXISTS logs_uploaded (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             equipement TEXT NOT NULL,
             filename TEXT NOT NULL,
             s3_key TEXT DEFAULT '',
@@ -542,7 +434,7 @@ def init_db():
 
         -- Horaires de notification pour les bots Telegram
         CREATE TABLE IF NOT EXISTS notification_schedules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             bot_key TEXT NOT NULL UNIQUE,
             enabled INTEGER DEFAULT 1,
             hour INTEGER DEFAULT 8,
@@ -554,7 +446,7 @@ def init_db():
 
         -- Techniciens assignés à une intervention (junction table pour per-tech data)
         CREATE TABLE IF NOT EXISTS interventions_techniciens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             intervention_id INTEGER NOT NULL,
             technicien_id INTEGER,
             technicien_nom TEXT NOT NULL,
@@ -632,78 +524,33 @@ def init_db():
 
         # Migration : recréer la table avec UNIQUE(nom, client)
         # NOTE: PRAGMA is SQLite-specific, skip for PostgreSQL
-        if not USE_PG:
-            try:
-                indexes = conn.execute("PRAGMA index_list(equipements)").fetchall()
-                needs_migration = False
-                for idx in indexes:
-                    idx_info = conn.execute(f"PRAGMA index_info('{idx[1]}')").fetchall()
-                    if len(idx_info) == 1 and any(col[2] == 'nom' for col in idx_info):
-                        needs_migration = True
-                        break
-                if needs_migration:
-                    logger.info("Début migration de la table équipements pour contrainte UNIQUE(nom, client)")
-                    conn.executescript("""
-                        CREATE TABLE IF NOT EXISTS equipements_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            nom TEXT NOT NULL,
-                            type TEXT DEFAULT '',
-                            fabricant TEXT DEFAULT '',
-                            modele TEXT DEFAULT '',
-                            num_serie TEXT DEFAULT '',
-                            date_installation TEXT DEFAULT '',
-                            derniere_maintenance TEXT DEFAULT '',
-                            statut TEXT DEFAULT 'Actif',
-                            notes TEXT DEFAULT '',
-                            client TEXT DEFAULT 'Centre Principal',
-                            UNIQUE(nom, client)
-                        );
-                        INSERT OR IGNORE INTO equipements_new
-                            SELECT id, nom, type, fabricant, modele, num_serie,
-                                   date_installation, derniere_maintenance, statut, notes, client
-                            FROM equipements;
-                        DROP TABLE equipements;
-                        ALTER TABLE equipements_new RENAME TO equipements;
-                    """)
-            except Exception as e:
-                logger.error(f"Erreur lors de la migration complexe des équipements: {e}")
-
         # Migration helper: ajouter colonne si elle n'existe pas (compatible PG + SQLite)
         def _safe_add_column(tbl, col, col_type="TEXT", default="''"):
             """Ajoute une colonne de manière sécurisée sans interrompre le flux."""
-            if USE_PG:
-                try:
-                    cur = conn._conn.cursor()
-                    # First check if column already exists
-                    cur.execute("""
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = %s AND column_name = %s
-                    """, (tbl, col))
-                    column_exists = cur.fetchone() is not None
+            try:
+                cur = conn.cursor()
+                # First check if column already exists
+                cur.execute("""
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = %s AND column_name = %s
+                """, (tbl, col))
+                column_exists = cur.fetchone() is not None
                     
-                    if not column_exists:
-                        # Column doesn't exist, add it
-                        cur.execute(
-                            f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type} DEFAULT {default}"
-                        )
-                        conn._conn.commit()
-                        logger.info(f"✅ Colonne {col} ajoutée à {tbl}")
-                    else:
-                        logger.debug(f"ℹ️  Colonne {col} déjà présente sur {tbl}")
-                except Exception as e:
-                    try:
-                        conn._conn.rollback()
-                    except Exception:
-                        pass
-                    logger.debug(f"⚠️  Erreur lors de l'ajout de {col} à {tbl}: {e}")
-            else:
-                try:
-                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type} DEFAULT {default}")
+                if not column_exists:
+                    # Column doesn't exist, add it
+                    cur.execute(
+                        f"ALTER TABLE {tbl} ADD COLUMN {col} {col_type} DEFAULT {default}"
+                    )
+                    conn.commit()
                     logger.info(f"✅ Colonne {col} ajoutée à {tbl}")
-                except Exception as e:
-                    logger.debug(f"ℹ️  Colonne {col} déjà présente sur {tbl} (SQLite)")  # Attendu si déjà là
-
-
+                else:
+                    logger.debug(f"ℹ️  Colonne {col} déjà présente sur {tbl}")
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.debug(f"⚠️  Erreur lors de l'ajout de {col} à {tbl}: {e}")
         # Migrations : colonnes ajoutées progressivement
         _safe_add_column("equipements", "matricule_fiscale")
         _safe_add_column("interventions", "date_debut_intervention", "TIMESTAMP", "NULL")
@@ -743,34 +590,19 @@ def init_db():
 
         # Notification schedules table migration (create if not exists)
         try:
-            if USE_PG:
-                # PostgreSQL syntax with SERIAL PRIMARY KEY
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS notification_schedules (
-                        id SERIAL PRIMARY KEY,
-                        bot_key TEXT NOT NULL UNIQUE,
-                        enabled INTEGER DEFAULT 1,
-                        hour INTEGER DEFAULT 8,
-                        minute INTEGER DEFAULT 30,
-                        days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-            else:
-                # SQLite syntax
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS notification_schedules (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        bot_key TEXT NOT NULL UNIQUE,
-                        enabled INTEGER DEFAULT 1,
-                        hour INTEGER DEFAULT 8,
-                        minute INTEGER DEFAULT 30,
-                        days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
+            # PostgreSQL syntax with SERIAL PRIMARY KEY
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notification_schedules (
+                    id SERIAL PRIMARY KEY,
+                    bot_key TEXT NOT NULL UNIQUE,
+                    enabled INTEGER DEFAULT 1,
+                    hour INTEGER DEFAULT 8,
+                    minute INTEGER DEFAULT 30,
+                    days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
             logger.info("✅ Table notification_schedules créée ou déjà existante")
         except Exception as e:
@@ -791,50 +623,27 @@ def init_db():
 
         # Interventions_techniciens table migration (per-technician tracking)
         try:
-            if USE_PG:
-                # PostgreSQL syntax
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS interventions_techniciens (
-                        id SERIAL PRIMARY KEY,
-                        intervention_id INTEGER NOT NULL,
-                        technicien_id INTEGER,
-                        technicien_nom TEXT NOT NULL,
-                        statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece')),
-                        probleme_tech TEXT DEFAULT '',
-                        cause_tech TEXT DEFAULT '',
-                        solution_tech TEXT DEFAULT '',
-                        heure_debut_tech TIME,
-                        heure_fin_tech TIME,
-                        duree_minutes_tech INTEGER DEFAULT 0,
-                        duree_deplacement_tech INTEGER DEFAULT 0,
-                        notes_tech TEXT DEFAULT '',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
-                    )
-                """)
-            else:
-                # SQLite syntax
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS interventions_techniciens (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        intervention_id INTEGER NOT NULL,
-                        technicien_id INTEGER,
-                        technicien_nom TEXT NOT NULL,
-                        statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece')),
-                        probleme_tech TEXT DEFAULT '',
-                        cause_tech TEXT DEFAULT '',
-                        solution_tech TEXT DEFAULT '',
-                        heure_debut_tech TIME,
-                        heure_fin_tech TIME,
-                        duree_minutes_tech INTEGER DEFAULT 0,
-                        duree_deplacement_tech INTEGER DEFAULT 0,
-                        notes_tech TEXT DEFAULT '',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
-                    )
-                """)
+            # PostgreSQL syntax
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS interventions_techniciens (
+                    id SERIAL PRIMARY KEY,
+                    intervention_id INTEGER NOT NULL,
+                    technicien_id INTEGER,
+                    technicien_nom TEXT NOT NULL,
+                    statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece')),
+                    probleme_tech TEXT DEFAULT '',
+                    cause_tech TEXT DEFAULT '',
+                    solution_tech TEXT DEFAULT '',
+                    heure_debut_tech TIME,
+                    heure_fin_tech TIME,
+                    duree_minutes_tech INTEGER DEFAULT 0,
+                    duree_deplacement_tech INTEGER DEFAULT 0,
+                    notes_tech TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
+                )
+            """)
             # Create index for faster queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_int_tech_intervention_id ON interventions_techniciens(intervention_id)")
             conn.commit()
@@ -858,137 +667,85 @@ def init_db():
 
 
         # Fabricants table
-        if USE_PG:
-            try:
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS fabricants (
-                        id SERIAL PRIMARY KEY,
-                        nom TEXT UNIQUE NOT NULL
-                    )
-                """)
-                conn._conn.commit()
-            except Exception:
-                try: conn._conn.rollback()
-                except Exception: pass
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS fabricants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nom TEXT UNIQUE NOT NULL
-            )
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fabricants (
+                    id SERIAL PRIMARY KEY,
+                    nom TEXT UNIQUE NOT NULL
+                )
             """)
-
+            conn.commit()
+        except Exception:
+            try: conn.rollback()
+            except Exception: pass
         # Custom equipment types table (per domain)
-        if USE_PG:
-            try:
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS types_equipement_custom (
-                        id SERIAL PRIMARY KEY,
-                        nom TEXT NOT NULL,
-                        domaine TEXT NOT NULL DEFAULT '',
-                        UNIQUE(nom, domaine)
-                    )
-                """)
-                conn._conn.commit()
-            except Exception:
-                try: conn._conn.rollback()
-                except Exception: pass
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS types_equipement_custom (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nom TEXT NOT NULL,
-                domaine TEXT NOT NULL DEFAULT '',
-                UNIQUE(nom, domaine)
-            )
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS types_equipement_custom (
+                    id SERIAL PRIMARY KEY,
+                    nom TEXT NOT NULL,
+                    domaine TEXT NOT NULL DEFAULT '',
+                    UNIQUE(nom, domaine)
+                )
             """)
-
+            conn.commit()
+        except Exception:
+            try: conn.rollback()
+            except Exception: pass
         # Custom intervention types table
-        if USE_PG:
-            try:
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS types_intervention_custom (
-                        id SERIAL PRIMARY KEY,
-                        nom TEXT UNIQUE NOT NULL
-                    )
-                """)
-                conn._conn.commit()
-            except Exception:
-                try: conn._conn.rollback()
-                except Exception: pass
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS types_intervention_custom (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nom TEXT UNIQUE NOT NULL
-            )
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS types_intervention_custom (
+                    id SERIAL PRIMARY KEY,
+                    nom TEXT UNIQUE NOT NULL
+                )
             """)
-
+            conn.commit()
+        except Exception:
+            try: conn.rollback()
+            except Exception: pass
         # Table Domaines Personnalisés (Médical)
-        if USE_PG:
-            try:
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS domaines_custom (
-                        id SERIAL PRIMARY KEY,
-                        nom TEXT UNIQUE NOT NULL,
-                        date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                conn._conn.commit()
-            except Exception:
-                try:
-                    conn._conn.rollback()
-                except Exception:
-                    pass
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS domaines_custom (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nom TEXT UNIQUE NOT NULL,
-                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS domaines_custom (
+                    id SERIAL PRIMARY KEY,
+                    nom TEXT UNIQUE NOT NULL,
+                    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
             """)
-
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         # Table Documents Techniques (séparée pour éviter les timeouts sur gros fichiers)
-        if USE_PG:
-            try:
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS documents_techniques (
-                        id SERIAL PRIMARY KEY,
-                        equipement_id INTEGER NOT NULL,
-                        nom_fichier TEXT NOT NULL,
-                        contenu_base64 TEXT NOT NULL,
-                        date_ajout TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (equipement_id) REFERENCES equipements(id)
-                    )
-                """)
-                conn._conn.commit()
-            except Exception:
-                try:
-                    conn._conn.rollback()
-                except Exception:
-                    pass
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS documents_techniques (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                equipement_id INTEGER NOT NULL,
-                nom_fichier TEXT NOT NULL,
-                contenu_base64 TEXT NOT NULL,
-                date_ajout TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (equipement_id) REFERENCES equipements(id)
-            )
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS documents_techniques (
+                    id SERIAL PRIMARY KEY,
+                    equipement_id INTEGER NOT NULL,
+                    nom_fichier TEXT NOT NULL,
+                    contenu_base64 TEXT NOT NULL,
+                    date_ajout TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (equipement_id) REFERENCES equipements(id)
+                )
             """)
-
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         # Table Contrats / SLA
         conn.execute("""
         CREATE TABLE IF NOT EXISTS contrats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             client TEXT NOT NULL,
             equipement TEXT,
             type_contrat TEXT DEFAULT 'Standard',
@@ -1010,7 +767,7 @@ def init_db():
         # Junction Table: Contrats ↔ Equipements (multi-equipment support)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS contrats_equipements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             contrat_id INTEGER NOT NULL,
             equipement_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1023,7 +780,7 @@ def init_db():
         # Table Conformité / QHSE
         conn.execute("""
         CREATE TABLE IF NOT EXISTS conformite (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             equipement TEXT NOT NULL,
             client TEXT DEFAULT '',
             type_controle TEXT NOT NULL,
@@ -1031,7 +788,7 @@ def init_db():
             date_controle DATE NOT NULL,
             date_expiration DATE NOT NULL,
             fichier_nom TEXT DEFAULT '',
-            fichier_data BLOB,
+            fichier_data BYTEA,
             statut TEXT DEFAULT 'Conforme',
             notes TEXT DEFAULT '',
             created_by TEXT DEFAULT '',
@@ -1042,7 +799,7 @@ def init_db():
         # Table Demandes d'intervention
         conn.execute("""
         CREATE TABLE IF NOT EXISTS demandes_intervention (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             date_demande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             demandeur TEXT DEFAULT '',
             client TEXT DEFAULT '',
@@ -1061,82 +818,42 @@ def init_db():
         """)
 
         # Table Notifications pièces (cross-app SIC Terrain ↔ SIC Radiologie)
-        if USE_PG:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS notifications_pieces (
-                id SERIAL PRIMARY KEY,
-                type TEXT NOT NULL,
-                intervention_id INTEGER,
-                piece_reference TEXT,
-                piece_nom TEXT,
-                intervention_ref TEXT,
-                equipement TEXT,
-                client TEXT,
-                technicien TEXT,
-                message TEXT,
-                source TEXT NOT NULL DEFAULT '',
-                destination TEXT NOT NULL,
-                statut TEXT DEFAULT 'non_lu',
-                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                date_lecture TIMESTAMP,
-                date_traitement TIMESTAMP
-            )
-            """)
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS notifications_pieces (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
-                intervention_id INTEGER,
-                piece_reference TEXT,
-                piece_nom TEXT,
-                intervention_ref TEXT,
-                equipement TEXT,
-                client TEXT,
-                technicien TEXT,
-                message TEXT,
-                source TEXT NOT NULL DEFAULT '',
-                destination TEXT NOT NULL,
-                statut TEXT DEFAULT 'non_lu',
-                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                date_lecture TIMESTAMP,
-                date_traitement TIMESTAMP
-            )
-            """)
-
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_pieces (
+            id SERIAL PRIMARY KEY,
+            type TEXT NOT NULL,
+            intervention_id INTEGER,
+            piece_reference TEXT,
+            piece_nom TEXT,
+            intervention_ref TEXT,
+            equipement TEXT,
+            client TEXT,
+            technicien TEXT,
+            message TEXT,
+            source TEXT NOT NULL DEFAULT '',
+            destination TEXT NOT NULL,
+            statut TEXT DEFAULT 'non_lu',
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            date_lecture TIMESTAMP,
+            date_traitement TIMESTAMP
+        )
+        """)
         # Table Pièces demandées (non référencées) par les techniciens
-        if USE_PG:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS pieces_demandees (
-                id SERIAL PRIMARY KEY,
-                reference TEXT NOT NULL,
-                designation TEXT NOT NULL DEFAULT '',
-                intervention_id INTEGER,
-                equipement TEXT DEFAULT '',
-                client TEXT DEFAULT '',
-                technicien TEXT DEFAULT '',
-                probleme TEXT DEFAULT '',
-                statut TEXT DEFAULT 'en_attente',
-                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                date_resolution TIMESTAMP
-            )
-            """)
-        else:
-            conn.execute("""
-            CREATE TABLE IF NOT EXISTS pieces_demandees (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                reference TEXT NOT NULL,
-                designation TEXT NOT NULL DEFAULT '',
-                intervention_id INTEGER,
-                equipement TEXT DEFAULT '',
-                client TEXT DEFAULT '',
-                technicien TEXT DEFAULT '',
-                probleme TEXT DEFAULT '',
-                statut TEXT DEFAULT 'en_attente',
-                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                date_resolution TIMESTAMP
-            )
-            """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS pieces_demandees (
+            id SERIAL PRIMARY KEY,
+            reference TEXT NOT NULL,
+            designation TEXT NOT NULL DEFAULT '',
+            intervention_id INTEGER,
+            equipement TEXT DEFAULT '',
+            client TEXT DEFAULT '',
+            technicien TEXT DEFAULT '',
+            probleme TEXT DEFAULT '',
+            statut TEXT DEFAULT 'en_attente',
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            date_resolution TIMESTAMP
+        )
+        """)
         # Migration: ajouter colonne probleme si elle n'existe pas
         try:
             conn.execute("ALTER TABLE pieces_demandees ADD COLUMN IF NOT EXISTS probleme TEXT DEFAULT ''")
@@ -1154,126 +871,99 @@ def init_db():
             # Transférer nom, prenom, email de techniciens vers technicien_pii
             # Note: on concatène nom et prenom pour nom_complet si besoin
             # Use COALESCE for PostgreSQL compatibility (IFNULL is SQLite-only)
-            if USE_PG:
-                conn.execute("""
-                    INSERT INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
-                    SELECT id, (COALESCE(nom, '') || ' ' || COALESCE(prenom, '')), email, telegram_id FROM techniciens
-                    WHERE nom != '' OR email != ''
-                    ON CONFLICT DO NOTHING
-                """)
-            else:
-                conn.execute("""
-                    INSERT OR IGNORE INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
-                    SELECT id, (IFNULL(nom, '') || ' ' || IFNULL(prenom, '')), email, telegram_id FROM techniciens
-                    WHERE nom != '' OR email != ''
-                """)
+            conn.execute("""
+                INSERT INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
+                SELECT id, (COALESCE(nom, '') || ' ' || COALESCE(prenom, '')), email, telegram_id FROM techniciens
+                WHERE nom != '' OR email != ''
+                ON CONFLICT DO NOTHING
+            """)
             logger.info("Audit Trail: Migration PII effectuée avec succès.")
         except Exception as e:
             logger.debug(f"Migration PII ignorée (Pillar 2): {e}")
 
         # --- Migration: Update CHECK constraint for utilisateurs.role ---
         # Add new roles: 'Responsable Technique' and 'Gestionnaire'
-        if USE_PG:
+        try:
+            # Drop old constraint if exists
+            conn.execute("ALTER TABLE utilisateurs DROP CONSTRAINT IF EXISTS utilisateurs_role_check")
+            # Add new constraint with all roles
+            conn.execute("""
+                ALTER TABLE utilisateurs ADD CONSTRAINT utilisateurs_role_check 
+                CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire'))
+            """)
+            conn.commit()
+            logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
+        except Exception as e:
             try:
-                # Drop old constraint if exists
-                conn.execute("ALTER TABLE utilisateurs DROP CONSTRAINT IF EXISTS utilisateurs_role_check")
-                # Add new constraint with all roles
-                conn.execute("""
-                    ALTER TABLE utilisateurs ADD CONSTRAINT utilisateurs_role_check 
-                    CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire'))
-                """)
-                conn.commit()
-                logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
-            except Exception as e:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                logger.info(f"Migration ignorée (utilisateurs role check): {e}")
+                conn.rollback()
+            except Exception:
+                pass
+            logger.info(f"Migration ignorée (utilisateurs role check): {e}")
 
         # --- Migration: Update CHECK constraint for planning_maintenance.statut to include "Décalé" ---
         # This allows reschedule feature to mark original date entries as "Décalé" (ghosted)
-        if USE_PG:
-            try:
-                # Check if "Décalé" is already in the constraint
-                cur = conn._conn.cursor()
-                cur.execute("""
-                    SELECT check_clause FROM information_schema.check_constraints 
-                    WHERE constraint_name LIKE 'planning_maintenance%'
-                """)
-                result = cur.fetchone()
+        try:
+            # Check if "Décalé" is already in the constraint
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT check_clause FROM information_schema.check_constraints 
+                WHERE constraint_name LIKE 'planning_maintenance%'
+            """)
+            result = cur.fetchone()
                 
-                if result:
-                    check_clause = result[0]
-                    if check_clause and 'Décalé' not in check_clause:
-                        # "Décalé" not in constraint, need to update it
-                        cur.execute("SELECT constraint_name FROM information_schema.check_constraints WHERE constraint_name LIKE 'planning_maintenance%'")
-                        constraint_name = cur.fetchone()[0]
-                        conn.execute(f"ALTER TABLE planning_maintenance DROP CONSTRAINT {constraint_name}")
-                        conn.execute("""
-                            ALTER TABLE planning_maintenance 
-                            ADD CONSTRAINT planning_maintenance_statut_check 
-                            CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
-                        """)
-                        conn.commit()
-                        logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
-                    elif check_clause and 'Décalé' in check_clause:
-                        logger.info("ℹ️  'Décalé' already in planning_maintenance statut constraint")
-                else:
-                    # No constraint found, create it
+            if result:
+                check_clause = result[0]
+                if check_clause and 'Décalé' not in check_clause:
+                    # "Décalé" not in constraint, need to update it
+                    cur.execute("SELECT constraint_name FROM information_schema.check_constraints WHERE constraint_name LIKE 'planning_maintenance%'")
+                    constraint_name = cur.fetchone()[0]
+                    conn.execute(f"ALTER TABLE planning_maintenance DROP CONSTRAINT {constraint_name}")
                     conn.execute("""
                         ALTER TABLE planning_maintenance 
                         ADD CONSTRAINT planning_maintenance_statut_check 
                         CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
                     """)
                     conn.commit()
-                    logger.info("✅ Migration réussie: planning_maintenance statut constraint created with 'Décalé' status")
-            except Exception as e:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                logger.debug(f"⚠️  Migration planning_maintenance statut check: {e}")
+                    logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
+                elif check_clause and 'Décalé' in check_clause:
+                    logger.info("ℹ️  'Décalé' already in planning_maintenance statut constraint")
+            else:
+                # No constraint found, create it
+                conn.execute("""
+                    ALTER TABLE planning_maintenance 
+                    ADD CONSTRAINT planning_maintenance_statut_check 
+                    CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
+                """)
+                conn.commit()
+                logger.info("✅ Migration réussie: planning_maintenance statut constraint created with 'Décalé' status")
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.debug(f"⚠️  Migration planning_maintenance statut check: {e}")
 
 
         # --- Migration: Populate contrats_equipements from existing contrats.equipement ---
         # This is a one-time migration that safely populates the junction table from legacy data
         try:
-            if USE_PG:
-                # PostgreSQL version - join with equipements table to get the ID
-                conn.execute("""
-                    INSERT INTO contrats_equipements (contrat_id, equipement_id, created_at)
-                    SELECT c.id, e.id, c.created_at FROM contrats c
-                    LEFT JOIN equipements e ON e.nom = c.equipement
-                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
-                    ON CONFLICT (contrat_id, equipement_id) DO NOTHING
-                """)
-            else:
-                # SQLite version
-                conn.execute("""
-                    INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id, created_at)
-                    SELECT c.id, e.id, c.created_at FROM contrats c
-                    LEFT JOIN equipements e ON e.nom = c.equipement
-                    WHERE c.equipement IS NOT NULL AND c.equipement != ''
-                """)
+            # PostgreSQL version - join with equipements table to get the ID
+            conn.execute("""
+                INSERT INTO contrats_equipements (contrat_id, equipement_id, created_at)
+                SELECT c.id, e.id, c.created_at FROM contrats c
+                LEFT JOIN equipements e ON e.nom = c.equipement
+                WHERE c.equipement IS NOT NULL AND c.equipement != ''
+                ON CONFLICT (contrat_id, equipement_id) DO NOTHING
+            """)
             logger.info("✅ Migration réussie: contrats_equipements peuplée depuis contrats.equipement")
         except Exception as e:
             logger.debug(f"Migration contrats_equipements ignorée: {e}")
 
         # --- Migration: Add pieces_incluses and avec_pieces columns to contrats if not exist ---
         try:
-            if USE_PG:
-                # PostgreSQL: Try to add columns if they don't exist
-                conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS pieces_incluses TEXT DEFAULT ''")
-                conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS avec_pieces INTEGER DEFAULT 0")
-            else:
-                # SQLite: Check if columns exist, add if not
-                cursor = conn.execute("PRAGMA table_info(contrats)")
-                existing_cols = {row[1] for row in cursor.fetchall()}
-                if "pieces_incluses" not in existing_cols:
-                    conn.execute("ALTER TABLE contrats ADD COLUMN pieces_incluses TEXT DEFAULT ''")
-                if "avec_pieces" not in existing_cols:
-                    conn.execute("ALTER TABLE contrats ADD COLUMN avec_pieces INTEGER DEFAULT 0")
+            # PostgreSQL: Try to add columns if they don't exist
+            conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS pieces_incluses TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS avec_pieces INTEGER DEFAULT 0")
             logger.info("✅ Migration réussie: colonnes pieces_incluses et avec_pieces ajoutées à contrats")
         except Exception as e:
             logger.debug(f"Migration colonnes pièces ignorée: {e}")
@@ -1378,13 +1068,13 @@ def ajouter_code(code, message, cause, solution, type_err, priorite, username="s
     with get_db() as conn:
         conn.execute("""
             INSERT INTO codes_erreurs (code, message, type)
-            VALUES (?, ?, ?)
+            VALUES (?, ?, %s)
             ON CONFLICT(code) DO UPDATE SET message=excluded.message, type=excluded.type
         """, (code, message[:200], type_err))
 
         conn.execute("""
             INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, %s)
             ON CONFLICT(mot_cle) DO UPDATE SET
                 type=excluded.type, priorite=excluded.priorite,
                 cause=excluded.cause, solution=excluded.solution,
@@ -1400,14 +1090,14 @@ def ajouter_codes_batch(rows_hex, rows_txt):
         for row in rows_hex:
             conn.execute("""
                 INSERT INTO codes_erreurs (code, message, niveau, type)
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, %s)
                 ON CONFLICT(code) DO UPDATE SET message=excluded.message, niveau=excluded.niveau, type=excluded.type
             """, (row.get("Code", ""), row.get("Message", ""), row.get("Niveau", "ATTENTION"), row.get("Type", "")))
 
         for row in rows_txt:
             conn.execute("""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, %s)
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     type=excluded.type, priorite=excluded.priorite,
                     cause=excluded.cause, solution=excluded.solution
@@ -1443,7 +1133,7 @@ def ajouter_client(client_dict):
         conn.execute("""
             INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse,
                                 code_client, region, type_client, international)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
             ON CONFLICT(nom) DO UPDATE SET
                 matricule_fiscale=excluded.matricule_fiscale,
                 ville=excluded.ville,
@@ -1522,8 +1212,7 @@ def migrer_clients_depuis_equipements():
                 if not nom:
                     continue
                 conn.execute("""
-                    INSERT OR IGNORE INTO clients (nom, matricule_fiscale, ville)
-                    VALUES (?, ?, ?)
+                    INSERT INTO clients (nom, matricule_fiscale, ville) VALUES (?, ?, %s) ON CONFLICT DO NOTHING
                 """, (nom, r.get("matricule_fiscale", ""), r.get("ville", "")))
             logger.info(f"Migré {len(rows)} clients depuis equipements")
     except Exception as e:
@@ -1598,7 +1287,7 @@ def ajouter_equipement(equipement_dict):
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
                                      domaine, est_annexe, garantie_debut, garantie_duree, ville, region, service)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
@@ -1688,14 +1377,14 @@ def lire_fabricants():
 def ajouter_fabricant(nom):
     """Ajoute un fabricant. Ignore si déjà existant."""
     with get_db() as conn:
-        conn.execute("INSERT OR IGNORE INTO fabricants (nom) VALUES (?)", (nom.strip(),))
+        conn.execute("INSERT INTO fabricants (nom) VALUES (%s) ON CONFLICT DO NOTHING", (nom.strip(),))
     return True
 
 
 def lire_types_equipement_custom(domaine=""):
     """Retourne la liste des types d'équipement personnalisés pour un domaine."""
     with get_db() as conn:
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         rows = conn.execute(
             f"SELECT id, nom, domaine FROM types_equipement_custom WHERE domaine = {ph} ORDER BY nom",
             (domaine,)
@@ -1706,54 +1395,42 @@ def lire_types_equipement_custom(domaine=""):
 def ajouter_type_equipement_custom(nom, domaine=""):
     """Ajoute un type d'équipement personnalisé. Ignore si déjà existant pour ce domaine."""
     with get_db() as conn:
-        if USE_PG:
-            conn.execute(
-                "INSERT INTO types_equipement_custom (nom, domaine) VALUES (%s, %s) ON CONFLICT (nom, domaine) DO NOTHING",
-                (nom.strip(), domaine)
-            )
-        else:
-            conn.execute(
-                "INSERT OR IGNORE INTO types_equipement_custom (nom, domaine) VALUES (?, ?)",
-                (nom.strip(), domaine)
-            )
+        conn.execute(
+            "INSERT INTO types_equipement_custom (nom, domaine) VALUES (%s, %s) ON CONFLICT (nom, domaine) DO NOTHING",
+            (nom.strip(), domaine)
+        )
     return True
 
 
 def lire_types_intervention_custom():
     """Retourne la liste des types d'intervention personnalisés."""
     with get_db() as conn:
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         rows = conn.execute("SELECT id, nom FROM types_intervention_custom ORDER BY nom").fetchall()
         return [dict(r) for r in rows]
 
 
 def ajouter_type_intervention_custom(nom):
     """Ajoute un type d'intervention personnalisé. Ignore si déjà existant."""
-    ph = "%s" if USE_PG else "?"
+    ph = "%s"
     with get_db() as conn:
-        if USE_PG:
-            conn.execute(f"INSERT INTO types_intervention_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
-        else:
-            conn.execute(f"INSERT OR IGNORE INTO types_intervention_custom (nom) VALUES ({ph})", (nom.strip(),))
+        conn.execute(f"INSERT INTO types_intervention_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
     return True
 
 
 def lire_domaines_custom():
     """Retourne la liste des domaines médicaux personnalisés."""
     with get_db() as conn:
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         rows = conn.execute("SELECT id, nom FROM domaines_custom ORDER BY nom").fetchall()
         return [dict(r) for r in rows]
 
 
 def ajouter_domaine_custom(nom):
     """Ajoute un domaine médical personnalisé. Ignore si déjà existant."""
-    ph = "%s" if USE_PG else "?"
+    ph = "%s"
     with get_db() as conn:
-        if USE_PG:
-            conn.execute(f"INSERT INTO domaines_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
-        else:
-            conn.execute(f"INSERT OR IGNORE INTO domaines_custom (nom) VALUES ({ph})", (nom.strip(),))
+        conn.execute(f"INSERT INTO domaines_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
     return True
 
 
@@ -1785,7 +1462,7 @@ def ajouter_document_technique(equipement_id, nom_fichier, contenu_base64):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO documents_techniques (equipement_id, nom_fichier, contenu_base64)
-            VALUES (?, ?, ?)
+            VALUES (?, ?, %s)
         """, (equipement_id, nom_fichier, contenu_base64))
     return True
 
@@ -2044,7 +1721,7 @@ def ajouter_planning(planning_dict):
         conn.execute("""
             INSERT INTO planning_maintenance (machine, client, type_maintenance, description,
                                               date_prevue, technicien_assigne, recurrence, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, %s)
         """, (
             planning_dict.get("machine", ""),
             planning_dict.get("client", ""),
@@ -2112,7 +1789,7 @@ def ajouter_piece(piece_dict):
         conn.execute("""
             INSERT INTO pieces_rechange (reference, designation, equipement_type,
                                          stock_actuel, stock_minimum, fournisseur, prix_unitaire, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, %s)
             ON CONFLICT(reference) DO UPDATE SET
                 stock_actuel=excluded.stock_actuel, prix_unitaire=excluded.prix_unitaire
         """, (
@@ -2222,41 +1899,16 @@ def _ensure_notifications_pieces_exists():
     """Crée la table notifications_pieces si elle n'existe pas (defensive initialization)."""
     with get_db() as conn:
         try:
-            if USE_PG:
-                cur = conn._conn.cursor()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'notifications_pieces'
+            """)
+            if not cur.fetchone():
+                # Table doesn't exist, create it
                 cur.execute("""
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'notifications_pieces'
-                """)
-                if not cur.fetchone():
-                    # Table doesn't exist, create it
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS notifications_pieces (
-                            id SERIAL PRIMARY KEY,
-                            type TEXT NOT NULL,
-                            intervention_id INTEGER,
-                            piece_reference TEXT,
-                            piece_nom TEXT,
-                            intervention_ref TEXT,
-                            equipement TEXT,
-                            client TEXT,
-                            technicien TEXT,
-                            message TEXT,
-                            source TEXT NOT NULL DEFAULT '',
-                            destination TEXT NOT NULL,
-                            statut TEXT DEFAULT 'non_lu',
-                            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            date_lecture TIMESTAMP,
-                            date_traitement TIMESTAMP
-                        )
-                    """)
-                    conn._conn.commit()
-                    logger.info("⚠️  Table notifications_pieces created dynamically (defensive)")
-            else:
-                # SQLite
-                conn.execute("""
                     CREATE TABLE IF NOT EXISTS notifications_pieces (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         type TEXT NOT NULL,
                         intervention_id INTEGER,
                         piece_reference TEXT,
@@ -2275,6 +1927,7 @@ def _ensure_notifications_pieces_exists():
                     )
                 """)
                 conn.commit()
+                logger.info("⚠️  Table notifications_pieces created dynamically (defensive)")
         except Exception as e:
             logger.debug(f"_ensure_notifications_pieces_exists: {e}")
 
@@ -2387,7 +2040,7 @@ def log_audit(username, action, details="", page=""):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO audit_log (username, action, details, page)
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, %s)
         """, (username, action, details, page))
 
 
@@ -2404,7 +2057,7 @@ def log_ai_inference(model_version, prompt_hash, confidence_score, outcome):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO ai_audit_log (model_version, prompt_hash, confidence_score, outcome)
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, %s)
         """, (model_version, prompt_hash, confidence_score, outcome))
 
 
@@ -2417,7 +2070,7 @@ def save_prediction_feedback(machine, date_predite, resultat, date_reelle="", no
     with get_db() as conn:
         conn.execute("""
             INSERT INTO prediction_feedback (machine, date_predite, resultat, date_reelle, note_technicien, username)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, %s)
         """, (machine, date_predite, resultat, date_reelle, note, username))
 
 
@@ -2479,7 +2132,7 @@ def set_config(cle, valeur):
     """Définit une valeur de configuration."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+            INSERT INTO config_client (cle, valeur) VALUES (?, %s)
             ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur
         """, (cle, valeur))
 
@@ -2507,8 +2160,7 @@ def migrer_depuis_excel(excel_path):
                     if code:
                         try:
                             conn.execute("""
-                                INSERT OR IGNORE INTO codes_erreurs (code, message, niveau, type)
-                                VALUES (?, ?, ?, ?)
+                                INSERT INTO codes_erreurs (code, message, niveau, type) VALUES (?, ?, ?, %s) ON CONFLICT DO NOTHING
                             """, (code, row.get("Message", ""), row.get("Niveau", "ATTENTION"), row.get("Type", "")))
                             migrated += 1
                         except Exception as e:
@@ -2528,8 +2180,7 @@ def migrer_depuis_excel(excel_path):
                     if mot_cle:
                         try:
                             conn.execute("""
-                                INSERT OR IGNORE INTO solutions (mot_cle, type, priorite, cause, solution)
-                                VALUES (?, ?, ?, ?, ?)
+                                INSERT INTO solutions (mot_cle, type, priorite, cause, solution) VALUES (?, ?, ?, ?, %s) ON CONFLICT DO NOTHING
                             """, (mot_cle, row.get("Type", ""), row.get("Priorite", "MOYENNE"),
                                   row.get("Cause", ""), row.get("Solution", "")))
                             sol_count += 1
@@ -2551,13 +2202,6 @@ def purger_et_reimporter_excel(excel_path):
     if not os.path.exists(excel_path):
         print(f"[PURGE] Fichier introuvable: {excel_path}")
         return 0
-
-    if not USE_PG:
-        # Mode SQLite : utiliser la migration classique
-        with get_db() as conn:
-            conn.execute("DELETE FROM codes_erreurs")
-            conn.execute("DELETE FROM solutions")
-        return migrer_depuis_excel(excel_path)
 
     # Mode PostgreSQL : utiliser psycopg2 directement
     import psycopg2
@@ -2644,7 +2288,7 @@ def log_telemetry(machine, sensor_type, value):
     """Enregistre une donnée télémétrique."""
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO telemetry (machine, sensor_type, value) VALUES (?, ?, ?)",
+            "INSERT INTO telemetry (machine, sensor_type, value) VALUES (?, ?, %s)",
             (machine, sensor_type, float(value)))
     return True
 
@@ -2683,94 +2327,93 @@ def verifier_et_migrer_schema():
     # NOTE: init_db() est déjà appelée dans @app.on_event("startup")
     # Ne pas l'appeler ici pour éviter une boucle infinie!
     
-    if USE_PG:
-        # Mode PostgreSQL - utiliser psycopg2
-        import psycopg2
+    # Mode PostgreSQL - utiliser psycopg2
+    import psycopg2
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.set_client_encoding('UTF8')
+        cur = conn.cursor()
+            
+        # Colonnes à vérifier/ajouter (interventions table)
+        missing_cols = [
+            ("start_time", "TIME"),
+            ("end_time", "TIME"),
+            ("duree_deplacement", "INTEGER DEFAULT 0"),
+            ("fiche_validation", "TEXT DEFAULT 'En attente'"),
+        ]
+            
+        for col, type_def in missing_cols:
+            try:
+                cur.execute(f"ALTER TABLE interventions ADD COLUMN IF NOT EXISTS {col} {type_def}")
+                conn.commit()
+                logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée.")
+            except psycopg2.Error as e:
+                logger.debug(f"Migration PostgreSQL colonne {col}: {e}")
+                conn.rollback()
+            
+        # Colonnes à vérifier/ajouter (interventions_techniciens table)
+        tech_cols = [
+            ("type_erreur_tech", "TEXT DEFAULT ''"),
+            ("pieces_a_deduire", "TEXT DEFAULT ''"),  # JSON array of pieces
+        ]
+            
+        for col, type_def in tech_cols:
+            try:
+                cur.execute(f"ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS {col} {type_def}")
+                conn.commit()
+                logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée à interventions_techniciens.")
+            except psycopg2.Error as e:
+                logger.debug(f"Migration PostgreSQL colonne {col} interventions_techniciens: {e}")
+                conn.rollback()
+            
+        # Migration: Update CHECK constraint for interventions_techniciens.statut to include "En attente de piece"
         try:
-            conn = psycopg2.connect(DATABASE_URL)
-            conn.set_client_encoding('UTF8')
-            cur = conn.cursor()
-            
-            # Colonnes à vérifier/ajouter (interventions table)
-            missing_cols = [
-                ("start_time", "TIME"),
-                ("end_time", "TIME"),
-                ("duree_deplacement", "INTEGER DEFAULT 0"),
-                ("fiche_validation", "TEXT DEFAULT 'En attente'"),
-            ]
-            
-            for col, type_def in missing_cols:
-                try:
-                    cur.execute(f"ALTER TABLE interventions ADD COLUMN IF NOT EXISTS {col} {type_def}")
-                    conn.commit()
-                    logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée.")
-                except psycopg2.Error as e:
-                    logger.debug(f"Migration PostgreSQL colonne {col}: {e}")
-                    conn.rollback()
-            
-            # Colonnes à vérifier/ajouter (interventions_techniciens table)
-            tech_cols = [
-                ("type_erreur_tech", "TEXT DEFAULT ''"),
-                ("pieces_a_deduire", "TEXT DEFAULT ''"),  # JSON array of pieces
-            ]
-            
-            for col, type_def in tech_cols:
-                try:
-                    cur.execute(f"ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS {col} {type_def}")
-                    conn.commit()
-                    logger.info(f"Migration PostgreSQL: Colonne '{col}' ajoutée/vérifiée à interventions_techniciens.")
-                except psycopg2.Error as e:
-                    logger.debug(f"Migration PostgreSQL colonne {col} interventions_techniciens: {e}")
-                    conn.rollback()
-            
-            # Migration: Update CHECK constraint for interventions_techniciens.statut to include "En attente de piece"
-            try:
-                cur.execute("""
-                    SELECT constraint_name FROM information_schema.table_constraints 
-                    WHERE table_name = 'interventions_techniciens' AND constraint_type = 'CHECK'
-                """)
-                constraint_result = cur.fetchone()
-                if constraint_result:
-                    constraint_name = constraint_result[0]
-                    # Drop old constraint
-                    cur.execute(f"ALTER TABLE interventions_techniciens DROP CONSTRAINT {constraint_name}")
-                    conn.commit()
-                    logger.info(f"Migration PostgreSQL: Ancien CHECK constraint '{constraint_name}' supprimé.")
+            cur.execute("""
+                SELECT constraint_name FROM information_schema.table_constraints 
+                WHERE table_name = 'interventions_techniciens' AND constraint_type = 'CHECK'
+            """)
+            constraint_result = cur.fetchone()
+            if constraint_result:
+                constraint_name = constraint_result[0]
+                # Drop old constraint
+                cur.execute(f"ALTER TABLE interventions_techniciens DROP CONSTRAINT {constraint_name}")
+                conn.commit()
+                logger.info(f"Migration PostgreSQL: Ancien CHECK constraint '{constraint_name}' supprimé.")
                 
-                # Add new constraint with "En attente de piece"
-                cur.execute("""
-                    ALTER TABLE interventions_techniciens 
-                    ADD CONSTRAINT interventions_techniciens_statut_check 
-                    CHECK (statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece'))
-                """)
-                conn.commit()
-                logger.info("Migration PostgreSQL: CHECK constraint mis à jour pour interventions_techniciens.statut")
-            except psycopg2.Error as e:
-                logger.debug(f"Migration PostgreSQL CHECK constraint: {e}")
-                try:
-                    conn.rollback()
-                except:
-                    pass
-            
-            # Migration: Add rappel_avant_jours column to contrats table
+            # Add new constraint with "En attente de piece"
+            cur.execute("""
+                ALTER TABLE interventions_techniciens 
+                ADD CONSTRAINT interventions_techniciens_statut_check 
+                CHECK (statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece'))
+            """)
+            conn.commit()
+            logger.info("Migration PostgreSQL: CHECK constraint mis à jour pour interventions_techniciens.statut")
+        except psycopg2.Error as e:
+            logger.debug(f"Migration PostgreSQL CHECK constraint: {e}")
             try:
-                cur.execute("""
-                    ALTER TABLE contrats ADD COLUMN IF NOT EXISTS rappel_avant_jours INTEGER DEFAULT 14
-                """)
-                conn.commit()
-                logger.info("Migration PostgreSQL: Colonne 'rappel_avant_jours' ajoutée/vérifiée à contrats.")
-            except psycopg2.Error as e:
-                logger.debug(f"Migration PostgreSQL rappel_avant_jours: {e}")
-                try:
-                    conn.rollback()
-                except:
-                    pass
+                conn.rollback()
+            except:
+                pass
             
-            cur.close()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Erreur migration PostgreSQL: {e}")
-        return
+        # Migration: Add rappel_avant_jours column to contrats table
+        try:
+            cur.execute("""
+                ALTER TABLE contrats ADD COLUMN IF NOT EXISTS rappel_avant_jours INTEGER DEFAULT 14
+            """)
+            conn.commit()
+            logger.info("Migration PostgreSQL: Colonne 'rappel_avant_jours' ajoutée/vérifiée à contrats.")
+        except psycopg2.Error as e:
+            logger.debug(f"Migration PostgreSQL rappel_avant_jours: {e}")
+            try:
+                conn.rollback()
+            except:
+                pass
+            
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Erreur migration PostgreSQL: {e}")
+    return
     
     # Mode SQLite - utiliser la migration classique
     with get_db() as conn:
@@ -2886,7 +2529,7 @@ def ajouter_technicien(tech_dict):
         with get_db() as conn:
             res = conn.execute("""
                 INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes, email, telephone, telegram_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
@@ -2964,7 +2607,7 @@ def lire_contrats(client=None):
 def get_contract_equipements(contrat_id):
     """Récupère tous les équipements d'un contrat."""
     with get_db() as conn:
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         
         try:
             rows = conn.execute(
@@ -3022,70 +2665,39 @@ def ajouter_contrat(contrat_dict):
             pieces_incluses = json.dumps(pieces_incluses)
         
         # Insert and retrieve ID - use RETURNING for PostgreSQL, fallback to MAX for SQLite
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         contrat_id = None
         
         try:
-            if USE_PG:
-                # PostgreSQL: Insert then use lastval() to get ID
-                conn.execute(f"""
-                    INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
-                        sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                        fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
-                        pieces_incluses, avec_pieces, rappel_avant_jours)
-                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                """, (
-                    contrat_dict.get("client", ""),
-                    contrat_dict.get("type_contrat", "Standard"),
-                    contrat_dict.get("date_debut", ""),
-                    contrat_dict.get("date_fin", ""),
-                    contrat_dict.get("sla_temps_reponse_h", 24),
-                    contrat_dict.get("interventions_incluses", -1),
-                    contrat_dict.get("montant", 0.0),
-                    contrat_dict.get("conditions", ""),
-                    contrat_dict.get("notes", ""),
-                    contrat_dict.get("fichier_contrat", ""),
-                    first_equipment,
-                    contrat_dict.get("recurrence_maintenance", ""),
-                    contrat_dict.get("date_premiere_maintenance", ""),
-                    contrat_dict.get("statut", "Actif"),
-                    pieces_incluses,
-                    1 if contrat_dict.get("avec_pieces") else 0,
-                    contrat_dict.get("rappel_avant_jours", 14),
-                ))
-                # Get the inserted ID using lastval() for PostgreSQL
-                row = conn.execute("SELECT lastval() as id").fetchone()
-                contrat_id = row["id"] if row else None
-            else:
-                # SQLite: Insert then get MAX(id)
-                conn.execute(f"""
-                    INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
-                        sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                        fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
-                        pieces_incluses, avec_pieces, rappel_avant_jours)
-                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                """, (
-                    contrat_dict.get("client", ""),
-                    contrat_dict.get("type_contrat", "Standard"),
-                    contrat_dict.get("date_debut", ""),
-                    contrat_dict.get("date_fin", ""),
-                    contrat_dict.get("sla_temps_reponse_h", 24),
-                    contrat_dict.get("interventions_incluses", -1),
-                    contrat_dict.get("montant", 0.0),
-                    contrat_dict.get("conditions", ""),
-                    contrat_dict.get("notes", ""),
-                    contrat_dict.get("fichier_contrat", ""),
-                    first_equipment,
-                    contrat_dict.get("recurrence_maintenance", ""),
-                    contrat_dict.get("date_premiere_maintenance", ""),
-                    contrat_dict.get("statut", "Actif"),
-                    pieces_incluses,
-                    1 if contrat_dict.get("avec_pieces") else 0,
-                    contrat_dict.get("rappel_avant_jours", 14),
-                ))
-                row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
-                contrat_id = row["id"] if row else None
-            
+            # PostgreSQL: Insert then use lastval() to get ID
+            conn.execute(f"""
+                INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
+                    sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                    pieces_incluses, avec_pieces, rappel_avant_jours)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """, (
+                contrat_dict.get("client", ""),
+                contrat_dict.get("type_contrat", "Standard"),
+                contrat_dict.get("date_debut", ""),
+                contrat_dict.get("date_fin", ""),
+                contrat_dict.get("sla_temps_reponse_h", 24),
+                contrat_dict.get("interventions_incluses", -1),
+                contrat_dict.get("montant", 0.0),
+                contrat_dict.get("conditions", ""),
+                contrat_dict.get("notes", ""),
+                contrat_dict.get("fichier_contrat", ""),
+                first_equipment,
+                contrat_dict.get("recurrence_maintenance", ""),
+                contrat_dict.get("date_premiere_maintenance", ""),
+                contrat_dict.get("statut", "Actif"),
+                pieces_incluses,
+                1 if contrat_dict.get("avec_pieces") else 0,
+                contrat_dict.get("rappel_avant_jours", 14),
+            ))
+            # Get the inserted ID using lastval() for PostgreSQL
+            row = conn.execute("SELECT lastval() as id").fetchone()
+            contrat_id = row["id"] if row else None
             logger.info(f"✅ Contrat created with ID: {contrat_id}")
         except Exception as e:
             logger.error(f"Error inserting contrat: {e}")
@@ -3104,7 +2716,7 @@ def ajouter_contrat(contrat_dict):
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
-                    ph = "%s" if USE_PG else "?"
+                    ph = "%s"
                     
                     # Get equipement ID from equipements table
                     eq_row = conn.execute(
@@ -3156,7 +2768,7 @@ def generer_planning_from_contrat(contrat_id):
     }
 
     with get_db() as conn:
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         
         try:
             row = conn.execute(
@@ -3291,7 +2903,7 @@ def modifier_contrat(contrat_id, contrat_dict):
             import json
             pieces_incluses = json.dumps(pieces_incluses)
         
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         conn.execute(f"""
             UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
                 sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
@@ -3326,7 +2938,7 @@ def modifier_contrat(contrat_id, contrat_dict):
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
-                    ph = "%s" if USE_PG else "?"
+                    ph = "%s"
                     
                     # Get equipement ID from equipements table
                     eq_row = conn.execute(
@@ -3391,7 +3003,7 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
         # Un ALTER TABLE échoué invalide la transaction PostgreSQL !
 
         # Use correct SQL placeholder based on database type
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
 
         # 1. Gestion du Stock + calcul coût pièces
         synthese_pieces = []
@@ -3540,7 +3152,7 @@ def ajouter_conformite(data, fichier_bytes=None):
             INSERT INTO conformite (equipement, client, type_controle, description,
                                      date_controle, date_expiration, fichier_nom, fichier_data,
                                      statut, notes, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
         """, (
             data.get("equipement", ""),
             data.get("client", ""),
@@ -3581,64 +3193,35 @@ def lire_fichier_conformite(conformite_id):
 # ==========================================
 
 def _ensure_demandes_table():
-    """Crée la table demandes_intervention si elle n'existe pas (PostgreSQL safe)."""
+    """Crée la table demandes_intervention si elle n'existe pas (PostgreSQL)."""
     with get_db() as conn:
-        if USE_PG:
-            # Exécuter directement sur la connexion brute pour éviter
-            # que PgCursorWrapper avale les erreurs silencieusement
-            raw = conn._raw if hasattr(conn, '_raw') else conn
-            cur = raw.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS demandes_intervention (
-                    id SERIAL PRIMARY KEY,
-                    date_demande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    demandeur TEXT DEFAULT '',
-                    client TEXT DEFAULT '',
-                    equipement TEXT DEFAULT '',
-                    urgence TEXT DEFAULT 'Moyenne',
-                    description TEXT DEFAULT '',
-                    code_erreur TEXT DEFAULT '',
-                    contact_nom TEXT DEFAULT '',
-                    contact_tel TEXT DEFAULT '',
-                    statut TEXT DEFAULT 'Nouvelle',
-                    technicien_assigne TEXT DEFAULT '',
-                    notes_traitement TEXT DEFAULT '',
-                    date_traitement TIMESTAMP,
-                    date_planifiee DATE,
-                    intervention_id INTEGER
-                )
-            """)
-            raw.commit()
-        else:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS demandes_intervention (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date_demande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    demandeur TEXT DEFAULT '',
-                    client TEXT DEFAULT '',
-                    equipement TEXT DEFAULT '',
-                    urgence TEXT DEFAULT 'Moyenne',
-                    description TEXT DEFAULT '',
-                    code_erreur TEXT DEFAULT '',
-                    contact_nom TEXT DEFAULT '',
-                    contact_tel TEXT DEFAULT '',
-                    statut TEXT DEFAULT 'Nouvelle',
-                    technicien_assigne TEXT DEFAULT '',
-                    notes_traitement TEXT DEFAULT '',
-                    date_traitement TIMESTAMP,
-                    date_planifiee DATE,
-                    intervention_id INTEGER
-                )
-            """)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS demandes_intervention (
+                id SERIAL PRIMARY KEY,
+                date_demande TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                demandeur TEXT DEFAULT '',
+                client TEXT DEFAULT '',
+                equipement TEXT DEFAULT '',
+                urgence TEXT DEFAULT 'Moyenne',
+                description TEXT DEFAULT '',
+                code_erreur TEXT DEFAULT '',
+                contact_nom TEXT DEFAULT '',
+                contact_tel TEXT DEFAULT '',
+                statut TEXT DEFAULT 'Nouvelle',
+                technicien_assigne TEXT DEFAULT '',
+                notes_traitement TEXT DEFAULT '',
+                date_traitement TIMESTAMP,
+                date_planifiee DATE,
+                intervention_id INTEGER
+            )
+        """)
+        conn.commit()
+        
         # Migration: ajouter date_planifiee si absente
         try:
-            if USE_PG:
-                raw = conn._raw if hasattr(conn, '_raw') else conn
-                cur = raw.cursor()
-                cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS date_planifiee DATE")
-                raw.commit()
-            else:
-                conn.execute("ALTER TABLE demandes_intervention ADD COLUMN date_planifiee DATE")
+            cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS date_planifiee DATE")
+            conn.commit()
         except Exception:
             pass
 
@@ -3669,7 +3252,7 @@ def ajouter_demande_intervention(demande_dict):
             INSERT INTO demandes_intervention
                 (date_demande, demandeur, client, equipement, urgence,
                  description, code_erreur, contact_nom, contact_tel, statut)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
         """, (
             demande_dict.get("date_demande", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             demande_dict.get("demandeur", ""),
@@ -3743,33 +3326,16 @@ def _ensure_notification_schedules_exists():
     """Crée la table notification_schedules si elle n'existe pas (defensive initialization)."""
     with get_db() as conn:
         try:
-            if USE_PG:
-                cur = conn._conn.cursor()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'notification_schedules'
+            """)
+            if not cur.fetchone():
+                # Table doesn't exist, create it
                 cur.execute("""
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'notification_schedules'
-                """)
-                if not cur.fetchone():
-                    # Table doesn't exist, create it
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS notification_schedules (
-                            id SERIAL PRIMARY KEY,
-                            bot_key TEXT NOT NULL UNIQUE,
-                            enabled INTEGER DEFAULT 1,
-                            hour INTEGER DEFAULT 8,
-                            minute INTEGER DEFAULT 30,
-                            days_of_week TEXT DEFAULT '1,2,3,4,5,6,7',
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    conn._conn.commit()
-                    logger.info("⚠️  Table notification_schedules created dynamically (defensive)")
-            else:
-                # SQLite: Just try to create, it will silently succeed if exists
-                conn.execute("""
                     CREATE TABLE IF NOT EXISTS notification_schedules (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         bot_key TEXT NOT NULL UNIQUE,
                         enabled INTEGER DEFAULT 1,
                         hour INTEGER DEFAULT 8,
@@ -3780,6 +3346,7 @@ def _ensure_notification_schedules_exists():
                     )
                 """)
                 conn.commit()
+                logger.info("⚠️  Table notification_schedules created dynamically (defensive)")
         except Exception as e:
             logger.debug(f"_ensure_notification_schedules_exists: {e}")
 
@@ -3826,7 +3393,7 @@ def sauvegarder_notification_schedule(bot_key, enabled, hour, minute, days_of_we
             # Insertion
             conn.execute("""
                 INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, %s)
             """, (bot_key, enabled, hour, minute, days_of_week))
     
     _trigger_backup()
@@ -3862,7 +3429,7 @@ def sauvegarder_notification_schedules_batch(schedules):
                 # Insertion
                 conn.execute("""
                     INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, %s)
                 """, (bot_key, enabled, hour, minute, days_of_week))
     
     _trigger_backup()
@@ -3909,7 +3476,7 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
                 all(w in words1 for w in words2))
     
     # Use correct placeholder based on database type
-    ph = "%s" if USE_PG else "?"
+    ph = "%s"
     
     with get_db() as conn:
         # Get ALL records for this intervention
@@ -3977,7 +3544,7 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         return (all(w in words2 for w in words1) and 
                 all(w in words1 for w in words2))
     
-    ph = "%s" if USE_PG else "?"
+    ph = "%s"
     
     with get_db() as conn:
         # Ensure the record exists
@@ -4160,7 +3727,7 @@ def consolidate_technician_duplicates(intervention_id):
         return (all(w in words2 for w in words1) and 
                 all(w in words1 for w in words2))
     
-    ph = "%s" if USE_PG else "?"
+    ph = "%s"
     consolidated = 0
     
     with get_db() as conn:
@@ -4403,7 +3970,7 @@ def finalize_intervention_from_techniciens(intervention_id):
     
     with get_db() as conn:
         # Use correct SQL placeholder based on database type
-        ph = "%s" if USE_PG else "?"
+        ph = "%s"
         
         # Get ALL technician records (only aggregate Cloturee ones)
         rows = conn.execute(f"""
