@@ -33,6 +33,9 @@ interface Contrat {
   notes: string;
   avec_pieces?: boolean;
   pieces_incluses?: string;
+  rappel_avant_jours?: number;
+  recurrence_maintenance?: string;
+  date_premiere_maintenance?: string;
 }
 
 const emptyForm = () => ({
@@ -92,6 +95,9 @@ export default function ContratsPage() {
         notes: item.notes || '',
         avec_pieces: item.avec_pieces || false,
         pieces_incluses: item.pieces_incluses || '',
+        rappel_avant_jours: item.rappel_avant_jours || 30,
+        recurrence_maintenance: item.recurrence_maintenance || 'Semestrielle',
+        date_premiere_maintenance: (item.date_premiere_maintenance || '').substring(0, 10),
       })));
       setEquips(eqs as any[]);
       setClients(cls as any[]);
@@ -209,6 +215,11 @@ export default function ContratsPage() {
       }
     }
     
+    // Convert rappel_avant_jours to rappel_avant and rappel_unite
+    const rappel_avant_jours = c.rappel_avant_jours || 30;
+    const rappel_avant = rappel_avant_jours % 30 === 0 ? rappel_avant_jours / 30 : rappel_avant_jours;
+    const rappel_unite = rappel_avant_jours % 30 === 0 ? 'mois' : 'jours';
+    
     setForm({
       client: c.client,
       equipement: c.equipement,
@@ -220,10 +231,10 @@ export default function ContratsPage() {
       montant: c.montant,
       avec_pieces: c.avec_pieces || false,
       pieces_selectionnees: pieces_selectionnees,
-      rappel_avant: 30,
-      rappel_unite: 'jours' as 'jours' | 'mois',
-      recurrence_maintenance: RECURRENCES[2],
-      date_premiere_maintenance: c.date_debut,
+      rappel_avant: rappel_avant,
+      rappel_unite: rappel_unite as 'jours' | 'mois',
+      recurrence_maintenance: c.recurrence_maintenance || RECURRENCES[2],
+      date_premiere_maintenance: c.date_premiere_maintenance || c.date_debut,
       conditions: c.conditions,
       notes: c.notes,
       statut: c.statut,

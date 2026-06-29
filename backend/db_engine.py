@@ -2966,40 +2966,27 @@ def get_contract_equipements(contrat_id):
     with get_db() as conn:
         ph = "%s" if USE_PG else "?"
         
-        # VPS PostgreSQL: contrats_equipements a equipement_nom directement
-        # Local SQLite: contrats_equipements a equipement_id (nécessite JOIN)
-        
-        equipements = []
-        
-        # Première tentative: récupérer equipement_nom directement (VPS)
         try:
             rows = conn.execute(
-                f"""SELECT equipement_nom FROM contrats_equipements
-                    WHERE contrat_id = {ph} AND equipement_nom IS NOT NULL
-                    ORDER BY id""",
+                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                    JOIN equipements e ON ce.equipement_id = e.id
+                    WHERE ce.contrat_id = {ph}
+                    ORDER BY ce.id""",
                 (contrat_id,)
             ).fetchall()
+            
             if rows:
                 equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+                logger.debug(f"Retrieved {len(equipements)} equipment(s) for contract {contrat_id}")
+                return equipements
+            else:
+                logger.debug(f"No equipements found for contract {contrat_id}")
+                return []
         except Exception as e:
-            logger.debug(f"equipement_nom not available: {e}")
-            equipements = []
-        
-        # Deuxième tentative: utiliser equipement_id avec JOIN (SQLite)
-        if not equipements:
-            try:
-                rows = conn.execute(
-                    f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
-                        LEFT JOIN equipements e ON ce.equipement_id = e.id
-                        WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
-                    (contrat_id,)
-                ).fetchall()
-                equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
-            except Exception as e:
-                logger.debug(f"equipement_id JOIN failed: {e}")
-                equipements = []
-        
-        return equipements
+            logger.error(f"Error retrieving equipements for contract {contrat_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
 
 def ajouter_contrat(contrat_dict):
     """
@@ -3040,14 +3027,13 @@ def ajouter_contrat(contrat_dict):
         
         try:
             if USE_PG:
-                # PostgreSQL: Use RETURNING clause to get ID directly from INSERT
-                cursor = conn.execute(f"""
+                # PostgreSQL: Insert then use lastval() to get ID
+                conn.execute(f"""
                     INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                         sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
                         fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
                         pieces_incluses, avec_pieces, rappel_avant_jours)
                     VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                    RETURNING id
                 """, (
                     contrat_dict.get("client", ""),
                     contrat_dict.get("type_contrat", "Standard"),
@@ -3067,8 +3053,9 @@ def ajouter_contrat(contrat_dict):
                     1 if contrat_dict.get("avec_pieces") else 0,
                     contrat_dict.get("rappel_avant_jours", 14),
                 ))
-                row = cursor.fetchone()
-                contrat_id = dict(row)["id"] if row else None
+                # Get the inserted ID using lastval() for PostgreSQL
+                row = conn.execute("SELECT lastval() as id").fetchone()
+                contrat_id = row["id"] if row else None
             else:
                 # SQLite: Insert then get MAX(id)
                 conn.execute(f"""
@@ -3111,33 +3098,33 @@ def ajouter_contrat(contrat_dict):
             return None
         
         # Insert equipments into junction table
+        # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
+        logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
+        
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
+                    ph = "%s" if USE_PG else "?"
+                    
                     # Get equipement ID from equipements table
                     eq_row = conn.execute(
-                        f"SELECT id FROM equipements WHERE nom = {('%s' if USE_PG else '?')} LIMIT 1",
+                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
                         (eq,)
                     ).fetchone()
                     eq_id = eq_row["id"] if eq_row else None
                     
                     if eq_id:
-                        ph = "%s" if USE_PG else "?"
-                        if USE_PG:
-                            conn.execute(
-                                f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
-                                (contrat_id, eq_id)
-                            )
-                        else:
-                            conn.execute(
-                                f"INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph})",
-                                (contrat_id, eq_id)
-                            )
-                        logger.debug(f"Equipment {eq} (ID: {eq_id}) linked to contrat {contrat_id}")
+                        conn.execute(
+                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            (contrat_id, eq_id)
+                        )
+                        logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")
                     else:
                         logger.warning(f"Equipment '{eq}' not found in equipements table")
                 except Exception as e:
-                    logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
+                    logger.error(f"❌ Error inserting equipment '{eq}' for contract {contrat_id}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
     
     _trigger_backup()
     logger.info(f"✅ Contrat #{contrat_id} saved successfully with {len(equipements)} equipment(s)")
@@ -3203,50 +3190,32 @@ def generer_planning_from_contrat(contrat_id):
                 return 0
 
             # Récupérer tous les équipements du contrat
-            # VPS PostgreSQL: contrats_equipements a equipement_nom (stocké directement)
-            # Local SQLite: contrats_equipements peut avoir equipement_id (JOIN nécessaire)
+            # PostgreSQL only: contrats_equipements a equipement_id avec FK vers equipements.id
             
             equipements = []
             
-            # Première tentative: récupérer equipement_nom directement (cas VPS)
             try:
                 equipements_rows = conn.execute(
-                    f"""SELECT equipement_nom FROM contrats_equipements
-                        WHERE contrat_id = {ph} AND equipement_nom IS NOT NULL
-                        ORDER BY id""",
+                    f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                        JOIN equipements e ON ce.equipement_id = e.id
+                        WHERE ce.contrat_id = {ph}
+                        ORDER BY ce.id""",
                     (contrat_id,)
                 ).fetchall()
                 
                 if equipements_rows:
                     equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
-                    logger.debug(f"Retrieved {len(equipements)} equipment(s) from equipement_nom column")
+                    logger.debug(f"Retrieved {len(equipements)} equipment(s) for planning generation")
             except Exception as e:
-                logger.debug(f"equipement_nom column not available or empty: {e}")
+                logger.error(f"Error retrieving equipements for planning generation: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 equipements = []
             
-            # Deuxième tentative: si vide, essayer avec equipement_id JOIN (cas SQLite/older schema)
-            if not equipements:
-                try:
-                    equipements_rows = conn.execute(
-                        f"""SELECT COALESCE(e.nom, ce.equipement_nom) as equipement_nom 
-                            FROM contrats_equipements ce
-                            LEFT JOIN equipements e ON ce.equipement_id = e.id
-                            WHERE ce.contrat_id = {ph}
-                            ORDER BY ce.id""",
-                        (contrat_id,)
-                    ).fetchall()
-                    
-                    if equipements_rows:
-                        equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
-                        logger.debug(f"Retrieved {len(equipements)} equipment(s) from JOIN")
-                except Exception as e:
-                    logger.debug(f"equipement_id JOIN failed: {e}")
-                    equipements = []
-            
-            # Troisième fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
+            # Fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
             if not equipements:
                 equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
-                logger.debug(f"Using contract.equipement fallback: {equipements}")
+                logger.debug(f"Using contract.equipement fallback for planning: {equipements}")
             
             if not equipements:
                 logger.warning(f"generer_planning: Contrat #{contrat_id} has no equipments")
@@ -3351,31 +3320,33 @@ def modifier_contrat(contrat_id, contrat_dict):
         conn.execute("DELETE FROM contrats_equipements WHERE contrat_id=?", (contrat_id,))
         
         # Insert new equipments into junction table
+        # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
+        logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
+        
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
+                    ph = "%s" if USE_PG else "?"
+                    
                     # Get equipement ID from equipements table
                     eq_row = conn.execute(
-                        f"SELECT id FROM equipements WHERE nom = {('?' if not USE_PG else '%s')} LIMIT 1",
+                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
                         (eq,)
                     ).fetchone()
                     eq_id = eq_row["id"] if eq_row else None
                     
                     if eq_id:
-                        if USE_PG:
-                            conn.execute(
-                                "INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                                (contrat_id, eq_id)
-                            )
-                        else:
-                            conn.execute(
-                                "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES (?, ?)",
-                                (contrat_id, eq_id)
-                            )
+                        conn.execute(
+                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            (contrat_id, eq_id)
+                        )
+                        logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")
                     else:
-                        logger.warning(f"Equipment '{eq}' not found in equipements table for contract update")
+                        logger.warning(f"Equipment '{eq}' not found in equipements table")
                 except Exception as e:
-                    logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
+                    logger.error(f"Error inserting equipment '{eq}' for contract {contrat_id}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
     
     _trigger_backup()
 
