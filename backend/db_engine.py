@@ -2965,13 +2965,41 @@ def get_contract_equipements(contrat_id):
     """Récupère tous les équipements d'un contrat."""
     with get_db() as conn:
         ph = "%s" if USE_PG else "?"
-        rows = conn.execute(
-            f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
-                LEFT JOIN equipements e ON ce.equipement_id = e.id
-                WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
-            (contrat_id,)
-        ).fetchall()
-        return [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+        
+        # VPS PostgreSQL: contrats_equipements a equipement_nom directement
+        # Local SQLite: contrats_equipements a equipement_id (nécessite JOIN)
+        
+        equipements = []
+        
+        # Première tentative: récupérer equipement_nom directement (VPS)
+        try:
+            rows = conn.execute(
+                f"""SELECT equipement_nom FROM contrats_equipements
+                    WHERE contrat_id = {ph} AND equipement_nom IS NOT NULL
+                    ORDER BY id""",
+                (contrat_id,)
+            ).fetchall()
+            if rows:
+                equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+        except Exception as e:
+            logger.debug(f"equipement_nom not available: {e}")
+            equipements = []
+        
+        # Deuxième tentative: utiliser equipement_id avec JOIN (SQLite)
+        if not equipements:
+            try:
+                rows = conn.execute(
+                    f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                        LEFT JOIN equipements e ON ce.equipement_id = e.id
+                        WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
+                    (contrat_id,)
+                ).fetchall()
+                equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+            except Exception as e:
+                logger.debug(f"equipement_id JOIN failed: {e}")
+                equipements = []
+        
+        return equipements
 
 def ajouter_contrat(contrat_dict):
     """
