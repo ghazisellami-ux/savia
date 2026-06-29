@@ -1002,6 +1002,7 @@ def init_db():
             notes TEXT DEFAULT '',
             pieces_incluses TEXT DEFAULT '',
             avec_pieces INTEGER DEFAULT 0,
+            rappel_avant_jours INTEGER DEFAULT 14,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
@@ -2751,6 +2752,20 @@ def verifier_et_migrer_schema():
                 except:
                     pass
             
+            # Migration: Add rappel_avant_jours column to contrats table
+            try:
+                cur.execute("""
+                    ALTER TABLE contrats ADD COLUMN IF NOT EXISTS rappel_avant_jours INTEGER DEFAULT 14
+                """)
+                conn.commit()
+                logger.info("Migration PostgreSQL: Colonne 'rappel_avant_jours' ajoutée/vérifiée à contrats.")
+            except psycopg2.Error as e:
+                logger.debug(f"Migration PostgreSQL rappel_avant_jours: {e}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
             cur.close()
             conn.close()
         except Exception as e:
@@ -2835,6 +2850,8 @@ def verifier_et_migrer_schema():
                     print(f"Erreur migration pieces_a_deduire: {e}")
         except Exception as e:
             print(f"Erreur vérification interventions_techniciens: {e}")
+
+
 
 # ==========================================
 # FONCTIONS CRUD — TECHNICIENS
@@ -2989,46 +3006,74 @@ def ajouter_contrat(contrat_dict):
             import json
             pieces_incluses = json.dumps(pieces_incluses)
         
-        # Insert and retrieve ID in a single operation - works for both SQLite and PostgreSQL
+        # Insert and retrieve ID - use RETURNING for PostgreSQL, fallback to MAX for SQLite
         ph = "%s" if USE_PG else "?"
-        try:
-            conn.execute(f"""
-                INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
-                    sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
-                    pieces_incluses, avec_pieces)
-                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-            """, (
-                contrat_dict.get("client", ""),
-                contrat_dict.get("type_contrat", "Standard"),
-                contrat_dict.get("date_debut", ""),
-                contrat_dict.get("date_fin", ""),
-                contrat_dict.get("sla_temps_reponse_h", 24),
-                contrat_dict.get("interventions_incluses", -1),
-                contrat_dict.get("montant", 0.0),
-                contrat_dict.get("conditions", ""),
-                contrat_dict.get("notes", ""),
-                contrat_dict.get("fichier_contrat", ""),
-                first_equipment,
-                contrat_dict.get("recurrence_maintenance", ""),
-                contrat_dict.get("date_premiere_maintenance", ""),
-                contrat_dict.get("statut", "Actif"),
-                pieces_incluses,
-                1 if contrat_dict.get("avec_pieces") else 0,
-            ))
-        except Exception as e:
-            logger.error(f"Error inserting contrat: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+        contrat_id = None
         
-        # Retrieve the newly created contrat ID - PostgreSQL RealDictCursor returns dict-like rows
         try:
-            row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
-            contrat_id = row["id"] if row else None
+            if USE_PG:
+                # PostgreSQL: Use RETURNING clause to get ID directly from INSERT
+                cursor = conn.execute(f"""
+                    INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
+                        sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                        fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                        pieces_incluses, avec_pieces, rappel_avant_jours)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    RETURNING id
+                """, (
+                    contrat_dict.get("client", ""),
+                    contrat_dict.get("type_contrat", "Standard"),
+                    contrat_dict.get("date_debut", ""),
+                    contrat_dict.get("date_fin", ""),
+                    contrat_dict.get("sla_temps_reponse_h", 24),
+                    contrat_dict.get("interventions_incluses", -1),
+                    contrat_dict.get("montant", 0.0),
+                    contrat_dict.get("conditions", ""),
+                    contrat_dict.get("notes", ""),
+                    contrat_dict.get("fichier_contrat", ""),
+                    first_equipment,
+                    contrat_dict.get("recurrence_maintenance", ""),
+                    contrat_dict.get("date_premiere_maintenance", ""),
+                    contrat_dict.get("statut", "Actif"),
+                    pieces_incluses,
+                    1 if contrat_dict.get("avec_pieces") else 0,
+                    contrat_dict.get("rappel_avant_jours", 14),
+                ))
+                row = cursor.fetchone()
+                contrat_id = dict(row)["id"] if row else None
+            else:
+                # SQLite: Insert then get MAX(id)
+                conn.execute(f"""
+                    INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
+                        sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                        fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                        pieces_incluses, avec_pieces, rappel_avant_jours)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                """, (
+                    contrat_dict.get("client", ""),
+                    contrat_dict.get("type_contrat", "Standard"),
+                    contrat_dict.get("date_debut", ""),
+                    contrat_dict.get("date_fin", ""),
+                    contrat_dict.get("sla_temps_reponse_h", 24),
+                    contrat_dict.get("interventions_incluses", -1),
+                    contrat_dict.get("montant", 0.0),
+                    contrat_dict.get("conditions", ""),
+                    contrat_dict.get("notes", ""),
+                    contrat_dict.get("fichier_contrat", ""),
+                    first_equipment,
+                    contrat_dict.get("recurrence_maintenance", ""),
+                    contrat_dict.get("date_premiere_maintenance", ""),
+                    contrat_dict.get("statut", "Actif"),
+                    pieces_incluses,
+                    1 if contrat_dict.get("avec_pieces") else 0,
+                    contrat_dict.get("rappel_avant_jours", 14),
+                ))
+                row = conn.execute("SELECT MAX(id) as id FROM contrats").fetchone()
+                contrat_id = row["id"] if row else None
+            
             logger.info(f"✅ Contrat created with ID: {contrat_id}")
         except Exception as e:
-            logger.error(f"Error retrieving contrat ID: {e}")
+            logger.error(f"Error inserting contrat: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None
@@ -3079,6 +3124,8 @@ def generer_planning_from_contrat(contrat_id):
     Supporte les équipements multiples: génère une entrée de planning pour 
     CHAQUE équipement du contrat.
     
+    Utilise le rappel_avant_jours du contrat pour les notifications.
+    
     Retourne le nombre d'entrées créées.
     """
     from dateutil.relativedelta import relativedelta
@@ -3113,6 +3160,7 @@ def generer_planning_from_contrat(contrat_id):
             date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
             date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
             client = contrat.get("client", "")
+            rappel_avant_jours = contrat.get("rappel_avant_jours", 14) or 14
 
             if not date_fin_str or not date_premiere_str:
                 logger.warning(f"generer_planning: Contrat #{contrat_id} missing dates. date_fin={date_fin_str}, date_premiere={date_premiere_str}")
@@ -3128,13 +3176,14 @@ def generer_planning_from_contrat(contrat_id):
 
             # Récupérer tous les équipements du contrat
             equipements_rows = conn.execute(
-                f"""SELECT ce.equipement_nom as equipement_nom FROM contrats_equipements ce
+                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                    LEFT JOIN equipements e ON ce.equipement_id = e.id
                     WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
                 (contrat_id,)
             ).fetchall()
             
             if equipements_rows:
-                equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+                equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
             else:
                 # Fallback: utiliser l'équipement du contrat (pour rétrocompatibilité)
                 equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
@@ -3166,11 +3215,11 @@ def generer_planning_from_contrat(contrat_id):
                             "Préventive",
                             f"MP Contrat #{contrat_id} — {equipement}",
                             current_date.isoformat(),
-                            "",  # Technicien non assigné — sera assigné via rappel 2 semaines avant
+                            "",  # Technicien non assigné — sera assigné via rappel
                             recurrence,
                             contrat_id,
                             "Planifiée",
-                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id}",
+                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id} | Rappel: {rappel_avant_jours}j",
                         ))
                         count += 1
                     except Exception as e:
@@ -3178,7 +3227,7 @@ def generer_planning_from_contrat(contrat_id):
                     
                     current_date = current_date + delta
 
-            logger.info(f"✅ generer_planning: Generated {count} planning entries for contrat #{contrat_id} across {len(equipements)} equipements")
+            logger.info(f"✅ generer_planning: Generated {count} planning entries for contrat #{contrat_id} across {len(equipements)} equipements (Rappel: {rappel_avant_jours}j)")
             return count
             
         except Exception as e:
@@ -3213,11 +3262,12 @@ def modifier_contrat(contrat_id, contrat_dict):
             import json
             pieces_incluses = json.dumps(pieces_incluses)
         
-        conn.execute("""
-            UPDATE contrats SET client=?, type_contrat=?, date_debut=?, date_fin=?,
-                sla_temps_reponse_h=?, interventions_incluses=?, montant=?, conditions=?, notes=?, statut=?,
-                fichier_contrat=?, equipement=?, pieces_incluses=?, avec_pieces=?
-            WHERE id=?
+        ph = "%s" if USE_PG else "?"
+        conn.execute(f"""
+            UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
+                sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
+                fichier_contrat={ph}, equipement={ph}, pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
+            WHERE id={ph}
         """, (
             contrat_dict.get("client", ""),
             contrat_dict.get("type_contrat", "Standard"),
@@ -3233,6 +3283,7 @@ def modifier_contrat(contrat_id, contrat_dict):
             first_equipment,
             pieces_incluses,
             1 if contrat_dict.get("avec_pieces") else 0,
+            contrat_dict.get("rappel_avant_jours", 14),
             contrat_id,
         ))
         
@@ -3243,10 +3294,26 @@ def modifier_contrat(contrat_id, contrat_dict):
         for eq in equipements:
             if eq:  # Only insert non-empty equipments
                 try:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_nom) VALUES (?, ?)",
-                        (contrat_id, eq)
-                    )
+                    # Get equipement ID from equipements table
+                    eq_row = conn.execute(
+                        f"SELECT id FROM equipements WHERE nom = {('?' if not USE_PG else '%s')} LIMIT 1",
+                        (eq,)
+                    ).fetchone()
+                    eq_id = eq_row["id"] if eq_row else None
+                    
+                    if eq_id:
+                        if USE_PG:
+                            conn.execute(
+                                "INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                                (contrat_id, eq_id)
+                            )
+                        else:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO contrats_equipements (contrat_id, equipement_id) VALUES (?, ?)",
+                                (contrat_id, eq_id)
+                            )
+                    else:
+                        logger.warning(f"Equipment '{eq}' not found in equipements table for contract update")
                 except Exception as e:
                     logger.debug(f"Could not insert equipment {eq} for contract {contrat_id}: {e}")
     
