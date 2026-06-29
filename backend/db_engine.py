@@ -3175,37 +3175,50 @@ def generer_planning_from_contrat(contrat_id):
                 return 0
 
             # Récupérer tous les équipements du contrat
-            # Note: contrats_equipements peut avoir equipement_nom (stocké directement) ou equipement_id (nécessite JOIN)
-            # On essaie d'abord avec equipement_nom directement
+            # VPS PostgreSQL: contrats_equipements a equipement_nom (stocké directement)
+            # Local SQLite: contrats_equipements peut avoir equipement_id (JOIN nécessaire)
+            
+            equipements = []
+            
+            # Première tentative: récupérer equipement_nom directement (cas VPS)
             try:
                 equipements_rows = conn.execute(
-                    f"""SELECT equipement_nom as equipement_nom FROM contrats_equipements
-                        WHERE contrat_id = {ph} ORDER BY id""",
+                    f"""SELECT equipement_nom FROM contrats_equipements
+                        WHERE contrat_id = {ph} AND equipement_nom IS NOT NULL
+                        ORDER BY id""",
                     (contrat_id,)
                 ).fetchall()
                 
                 if equipements_rows:
-                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
-                else:
-                    equipements = []
+                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+                    logger.debug(f"Retrieved {len(equipements)} equipment(s) from equipement_nom column")
             except Exception as e:
-                logger.debug(f"equipement_nom not found, trying equipement_id: {e}")
-                # Fallback: utiliser equipement_id avec JOIN
+                logger.debug(f"equipement_nom column not available or empty: {e}")
+                equipements = []
+            
+            # Deuxième tentative: si vide, essayer avec equipement_id JOIN (cas SQLite/older schema)
+            if not equipements:
                 try:
                     equipements_rows = conn.execute(
-                        f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                        f"""SELECT COALESCE(e.nom, ce.equipement_nom) as equipement_nom 
+                            FROM contrats_equipements ce
                             LEFT JOIN equipements e ON ce.equipement_id = e.id
-                            WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
+                            WHERE ce.contrat_id = {ph}
+                            ORDER BY ce.id""",
                         (contrat_id,)
                     ).fetchall()
-                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
-                except Exception as e2:
-                    logger.warning(f"Could not retrieve equipements from contrats_equipements: {e2}")
+                    
+                    if equipements_rows:
+                        equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
+                        logger.debug(f"Retrieved {len(equipements)} equipment(s) from JOIN")
+                except Exception as e:
+                    logger.debug(f"equipement_id JOIN failed: {e}")
                     equipements = []
             
-            # Final fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
+            # Troisième fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
             if not equipements:
                 equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
+                logger.debug(f"Using contract.equipement fallback: {equipements}")
             
             if not equipements:
                 logger.warning(f"generer_planning: Contrat #{contrat_id} has no equipments")
