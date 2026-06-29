@@ -3175,17 +3175,36 @@ def generer_planning_from_contrat(contrat_id):
                 return 0
 
             # Récupérer tous les équipements du contrat
-            equipements_rows = conn.execute(
-                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
-                    LEFT JOIN equipements e ON ce.equipement_id = e.id
-                    WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
-                (contrat_id,)
-            ).fetchall()
+            # Note: contrats_equipements peut avoir equipement_nom (stocké directement) ou equipement_id (nécessite JOIN)
+            # On essaie d'abord avec equipement_nom directement
+            try:
+                equipements_rows = conn.execute(
+                    f"""SELECT equipement_nom as equipement_nom FROM contrats_equipements
+                        WHERE contrat_id = {ph} ORDER BY id""",
+                    (contrat_id,)
+                ).fetchall()
+                
+                if equipements_rows:
+                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
+                else:
+                    equipements = []
+            except Exception as e:
+                logger.debug(f"equipement_nom not found, trying equipement_id: {e}")
+                # Fallback: utiliser equipement_id avec JOIN
+                try:
+                    equipements_rows = conn.execute(
+                        f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                            LEFT JOIN equipements e ON ce.equipement_id = e.id
+                            WHERE ce.contrat_id = {ph} ORDER BY ce.id""",
+                        (contrat_id,)
+                    ).fetchall()
+                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
+                except Exception as e2:
+                    logger.warning(f"Could not retrieve equipements from contrats_equipements: {e2}")
+                    equipements = []
             
-            if equipements_rows:
-                equipements = [dict(row)["equipement_nom"] for row in equipements_rows if dict(row).get("equipement_nom")]
-            else:
-                # Fallback: utiliser l'équipement du contrat (pour rétrocompatibilité)
+            # Final fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
+            if not equipements:
                 equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
             
             if not equipements:
