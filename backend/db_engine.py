@@ -149,6 +149,215 @@ def _trigger_backup():
     pass
 
 
+def _auto_migrate_vps_schema(conn):
+    """
+    Auto-migration: Converts VPS schema (equipement_nom) to standard schema (equipement_id).
+    
+    Runs automatically on app startup - idempotent and safe.
+    If schema is already standard, does nothing.
+    If schema needs migration, converts it transparently.
+    
+    This allows seamless deployment to both new and legacy VPS instances.
+    """
+    try:
+        cursor = conn.cursor()
+        
+        # Check if contrats_equipements table exists
+        try:
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'contrats_equipements'
+                )
+            """)
+            result = cursor.fetchone()
+            table_exists = result[0] if result else False
+        except Exception as table_check_error:
+            logger.debug(f"Could not check if contrats_equipements exists: {table_check_error}")
+            return
+        
+        if not table_exists:
+            logger.debug("contrats_equipements table does not exist yet - will be created by init_db")
+            return
+        
+        # Check current schema
+        try:
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns 
+                WHERE table_name = 'contrats_equipements'
+            """)
+            columns = [row[0] for row in cursor.fetchall()]
+        except Exception as schema_check_error:
+            logger.debug(f"Could not check contrats_equipements schema: {schema_check_error}")
+            return
+        
+        has_equipement_id = 'equipement_id' in columns
+        has_equipement_nom = 'equipement_nom' in columns
+        
+        # Already migrated - nothing to do
+        if has_equipement_id and not has_equipement_nom:
+            logger.debug("✅ VPS schema already migrated (equipement_id exists, equipement_nom removed)")
+            return
+        
+        # If only equipement_nom exists (need migration)
+        if has_equipement_nom and not has_equipement_id:
+            logger.info("⚠️  VPS legacy schema detected (equipement_nom exists) - starting auto-migration...")
+            
+            # Step 1: Add equipement_id column
+            try:
+                cursor.execute("""
+                    ALTER TABLE contrats_equipements 
+                    ADD COLUMN equipement_id INTEGER
+                """)
+                conn.commit()
+                logger.info("✅ Added equipement_id column")
+            except Exception as add_col_error:
+                logger.warning(f"Could not add equipement_id column: {add_col_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            # Step 2: Populate equipement_id from equipement_nom via FK join
+            try:
+                cursor.execute("""
+                    UPDATE contrats_equipements ce
+                    SET equipement_id = e.id
+                    FROM equipements e
+                    WHERE ce.equipement_nom = e.nom
+                    AND ce.equipement_id IS NULL
+                """)
+                rows_updated = cursor.rowcount
+                conn.commit()
+                logger.info(f"✅ Populated {rows_updated} rows with equipement_id from equipement_nom")
+            except Exception as populate_error:
+                logger.warning(f"Could not populate equipement_id: {populate_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            # Step 3: Add FK constraint if it doesn't exist
+            try:
+                cursor.execute("""
+                    SELECT constraint_name FROM information_schema.table_constraints 
+                    WHERE table_name = 'contrats_equipements' 
+                    AND constraint_type = 'FOREIGN KEY'
+                    AND constraint_name LIKE '%equipement_id%'
+                """)
+                fk_result = cursor.fetchone()
+                fk_exists = fk_result is not None
+                
+                if not fk_exists:
+                    cursor.execute("""
+                        ALTER TABLE contrats_equipements
+                        ADD CONSTRAINT contrats_equipements_equipement_id_fkey
+                        FOREIGN KEY (equipement_id) REFERENCES equipements(id) ON DELETE RESTRICT
+                    """)
+                    conn.commit()
+                    logger.info("✅ Added FK constraint on equipement_id")
+            except Exception as fk_error:
+                logger.warning(f"Could not add FK constraint: {fk_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            # Step 4: Remove equipement_nom column (cleanup)
+            try:
+                cursor.execute("ALTER TABLE contrats_equipements DROP COLUMN equipement_nom")
+                conn.commit()
+                logger.info("✅ Removed equipement_nom column - migration complete!")
+            except Exception as drop_col_error:
+                logger.warning(f"Could not drop equipement_nom column: {drop_col_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            return
+        
+        # Both columns exist (partial migration state) - finish it
+        if has_equipement_id and has_equipement_nom:
+            logger.info("⚠️  Partial migration detected (both columns exist) - completing...")
+            
+            # Populate any remaining empty equipement_id values
+            try:
+                cursor.execute("""
+                    UPDATE contrats_equipements ce
+                    SET equipement_id = e.id
+                    FROM equipements e
+                    WHERE ce.equipement_nom = e.nom
+                    AND ce.equipement_id IS NULL
+                """)
+                rows_updated = cursor.rowcount
+                if rows_updated > 0:
+                    conn.commit()
+                    logger.info(f"✅ Populated {rows_updated} remaining rows")
+            except Exception as partial_populate_error:
+                logger.warning(f"Could not populate remaining equipement_id: {partial_populate_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            # Add FK constraint if missing
+            try:
+                cursor.execute("""
+                    SELECT constraint_name FROM information_schema.table_constraints 
+                    WHERE table_name = 'contrats_equipements' 
+                    AND constraint_type = 'FOREIGN KEY'
+                    AND constraint_name LIKE '%equipement_id%'
+                """)
+                fk_result = cursor.fetchone()
+                fk_exists = fk_result is not None
+                
+                if not fk_exists:
+                    cursor.execute("""
+                        ALTER TABLE contrats_equipements
+                        ADD CONSTRAINT contrats_equipements_equipement_id_fkey
+                        FOREIGN KEY (equipement_id) REFERENCES equipements(id) ON DELETE RESTRICT
+                    """)
+                    conn.commit()
+                    logger.info("✅ Added missing FK constraint")
+            except Exception as partial_fk_error:
+                logger.warning(f"Could not add missing FK constraint: {partial_fk_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            # Remove equipement_nom column
+            try:
+                cursor.execute("ALTER TABLE contrats_equipements DROP COLUMN equipement_nom")
+                conn.commit()
+                logger.info("✅ Removed equipement_nom column - migration complete!")
+            except Exception as partial_drop_error:
+                logger.warning(f"Could not drop equipement_nom column in partial migration: {partial_drop_error}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                return
+            
+            return
+    
+    except Exception as e:
+        logger.warning(f"Auto-migration encountered unexpected issue: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Don't fail startup - log warning but continue
+        # The app will still work, just with the old schema if migration failed
+
+
 
 
 
@@ -967,6 +1176,14 @@ def init_db():
             logger.info("✅ Migration réussie: colonnes pieces_incluses et avec_pieces ajoutées à contrats")
         except Exception as e:
             logger.debug(f"Migration colonnes pièces ignorée: {e}")
+        
+        # --- Auto-Migration: VPS Schema (equipement_nom → equipement_id) ---
+        # This migration runs automatically on every startup
+        # It safely converts legacy VPS schema to standard schema if needed
+        try:
+            _auto_migrate_vps_schema(conn)
+        except Exception as e:
+            logger.warning(f"Auto-migration VPS schema failed: {e}")
 
 
 # ---- Nettoyage texte double-encodé UTF-8 (à la lecture) ----
