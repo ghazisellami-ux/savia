@@ -3964,7 +3964,7 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
             pdf.cell(col_widths[i], 7, header, border=1, align='C')
         pdf.ln()
 
-        # Table data with proper row alignment for multi-line notes
+        # Table data - Using multi_cell for notes to support line wrapping
         pdf.set_font("Arial", size=8)
         
         for row in rows:
@@ -3977,78 +3977,87 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
             statut = str(row.get("statut", ""))[:12]
             notes_full = str(row.get("notes", ""))
             
-            # Calculate lines for notes
-            max_chars_per_line = 45
+            # For notes with potential line breaks, we need multi-line support
+            # Calculate how many lines the notes will need (approximately 11 chars per line at this width and font size)
+            line_width_mm = 78  # col_widths[6]
+            chars_per_line = 45  # approximate for Arial 8pt at 78mm
+            
+            # Split notes into lines
             notes_lines = []
             remaining = notes_full
             while remaining:
-                if len(remaining) <= max_chars_per_line:
+                if len(remaining) <= chars_per_line:
                     notes_lines.append(remaining)
                     break
                 else:
-                    split_pos = remaining.rfind(' ', 0, max_chars_per_line)
+                    split_pos = remaining.rfind(' ', 0, chars_per_line)
                     if split_pos == -1:
-                        split_pos = max_chars_per_line
+                        split_pos = chars_per_line
                     notes_lines.append(remaining[:split_pos])
                     remaining = remaining[split_pos:].lstrip()
+            
+            # Limit to max 3 lines to avoid oversized rows
+            if len(notes_lines) > 3:
+                notes_lines = notes_lines[:3]
+                notes_lines[-1] = notes_lines[-1][:chars_per_line-3] + "..."
             
             # Ensure at least one line
             if not notes_lines:
                 notes_lines = [""]
             
-            # Row height based on number of notes lines
-            line_height = 6
+            # Row height depends on number of notes lines (5mm per line)
             num_lines = len(notes_lines)
-            row_height = line_height * num_lines
+            row_height = 5 * num_lines
             
-            # Get starting X and Y
-            x_start = pdf.get_x()
+            # Get current Y position
+            current_y = pdf.get_y()
+            # Page bottom is around 190mm with 10mm margin
+            if current_y + row_height > 190:
+                # Add new page and re-draw header
+                pdf.add_page()
+                pdf.set_font("Arial", 'B', size=9)
+                for i, header in enumerate(headers):
+                    pdf.cell(col_widths[i], 7, header, border=1, align='C')
+                pdf.ln()
+                pdf.set_font("Arial", size=8)
+            
+            # Draw row cells - use manual positioning for multi-line notes
             y_start = pdf.get_y()
             
-            # Draw all columns at once with proper alignment
-            # Column 1: Date
-            pdf.set_xy(x_start, y_start)
+            # Draw all columns except notes first
+            pdf.set_xy(10, y_start)
             pdf.cell(col_widths[0], row_height, date_str, border=1, align='C')
             
-            # Column 2: Machine
-            pdf.set_xy(x_start + col_widths[0], y_start)
+            pdf.set_xy(10 + col_widths[0], y_start)
             pdf.cell(col_widths[1], row_height, machine, border=1, align='L')
             
-            # Column 3: Type
-            pdf.set_xy(x_start + col_widths[0] + col_widths[1], y_start)
+            pdf.set_xy(10 + col_widths[0] + col_widths[1], y_start)
             pdf.cell(col_widths[2], row_height, type_maint, border=1, align='L')
             
-            # Column 4: Technicien
-            pdf.set_xy(x_start + col_widths[0] + col_widths[1] + col_widths[2], y_start)
+            pdf.set_xy(10 + col_widths[0] + col_widths[1] + col_widths[2], y_start)
             pdf.cell(col_widths[3], row_height, tech, border=1, align='L')
             
-            # Column 5: Client
-            x_pos = x_start + col_widths[0] + col_widths[1] + col_widths[2] + col_widths[3]
+            x_pos = 10 + col_widths[0] + col_widths[1] + col_widths[2] + col_widths[3]
             pdf.set_xy(x_pos, y_start)
             pdf.cell(col_widths[4], row_height, client, border=1, align='L')
             
-            # Column 6: Statut
             x_pos += col_widths[4]
             pdf.set_xy(x_pos, y_start)
             pdf.cell(col_widths[5], row_height, statut, border=1, align='C')
             
-            # Column 7: Notes (with multi-line support)
+            # Draw notes cell with border and multi-line content
             x_pos += col_widths[5]
             pdf.set_xy(x_pos, y_start)
-            
-            # Draw border for notes cell
             pdf.rect(x_pos, y_start, col_widths[6], row_height, 'D')
             
-            # Write each line of notes inside the cell
+            # Draw each line of notes
             for line_num, notes_line in enumerate(notes_lines):
-                line_y = y_start + (line_num * line_height) + 1
+                line_y = y_start + (line_num * 5) + 1
                 pdf.set_xy(x_pos + 1, line_y)
-                pdf.set_font("Arial", size=8)
-                pdf.cell(col_widths[6] - 2, line_height - 1, notes_line, border=0, align='L')
+                pdf.cell(col_widths[6] - 2, 4.5, notes_line, border=0, align='L')
             
-            # Move cursor to next row
-            pdf.set_xy(x_start, y_start + row_height)
-            pdf.ln(0)
+            # Move to next row
+            pdf.set_y(y_start + row_height)
 
         # Footer
         pdf.set_y(-15)
@@ -4641,7 +4650,6 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
     return {"ok": True, "created": len(created), "interventions": created}
 
 
-@app.post("/api/planning/pdf")
 @app.post("/api/interventions/{intervention_id}/factured")
 
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
