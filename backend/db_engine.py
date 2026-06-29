@@ -2605,11 +2605,14 @@ def lire_contrats(client=None):
     return df
 
 def get_contract_equipements(contrat_id):
-    """Récupère tous les équipements d'un contrat."""
+    """Récupère tous les équipements d'un contrat (utilise equipement_id)."""
     with get_db() as conn:
         ph = "%s"
         
         try:
+            # Ensure contrat_id is a Python int (handles numpy.int64 from pandas)
+            contrat_id = int(contrat_id)
+            
             rows = conn.execute(
                 f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
                     JOIN equipements e ON ce.equipement_id = e.id
@@ -2622,13 +2625,11 @@ def get_contract_equipements(contrat_id):
                 equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
                 logger.debug(f"Retrieved {len(equipements)} equipment(s) for contract {contrat_id}")
                 return equipements
-            else:
-                logger.debug(f"No equipements found for contract {contrat_id}")
-                return []
+            
+            logger.debug(f"No equipements found for contract {contrat_id}")
+            return []
         except Exception as e:
             logger.error(f"Error retrieving equipements for contract {contrat_id}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return []
 
 def ajouter_contrat(contrat_dict):
@@ -2758,6 +2759,9 @@ def generer_planning_from_contrat(contrat_id):
     from dateutil.relativedelta import relativedelta
     import logging
     logger = logging.getLogger("db_engine")
+    
+    # Ensure contrat_id is a Python int (handles numpy.int64 from pandas)
+    contrat_id = int(contrat_id)
 
     RECURRENCE_DELTAS = {
         "Hebdomadaire": relativedelta(weeks=1),
@@ -2801,9 +2805,7 @@ def generer_planning_from_contrat(contrat_id):
                 logger.error(f"generer_planning: Invalid date format for contrat #{contrat_id}: {ve}")
                 return 0
 
-            # Récupérer tous les équipements du contrat
-            # PostgreSQL only: contrats_equipements a equipement_id avec FK vers equipements.id
-            
+            # Récupérer tous les équipements du contrat (utilise le schema standard equipement_id)
             equipements = []
             
             try:
@@ -2820,14 +2822,7 @@ def generer_planning_from_contrat(contrat_id):
                     logger.debug(f"Retrieved {len(equipements)} equipment(s) for planning generation")
             except Exception as e:
                 logger.error(f"Error retrieving equipements for planning generation: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
                 equipements = []
-            
-            # Fallback: utiliser l'équipement du contrat principal (rétrocompatibilité)
-            if not equipements:
-                equipements = [contrat.get("equipement", "")] if contrat.get("equipement") else []
-                logger.debug(f"Using contract.equipement fallback for planning: {equipements}")
             
             if not equipements:
                 logger.warning(f"generer_planning: Contrat #{contrat_id} has no equipments")
@@ -2929,7 +2924,7 @@ def modifier_contrat(contrat_id, contrat_dict):
         ))
         
         # Delete existing equipments for this contract
-        conn.execute("DELETE FROM contrats_equipements WHERE contrat_id=?", (contrat_id,))
+        conn.execute("DELETE FROM contrats_equipements WHERE contrat_id=%s", (contrat_id,))
         
         # Insert new equipments into junction table
         # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
