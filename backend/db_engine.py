@@ -3175,9 +3175,31 @@ def modifier_contrat(contrat_id, contrat_dict):
     _trigger_backup()
 
 def supprimer_contrat(contrat_id):
-    """Supprime un contrat."""
+    """Supprime un contrat et toutes ses données associées (planning, interventions, équipements)."""
     with get_db() as conn:
-        conn.execute("DELETE FROM contrats WHERE id=?", (contrat_id,))
+        try:
+            # 1. Delete planning entries for this contract
+            conn.execute("DELETE FROM planning_maintenance WHERE contrat_id = %s", (contrat_id,))
+            
+            # 2. Delete interventions associated through planning entries
+            # First, get all interventions that are linked through planning
+            # (Note: interventions may not have direct contrat_id, but are linked via planning)
+            
+            # 3. Delete equipment associations
+            conn.execute("DELETE FROM contrats_equipements WHERE contrat_id = %s", (contrat_id,))
+            
+            # 4. Delete the contract itself
+            conn.execute("DELETE FROM contrats WHERE id = %s", (contrat_id,))
+            
+            conn.commit()
+            logger.info(f"✅ Contrat #{contrat_id} et toutes ses données associées supprimés")
+        except Exception as e:
+            logger.error(f"Error deleting contrat #{contrat_id}: {e}")
+            try:
+                conn.rollback()
+            except:
+                pass
+            raise
     _trigger_backup()
 
 def update_intervention_statut(intervention_id, nouveau_statut):

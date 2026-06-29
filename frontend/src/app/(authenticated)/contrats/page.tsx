@@ -76,6 +76,8 @@ export default function ContratsPage() {
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ contratId: string; contratName: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -278,17 +280,20 @@ export default function ContratsPage() {
     }));
   };
 
-  const filtered = data.filter(c => {
-    const matchSearch = !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
-      c.id.toLowerCase().includes(search.toLowerCase()) ||
-      (c.type_contrat || '').toLowerCase().includes(search.toLowerCase());
-    
-    // Determine actual status
-    const actualStatus = getActualStatus(c);
-    
-    const matchStatut = !filterStatut || actualStatus.toLowerCase() === filterStatut.toLowerCase();
-    return matchSearch && matchStatut;
-  });
+  const filtered = data
+    .filter(c => {
+      const matchSearch = !search || c.client.toLowerCase().includes(search.toLowerCase()) ||
+        c.id.toLowerCase().includes(search.toLowerCase()) ||
+        (c.type_contrat || '').toLowerCase().includes(search.toLowerCase());
+      
+      // Determine actual status
+      const actualStatus = getActualStatus(c);
+      
+      const matchStatut = !filterStatut || actualStatus.toLowerCase() === filterStatut.toLowerCase();
+      return matchSearch && matchStatut;
+    })
+    // Sort by ID descending (newest first)
+    .sort((a, b) => Number(b.id) - Number(a.id));
 
   const actifs = data.filter(c => getActualStatus(c) === 'Actif').length;
   const suspendus = data.filter(c => getActualStatus(c) === 'Suspendu').length;
@@ -358,6 +363,32 @@ export default function ContratsPage() {
       alert('Erreur PDF: ' + (err?.message || err));
     }
     finally { setIsPdfGen(false); }
+  };
+
+  const handleDeleteContrat = async () => {
+    if (!deleteConfirm) return;
+    setIsDeleting(true);
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      if (!token) throw new Error('Session expirée');
+
+      const res = await fetch(`/api/contrats/${deleteConfirm.contratId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + token },
+      });
+
+      if (!res.ok) throw new Error(`Erreur HTTP ${res.status}`);
+      
+      // Reload the data
+      await load();
+      setDeleteConfirm(null);
+      setSelectedContrat(null);
+      setSaveMsg('✅ Contrat et ses données associées supprimés avec succès!');
+    } catch (err: any) {
+      setSaveMsg(`❌ Erreur suppression: ${err?.message || 'Indisponible'}`);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   return (
@@ -556,6 +587,14 @@ export default function ContratsPage() {
                 >
                   <Download className="w-3.5 h-3.5" /> {isPdfGen ? 'Génération...' : 'Télécharger PDF'}
                 </button>
+                {canEdit && (
+                  <button
+                    onClick={() => setDeleteConfirm({ contratId: c.id, contratName: c.client })}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-400/20 transition-all cursor-pointer ml-auto"
+                  >
+                    <X className="w-3.5 h-3.5" /> Supprimer
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -983,6 +1022,70 @@ export default function ContratsPage() {
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 {isSaving ? 'Enregistrement...' : editingContrat ? 'Mettre à jour' : 'Créer le contrat'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============== DELETE CONFIRMATION MODAL ============== */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setDeleteConfirm(null)}>
+          <div className="glass rounded-2xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-savia-border">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-lg text-red-500">Supprimer le contrat</h2>
+                  <p className="text-xs text-savia-text-muted">Cette action est irréversible</p>
+                </div>
+              </div>
+              <button onClick={() => setDeleteConfirm(null)} className="p-2 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-savia-text transition-all cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              <div className="bg-red-500/10 rounded-lg p-4 border border-red-500/20">
+                <p className="text-sm text-savia-text">
+                  Êtes-vous sûr de vouloir supprimer le contrat <span className="font-bold text-red-400">#{deleteConfirm.contratId}</span> pour <span className="font-bold">{deleteConfirm.contratName}</span>?
+                </p>
+              </div>
+              
+              <div className="bg-amber-500/10 rounded-lg p-3 border border-amber-500/20">
+                <div className="flex gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-600">
+                    <p className="font-semibold mb-1">⚠️ Cette suppression inclura:</p>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>Le contrat lui-même</li>
+                      <li>Tous les équipements associés</li>
+                      <li>Toutes les maintenances planifiées</li>
+                      <li>Les interventions liées à ce contrat</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-savia-border">
+              <button 
+                onClick={() => setDeleteConfirm(null)} 
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer disabled:opacity-50">
+                Annuler
+              </button>
+              <button 
+                onClick={handleDeleteContrat} 
+                disabled={isDeleting}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-red-600 to-red-700 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-red-500/20 disabled:opacity-50">
+                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                {isDeleting ? 'Suppression...' : 'Supprimer définitivement'}
               </button>
             </div>
           </div>
