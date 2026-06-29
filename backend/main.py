@@ -277,7 +277,7 @@ def check_planning_reminder():
                 if contrat_id:
                     try:
                         with get_db() as conn:
-                            ph = "%s" if USE_PG else "?"
+                            ph = "%s"
                             contrat_row = conn.execute(
                                 f"SELECT rappel_avant_jours FROM contrats WHERE id = {ph}",
                                 (contrat_id,)
@@ -997,7 +997,6 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     bot_key: 'telegram' (technicien), 'telegram_sav', 'telegram_manager', 'telegram_stock'
     """
     import urllib.request, urllib.parse, json as _json
-    from db_engine import USE_PG
     token_key = f"{bot_key}_token"
     chat_key = f"{bot_key}_chat_id"
     try:
@@ -1614,7 +1613,7 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
 def sync_region_ville():
     """Sync region and ville from clients to equipements based on client name. Admin operation."""
     try:
-        from db_engine import _trigger_backup, USE_PG
+        from db_engine import _trigger_backup
         
         df_clients = db_lire_clients()
         df_eq = lire_equipements()
@@ -1624,76 +1623,63 @@ def sync_region_ville():
         
         logger.info(f"Starting sync: {len(df_clients)} clients, {len(df_eq)} equipements")
         
-        # Use SQL UPDATE with JOIN to sync region/ville from clients to equipements
+        # Use SQL UPDATE with JOIN to sync region/ville from clients to equipements (PostgreSQL)
         with get_db() as conn:
-            if USE_PG:
-                # PostgreSQL: Use UPDATE with JOIN
-                cur = conn._conn.cursor()
+            cur = conn.cursor()
+            
+            # Update equipements where client name matches exactly
+            cur.execute("""
+                UPDATE equipements e
+                SET region = c.region, ville = c.ville
+                FROM clients c
+                WHERE LOWER(e.client) = LOWER(c.nom)
+            """)
+            exact_matches = cur.rowcount
+            conn.commit()
+            
+            logger.info(f"Exact matches: {exact_matches}")
+            
+            # For remaining equipements, try fuzzy matching
+            # Get equipements that still have region='Nord' but don't have exact client match
+            cur.execute("""
+                SELECT e.id, e.client
+                FROM equipements e
+                LEFT JOIN clients c ON LOWER(e.client) = LOWER(c.nom)
+                WHERE c.id IS NULL
+            """)
+            unmatched_equips = cur.fetchall()
+            logger.info(f"Unmatched equipements: {len(unmatched_equips)}")
+            
+            # Try fuzzy matching for unmatched equipements
+            fuzzy_matches = 0
+            for equip_id, equip_client in unmatched_equips:
+                # Find best match in clients table
+                best_match = None
+                best_score = 0
                 
-                # Update equipements where client name matches exactly
-                cur.execute("""
-                    UPDATE equipements e
-                    SET region = c.region, ville = c.ville
-                    FROM clients c
-                    WHERE LOWER(e.client) = LOWER(c.nom)
-                """)
-                exact_matches = cur.rowcount
-                conn._conn.commit()
-                
-                logger.info(f"Exact matches: {exact_matches}")
-                
-                # For remaining equipements, try fuzzy matching
-                # Get equipements that still have region='Nord' but don't have exact client match
-                cur.execute("""
-                    SELECT e.id, e.client
-                    FROM equipements e
-                    LEFT JOIN clients c ON LOWER(e.client) = LOWER(c.nom)
-                    WHERE c.id IS NULL
-                """)
-                unmatched_equips = cur.fetchall()
-                logger.info(f"Unmatched equipements: {len(unmatched_equips)}")
-                
-                # Try fuzzy matching for unmatched equipements
-                fuzzy_matches = 0
-                for equip_id, equip_client in unmatched_equips:
-                    # Find best match in clients table
-                    best_match = None
-                    best_score = 0
+                for _, client_row in df_clients.iterrows():
+                    client_nom = str(client_row.get("nom", "")).lower()
+                    equip_client_lower = str(equip_client).lower()
                     
-                    for _, client_row in df_clients.iterrows():
-                        client_nom = str(client_row.get("nom", "")).lower()
-                        equip_client_lower = str(equip_client).lower()
-                        
-                        # Simple fuzzy match: check if one contains the other
-                        if equip_client_lower in client_nom or client_nom in equip_client_lower:
-                            best_match = client_row
-                            break
+                    # Simple fuzzy match: check if one contains the other
+                    if equip_client_lower in client_nom or client_nom in equip_client_lower:
+                        best_match = client_row
+                        break
+                
+                if best_match is not None:
+                    region = str(best_match.get("region", "")).strip()
+                    ville = str(best_match.get("ville", "")).strip()
                     
-                    if best_match is not None:
-                        region = str(best_match.get("region", "")).strip()
-                        ville = str(best_match.get("ville", "")).strip()
-                        
-                        cur.execute(
-                            "UPDATE equipements SET region = ?, ville = ? WHERE id = ?",
-                            (region, ville, equip_id)
-                        )
-                        fuzzy_matches += 1
-                
-                conn._conn.commit()
-                logger.info(f"Fuzzy matches: {fuzzy_matches}")
-                
-                total_updated = exact_matches + fuzzy_matches
-            else:
-                # SQLite: Use UPDATE with JOIN
-                cur = conn.cursor()
-                cur.execute("""
-                    UPDATE equipements
-                    SET region = (SELECT region FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1),
-                        ville = (SELECT ville FROM clients WHERE LOWER(clients.nom) = LOWER(equipements.client) LIMIT 1)
-                    WHERE client IN (SELECT nom FROM clients)
-                """)
-                total_updated = cur.rowcount
-                conn.commit()
+                    cur.execute(
+                        "UPDATE equipements SET region = %s, ville = %s WHERE id = %s",
+                        (region, ville, equip_id)
+                    )
+                    fuzzy_matches += 1
+            
+            conn.commit()
+            logger.info(f"Fuzzy matches: {fuzzy_matches}")
+            
+            total_updated = exact_matches + fuzzy_matches
         
         logger.info(f"Sync completed: {total_updated} equipements updated")
         _trigger_backup()
@@ -2578,7 +2564,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     Crée une demande d'intervention avec support multi-techniciens.
     Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
     """
-    from db_engine import get_db, USE_PG
+    from db_engine import get_db
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     demandeur          = body.get("demandeur") or user.get("username", "")
@@ -2607,8 +2593,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     first_tech = techniciens_fullnames[0] if techniciens_fullnames else ""
     statut = "Assignée" if first_tech else "En attente"
     
-    # Use correct placeholder based on database type
-    ph = "%s" if USE_PG else "?"
+    # Use PostgreSQL placeholder
+    ph = "%s"
 
     demande_id = None
     parent_intervention_id = None
@@ -4394,8 +4380,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             detail="Only Admin and Manager can reschedule interventions"
         )
     
-    from db_engine import USE_PG
-    ph = "%s" if USE_PG else "?"  # Placeholder for PostgreSQL or SQLite
+    ph = "%s"  # PostgreSQL placeholder
     
     new_date = body.get("date_planifiee")
     new_technicians = body.get("technicien_assigne")
