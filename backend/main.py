@@ -3885,7 +3885,7 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 @app.post("/api/planning/pdf")
 def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
     """Generate a maintenance planning PDF using FPDF with proper header.
-    Supports date range filtering."""
+    Supports date range filtering. Uses landscape orientation for better column visibility."""
     from io import BytesIO
     from fastapi.responses import Response
     from datetime import datetime
@@ -3900,7 +3900,8 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
         company_name = body.get("company_name", "SAVIA")
         company_logo = body.get("company_logo", "")
 
-        pdf = FPDF()
+        # Use landscape orientation (L) instead of portrait
+        pdf = FPDF(orientation='L')
         pdf.set_auto_page_break(auto=True, margin=10)
 
         # Page 1: Header with logo
@@ -3926,19 +3927,20 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
                         tmp.write(image_bytes)
                         tmp_path = tmp.name
                     
-                    # Add company logo to top right (x=160 aligns it to right, y=10, w=35 for width)
-                    pdf.image(tmp_path, x=160, y=10, w=35)
+                    # Add company logo to top right (adjusted for landscape page width ~277mm)
+                    # x=240 aligns it to right of landscape page, y=10, w=35 for width
+                    pdf.image(tmp_path, x=240, y=10, w=35)
                     
                     # Clean up temp file
                     os.unlink(tmp_path)
             except Exception as e:
                 logger.warning(f"Failed to add company logo: {e}")
         
-        # Right: Company info (below logo)
-        pdf.set_xy(120, 50)
+        # Right: Company info (below logo, adjusted for landscape)
+        pdf.set_xy(210, 50)
         pdf.set_font("Arial", 'B', size=12)
         pdf.cell(0, 5, company_name, ln=True, align='R')
-        pdf.set_xy(120, 55)
+        pdf.set_xy(210, 55)
         pdf.set_font("Arial", size=9)
         pdf.cell(0, 4, f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
         
@@ -3952,35 +3954,101 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
         pdf.cell(0, 3, f"Nombre d'interventions: {len(rows)}", ln=True)
         pdf.ln(5)
 
-        # Table header
+        # Table header - optimized for landscape width
+        # Landscape page width is approximately 277mm, with 10mm margins = 257mm available
         pdf.set_font("Arial", 'B', size=9)
-        col_widths = [25, 25, 25, 30, 30, 25, 25]
+        col_widths = [30, 38, 28, 38, 38, 28, 78]  # Notes: 78mm
         headers = ["Date", "Machine", "Type", "Technicien", "Client", "Statut", "Notes"]
         
         for i, header in enumerate(headers):
             pdf.cell(col_widths[i], 7, header, border=1, align='C')
         pdf.ln()
 
-        # Table data
+        # Table data with proper row alignment for multi-line notes
         pdf.set_font("Arial", size=8)
+        
         for row in rows:
-            # Use the column names that the frontend sends
+            # Extract data
             date_str = row.get("date_planifiee", "")[:10] if row.get("date_planifiee") else ""
-            machine = str(row.get("machine", ""))[:15]
-            type_maint = str(row.get("type_maintenance", ""))[:12]
-            tech = str(row.get("technicien", ""))[:15]  # Frontend sends "technicien", not "technicien_assigne"
-            client = str(row.get("client", ""))[:15]
-            statut = str(row.get("statut", ""))[:10]
-            notes = str(row.get("notes", ""))[:15]
+            machine = str(row.get("machine", ""))[:25]
+            type_maint = str(row.get("type_maintenance", ""))[:15]
+            tech = str(row.get("technicien", ""))[:20]
+            client = str(row.get("client", ""))[:20]
+            statut = str(row.get("statut", ""))[:12]
+            notes_full = str(row.get("notes", ""))
             
-            pdf.cell(col_widths[0], 6, date_str, border=1, align='C')
-            pdf.cell(col_widths[1], 6, machine, border=1)
-            pdf.cell(col_widths[2], 6, type_maint, border=1)
-            pdf.cell(col_widths[3], 6, tech, border=1)
-            pdf.cell(col_widths[4], 6, client, border=1)
-            pdf.cell(col_widths[5], 6, statut, border=1, align='C')
-            pdf.cell(col_widths[6], 6, notes, border=1)
-            pdf.ln()
+            # Calculate lines for notes
+            max_chars_per_line = 45
+            notes_lines = []
+            remaining = notes_full
+            while remaining:
+                if len(remaining) <= max_chars_per_line:
+                    notes_lines.append(remaining)
+                    break
+                else:
+                    split_pos = remaining.rfind(' ', 0, max_chars_per_line)
+                    if split_pos == -1:
+                        split_pos = max_chars_per_line
+                    notes_lines.append(remaining[:split_pos])
+                    remaining = remaining[split_pos:].lstrip()
+            
+            # Ensure at least one line
+            if not notes_lines:
+                notes_lines = [""]
+            
+            # Row height based on number of notes lines
+            line_height = 6
+            num_lines = len(notes_lines)
+            row_height = line_height * num_lines
+            
+            # Get starting X and Y
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+            
+            # Draw all columns at once with proper alignment
+            # Column 1: Date
+            pdf.set_xy(x_start, y_start)
+            pdf.cell(col_widths[0], row_height, date_str, border=1, align='C')
+            
+            # Column 2: Machine
+            pdf.set_xy(x_start + col_widths[0], y_start)
+            pdf.cell(col_widths[1], row_height, machine, border=1, align='L')
+            
+            # Column 3: Type
+            pdf.set_xy(x_start + col_widths[0] + col_widths[1], y_start)
+            pdf.cell(col_widths[2], row_height, type_maint, border=1, align='L')
+            
+            # Column 4: Technicien
+            pdf.set_xy(x_start + col_widths[0] + col_widths[1] + col_widths[2], y_start)
+            pdf.cell(col_widths[3], row_height, tech, border=1, align='L')
+            
+            # Column 5: Client
+            x_pos = x_start + col_widths[0] + col_widths[1] + col_widths[2] + col_widths[3]
+            pdf.set_xy(x_pos, y_start)
+            pdf.cell(col_widths[4], row_height, client, border=1, align='L')
+            
+            # Column 6: Statut
+            x_pos += col_widths[4]
+            pdf.set_xy(x_pos, y_start)
+            pdf.cell(col_widths[5], row_height, statut, border=1, align='C')
+            
+            # Column 7: Notes (with multi-line support)
+            x_pos += col_widths[5]
+            pdf.set_xy(x_pos, y_start)
+            
+            # Draw border for notes cell
+            pdf.rect(x_pos, y_start, col_widths[6], row_height, 'D')
+            
+            # Write each line of notes inside the cell
+            for line_num, notes_line in enumerate(notes_lines):
+                line_y = y_start + (line_num * line_height) + 1
+                pdf.set_xy(x_pos + 1, line_y)
+                pdf.set_font("Arial", size=8)
+                pdf.cell(col_widths[6] - 2, line_height - 1, notes_line, border=0, align='L')
+            
+            # Move cursor to next row
+            pdf.set_xy(x_start, y_start + row_height)
+            pdf.ln(0)
 
         # Footer
         pdf.set_y(-15)
