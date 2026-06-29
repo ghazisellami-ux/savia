@@ -2252,21 +2252,62 @@ def lire_toutes_pieces_demandees(statut=None):
 # FONCTIONS CRUD — AUDIT LOG
 # ==========================================
 
-def log_audit(username, action, details="", page=""):
-    """Enregistre une action dans le journal d'audit."""
+def log_audit(username, action, details="", page="", ip_address=""):
+    """
+    Enregistre une action dans le journal d'audit.
+    
+    Args:
+        username (str): Nom d'utilisateur effectuant l'action
+        action (str): Type d'action (LOGIN, CREATE_EQUIPEMENT, UPDATE_INTERVENTION, etc.)
+        details (str): Détails de l'action (JSON ou texte libre)
+        page (str): Page/module concerné (equipements, interventions, etc.)
+        ip_address (str): Adresse IP du client
+    """
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO audit_log (username, action, details, page)
-            VALUES (?, ?, ?, %s)
-        """, (username, action, details, page))
+            INSERT INTO audit_log (username, action, details, page, ip_address)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (username, action, details, page, ip_address))
 
 
-def lire_audit(limit=100):
-    """Lit le journal d'audit."""
+def lire_audit(limit=1000, username="", action="", date_from="", date_to=""):
+    """
+    Lit le journal d'audit avec filtrage.
+    
+    Args:
+        limit (int): Nombre maximum de logs à retourner (défaut 1000)
+        username (str): Filtrer par utilisateur (optionnel)
+        action (str): Filtrer par type d'action (optionnel)
+        date_from (str): Date de début au format YYYY-MM-DD (optionnel)
+        date_to (str): Date de fin au format YYYY-MM-DD (optionnel)
+    
+    Returns:
+        pd.DataFrame: Les logs filtrés triés par timestamp décroissant
+    """
     with get_db() as conn:
-        return read_sql(
-            "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?",
-            conn, params=(limit,))
+        query = "SELECT * FROM audit_log WHERE 1=1"
+        params = []
+        
+        if username:
+            query += " AND username = %s"
+            params.append(username)
+        
+        if action:
+            query += " AND action = %s"
+            params.append(action)
+        
+        if date_from:
+            query += " AND DATE(timestamp) >= %s"
+            params.append(date_from)
+        
+        if date_to:
+            query += " AND DATE(timestamp) <= %s"
+            params.append(date_to)
+        
+        query += " ORDER BY timestamp DESC LIMIT %s"
+        params.append(limit)
+        
+        return read_sql(query, conn, params=tuple(params))
 
 
 def log_ai_inference(model_version, prompt_hash, confidence_score, outcome):

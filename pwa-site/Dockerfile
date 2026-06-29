@@ -5,9 +5,9 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 
-# Try alternative npm registry if default fails
-RUN npm ci --include=dev --registry https://registry.npmmirror.com || \
-    npm ci --include=dev
+# Use standard npm registry - mirror is too slow
+RUN npm ci --include=dev --default-timeout=180 --retries 10 || \
+    npm ci --include=dev --default-timeout=180 --retries 10
 
 COPY . .
 
