@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
+import LogsTab from './LogsTab';
 import {
   Shield, Users, Plus, Trash2, Loader2, Save,
   X, Eye, EyeOff, Edit2, Crown, UserCog, Phone, Mail, Send,
@@ -186,7 +187,7 @@ export default function AdminPage() {
   const { user: currentUser } = useAuth();
   // Les non-admins commencent directement sur l'onglet Paramètres
   const defaultTab = currentUser?.username === 'admin' ? 'users' : 'settings';
-  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings'>(defaultTab);
+  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs'>(defaultTab as any);
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>(DEFAULT_PROFILES);
@@ -564,6 +565,7 @@ export default function AdminPage() {
           { id: 'users',    label: 'Utilisateurs',       icon: <Users className="w-4 h-4" />, adminOnly: false },
           { id: 'profiles', label: 'Profils & Permissions', icon: <Shield className="w-4 h-4" />, adminOnly: true },
           { id: 'techs',    label: 'Techniciens',         icon: <Wrench className="w-4 h-4" />, adminOnly: false },
+          { id: 'logs',     label: 'Audit Logs',          icon: <Shield className="w-4 h-4" />, adminOnly: true },
           { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" />, adminOnly: false },
         ]
           .filter(t => !t.adminOnly || currentUser?.username === 'admin')
@@ -751,6 +753,11 @@ export default function AdminPage() {
         </SectionCard>
       )}
 
+      {/* ─── TAB: LOGS ──────────────────────────────────────── */}
+      {tab === 'logs' && (
+        <LogsTab />
+      )}
+
       {/* ─── TAB: SETTINGS ───────────────────────────────────── */}
       {tab === 'settings' && (
         <div className="space-y-6">
@@ -836,7 +843,6 @@ export default function AdminPage() {
           </div>
         </div>
       )}
-
 
       {/* ═══════════════ USER MODAL ═══════════════════════════ */}
       {showUserModal && (

@@ -19,7 +19,7 @@ from typing import Optional, List, Dict, Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -143,6 +143,8 @@ app.add_middleware(
 def startup():
     init_db()
     auth.creer_admin_defaut()
+    _ensure_dejavu_font()
+    _ensure_fa_font()
     # Migration: colonnes fiche signée
     try:
         with get_db() as conn:
@@ -1098,7 +1100,9 @@ def root():
 
 
 @app.post("/api/auth/login")
-def login(body: LoginRequest):
+def login(body: LoginRequest, request: Request):
+    ip_address = request.client.host if request.client else "unknown"
+    
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
@@ -1106,9 +1110,14 @@ def login(body: LoginRequest):
         ).fetchone()
 
     if not row or not _verify_password(body.password, row["password_hash"]):
+        log_audit(body.username, "LOGIN_FAILED", f"Identifiants incorrects", "auth", ip_address)
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
     user_data = dict(row)
+    
+    # Log successful login
+    log_audit(body.username, "LOGIN", "Connexion réussie", "auth", ip_address)
+    
     payload = {
         "sub": user_data["username"],
         "role": user_data["role"],
@@ -1594,18 +1603,47 @@ def create_equipement(body: dict, user: dict = Depends(_verify_token)):
             (nom, client)
         ).fetchone()
     equip_id = dict(row)["id"] if row else None
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({"equipement": nom, "client": client, "id": equip_id}, ensure_ascii=False)
+    log_audit(username, "CREATE_EQUIPEMENT", details, "equipements")
+    
     return {"ok": True, "id": equip_id}
 
 
 @app.put("/api/equipements/{equip_id}")
 def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_token)):
     modifier_equipement(equip_id, body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({"equipement_id": equip_id, "changes": body}, ensure_ascii=False)
+    log_audit(username, "UPDATE_EQUIPEMENT", details, "equipements")
+    
     return {"ok": True}
 
 
 @app.delete("/api/equipements/{equip_id}")
 def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
+    # Get equipment name before deleting for logging
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT nom, client FROM equipements WHERE id = ?", (equip_id,)).fetchone()
+            equip_name = dict(row)["nom"] if row else "Unknown"
+    except:
+        equip_name = "Unknown"
+    
     supprimer_equipement(equip_id)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({"equipement_id": equip_id, "equipement": equip_name}, ensure_ascii=False)
+    log_audit(username, "DELETE_EQUIPEMENT", details, "equipements")
+    
     return {"ok": True}
 
 
@@ -1906,6 +1944,18 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
         body["technicien"] = _get_technician_fullname(technicien_username)
     
     ajouter_intervention(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "machine": body.get("machine", ""),
+        "type": body.get("type_intervention", ""),
+        "technicien": body.get("technicien", ""),
+        "priorite": body.get("priorite", ""),
+    }, ensure_ascii=False)
+    log_audit(username, "CREATE_INTERVENTION", details, "interventions")
+    
     # Notification Telegram au bot technique
     try:
         machine = body.get("machine", "N/A")
@@ -2349,16 +2399,30 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
     
     try:
         with get_db() as conn:
-            # Vérifier que l'intervention existe
+            # Vérifier que l'intervention existe et récupérer ses infos
             row = conn.execute(
-                "SELECT id FROM interventions WHERE id = ?",
+                "SELECT id, machine, type_intervention FROM interventions WHERE id = ?",
                 (intervention_id,)
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Intervention non trouvée")
             
+            row_dict = dict(row)
+            machine = row_dict.get("machine", "Unknown")
+            type_intervention = row_dict.get("type_intervention", "Unknown")
+            
             # Supprimer l'intervention
             conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
+            
+            # Log audit
+            username = user.get("sub", "unknown")
+            import json
+            details = json.dumps({
+                "intervention_id": intervention_id,
+                "machine": machine,
+                "type": type_intervention,
+            }, ensure_ascii=False)
+            log_audit(username, "DELETE_INTERVENTION", details, "interventions")
             
         return {"ok": True, "message": f"Intervention #{intervention_id} supprimée"}
     except HTTPException:
@@ -3602,6 +3666,16 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
 @app.post("/api/pieces")
 def create_piece(body: dict, user: dict = Depends(_verify_token)):
     ajouter_piece(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "reference": body.get("reference", ""),
+        "designation": body.get("designation", ""),
+        "stock_initial": body.get("stock_actuel", 0),
+    }, ensure_ascii=False)
+    log_audit(username, "CREATE_PIECE", details, "pieces")
 
     # Vérifier si cette pièce était demandée par un technicien (non référencée)
     reference = body.get("reference", "")
@@ -3636,6 +3710,16 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
         nom_piece = ""
 
     modifier_piece(piece_id, body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "piece_id": piece_id,
+        "reference": reference,
+        "changes": body,
+    }, ensure_ascii=False)
+    log_audit(username, "UPDATE_PIECE", details, "pieces")
 
     # Détecter réapprovisionnement : stock passe de 0 (ou négatif) → positif
     if nouveau_stock is not None and stock_avant is not None:
@@ -3724,7 +3808,29 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
 
 @app.delete("/api/pieces/{piece_id}")
 def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
+    # Get piece info before deleting
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT reference, designation FROM pieces_rechange WHERE id = ?",
+                (piece_id,)
+            ).fetchone()
+            piece_info = dict(row) if row else {"reference": "Unknown", "designation": "Unknown"}
+    except:
+        piece_info = {"reference": "Unknown", "designation": "Unknown"}
+    
     supprimer_piece(piece_id)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "piece_id": piece_id,
+        "reference": piece_info.get("reference", ""),
+        "designation": piece_info.get("designation", ""),
+    }, ensure_ascii=False)
+    log_audit(username, "DELETE_PIECE", details, "pieces")
+    
     return {"ok": True}
 
 
@@ -3756,6 +3862,18 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
 @app.post("/api/contrats")
 def create_contrat(body: dict, user: dict = Depends(_verify_token)):
     contrat_id = ajouter_contrat(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "client": body.get("client", ""),
+        "equipements": body.get("equipements", []),
+        "recurrence": body.get("recurrence_maintenance", ""),
+        "contrat_id": contrat_id,
+    }, ensure_ascii=False)
+    log_audit(username, "CREATE_CONTRAT", details, "contrats")
+    
     nb_plannings = 0
     if contrat_id:
         try:
@@ -3804,12 +3922,43 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
 @app.put("/api/contrats/{contrat_id}")
 def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_token)):
     modifier_contrat(contrat_id, body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "contrat_id": contrat_id,
+        "changes": body,
+    }, ensure_ascii=False)
+    log_audit(username, "UPDATE_CONTRAT", details, "contrats")
+    
     return {"ok": True}
 
 
 @app.delete("/api/contrats/{contrat_id}")
 def delete_contrat(contrat_id: int, user: dict = Depends(_verify_token)):
+    # Get contrat info before deleting
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT client FROM contrats WHERE id = ?",
+                (contrat_id,)
+            ).fetchone()
+            client = dict(row)["client"] if row else "Unknown"
+    except:
+        client = "Unknown"
+    
     supprimer_contrat(contrat_id)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "contrat_id": contrat_id,
+        "client": client,
+    }, ensure_ascii=False)
+    log_audit(username, "DELETE_CONTRAT", details, "contrats")
+    
     return {"ok": True}
 
 
@@ -4578,7 +4727,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             
             # Log audit
             log_audit(
-                user.get("username", "unknown"),
+                user.get("sub", "unknown"),
                 "RESCHEDULE_PLANNING",
                 f"Planning {planning_id}: {update_data}"
             )
@@ -5866,6 +6015,186 @@ def delete_user(user_id: int, user: dict = Depends(_verify_token)):
 @app.get("/api/audit")
 def get_audit_log(limit: int = 100, user: dict = Depends(_verify_token)):
     return _df_to_records(lire_audit(limit=limit))
+
+
+@app.get("/api/admin/audit-logs")
+def get_admin_audit_logs(
+    limit: int = Query(1000, ge=1, le=5000),
+    username: str = Query(""),
+    action: str = Query(""),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+    user: dict = Depends(_verify_token),
+):
+    """
+    GET /api/admin/audit-logs - Retourne les logs filtrés (ADMIN ONLY)
+    
+    Query Parameters:
+      - limit: Nombre max de logs (1-5000, défaut 1000)
+      - username: Filtrer par utilisateur (optionnel)
+      - action: Filtrer par type d'action (optionnel)
+      - date_from: Date début YYYY-MM-DD (optionnel)
+      - date_to: Date fin YYYY-MM-DD (optionnel)
+    
+    Returns: Array of audit log entries
+    """
+    # Vérifier que l'utilisateur est ADMIN
+    if user.get("role") != "Admin":
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
+    
+    try:
+        df = lire_audit(
+            limit=limit,
+            username=username if username else "",
+            action=action if action else "",
+            date_from=date_from if date_from else "",
+            date_to=date_to if date_to else ""
+        )
+        return _df_to_records(df)
+    except Exception as e:
+        logger.error(f"Error fetching audit logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AuditExportRequest(BaseModel):
+    limit: int = 1000
+    username: str = ""
+    action: str = ""
+    date_from: str = ""
+    date_to: str = ""
+
+
+@app.post("/api/admin/audit-logs/export-pdf")
+def export_audit_logs_pdf(
+    req: AuditExportRequest,
+    user: dict = Depends(_verify_token),
+):
+    """
+    POST /api/admin/audit-logs/export-pdf - Exporte les logs en PDF (ADMIN ONLY)
+    
+    Body parameters:
+      - limit: Nombre max de logs
+      - username: Filtrer par utilisateur
+      - action: Filtrer par type d'action
+      - date_from: Date début YYYY-MM-DD
+      - date_to: Date fin YYYY-MM-DD
+    
+    Returns: PDF file
+    """
+    # Vérifier que l'utilisateur est ADMIN
+    if user.get("role") != "Admin":
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
+    
+    try:
+        # Récupérer les logs avec les filtres
+        df = lire_audit(
+            limit=req.limit,
+            username=req.username,
+            action=req.action,
+            date_from=req.date_from,
+            date_to=req.date_to
+        )
+        
+        if df.empty:
+            raise HTTPException(status_code=400, detail="Aucun log à exporter")
+        
+        # Créer le PDF en format PAYSAGE
+        pdf = FPDF(orientation='L')  # L = Landscape
+        pdf.add_page()
+        
+        # Charger la police DejaVu
+        _DJVU = '/app/DejaVuSans.ttf'
+        if os.path.exists(_DJVU):
+            try:
+                pdf.add_font('DejaVu', fname=_DJVU)
+            except Exception as e:
+                logger.warning(f"Could not load DejaVu font: {e}, falling back to Helvetica")
+                _DJVU = None
+        else:
+            _DJVU = None
+        
+        # Utiliser Helvetica comme fallback si DejaVu n'est pas disponible
+        font_name = 'DejaVu' if _DJVU else 'Helvetica'
+        pdf.set_font(font_name, size=10)
+        
+        # En-tête
+        pdf.set_font(font_name, "B", size=14)
+        pdf.cell(0, 10, "Journal d'Audit SAVIA", ln=True, align="C")
+        
+        pdf.set_font(font_name, size=9)
+        pdf.cell(0, 5, f"Généré le: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True, align="R")
+        pdf.cell(0, 5, f"Par: {user.get('nom', user.get('username', 'N/A'))}", ln=True, align="R")
+        
+        # Filtres appliqués
+        filters_text = []
+        if req.username:
+            filters_text.append(f"Utilisateur: {req.username}")
+        if req.action:
+            filters_text.append(f"Action: {req.action}")
+        if req.date_from or req.date_to:
+            date_range = f"Période: {req.date_from or '...'} à {req.date_to or '...'}"
+            filters_text.append(date_range)
+        
+        if filters_text:
+            pdf.set_font(font_name, "I", size=8)
+            pdf.cell(0, 4, "Filtres appliqués: " + " | ".join(filters_text), ln=True)
+        
+        pdf.ln(3)
+        
+        # Tableau des logs - colonnes plus larges pour le paysage
+        pdf.set_font(font_name, "B", size=9)
+        # Largeurs pour format paysage avec Action et Détails +40%
+        col_widths = [30, 30, 49, 98, 25, 20]  # Total ~252mm (ajusté)
+        headers = ["Date/Heure", "Utilisateur", "Action", "Détails", "Page", "IP"]
+        
+        # En-têtes du tableau avec couleur de fond
+        pdf.set_fill_color(1, 180, 188)  # Couleur SAVIA (cyan)
+        pdf.set_text_color(255, 255, 255)  # Texte blanc
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 8, header, border=1, align="C", fill=True)
+        pdf.ln()
+        
+        # Contenu du tableau
+        pdf.set_font(font_name, size=8)
+        pdf.set_text_color(0, 0, 0)  # Texte noir pour le contenu
+        for _, row in df.iterrows():
+            timestamp = str(row.get("timestamp", ""))[:16]  # Format: YYYY-MM-DD HH:MM
+            username_val = str(row.get("username", ""))[:25]
+            action_val = str(row.get("action", ""))[:25]
+            details_val = str(row.get("details", ""))[:50]
+            page_val = str(row.get("page", ""))[:20]
+            ip_val = str(row.get("ip_address", ""))[:15]
+            
+            # Écrire les cellules avec hauteur augmentée pour multi-ligne
+            pdf.cell(col_widths[0], 7, timestamp, border=1)
+            pdf.cell(col_widths[1], 7, username_val, border=1)
+            pdf.cell(col_widths[2], 7, action_val, border=1)
+            pdf.cell(col_widths[3], 7, details_val, border=1)
+            pdf.cell(col_widths[4], 7, page_val, border=1)
+            pdf.cell(col_widths[5], 7, ip_val, border=1)
+            pdf.ln()
+        
+        # Retourner le PDF
+        pdf_bytes = pdf.output(dest='S')
+        # pdf.output() retourne bytes ou bytearray selon la version de fpdf
+        if isinstance(pdf_bytes, (str, bytearray)):
+            if isinstance(pdf_bytes, str):
+                pdf_bytes = pdf_bytes.encode('latin-1')
+            else:
+                pdf_bytes = bytes(pdf_bytes)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=audit-logs-{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"}
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting audit logs to PDF: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==========================================
