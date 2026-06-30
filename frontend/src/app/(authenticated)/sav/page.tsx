@@ -59,6 +59,7 @@ export default function SavPage() {
   const { user } = useAuth();
   console.log('[SAV] Component rendering, user role:', user?.role);
   const isTechnicien = user?.role === 'Technicien';
+  const isClient = user?.role === 'Lecteur'; // Client profile
   const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
 
   const [activeTab, setActiveTab] = useState(0);
@@ -253,6 +254,13 @@ export default function SavPage() {
   }, []);
 
   useEffect(() => { loadData(0, false); }, [loadData]);
+
+  // Force tab 0 for clients (Lecteur role)
+  useEffect(() => {
+    if (isClient && activeTab !== 0) {
+      setActiveTab(0);
+    }
+  }, [isClient, activeTab]);
 
   // Infinite scroll: load more when user scrolls near bottom
   useEffect(() => {
@@ -602,6 +610,9 @@ export default function SavPage() {
   // ===== FILTERING with period mode (mensuel/annuel) + client + equipment + status =====
   const filtered = useMemo(() => {
     return data.filter(i => {
+      // Client filter: Lecteur can only see their own interventions
+      if (isClient && user?.client && i.client !== user.client) return false;
+      
       // Period filter
       const d = new Date(i.date);
       if (!isNaN(d.getTime())) {
@@ -615,7 +626,7 @@ export default function SavPage() {
       if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
-  }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data]);
+  }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data, isClient, user?.client]);
 
   // ===== KPI CALCULATIONS =====
   // Use filtered.length for TOTAL count (respects all filters: period, status, type, client, equipment)
@@ -833,8 +844,8 @@ export default function SavPage() {
           { label: 'En cours', value: enCours, icon: <Clock className="w-5 h-5" />, color: 'text-yellow-400' },
           { label: 'Taux résol.', value: `${tauxResolution}%`, icon: <Target className="w-5 h-5" />, color: 'text-blue-400' },
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
-          { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
-        ].map(k => (
+          !isClient && { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
+        ].filter(Boolean).map(k => (
           <div key={k.label} className="glass rounded-xl p-3 text-center">
             <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
             <div className={`text-2xl font-black ${k.color}`}>{k.value}</div>
@@ -845,17 +856,21 @@ export default function SavPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 glass rounded-xl p-1 overflow-x-auto">
-        {tabs.map((tab, i) => (
-          <button key={i} onClick={() => setActiveTab(i)}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === i
-                ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md'
-                : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'
-            }`}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
+        {tabs.map((tab, i) => {
+          // Clients (Lecteur) can only see Tab 0 (Interventions)
+          if (isClient && i !== 0) return null;
+          return (
+            <button key={i} onClick={() => setActiveTab(i)}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === i
+                  ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md'
+                  : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'
+              }`}
+            >
+              {tab.icon} {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* ===== TAB 0: INTERVENTIONS TABLE ===== */}

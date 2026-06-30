@@ -1087,11 +1087,21 @@ def _verify_password(password: str, hashed: str) -> bool:
 
 def _check_create_permission(user: dict) -> bool:
     """
-    Vérifier si l'utilisateur a le droit de créer des clients, équipements, ou demandes.
+    Vérifier si l'utilisateur a le droit de créer des clients, équipements, ou demandes (sauf Lecteur).
     Autorisé pour: Admin, Manager, Responsable Technique
     """
     role = user.get("role", "")
     allowed_roles = ["Admin", "Manager", "Responsable Technique"]
+    return role in allowed_roles
+
+
+def _check_create_demande_permission(user: dict) -> bool:
+    """
+    Vérifier si l'utilisateur a le droit de créer une demande d'intervention.
+    Autorisé pour: Admin, Manager, Responsable Technique, Lecteur (clients)
+    """
+    role = user.get("role", "")
+    allowed_roles = ["Admin", "Manager", "Responsable Technique", "Lecteur"]
     return role in allowed_roles
 
 
@@ -2662,11 +2672,11 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     Crée une demande d'intervention avec support multi-techniciens.
     Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
     """
-    # Check permission
-    if not _check_create_permission(user):
+    # Check permission - Lecteurs (clients) peuvent créer des demandes
+    if not _check_create_demande_permission(user):
         raise HTTPException(
             status_code=403,
-            detail="Cette action est réservée aux Responsables, Managers et Admins"
+            detail="Vous n'avez pas le droit de créer une demande d'intervention"
         )
     
     from db_engine import get_db

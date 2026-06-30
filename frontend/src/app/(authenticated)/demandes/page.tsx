@@ -77,7 +77,7 @@ const formatDateTime = (dateStr: string): string => {
 export default function DemandesPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role);
+  const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique', 'Lecteur'].includes(user.role);
   const canAssignTech = user?.role === 'Manager' || user?.role === 'Responsable Technique' || user?.role === 'Admin';
   const clientNom = user?.client || '';
   const demandeurNom = user?.nom || '';
@@ -205,7 +205,8 @@ export default function DemandesPage() {
   };
 
   const openUpdate = (d: Demande) => {
-    if (!canCreate) return;
+    // Only Admin, Manager, Responsable Technique can update status (not Lecteur/clients)
+    if (!user?.role || !['Admin', 'Manager', 'Responsable Technique'].includes(user.role)) return;
     setSelectedDemande(d);
     setUpdateForm({ statut: d.statut, technicien_assigne: d.technicien_assigne, notes_traitement: d.notes_traitement });
     setShowUpdateModal(true);
@@ -330,7 +331,7 @@ export default function DemandesPage() {
                   {STATUT_ICONS[d.statut]}{d.statut}
                 </span>
               </div>
-              {canCreate && (
+              {user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role) && (
                 <button onClick={() => openUpdate(d)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-savia-accent/10 text-savia-accent hover:bg-savia-accent/20 transition-colors text-xs font-semibold cursor-pointer">
                   <Edit className="w-3.5 h-3.5" /> Mettre à jour
@@ -389,13 +390,14 @@ export default function DemandesPage() {
               </div>
 
               {/* Demandeur */}
-              {!isLecteur && (
+              {canCreate && (
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <User className="w-3.5 h-3.5" /> Demandeur * (Pré-rempli avec votre nom)
                   </label>
                   <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
-                    onChange={e => setForm({...form, demandeur: e.target.value})} />
+                    onChange={e => setForm({...form, demandeur: e.target.value})} 
+                    disabled={isLecteur} />
                 </div>
               )}
 
@@ -518,7 +520,7 @@ export default function DemandesPage() {
       )}
 
       {/* ========== MODAL: Mise à jour statut ========== */}
-      {canCreate && showUpdateModal && selectedDemande && (
+      {user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role) && showUpdateModal && selectedDemande && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-savia-surface border border-savia-border rounded-2xl w-full max-w-lg shadow-2xl">
             <div className="flex items-center justify-between p-5 border-b border-savia-border">
