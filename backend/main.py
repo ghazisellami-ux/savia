@@ -1085,6 +1085,26 @@ def _verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def _check_create_permission(user: dict) -> bool:
+    """
+    Vérifier si l'utilisateur a le droit de créer des clients, équipements, ou demandes.
+    Autorisé pour: Admin, Manager, Responsable Technique
+    """
+    role = user.get("role", "")
+    allowed_roles = ["Admin", "Manager", "Responsable Technique"]
+    return role in allowed_roles
+
+
+def _check_create_piece_permission(user: dict) -> bool:
+    """
+    Vérifier si l'utilisateur a le droit de créer des pièces de rechange.
+    Autorisé pour: Admin, Manager, Responsable Technique, Gestionnaire de stock, Gestionnaire
+    """
+    role = user.get("role", "")
+    allowed_roles = ["Admin", "Manager", "Responsable Technique", "Gestionnaire de stock", "Gestionnaire"]
+    return role in allowed_roles
+
+
 # ==========================================
 # AUTH
 # ==========================================
@@ -1593,6 +1613,13 @@ def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_t
 
 @app.post("/api/equipements")
 def create_equipement(body: dict, user: dict = Depends(_verify_token)):
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     ajouter_equipement(body)
     # Return the ID of the created/upserted equipment
     nom = body.get("Nom", "")
@@ -1938,6 +1965,13 @@ def get_child_interventions_endpoint(
 
 @app.post("/api/interventions")
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     # Convert technicien username to full name (nom + prenom)
     technicien_username = body.get("technicien", "")
     if technicien_username:
@@ -2628,6 +2662,13 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     Crée une demande d'intervention avec support multi-techniciens.
     Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
     """
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     from db_engine import get_db
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2761,6 +2802,10 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     )
     _send_telegram(msg)
     
+    # Log audit
+    username = user.get("sub", "unknown")
+    log_audit(username, "CREATE_DEMANDE", f"{{\"client\": \"{client}\", \"demande_id\": {demande_id}}}", "demandes")
+    
     logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Intervention PARTAGÉE #{intervention_id}")
     
     return {"success": True, "demande_id": demande_id, "intervention_id": intervention_id}
@@ -2768,6 +2813,13 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/demandes/{demande_id}/statut")
 def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_verify_token)):
+    # Check permission - only Admin, Manager, Responsable Technique can update status
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Seuls les Managers, Responsables et Admins peuvent mettre à jour le statut des demandes"
+        )
+    
     from db_engine import get_db
     nouveau_statut      = body.get("statut") or "En cours"
     technicien_assigne  = body.get("technicien_assigne") or ""
@@ -3665,6 +3717,13 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
 
 @app.post("/api/pieces")
 def create_piece(body: dict, user: dict = Depends(_verify_token)):
+    # Check permission
+    if not _check_create_piece_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins"
+        )
+    
     ajouter_piece(body)
     
     # Log audit
@@ -4020,7 +4079,25 @@ def get_planning(
 
 @app.post("/api/planning")
 def create_planning(body: dict, user: dict = Depends(_verify_token)):
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     ajouter_planning(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "machine": body.get("machine", ""),
+        "type": body.get("type", ""),
+        "date": body.get("date", ""),
+    }, ensure_ascii=False)
+    log_audit(username, "CREATE_PLANNING", details, "planning")
+    
     return {"ok": True}
 
 
@@ -6762,13 +6839,34 @@ def get_clients_by_region(region: Optional[str] = None, user: dict = Depends(_ve
 @app.post("/api/clients")
 def create_client(body: dict, user: dict = Depends(_verify_token)):
     """Create a new client."""
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     ajouter_client(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({"client": body.get("nom", "")}, ensure_ascii=False)
+    log_audit(username, "CREATE_CLIENT", details, "clients")
+    
     return {"ok": True}
 
 
 @app.post("/api/clients/import-excel")
 async def import_clients_excel(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import clients from an Excel or CSV file with auto-detection of columns."""
+    # Check permission
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins"
+        )
+    
     import io
     try:
         content = await file.read()
@@ -6855,6 +6953,10 @@ async def import_clients_excel(file: UploadFile = File(...), user: dict = Depend
             except Exception as e:
                 logger.warning(f"Import client skip '{nom}': {e}")
                 skipped += 1
+
+        # Log audit
+        username = user.get("sub", "unknown")
+        log_audit(username, "IMPORT_CLIENTS", f"{{\"imported\": {imported}, \"skipped\": {skipped}}}", "clients")
 
         return {
             "ok": True,

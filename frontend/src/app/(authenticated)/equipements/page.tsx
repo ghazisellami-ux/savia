@@ -168,6 +168,7 @@ function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; 
 export default function EquipementsPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
+  const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role);
   const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>(isLecteur ? 'equipements' : 'clients');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
@@ -767,7 +768,7 @@ export default function EquipementsPage() {
       {activeTab === 'equipements' && (
         <>
           {/* Add/Edit Form */}
-          {!isLecteur && (
+          {canCreate && (
             <div ref={formRef} className="glass rounded-xl overflow-hidden">
               <button
                 onClick={() => { if (showAddForm) cancelForm(); else { setEditingEquip(null); setForm(emptyForm); setShowAddForm(true); } }}
@@ -1410,7 +1411,7 @@ export default function EquipementsPage() {
       {activeTab === 'clients' && (
         <>
           {/* Excel Import */}
-          {!isLecteur && (
+          {canCreate && (
             <div className="flex items-center gap-3 flex-wrap">
               <input type="file" ref={excelFileRef} accept=".xlsx,.xls,.csv" className="hidden" onChange={handleExcelImport} />
               <button onClick={() => excelFileRef.current?.click()} disabled={importingExcel}
@@ -1430,7 +1431,7 @@ export default function EquipementsPage() {
           )}
 
           {/* Add/Edit Client Form */}
-          {!isLecteur && (
+          {canCreate && (
             <div className="glass rounded-xl overflow-hidden">
               <button
                 onClick={() => { 

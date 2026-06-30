@@ -117,6 +117,7 @@ const emptyForm = {
 export default function PlanningPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
+  const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role);
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
@@ -481,9 +482,9 @@ export default function PlanningPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Planification et suivi des maintenances préventives</p>
         </div>
-        {!isLecteur && (
+        {canCreate && (
         <button onClick={() => { setForm({...emptyForm, date_planifiee: todayStr}); setError(''); setShowAddModal(true); }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> Planifier une maintenance
         </button>
         )}
@@ -544,11 +545,11 @@ export default function PlanningPage() {
                   if (!cell.inMonth) return;
                   const evs = eventsForDate(cell.date);
                   if (evs.length > 0) {
-                    // Ouvrir la popup détails
+                    // Ouvrir la popup détails (tous les rôles peuvent consulter)
                     setDayDetailDate(cell.date);
                     setDayDetailEvents(evs);
-                  } else {
-                    // Ouvrir la modale ajout
+                  } else if (canCreate) {
+                    // Ouvrir la modale ajout (seulement pour create roles)
                     setSelectedDay(cell.day);
                     setForm({...emptyForm, date_planifiee: cell.date});
                     setError('');
@@ -1022,6 +1023,7 @@ export default function PlanningPage() {
                 Maintenances — {dayDetailDate}
               </h2>
               <div className="flex items-center gap-2">
+                {canCreate && (
                 <button
                   onClick={() => {
                     const day = Number(dayDetailDate!.split('-')[2]);
@@ -1035,6 +1037,7 @@ export default function PlanningPage() {
                 >
                   <Plus className="w-3.5 h-3.5" /> Ajouter
                 </button>
+                )}
                 <button onClick={() => setDayDetailDate(null)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
                   <X className="w-5 h-5" />
                 </button>
