@@ -175,6 +175,7 @@ export const pieces = {
   create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/pieces', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
+  prediction: (id: number) => request<Record<string, unknown>>(`/api/pieces/${id}/prediction`, { method: 'POST' }),
 };
 
 export const piecesDemandees = {

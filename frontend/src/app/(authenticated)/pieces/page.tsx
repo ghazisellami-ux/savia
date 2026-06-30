@@ -258,16 +258,49 @@ export default function PiecesPage() {
     catch (err) { console.error("Delete failed", err); }
   };
 
-  // Helper: calculate predicted purchase date client-side
-  const predictedDate = (p: Piece): string => {
-    const today = new Date();
-    const add = (n: number) => new Date(today.getTime() + n * 86400000).toLocaleDateString('fr-FR');
-    if (p.stock_actuel === 0) return add(0);                        // Rupture → aujourd'hui
-    if (p.stock_actuel <= p.stock_minimum) return add(3);           // Stock bas → +3 jours
-    const marge = p.stock_actuel - p.stock_minimum;
-    if (marge <= 2) return add(14);                                 // Faible marge → +14 jours
-    if (marge <= 5) return add(30);                                 // Bonne marge → +30 jours
-    return add(60);                                                 // OK → +60 jours
+  // Fetch predictions from API for each piece
+  const [predictions, setPredictions] = useState<Record<number, any>>({});
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  
+  const loadPredictions = useCallback(async () => {
+    if (data.length === 0) return;
+    setPredictionsLoading(true);
+    try {
+      const preds: Record<number, any> = {};
+      await Promise.all(data.map(async (p) => {
+        try {
+          const res = await pieces.prediction(p.id);
+          preds[p.id] = res;
+        } catch (err) {
+          console.error(`Erreur prediction piece ${p.id}:`, err);
+          preds[p.id] = { error: true, date_commande: null };
+        }
+      }));
+      setPredictions(preds);
+    } catch (err) {
+      console.error("Erreur loading predictions:", err);
+    } finally {
+      setPredictionsLoading(false);
+    }
+  }, [data]);
+
+  useEffect(() => {
+    // Load predictions when switching to Tab 3
+    if (activeTab === 3 && Object.keys(predictions).length === 0) {
+      loadPredictions();
+    }
+  }, [activeTab, predictions, loadPredictions]);
+
+  // Helper: display prediction date or insufficient data message
+  const getPredictionDisplay = (p: Piece): JSX.Element => {
+    const pred = predictions[p.id];
+    if (!pred) {
+      return <span className="text-savia-text-muted text-xs">Chargement...</span>;
+    }
+    if (pred.error || !pred.date_commande) {
+      return <span className="text-orange-400 text-xs font-semibold">⚠️ Données insuffisantes</span>;
+    }
+    return <span className="text-xs font-semibold">{pred.date_commande}</span>;
   };
 
   const handleAiAnalyze = async () => {
@@ -724,7 +757,7 @@ export default function PiecesPage() {
                                 isRupture ? 'text-red-400' : isBas ? 'text-yellow-400' : 'text-green-400/80'
                               }`}>
                                 <Calendar className="w-3 h-3" />
-                                {predictedDate(p)}
+                                {getPredictionDisplay(p)}
                               </span>
                             </td>
                             <td className="py-2.5 px-3">
