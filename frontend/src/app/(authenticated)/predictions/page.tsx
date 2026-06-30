@@ -188,7 +188,9 @@ export default function PredictionsPage() {
           `${interventionStats.total} interventions (${interventionStats.correctives} correctives, ${interventionStats.preventives} préventives, ${interventionStats.calibration} calibrations). ` +
           "Objectif: générer un diagnostic complet et un plan de maintenance préventive.",
       };
-      const res = await aiApi.analyzePerformance(kpis, 'TND');
+      // Get currency from localStorage (set in admin settings)
+      const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
+      const res = await aiApi.analyzePerformance(kpis, devise);
       if (res?.ok && res.result) {
         setAiAnalysis(res.result);
       } else {

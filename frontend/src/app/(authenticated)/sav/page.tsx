@@ -492,7 +492,9 @@ export default function SavPage() {
         tech_details, machines_detail, clients_detail, interventions_detail,
       };
 
-      const res = await ai.analyzeSav(sav_data, 'TND');
+      // Get currency from localStorage (set in admin settings)
+      const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
+      const res = await ai.analyzeSav(sav_data, devise);
       if (res.ok && res.result) {
         setAiResult(typeof res.result === 'string' ? JSON.parse(res.result) : res.result);
       } else {

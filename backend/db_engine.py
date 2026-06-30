@@ -4976,3 +4976,128 @@ def predict_pieces_a_commander(nb_to_return: int = 10) -> list:
     except Exception as e:
         logger.error(f"Erreur predict_pieces_a_commander: {e}")
         return []
+
+
+# ==========================================
+# IA CONTEXT BUILDER: Assemble data for AI analysis
+# ==========================================
+
+def get_ai_pieces_context(domaine: str = "", equipment_type: str = ""):
+    """
+    Assemble comprehensive context for AI analysis of spare parts.
+    Includes historical usage, predictions, and equipment metadata.
+    
+    Args:
+        domaine: Equipment domain/facility type (e.g., "Radiologie", "Soins Intensifs")
+        equipment_type: Specific equipment type (e.g., "Scanner CT", "IRM")
+    
+    Returns:
+        dict with complete context for AI prompt
+    """
+    try:
+        with get_db() as conn:
+            # Fetch all pieces with predictions
+            pieces_df = read_sql("""
+                SELECT 
+                    id, reference, designation, equipement_type, domaine,
+                    stock_actuel, stock_minimum, prix_unitaire, fournisseur,
+                    consommation_moyenne_mois, delai_fournisseur_jours,
+                    criticite, nombre_equipements_relies, utilisation_recente_30j,
+                    data_confidence
+                FROM pieces_rechange
+                ORDER BY reference
+            """, conn)
+            
+            if pieces_df.empty:
+                return {'pieces': [], 'interventions_history': []}
+            
+            pieces_list = []
+            for _, row in pieces_df.iterrows():
+                piece_id = int(row['id'])
+                
+                # Get intervention history for this piece (last 90 days)
+                history_df = read_sql("""
+                    SELECT 
+                        date, machine, client, technicien, statut,
+                        pieces_utilisees
+                    FROM interventions
+                    WHERE pieces_utilisees LIKE %s
+                        AND date >= NOW() - INTERVAL '90 days'
+                    ORDER BY date DESC
+                    LIMIT 20
+                """, conn, params=(f'%{row["reference"]}%',))
+                
+                history = []
+                for _, h in history_df.iterrows():
+                    history.append({
+                        'date': str(h['date']),
+                        'equipment': h['machine'],
+                        'facility': h['client'],
+                        'technician': h['technicien'],
+                        'status': h['statut']
+                    })
+                
+                # Calculate when rupture will occur
+                consumption = float(row['consommation_moyenne_mois'] or 0)
+                stock = int(row['stock_actuel'] or 0)
+                mini = int(row['stock_minimum'] or 1)
+                
+                if consumption > 0:
+                    days_until_rupture = ((stock - mini) / consumption) * 30 if stock > mini else 0
+                else:
+                    days_until_rupture = None
+                
+                piece = {
+                    'id': piece_id,
+                    'reference': row['reference'],
+                    'designation': row['designation'],
+                    'equipment_type': row['equipement_type'],
+                    'domain': row['domaine'],
+                    'current_stock': stock,
+                    'minimum_stock': mini,
+                    'unit_price': float(row['prix_unitaire'] or 0),
+                    'supplier': row['fournisseur'],
+                    'supplier_lead_time_days': int(row['delai_fournisseur_jours'] or 14),
+                    'criticality': row['criticite'],
+                    'monthly_consumption': round(float(row['consommation_moyenne_mois'] or 0), 2),
+                    'dependent_equipment_count': int(row['nombre_equipements_relies'] or 1),
+                    'recent_usage_30d': int(row['utilisation_recente_30j'] or 0),
+                    'data_confidence': row['data_confidence'],
+                    'days_until_rupture': round(days_until_rupture, 1) if days_until_rupture is not None else None,
+                    'recent_usage_history': history
+                }
+                
+                # Calculate urgency
+                if stock == 0:
+                    piece['urgency'] = 'CRITICAL - OUT_OF_STOCK'
+                elif stock <= mini:
+                    piece['urgency'] = 'CRITICAL - LOW_STOCK'
+                elif days_until_rupture is not None and days_until_rupture <= 7:
+                    piece['urgency'] = 'HIGH - RUPTURE_IN_7_DAYS'
+                elif days_until_rupture is not None and days_until_rupture <= 14:
+                    piece['urgency'] = 'NORMAL - RUPTURE_IN_14_DAYS'
+                else:
+                    piece['urgency'] = 'LOW - ADEQUATE_STOCK'
+                
+                pieces_list.append(piece)
+            
+            # Global statistics
+            total_stock_value = sum(p['current_stock'] * p['unit_price'] for p in pieces_list)
+            critical_count = sum(1 for p in pieces_list if 'CRITICAL' in p['urgency'])
+            high_count = sum(1 for p in pieces_list if p['urgency'].startswith('HIGH'))
+            
+            return {
+                'pieces': pieces_list,
+                'statistics': {
+                    'total_pieces': len(pieces_list),
+                    'critical_urgency_count': critical_count,
+                    'high_urgency_count': high_count,
+                    'total_stock_value': round(total_stock_value, 2),
+                    'requested_domain': domaine,
+                    'requested_equipment_type': equipment_type
+                }
+            }
+    
+    except Exception as e:
+        logger.error(f"Erreur get_ai_pieces_context: {e}")
+        return {'pieces': [], 'statistics': {}, 'error': str(e)}
