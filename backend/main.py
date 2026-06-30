@@ -46,6 +46,8 @@ from db_engine import (
     lire_types_equipement_custom, ajouter_type_equipement_custom,
     lire_types_intervention_custom, ajouter_type_intervention_custom,
     lire_notification_schedules, sauvegarder_notification_schedules_batch,
+    predict_commande_date, predict_pieces_a_commander,
+    update_piece_parameters_batch, calculate_piece_parameters,
 )
 
 logger = logging.getLogger("savia-api")
@@ -898,6 +900,17 @@ def _start_garantie_daemon():
                         check_stock_alerts()
                     except Exception as e:
                         logger.error(f"Stock alerts daemon error: {e}")
+                    
+                    # Update piece parameters (consommation, equipements, utilisation) from historical data
+                    try:
+                        result = update_piece_parameters_batch()
+                        if result.get('success'):
+                            logger.info(f"Piece parameters updated: {result['updated']} pieces, {result['failed']} failed")
+                        else:
+                            logger.error(f"Piece parameters update error: {result.get('error')}")
+                    except Exception as e:
+                        logger.error(f"Piece parameters daemon error: {e}")
+                    
                     try:
                         check_facturation_reminders()
                     except Exception as e:
@@ -3537,6 +3550,69 @@ def get_pieces(user: dict = Depends(_verify_token)):
     return _df_to_records(lire_pieces())
 
 
+@app.get("/api/pieces/predictions/priorite")
+def get_pieces_a_commander(limit: int = 10, user: dict = Depends(_verify_token)):
+    """
+    Retourne les pièces à commander en priorité (N pièces les plus urgentes).
+    Utilise la prédiction avancée multi-facteur.
+    
+    Query params:
+        - limit: Nombre de pièces à retourner (défaut: 10)
+    
+    Returns:
+        List of pieces ranked by urgence (CRITIQUE, HAUTE, NORMALE, BASSE)
+    """
+    try:
+        predictions = predict_pieces_a_commander(nb_to_return=limit)
+        return predictions
+    except Exception as e:
+        logger.error(f"Erreur prédiction pièces: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pieces/{piece_id}/prediction")
+def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token)):
+    """
+    Génère une prédiction détaillée pour une pièce spécifique.
+    Utilise tous les paramètres avancés (consommation, lead time, criticité, etc).
+    
+    Returns:
+        {
+            'date_commande': ISO date,
+            'urgence': 'CRITIQUE' | 'HAUTE' | 'NORMALE' | 'BASSE',
+            'raison': str (explication du calcul),
+            'jours_avant_rupture': float,
+            'stock_previsionnel_jours': float,
+            'details': {...}
+        }
+    """
+    try:
+        with get_db() as conn:
+            piece = conn.execute(
+                """SELECT id, reference, designation, stock_actuel, stock_minimum,
+                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
+                          prix_unitaire, nombre_equipements_relies, utilisation_recente_30j
+                   FROM pieces_rechange WHERE id = ?""",
+                (piece_id,)
+            ).fetchone()
+        
+        if not piece:
+            raise HTTPException(status_code=404, detail="Pièce non trouvée")
+        
+        prediction = predict_commande_date(dict(piece))
+        return {
+            'piece_id': piece_id,
+            'reference': piece['reference'],
+            'designation': piece['designation'],
+            **prediction
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur prédiction pièce {piece_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _normalize_ref(ref: str) -> str:
     """Normalise une référence pour matching flou: supprime tirets, espaces, points, underscores, met en minuscule."""
     import re
@@ -3901,6 +3977,87 @@ def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
     log_audit(username, "DELETE_PIECE", details, "pieces")
     
     return {"ok": True}
+
+
+@app.post("/api/pieces/recalculate-parameters")
+def recalculate_piece_parameters(user: dict = Depends(_verify_token)):
+    """
+    Recalculate and update all piece parameters from historical data.
+    This triggers the automatic calculation of:
+    - consommation_moyenne_mois
+    - nombre_equipements_relies  
+    - utilisation_recente_30j
+    - data_confidence level
+    
+    Used for testing or manual refresh.
+    """
+    try:
+        result = update_piece_parameters_batch()
+        
+        if result.get('success'):
+            logger.info(f"Piece parameters updated: {result['updated']} pieces updated, {result['failed']} failed")
+            
+            # Log audit
+            username = user.get("sub", "unknown")
+            log_audit(username, "RECALCULATE_PIECE_PARAMETERS", 
+                     f"Updated {result['updated']} pieces", "pieces")
+            
+            return {
+                'success': True,
+                'message': 'Parametres recalcules avec succes',
+                'updated': result['updated'],
+                'failed': result['failed'],
+                'total': result['total']
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Unknown error'))
+    except Exception as e:
+        logger.error(f"Erreur recalculate_piece_parameters: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pieces/{piece_id}/parameters")
+def get_piece_parameters(piece_id: int, user: dict = Depends(_verify_token)):
+    """
+    Get calculated parameters for a specific piece with confidence level.
+    Shows:
+    - consommation_moyenne_mois
+    - data_confidence level
+    - Reasoning for prediction reliability
+    """
+    try:
+        with get_db() as conn:
+            piece = conn.execute("""
+                SELECT reference, designation, equipement_type,
+                       consommation_moyenne_mois, delai_fournisseur_jours, criticite,
+                       nombre_equipements_relies, utilisation_recente_30j
+                FROM pieces_rechange WHERE id = %s
+            """, (piece_id,)).fetchone()
+            
+            if not piece:
+                raise HTTPException(status_code=404, detail="Piece not found")
+            
+            # Recalculate to get current confidence level
+            params = calculate_piece_parameters(
+                piece['reference'],
+                piece['equipement_type']
+            )
+            
+            return {
+                'piece_id': piece_id,
+                'reference': piece['reference'],
+                'designation': piece['designation'],
+                'consommation_moyenne_mois': piece['consommation_moyenne_mois'],
+                'data_confidence': params['data_confidence'],
+                'utilisation_recente_30j': piece['utilisation_recente_30j'],
+                'nombre_equipements_relies': piece['nombre_equipements_relies'],
+                'details': params['details']
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur get_piece_parameters: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==========================================
