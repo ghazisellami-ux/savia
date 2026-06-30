@@ -724,16 +724,16 @@ def init_db():
         _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur pieces_rechange")
+        _safe_add_column("pieces_rechange", "domaine", "TEXT", "'Radiologie'")
+        _safe_add_column("pieces_rechange", "est_annexe", "BOOLEAN", "false")
         
-        # --- NEW MIGRATIONS: Advanced prediction parameters ---
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN consommation_moyenne_mois REAL DEFAULT 1.0", "consommation_moyenne_mois sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN delai_fournisseur_jours INTEGER DEFAULT 14", "delai_fournisseur_jours sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN criticite VARCHAR(20) DEFAULT 'NORMAL'", "criticite sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN nombre_equipements_relies INTEGER DEFAULT 1", "nombre_equipements_relies sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN utilisation_recente_30j INTEGER DEFAULT 0", "utilisation_recente_30j sur pieces_rechange")
-        _run_migration("ALTER TABLE pieces_rechange ADD COLUMN data_confidence VARCHAR(20) DEFAULT 'INSUFFICIENT'", "data_confidence sur pieces_rechange")
+        # --- NEW MIGRATIONS: Advanced prediction parameters (using safe add for PostgreSQL compatibility) ---
+        _safe_add_column("pieces_rechange", "consommation_moyenne_mois", "REAL", "1.0")
+        _safe_add_column("pieces_rechange", "delai_fournisseur_jours", "INTEGER", "14")
+        _safe_add_column("pieces_rechange", "criticite", "VARCHAR(20)", "'NORMAL'")
+        _safe_add_column("pieces_rechange", "nombre_equipements_relies", "INTEGER", "1")
+        _safe_add_column("pieces_rechange", "utilisation_recente_30j", "INTEGER", "0")
+        _safe_add_column("pieces_rechange", "data_confidence", "VARCHAR(20)", "'INSUFFICIENT'")
         
         _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
         
