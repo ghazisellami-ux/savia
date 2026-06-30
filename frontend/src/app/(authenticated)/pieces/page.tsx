@@ -307,6 +307,15 @@ export default function PiecesPage() {
     setIsAnalyzing(true);
     setAiResult(null);
     try {
+      // Get currency from localStorage (set in admin settings)
+      const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
+      
+      // Extract most common domain and equipment type from data
+      const domaines = [...new Set(data.map(p => p.domaine || 'Généraliste').filter(Boolean))];
+      const equipTypes = [...new Set(data.map(p => p.equipement_type || '').filter(Boolean))];
+      const domain = domaines.length === 1 ? domaines[0] : domaines.join(' / ');
+      const equipment_type = equipTypes.length === 1 ? equipTypes[0] : equipTypes.slice(0, 3).join(', ');
+      
       const res = await ai.analyzePieces(data.map(p => ({
         designation: p.designation,
         reference: p.reference,
@@ -315,7 +324,7 @@ export default function PiecesPage() {
         stock_minimum: p.stock_minimum,
         prix_unitaire: p.prix_unitaire,
         fournisseur: p.fournisseur,
-      })), 'TND');
+      })), devise, domain, equipment_type);
       if (res.ok && res.result) {
         const raw = typeof res.result === 'string' ? res.result : JSON.stringify(res.result);
         const jsonMatch = raw.match(/\{[\s\S]*\}/);

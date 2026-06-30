@@ -5656,73 +5656,141 @@ PRODUIS un rapport JSON STRICT :
 
 @app.post("/api/ai/analyze-pieces")
 def analyze_pieces(body: dict, user: dict = Depends(_verify_token)):
-    """Calls Gemini to produce a spare parts purchase prediction report with dates and reasons."""
+    """
+    Advanced AI analysis of spare parts with historical usage and predictions.
+    Uses calculated consumption, data confidence, and intervention history.
+    Generates buying recommendations and purchase planning.
+    """
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
+        from db_engine import get_ai_pieces_context
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
+        raise HTTPException(status_code=503, detail="AI engine is not available.")
 
-    pieces_data = body.get("pieces", [])
-    sym = body.get("sym", "TND")
+    # Get domain and equipment type from request (or use defaults)
+    domaine = body.get("domain", "")
+    equipment_type = body.get("equipment_type", "")
+    sym = body.get("sym", "USD")  # Default to USD for universality
+
+    # Get comprehensive context from database
+    context = get_ai_pieces_context(domaine, equipment_type)
+    pieces_data = context.get('pieces', [])
+    stats = context.get('statistics', {})
+    
+    if not pieces_data:
+        raise HTTPException(status_code=400, detail="No spare parts data available for analysis.")
 
     import datetime
     today = datetime.date.today()
     def fmt(d): return d.strftime("%d/%m/%Y")
 
+    # Build detailed inventory report with predictions
     inventory_lines = ""
+    critical_pieces = []
     for p in pieces_data:
-        nom = p.get("designation","?"); ref = p.get("reference","?")
-        stock = p.get("stock_actuel", 0); mini = p.get("stock_minimum", 1)
-        prix = p.get("prix_unitaire", 0); four = p.get("fournisseur","N/A")
-        equip = p.get("equipement_type","?")
-        manquant = max(0, mini - stock + 1)
-        if stock == 0: statut = "RUPTURE TOTALE"
-        elif stock <= mini: statut = f"STOCK BAS (manque {manquant})"
-        else: statut = f"OK (marge={stock-mini})"
-        inventory_lines += f"  - {nom} ({ref}) | Equip: {equip} | Stock: {stock}/{mini} [{statut}] | {four} | {prix} {sym}\n"
-
-    total_val = sum(p.get("stock_actuel",0)*p.get("prix_unitaire",0) for p in pieces_data)
-    ruptures = sum(1 for p in pieces_data if p.get("stock_actuel",0)==0)
-    bas = sum(1 for p in pieces_data if 0 < p.get("stock_actuel",0) <= p.get("stock_minimum",1))
+        ref = p['reference']
+        nom = p['designation']
+        stock = p['current_stock']
+        mini = p['minimum_stock']
+        prix = p['unit_price']
+        four = p['supplier']
+        consomm = p['monthly_consumption']
+        confiance = p['data_confidence']
+        urgency = p['urgency']
+        jours_rupture = p['days_until_rupture']
+        recent_use = p['recent_usage_30d']
+        
+        # Format stock status with prediction (in French)
+        if stock == 0:
+            status = "EN RUPTURE - CRITIQUE"
+        elif stock <= mini:
+            status = f"STOCK BAS (besoin {mini - stock + 1})"
+        elif jours_rupture is not None and jours_rupture <= 7:
+            status = f"CORRECT mais RUPTURE en {jours_rupture:.0f} jours"
+        else:
+            status = f"ADAPTÉ (marge {stock - mini})"
+        
+        # Consumption info (in French)
+        consump_info = f"Consommation: {consomm:.2f}/mois | Usage récent (30j): {recent_use}x | Confiance: {confiance}"
+        
+        line = f"  • {nom} ({ref}) | Équip: {p['equipment_type']} | Stock: {stock}/{mini} [{status}] | {consump_info} | Fournisseur: {four} | Prix: {prix:.2f} {sym}\n"
+        inventory_lines += line
+        
+        # Track critical items
+        if 'CRITICAL' in urgency:
+            critical_pieces.append((ref, nom, urgency))
+    
+    # Timeline weeks
     s1 = f"{fmt(today)} - {fmt(today+datetime.timedelta(days=6))}"
     s2 = f"{fmt(today+datetime.timedelta(days=7))} - {fmt(today+datetime.timedelta(days=13))}"
     s3 = f"{fmt(today+datetime.timedelta(days=14))} - {fmt(today+datetime.timedelta(days=20))}"
-    d0=fmt(today); d3=fmt(today+datetime.timedelta(days=3)); d7=fmt(today+datetime.timedelta(days=7)); d14=fmt(today+datetime.timedelta(days=14))
+    d0 = fmt(today)
+    d3 = fmt(today+datetime.timedelta(days=3))
+    d7 = fmt(today+datetime.timedelta(days=7))
+    d14 = fmt(today+datetime.timedelta(days=14))
+    
+    # Contextualize for domain if provided (in French)
+    domain_context = ""
+    if domaine:
+        domain_context = f"\nDomaine: {domaine}"
+        if equipment_type:
+            domain_context += f" | Équipement principal: {equipment_type}"
+    
+    prompt = f"""Tu es un expert en gestion de stock et approvisionnement pour équipements médicaux critiques.
+Analyse cet inventaire de pièces de rechange avec prédictions et génère un plan d'achat stratégique EN FRANÇAIS.
 
-    prompt = f"""Tu es Supply Chain Manager expert en pièces de rechange pour équipements de radiologie médicale (Tunisie).
-Date du jour : {fmt(today)} | Inventaire : {len(pieces_data)} réf. | Valeur : {total_val:,.0f} {sym} | RUPTURES : {ruptures} | STOCK BAS : {bas}
+=== CONTEXTE INSTALLATION ===
+Aujourd'hui: {fmt(today)}{domain_context}
+Total pièces: {stats['total_pieces']} références
+Valeur stock: {stats['total_stock_value']:,.0f} {sym}
+Articles urgence CRITIQUE: {stats['critical_urgency_count']}
+Articles urgence HAUTE: {stats['high_urgency_count']}
 
-INVENTAIRE :
+=== INVENTAIRE PIÈCES AVEC PRÉDICTIONS ===
 {inventory_lines}
 
-Génère un plan d'achat prévisionnel avec dates précises et raisons médicales/opérationnelles.
-Réponds UNIQUEMENT en JSON valide (sans markdown, sans texte avant/après) :
+=== DIRECTIVES D'ANALYSE ===
+1. Utiliser les données de consommation mensuelle et usage récent pour générer des prédictions fiables
+2. Data_confidence indique la fiabilité (INSUFFICIENT/LOW/MEDIUM/HIGH) - prioriser MEDIUM+
+3. days_until_rupture = jours avant rupture de stock
+4. Patterns usage 30j = indicatif de la tendance réelle
+5. Générer quantités commandées basées sur consommation + délai fournisseur
+6. Prioriser urgence CRITIQUE + haute confiance données
+
+=== FORMAT RÉPONSE ===
+RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
 {{
-  "analyse_risque": "Synthèse 3-4 phrases sur pièces critiques, impact soins, capital immobilisé",
+  "analyse_risque": "Résumé exécutif (3-4 phrases): identifier pièces critiques, impact opérationnel, capital à risque",
   "recommandations": [
-    {{"piece": "Nom pièce", "reference": "REF", "raison": "Impact médical concret si non commandée (ex: arrêt scanner CT = patients sans diagnostic)", "action": "Commander immédiatement", "quantite": 2, "date_achat": "{d0}", "urgence": "critique", "cout_estime": 500}},
-    {{"piece": "Nom pièce 2", "reference": "REF2", "raison": "Raison opérationnelle spécifique", "action": "Commander bientôt", "quantite": 1, "date_achat": "{d7}", "urgence": "haute", "cout_estime": 300}}
+    {{"piece": "Nom pièce", "reference": "REF", "raison": "Impact opérationnel si non commandé (ex: arrêt équipement = X patients)", "action": "Commander immédiatement", "quantite": 2, "date_achat": "{d0}", "urgence": "critique", "cout_estime": 500, "delai_fournisseur": 14}},
+    {{"piece": "Nom pièce 2", "reference": "REF2", "raison": "Raison opérationnelle basée pattern consommation", "action": "Commander rapidement", "quantite": 1, "date_achat": "{d7}", "urgence": "haute", "cout_estime": 300, "delai_fournisseur": 14}}
   ],
   "plan_achat": [
-    {{"semaine": "S1 ({s1})", "pieces": ["pièce1"], "budget": 1200, "priorite": "Critique"}},
-    {{"semaine": "S2 ({s2})", "pieces": ["pièce2"], "budget": 800, "priorite": "Haute"}},
-    {{"semaine": "S3 ({s3})", "pieces": ["pièce3"], "budget": 500, "priorite": "Normale"}}
+    {{"semaine": "Semaine 1 ({s1})", "pieces": ["reference_1"], "budget": 1200, "priorite": "Critique", "raison": "Besoins immédiats"}},
+    {{"semaine": "Semaine 2 ({s2})", "pieces": ["reference_2"], "budget": 800, "priorite": "Haute", "raison": "Prévenir rupture"}},
+    {{"semaine": "Semaine 3 ({s3})", "pieces": ["reference_3"], "budget": 500, "priorite": "Normale", "raison": "Maintenir stock minimum"}}
   ],
   "impact_budget": {{
     "cout_total_commande": 2500,
     "gain_potentiel": 8000,
-    "ratio": "Pour 1 {sym} investi, 3.2 {sym} économisés en arrêts",
-    "cout_indisponibilite_estime": 3000
+    "ratio": "Pour chaque 1 {sym} investi, X {sym} d'économie sur indisponibilité",
+    "cout_indisponibilite_estime": 3000,
+    "calcul_methode": "Basé sur nombre équipements critiques et consommation mensuelle"
   }},
   "tendances": ["Tendance 1 avec données concrètes", "Tendance 2", "Tendance 3"]
 }}"""
 
     raw = _call_ia(prompt, timeout=90, is_json=True)
     if not raw:
-        raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
+        raise HTTPException(status_code=500, detail="AI did not respond.")
     result = clean_json_response(raw)
+    
+    # Log the analysis
+    username = user.get("sub", "unknown")
+    log_audit(username, "AI_ANALYZE_PIECES", f"Analyzed {len(pieces_data)} spare parts", "pieces")
+    
     return {"ok": True, "result": result}
 
 
