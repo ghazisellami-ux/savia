@@ -716,32 +716,6 @@ def init_db():
                 # On logue l'erreur mais on continue (souvent dû à une colonne déjà existante)
                 logger.debug(f"Migration ignorée ({description}): {e}")
 
-        _run_migration("ALTER TABLE equipements ADD COLUMN client TEXT DEFAULT 'Centre Principal'", "client sur equipements")
-        _run_migration("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''", "telegram_id sur techniciens")
-        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN client TEXT DEFAULT ''", "client sur planning")
-        _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
-        _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
-        _safe_add_column("pieces_rechange", "domaine", "TEXT", "'Radiologie'")
-        _safe_add_column("pieces_rechange", "est_annexe", "BOOLEAN", "false")
-        
-        # --- NEW MIGRATIONS: Advanced prediction parameters (using safe add for PostgreSQL compatibility) ---
-        _safe_add_column("pieces_rechange", "consommation_moyenne_mois", "REAL", "1.0")
-        _safe_add_column("pieces_rechange", "delai_fournisseur_jours", "INTEGER", "14")
-        _safe_add_column("pieces_rechange", "criticite", "VARCHAR(20)", "'NORMAL'")
-        _safe_add_column("pieces_rechange", "nombre_equipements_relies", "INTEGER", "1")
-        _safe_add_column("pieces_rechange", "utilisation_recente_30j", "INTEGER", "0")
-        _safe_add_column("pieces_rechange", "data_confidence", "VARCHAR(20)", "'INSUFFICIENT'")
-        
-        _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
-        
-        # Migration: Ghost entry tracking for reschedule feature
-        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN is_ghost BOOLEAN DEFAULT false", "is_ghost sur planning_maintenance")
-
-        # Migration : recréer la table avec UNIQUE(nom, client)
-        # NOTE: PRAGMA is SQLite-specific, skip for PostgreSQL
         # Migration helper: ajouter colonne si elle n'existe pas (compatible PG + SQLite)
         def _safe_add_column(tbl, col, col_type="TEXT", default="''"):
             """Ajoute une colonne de manière sécurisée sans interrompre le flux."""
@@ -769,6 +743,31 @@ def init_db():
                 except Exception:
                     pass
                 logger.debug(f"⚠️  Erreur lors de l'ajout de {col} à {tbl}: {e}")
+
+        _run_migration("ALTER TABLE equipements ADD COLUMN client TEXT DEFAULT 'Centre Principal'", "client sur equipements")
+        _run_migration("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''", "telegram_id sur techniciens")
+        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN client TEXT DEFAULT ''", "client sur planning")
+        _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
+        _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
+        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
+        _safe_add_column("pieces_rechange", "domaine", "TEXT", "'Radiologie'")
+        _safe_add_column("pieces_rechange", "est_annexe", "BOOLEAN", "false")
+        
+        # --- NEW MIGRATIONS: Advanced prediction parameters (using safe add for PostgreSQL compatibility) ---
+        _safe_add_column("pieces_rechange", "consommation_moyenne_mois", "REAL", "1.0")
+        _safe_add_column("pieces_rechange", "delai_fournisseur_jours", "INTEGER", "14")
+        _safe_add_column("pieces_rechange", "criticite", "VARCHAR(20)", "'NORMAL'")
+        _safe_add_column("pieces_rechange", "nombre_equipements_relies", "INTEGER", "1")
+        _safe_add_column("pieces_rechange", "utilisation_recente_30j", "INTEGER", "0")
+        _safe_add_column("pieces_rechange", "data_confidence", "VARCHAR(20)", "'INSUFFICIENT'")
+        
+        _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
+        
+        # Migration: Ghost entry tracking for reschedule feature
+        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN is_ghost BOOLEAN DEFAULT false", "is_ghost sur planning_maintenance")
+
         # Migrations : colonnes ajoutées progressivement
         _safe_add_column("equipements", "matricule_fiscale")
         _safe_add_column("interventions", "date_debut_intervention", "TIMESTAMP", "NULL")
