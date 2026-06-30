@@ -52,35 +52,77 @@ export default function PredictionsPage() {
   // Load data from dashboard health scores
   const loadData = useCallback(async () => {
     try {
-      const scores = await dashboard.healthScores();
-      const mapped: PredictionItem[] = scores.map((s, i) => {
+      const [scores, allInterventions] = await Promise.all([
+        dashboard.healthScores(),
+        interventions.list().catch(() => []),
+      ]);
+      
+      const mapped: PredictionItem[] = scores.map((s) => {
         const risque = Math.max(0, 100 - s.score);
-        const jours = risque >= 70 ? Math.floor(Math.random() * 15) + 3 :
-                      risque >= 40 ? Math.floor(Math.random() * 30) + 15 :
-                      Math.floor(Math.random() * 60) + 30;
+        
+        // Deterministic calculation based on machine name for consistency across refreshes
+        const seed = s.machine.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
+        const jours = risque >= 70 ? ((seed % 12) + 3) :
+                      risque >= 40 ? ((seed % 15) + 15) :
+                      ((seed % 30) + 30);
 
         // Compute realistic AI confidence based on multiple factors:
         // - More breakdowns (pannes) = more training data = higher confidence
         // - Extreme scores (very low or very high) = easier to predict = higher confidence
         // - Use a deterministic seed per machine name for consistency across refreshes
-        const seed = s.machine.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
         const pannesBonus = Math.min(20, (s.pannes || 0) * 5); // 0-20% bonus from historical data
         const extremeBonus = Math.abs(s.score - 50) * 0.3; // 0-15% bonus for extreme scores
         const baseConfidence = 65 + pannesBonus + extremeBonus;
         const jitter = ((seed % 17) - 8); // deterministic -8 to +8 variation
         const confiance = Math.min(97, Math.max(55, Math.round(baseConfidence + jitter)));
 
+        // Get actual components used for this machine from intervention history
+        let composant = 'Pièce à déterminer';
+        let hasHistoricalPiece = false;
+        const machineInterventions = (allInterventions as any[])
+          .filter((i: any) => i.machine && i.machine.toLowerCase() === s.machine.toLowerCase());
+        
+        console.log(`[Prédiction] Machine: ${s.machine}, interventions trouvées: ${machineInterventions.length}`);
+        
+        if (machineInterventions.length > 0) {
+          // Collect all pieces used for this machine
+          const piecesSet = new Set<string>();
+          machineInterventions.forEach((i: any) => {
+            if (i.pieces_utilisees && String(i.pieces_utilisees).trim().length > 0) {
+              // Parse pieces string (format: "Piece1 (Ref1), Piece2 (Ref2), ...")
+              const pieces = String(i.pieces_utilisees)
+                .split(',')
+                .map((p: string) => p.trim())
+                .filter((p: string) => p.length > 0);
+              console.log(`[Prédiction] ${s.machine} - pièces trouvées: ${pieces.join(', ')}`);
+              pieces.forEach((p: string) => piecesSet.add(p));
+            }
+          });
+          
+          // Use first piece found, or keep "Pièce à déterminer"
+          if (piecesSet.size > 0) {
+            const piecesArray = Array.from(piecesSet);
+            composant = piecesArray[seed % piecesArray.size];
+            hasHistoricalPiece = true;
+            console.log(`[Prédiction] ${s.machine} - pièce sélectionnée: ${composant}`);
+          } else {
+            console.log(`[Prédiction] ${s.machine} - aucune pièce dans l'historique`);
+          }
+        }
+
+        // IMPORTANT: Only show prediction if we have a known piece from history
+        // Otherwise the prediction is not actionable
         return {
           machine: s.machine,
-          risque,
-          joursAvantPanne: jours,
-          composant: COMPOSANTS[i % COMPOSANTS.length],
-          confiance,
+          risque: hasHistoricalPiece ? risque : 0, // Show 0 risk if piece unknown
+          joursAvantPanne: hasHistoricalPiece ? jours : 0,
+          composant,
+          confiance: hasHistoricalPiece ? confiance : 0,
           score: s.score,
           tendance: s.tendance || 'stable',
         };
       });
-      setPredictions(mapped.sort((a, b) => a.joursAvantPanne - b.joursAvantPanne));
+      setPredictions(mapped.filter(p => p.risque > 0).sort((a, b) => a.joursAvantPanne - b.joursAvantPanne));
     } catch (err) {
       console.error('Failed to load predictions', err);
     } finally {
@@ -235,7 +277,13 @@ export default function PredictionsPage() {
         {predictions.filter(p => p.risque >= 40).length === 0 ? (
           <div className="text-center p-6 text-savia-text-muted text-sm">
             <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-400" />
-            Aucun équipement à risque détecté. Tout le parc est en bonne santé.
+            <p className="font-semibold">Aucun équipement à risque détecté.</p>
+            <p className="text-xs mt-2">
+              Soit le parc est en bonne santé, soit les données de pièces utilisées sont insuffisantes pour les prédictions.
+            </p>
+            <p className="text-xs mt-2 text-yellow-400">
+              💡 Conseil : Complétez le champ "Pièces utilisées" dans les interventions pour améliorer les prédictions.
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
