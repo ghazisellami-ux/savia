@@ -83,7 +83,7 @@ export default function DemandesPage() {
   const demandeurNom = user?.nom || '';
 
   const emptyForm = {
-    demandeur: demandeurNom,
+    demandeur: demandeurNom, // Pré-rempli avec le nom de l'utilisateur connecté
     client: isLecteur ? clientNom : '',
     equipement: '',
     urgence: 'Moyenne',
@@ -392,7 +392,7 @@ export default function DemandesPage() {
               {!isLecteur && (
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <User className="w-3.5 h-3.5" /> Demandeur *
+                    <User className="w-3.5 h-3.5" /> Demandeur * (Pré-rempli avec votre nom)
                   </label>
                   <input className={INPUT_CLS} placeholder="Nom du demandeur" value={form.demandeur}
                     onChange={e => setForm({...form, demandeur: e.target.value})} />
