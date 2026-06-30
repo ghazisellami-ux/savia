@@ -7,6 +7,7 @@ import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Spar
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
   Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
 import { pieces, interventions, ai, notifications as notifApi, piecesDemandees, equipements } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 interface Piece {
   id: number;
@@ -34,6 +35,9 @@ const ALL_DOMAINES = Object.keys(DOMAINES_TYPES);
 const TYPES_EQUIPEMENTS = Object.values(DOMAINES_TYPES).flat(); // compat
 
 export default function PiecesPage() {
+  const { user } = useAuth();
+  const canCreatePiece = user?.role && ['Admin', 'Manager', 'Responsable Technique', 'Gestionnaire de stock', 'Gestionnaire'].includes(user.role);
+  
   const [activeTab, setActiveTab] = useState(0);
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
@@ -369,7 +373,7 @@ export default function PiecesPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion du stock, traçabilité et prédictions IA</p>
         </div>
-        <button onClick={() => { setForm(emptyForm); setShowAddModal(true); }} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
+        <button onClick={() => { setForm(emptyForm); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> Nouvelle Pièce
         </button>
       </div>

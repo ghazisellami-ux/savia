@@ -1,5 +1,5 @@
 'use client';
-import { Search, Building2, Users, Wrench, Loader2, Plus, Upload, X, Globe, MapPin, FileSpreadsheet, CheckCircle } from 'lucide-react';
+import { Search, Building2, Users, Wrench, Loader2, Plus, Upload, X, Globe, MapPin, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { clients as clientsApi } from '@/lib/api';
 
@@ -21,6 +21,8 @@ const emptyForm = (): Record<string, any> => ({
   telephone:'', adresse:'', type_client:'Privé', international: false,
 });
 
+const ALLOWED_ROLES = ['Admin', 'Manager', 'Responsable Technique'];
+
 export default function ClientsPage() {
   const [search, setSearch] = useState('');
   const [regionFilter, setRegionFilter] = useState('');
@@ -34,6 +36,8 @@ export default function ClientsPage() {
   const [saving, setSaving] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
   const [importing, setImporting] = useState(false);
+  const [userRole, setUserRole] = useState<string|null>(null);
+  const [error, setError] = useState<string|null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadData = async () => {
@@ -51,7 +55,22 @@ export default function ClientsPage() {
     } catch(e) { console.error(e); } finally { setIsLoading(false); }
   };
 
-  useEffect(() => { loadData(); }, []);
+  const fetchUserRole = async () => {
+    try {
+      const userJson = localStorage.getItem('savia_user');
+      if (userJson) {
+        const user = JSON.parse(userJson);
+        setUserRole(user.role);
+      }
+    } catch (e) {
+      console.error('Erreur récupération rôle:', e);
+    }
+  };
+
+  useEffect(() => { 
+    loadData();
+    fetchUserRole();
+  }, []);
 
   const filtered = data.filter(c => {
     if (search && !c.nom.toLowerCase().includes(search.toLowerCase())) return false;
@@ -74,6 +93,8 @@ export default function ClientsPage() {
   const totalMachines = data.reduce((a,c) => a+c.nb_equipements, 0);
   const totalInterv = data.reduce((a,c) => a+c.nb_interventions, 0);
   const avgHealth = data.length > 0 ? Math.round(data.reduce((a,c) => a+c.score_sante, 0)/data.length) : 0;
+  
+  const canCreate = userRole && ALLOWED_ROLES.includes(userRole);
 
   const openAdd = () => { setForm(emptyForm()); setEditId(null); setShowModal(true); };
   const openEdit = (c: Client) => {
@@ -86,11 +107,16 @@ export default function ClientsPage() {
   const handleSave = async () => {
     if (!form.nom.trim()) return alert('Le nom est obligatoire');
     setSaving(true);
+    setError(null);
     try {
       if (editId) await clientsApi.update(editId, form);
       else await clientsApi.create(form);
       setShowModal(false); await loadData();
-    } catch(e: any) { alert('Erreur: '+(e.message||'Inconnue')); }
+    } catch(e: any) {
+      const errorMsg = e.message || 'Erreur inconnue';
+      setError(errorMsg);
+      alert('Erreur: ' + errorMsg);
+    }
     finally { setSaving(false); }
   };
 
@@ -102,11 +128,17 @@ export default function ClientsPage() {
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setImporting(true); setImportResult(null);
+    setImporting(true);
+    setImportResult(null);
+    setError(null);
     try {
       const res = await clientsApi.importExcel(file);
       setImportResult(res); await loadData();
-    } catch(err: any) { setImportResult({ ok:false, error: err.message }); }
+    } catch(err: any) {
+      const errorMsg = err.message || 'Erreur inconnue';
+      setImportResult({ ok:false, error: errorMsg });
+      setError(errorMsg);
+    }
     finally { setImporting(false); if(fileRef.current) fileRef.current.value=''; }
   };
 
@@ -121,24 +153,41 @@ export default function ClientsPage() {
           <h1 className="text-2xl font-black gradient-text">🏢 Clients SAVIA</h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion des établissements clients</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <input type="file" ref={fileRef} accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
-          <button onClick={() => fileRef.current?.click()} disabled={importing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all text-sm font-medium">
+          {!canCreate && (
+            <div className="text-xs text-amber-400 px-3 py-2 bg-amber-500/10 rounded-lg border border-amber-500/30 flex items-center gap-2 whitespace-nowrap">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Réservé aux Responsables
+            </div>
+          )}
+          <button onClick={() => fileRef.current?.click()} disabled={importing || !canCreate}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/30 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Importer Excel
           </button>
-          <button onClick={openAdd}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-savia-accent/20 text-savia-accent hover:bg-savia-accent/30 border border-savia-accent/30 transition-all text-sm font-medium">
+          <button onClick={openAdd} disabled={!canCreate}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-savia-accent/20 text-savia-accent hover:bg-savia-accent/30 border border-savia-accent/30 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
             <Plus className="w-4 h-4" /> Ajouter Client
           </button>
         </div>
       </div>
 
+      {/* Error banner */}
+      {error && (
+        <div className="glass rounded-xl p-4 flex items-center gap-3 border border-red-500/30">
+          <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm text-red-400">{error}</p>
+          </div>
+          <button onClick={() => setError(null)} className="text-savia-text-dim hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
       {/* Import result banner */}
       {importResult && (
         <div className={`glass rounded-xl p-4 flex items-center gap-3 border ${importResult.ok ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
-          {importResult.ok ? <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" /> : <X className="w-5 h-5 text-red-400 shrink-0" />}
+          {importResult.ok ? <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" /> : <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />}
           <div className="flex-1">
             {importResult.ok ? (
               <p className="text-sm"><span className="font-bold text-emerald-400">{importResult.imported}</span> clients importés,{' '}

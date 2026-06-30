@@ -68,6 +68,12 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
     reports: true, contrats: true, admin: false, settings: true, demandes: false,
     finances: true, carte: true, sla: true,
   },
+  'Gestionnaire de stock': {
+    dashboard: true, supervision: false, equipements: true, predictions: true,
+    base_connaissances: false, sav: false, planning: false, pieces: true,
+    reports: true, contrats: true, admin: false, settings: true, demandes: false,
+    finances: true, carte: true, sla: true,
+  },
   Lecteur: {
     dashboard: true, supervision: true, equipements: true, predictions: false,
     base_connaissances: false, sav: false, planning: false, pieces: false,
