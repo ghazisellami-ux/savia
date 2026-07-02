@@ -4209,11 +4209,17 @@ def lire_child_interventions_for_technician(technician_name):
     
     # Post-filter: ensure ALL words from technician_name appear as whole words
     # in the technicien field (prevents "al" in "Salah Al Salah" from matching "Ahmed Ben Salah")
+    # Strip punctuation (commas, etc.) before splitting to handle "Salah Al Salah, Other Tech"
     if not df.empty and "technicien" in df.columns:
-        name_words = [w.lower() for w in technician_name.split() if len(w) > 1]
-        if name_words:
+        import re as _re
+        def _extract_words_db(text):
+            cleaned = _re.sub(r'[,;/\-_\.\(\)\[\]]+', ' ', text.lower())
+            return [w for w in cleaned.split() if len(w) > 1]
+        
+        user_words = _extract_words_db(technician_name)
+        if user_words:
             df = df[df["technicien"].astype(str).apply(
-                lambda t: all(word in t.lower().split() for word in name_words)
+                lambda t: all(word in _extract_words_db(t) for word in user_words)
             )]
     
     # Apply text fixes
