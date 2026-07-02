@@ -2175,15 +2175,31 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             current_tech = str(row.get("technicien") or "").strip()
             user_nom_complet = (user.get("nom") or "").strip()
             
-            # Vérifier que le technicien est assigné à l'intervention
-            is_assigned = _tech_name_matches(user_nom_complet, current_tech)
-            logger.info(f"🔐 Permission check: user='{user_nom_complet}' vs tech='{current_tech}' → assigned={is_assigned}")
-            
-            if not is_assigned and current_tech:  # Si l'intervention est assignée et ce n'est pas ce technicien
-                raise HTTPException(
-                    status_code=403,
-                    detail="Vous ne pouvez éditer que vos propres interventions"
-                )
+            # Cas 1: Intervention avec champ technicien rempli (single-technicien)
+            if current_tech:
+                is_assigned = _tech_name_matches(user_nom_complet, current_tech)
+                logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' vs tech='{current_tech}' → assigned={is_assigned}")
+                if not is_assigned:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Vous ne pouvez éditer que vos propres interventions"
+                    )
+            else:
+                # Cas 2: Intervention sans technicien principal (multi-technicien) → vérifier interventions_techniciens
+                logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
+                tech_row = conn.execute(
+                    "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
+                    (intervention_id, user.get("sub"))  # user.get("sub") est le username
+                ).fetchone()
+                
+                if not tech_row:
+                    # Technicien n'est pas dans la liste interventions_techniciens
+                    logger.warning(f"🔐 Technicien '{user_nom_complet}' (user_id={user.get('sub')}) not in interventions_techniciens for #{intervention_id}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Vous ne pouvez éditer que vos propres interventions"
+                    )
+                logger.info(f"🔐 Technicien '{user_nom_complet}' found in interventions_techniciens")
     
     new_statut = body.get("statut")
     if new_statut and "tur" in new_statut.lower():
@@ -3085,13 +3101,32 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             if user.get("role") == "Technicien":
                 current_tech = str(intervention.get("technicien") or "").strip()
                 user_nom_complet = (user.get("nom") or "").strip()
-                is_assigned = _tech_name_matches(user_nom_complet, current_tech)
                 
-                if not is_assigned and current_tech:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Vous ne pouvez éditer que vos propres interventions"
-                    )
+                # Cas 1: Intervention avec champ technicien rempli (single-technicien)
+                if current_tech:
+                    is_assigned = _tech_name_matches(user_nom_complet, current_tech)
+                    logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' vs tech='{current_tech}' → assigned={is_assigned}")
+                    if not is_assigned:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Vous ne pouvez éditer que vos propres interventions"
+                        )
+                else:
+                    # Cas 2: Intervention sans technicien principal (multi-technicien) → vérifier interventions_techniciens
+                    logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
+                    tech_row = conn.execute(
+                        "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
+                        (intervention_id, user.get("sub"))  # user.get("sub") est le username
+                    ).fetchone()
+                    
+                    if not tech_row:
+                        # Technicien n'est pas dans la liste interventions_techniciens
+                        logger.warning(f"🔐 Technicien '{user_nom_complet}' (user_id={user.get('sub')}) not in interventions_techniciens for #{intervention_id}")
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Vous ne pouvez éditer que vos propres interventions"
+                        )
+                    logger.info(f"🔐 Technicien '{user_nom_complet}' found in interventions_techniciens")
         
         # Get or create entry for this technician
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
