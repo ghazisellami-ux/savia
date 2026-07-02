@@ -79,12 +79,16 @@ import re as _re
 
 def _extract_words(text: str) -> list:
     """
-    Extrait les mots significatifs d'un texte en supprimant la ponctuation.
+    Extrait tous les mots significatifs d'un texte en supprimant la ponctuation.
+    NE PAS filtrer les mots courts (inclure les prénoms comme "Ali", "Al", etc).
+    
     Ex: "Salah Al Salah, Ahmed Ben Salah" → ["salah", "al", "salah", "ahmed", "ben", "salah"]
+    Ex: "Ali Ben Haj" → ["ali", "ben", "haj"]
     """
     # Remplacer toute ponctuation par des espaces, puis split
     cleaned = _re.sub(r'[,;/\-_\.\(\)\[\]]+', ' ', text.lower())
-    return [w for w in cleaned.split() if len(w) > 1]
+    # Garder TOUS les mots non-vides (ne pas filtrer par len > 1)
+    return [w for w in cleaned.split() if w.strip()]
 
 
 def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
@@ -95,9 +99,10 @@ def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
     - Ordre inversé des noms ("Salah Al Salah" vs "Al Salah Salah")
     - Noms multiples séparés par virgule ("Salah Al Salah, Ahmed Ben Salah")
     - Ponctuation dans les noms
-    - Évite les faux positifs par sous-chaîne ("al" ne matche PAS "Salah")
+    - Noms courts et prénoms ("Ali", "Al", "A", etc)
+    - Évite les faux positifs par sous-chaîne ("al" ne matche PAS "Salah" mais "ali" = "ali")
     
-    Returns True si TOUS les mots significatifs du nom utilisateur
+    Returns True si TOUS les mots du nom utilisateur
     apparaissent comme mots entiers dans le champ technicien.
     """
     if not user_name or not technicien_field:
@@ -106,9 +111,15 @@ def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
     user_words = _extract_words(user_name)
     tech_words = _extract_words(technicien_field)
     
+    # IMPORTANT: Si l'utilisateur n'a aucun mot (nom vide?), refuser
     if not user_words:
         return False
     
+    # IMPORTANT: Si le champ technicien est vide, refuser
+    if not tech_words:
+        return False
+    
+    # Tous les mots de l'utilisateur doivent être présents dans le champ technicien
     return all(word in tech_words for word in user_words)
 
 
