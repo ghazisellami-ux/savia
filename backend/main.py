@@ -5205,59 +5205,150 @@ def get_knowledge(user: dict = Depends(_verify_token)):
 
 
 def _parse_text_to_rows(text: str) -> list:
-    """Parse unstructured text (from PDF/Word) into error code rows using AI or regex."""
+    """Parse unstructured text (from PDF/Word) into error code rows using AI with chunking or regex."""
     import re
+    import json
     rows = []
 
-    # Try AI extraction first
+    # Try AI extraction FIRST with chunking
     try:
-        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
+        from ai_engine import _call_ia, AI_AVAILABLE
         if AI_AVAILABLE and len(text) > 50:
-            prompt = f"""Extrais les codes d'erreur de ce texte technique. 
-Pour chaque code trouvé, donne: code, message, type (Hardware/Software/Network), cause, solution, priorite (HAUTE/MOYENNE/BASSE).
-Texte (extrait): {text[:4000]}
+            # Split into chunks to avoid token limits
+            chunk_size = 20000
+            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+            
+            logger.info(f"📤 Sending {len(text)} chars to IA in {len(chunks)} chunk(s)")
+            
+            all_codes = {}  # Use dict to avoid duplicates
+            
+            for chunk_idx, text_chunk in enumerate(chunks):
+                if len(text_chunk) < 50:
+                    continue
+                    
+                logger.info(f"📤 Chunk {chunk_idx+1}/{len(chunks)} ({len(text_chunk)} chars)")
+                
+                prompt = f"""Extrais TOUS les codes d'erreur du texte.
+Pour chaque code: code, message, cause, solution.
+Réponds UNIQUEMENT en JSON:
+[{{"code":"105","message":"Error description","cause":"Root cause","solution":"How to fix"}}]
 
-Réponds en JSON: [{{"code":"ERR001","message":"...","type":"Hardware","cause":"...","solution":"...","priorite":"MOYENNE"}}]"""
-            raw = _call_ia(prompt, timeout=30, is_json=True)
-            if raw:
-                result = clean_json_response(raw)
-                if isinstance(result, list) and len(result) > 0:
-                    return result
-    except Exception:
-        pass
+Texte:
+{text_chunk}
+"""
+                
+                raw = _call_ia(prompt, timeout=60, is_json=True)
+                
+                if raw:
+                    raw_text = raw.strip()
+                    raw_text = re.sub(r'```\w*\s*', '', raw_text)
+                    raw_text = re.sub(r'```', '', raw_text)
+                    raw_text = raw_text.strip()
+                    
+                    try:
+                        result = json.loads(raw_text)
+                        if isinstance(result, list):
+                            logger.info(f"✓ Chunk {chunk_idx+1}: {len(result)} codes")
+                            for item in result:
+                                if isinstance(item, dict) and 'code' in item:
+                                    code = str(item['code'])
+                                    if code not in all_codes:
+                                        item['message'] = str(item.get('message', code))
+                                        item['cause'] = str(item.get('cause', ''))
+                                        item['solution'] = str(item.get('solution', ''))
+                                        item['type'] = 'Hardware'
+                                        item['priorite'] = 'MOYENNE'
+                                        all_codes[code] = item
+                    except json.JSONDecodeError:
+                        logger.warning(f"⚠️ Chunk {chunk_idx+1}: Parse error")
+            
+            if all_codes:
+                rows = list(all_codes.values())
+                logger.info(f"✓ IA: {len(rows)} unique codes from {len(chunks)} chunks")
+                if len(rows) >= 3:
+                    return rows
+            
+            logger.warning(f"⚠️ IA found only {len(rows)} codes, using regex fallback")
+                
+    except Exception as e:
+        logger.warning(f"⚠️ IA extraction failed: {e}")
 
     # Fallback: regex-based extraction
-    # Common patterns: "ERR-001", "E001", "0x1234", "ERROR 001"
-    patterns = [
-        r'((?:ERR|ERROR|E|WARN|W|FAULT|F|CODE)[_\-\s]?\d{2,5})',
-        r'(0x[0-9A-Fa-f]{4,8})',
-        r'((?:H|S|N)\d{4})',
-    ]
-    for pattern in patterns:
-        matches = re.finditer(pattern, text, re.IGNORECASE)
-        for match in matches:
-            code = match.group(1).strip()
-            # Get surrounding context (100 chars)
-            start = max(0, match.start() - 20)
-            end = min(len(text), match.end() + 200)
+    logger.info("📌 Using regex fallback")
+    
+    found_codes = set()
+    
+    # Pattern 1: Number after Alarm/ERROR keywords
+    pattern1 = r'(?:Alarm|ALARM|ERROR|ERR|FAULT|CODE|code)\s+(\d{1,5})'
+    matches = list(re.finditer(pattern1, text, re.IGNORECASE))
+    logger.info(f"🔍 Pattern 1: {len(matches)} matches")
+    
+    for match in matches:
+        code_num = match.group(1)
+        if code_num not in found_codes:
+            found_codes.add(code_num)
+            start = max(0, match.start() - 30)
+            end = min(len(text), match.end() + 150)
             context = text[start:end].replace('\n', ' ').strip()
-            if code not in [r.get('code') for r in rows]:
-                rows.append({
-                    "code": code,
-                    "message": context[:120],
-                    "type": "Hardware",
-                    "cause": "",
-                    "solution": "",
-                    "priorite": "MOYENNE",
-                })
-
+            rows.append({
+                "code": code_num,
+                "message": context[:150],
+                "type": "Hardware",
+                "cause": "",
+                "solution": "",
+                "priorite": "MOYENNE",
+            })
+    
+    # Pattern 2: Letter+number codes
+    pattern2 = r'\b([EHSN]\d{2,4})\b'
+    matches = list(re.finditer(pattern2, text, re.IGNORECASE))
+    logger.info(f"🔍 Pattern 2: {len(matches)} matches")
+    
+    for match in matches:
+        code_num = match.group(1)
+        if code_num not in found_codes:
+            found_codes.add(code_num)
+            start = max(0, match.start() - 30)
+            end = min(len(text), match.end() + 150)
+            context = text[start:end].replace('\n', ' ').strip()
+            rows.append({
+                "code": code_num,
+                "message": context[:150],
+                "type": "Hardware",
+                "cause": "",
+                "solution": "",
+                "priorite": "MOYENNE",
+            })
+    
+    # Pattern 3: Hex codes
+    pattern3 = r'\b(0x[0-9A-Fa-f]{2,8})\b'
+    matches = list(re.finditer(pattern3, text, re.IGNORECASE))
+    logger.info(f"🔍 Pattern 3: {len(matches)} matches")
+    
+    for match in matches:
+        code_num = match.group(1)
+        if code_num not in found_codes:
+            found_codes.add(code_num)
+            start = max(0, match.start() - 30)
+            end = min(len(text), match.end() + 150)
+            context = text[start:end].replace('\n', ' ').strip()
+            rows.append({
+                "code": code_num,
+                "message": context[:150],
+                "type": "Hardware",
+                "cause": "",
+                "solution": "",
+                "priorite": "MOYENNE",
+            })
+    
+    logger.info(f"📌 Regex: {len(rows)} codes")
+    
     if not rows:
-        # If no codes found, store the document text as a single entry
         lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 10]
         for i, line in enumerate(lines[:50]):
             rows.append({
                 "code": f"DOC-{i+1:03d}",
-                "message": line[:200],
+                "message": line[:150],
                 "type": "Documentation",
                 "cause": "",
                 "solution": "",
@@ -5267,27 +5358,109 @@ Réponds en JSON: [{{"code":"ERR001","message":"...","type":"Hardware","cause":"
     return rows
 
 
+# ==========================================
+# ENCODAGE UNIVERSEL - Fonctions globales
+# ==========================================
+
+def detect_and_fix_encoding(data: bytes) -> str:
+    """
+    Détecte et corrige l'encodage universel des données binaires.
+    Fonctionne pour tous les formats: CSV, DOCX, PDF texte, etc.
+    """
+    if not data:
+        return ""
+    
+    import chardet
+    
+    # Essayer chardet pour détecter l'encodage
+    detected = chardet.detect(data)
+    detected_encoding = detected.get('encoding') if detected and detected.get('confidence', 0) > 0.5 else None
+    
+    logger.info(f"🔍 Charset detection: {detected_encoding} (confidence: {detected.get('confidence', 0):.2f})")
+    
+    # Liste d'encodages à essayer, avec le détecté en priorité
+    encodings_to_try = []
+    if detected_encoding:
+        encodings_to_try.append(detected_encoding)
+    
+    # Ajouter les encodages courants dans l'ordre de probabilité
+    # UTF-8 first (avec BOM), then Latin-1, then CP1252
+    encodings_to_try.extend(['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'cp1250', 'ascii'])
+    
+    # Essayer les encodages
+    for encoding in encodings_to_try:
+        try:
+            text = data.decode(encoding)
+            logger.info(f"✓ Successfully decoded with: {encoding}")
+            return text
+        except (UnicodeDecodeError, AttributeError, LookupError):
+            continue
+    
+    # Fallback: décoder avec remplacement (ne jamais échouer)
+    logger.warning("⚠️ All encoding attempts failed, using UTF-8 with replacement")
+    return data.decode('utf-8', errors='replace')
+
+
 @app.post("/api/knowledge/import")
 async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import error codes from an uploaded Excel/CSV file."""
     import io
+    import unicodedata
+    import re
+    
+    def fix_mojibake(text: str) -> str:
+        """
+        Répare la mojibake (texte cassé dû à mauvais encodage).
+        Utilise plusieurs stratégies pour détecter et réparer.
+        """
+        if not text:
+            return text
+        
+        # Stratégie 1: Détecter UTF-8 mal interprété en Latin-1
+        # Caractères typiques: ƒ (U+0192), ö (U+00F6), etc.
+        # Motif: si on voit trop de caractères accidentels, essayer de ré-encoder
+        suspect_pattern = re.compile(r'[\u0192\u00C0-\u00FF\u0100-\u017F]')
+        suspect_count = len(suspect_pattern.findall(text))
+        
+        if suspect_count > len(text) * 0.01:  # Plus de 1% de caractères suspects
+            try:
+                # Essayer UTF-8 -> Latin-1 -> UTF-8
+                fixed = text.encode('latin-1', errors='ignore').decode('utf-8', errors='replace')
+                # Vérifier si ça s'est amélioré
+                fixed_suspects = len(suspect_pattern.findall(fixed))
+                if fixed_suspects < suspect_count:
+                    logger.info(f"✓ fix_mojibake: Réparation UTF-8→Latin-1→UTF-8 réussie ({suspect_count} → {fixed_suspects})")
+                    return fixed
+            except Exception as e:
+                logger.warning(f"⚠️ fix_mojibake: Tentative UTF-8→Latin-1 échouée: {e}")
+        
+        # Stratégie 2: Remplacer les caractères connus corrompus
+        corruption_map = {
+            'ƒ': '',  # U+0192 - suppression
+            'Ô': 'O',  # U+00D4 - confusion
+            'ô': 'o',  # U+00F4 - confusion
+            'Õ': 'O',  # U+00D5 - confusion
+            'õ': 'o',  # U+00F5 - confusion
+        }
+        for wrong, correct in corruption_map.items():
+            if wrong in text:
+                text = text.replace(wrong, correct)
+        
+        return text
     
     def sanitize_text(text: str) -> str:
         """Nettoie le texte en fixant les problèmes de mojibake et caractères corrompus."""
         if not text:
             return text
         
-        # ÉTAPE 1: Détecter et réparer la mojibake UTF-8 mal décodée
-        # Pattern: caractères UTF-8 multi-bytes mal interprétés comme latin-1
-        # Ex: "â€¯" (U+00E2 U+0080 U+00AF) = corruption de U+203F (overline)
-        try:
-            # Essayer de ré-encoder en latin-1 puis décoder en UTF-8
-            # Cela répare souvent les problèmes de mojibake
-            text = text.encode('latin-1', errors='ignore').decode('utf-8', errors='replace')
-        except Exception:
-            pass
+        # ÉTAPE 0: Réparer la mojibake
+        text = fix_mojibake(text)
         
-        # ÉTAPE 2: Remplacer les caractères de typographie spéciaux par ASCII
+        # ÉTAPE 0.5: Convertir les espaces non-ASCII en espaces normaux AVANT toute autre chose
+        # Cela évite les problèmes avec les patterns regex
+        text = re.sub(r'[\u00A0\u2000-\u200B\u2028\u2029\u3000]', ' ', text)
+        
+        # ÉTAPE 1: Remplacer les caractères de typographie spéciaux par ASCII
         char_map = {
             ''': "'",           # apostrophe courbe
             ''': "'",           # autre apostrophe
@@ -5321,15 +5494,17 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         for old_char, new_char in char_map.items():
             text = text.replace(old_char, new_char)
         
-        # ÉTAPE 3: Supprimer les caractères de contrôle sauf newline et tab
-        text = ''.join(c if ord(c) >= 32 or c in '\n\t\r' else '' for c in text)
+        # ÉTAPE 2: Supprimer les caractères de contrôle sauf newline, tab, CR
+        # But: garder newlines pour les patterns regex
+        text = ''.join(c if (ord(c) >= 32 or c in '\n\t\r') else '' for c in text)
         
-        # ÉTAPE 4: Convertir en NFD (décomposé) puis en NFC (composé) pour normaliser
-        import unicodedata
+        # ÉTAPE 3: Convertir en NFD (décomposé) puis en NFC (composé) pour normaliser
         text = unicodedata.normalize('NFC', text)
         
-        # ÉTAPE 5: Nettoyer les espaces multiples
-        text = ' '.join(text.split())
+        # ÉTAPE 4: Nettoyer les espaces multiples (mais garder les newlines)
+        lines = text.split('\n')
+        lines = [' '.join(line.split()) for line in lines]
+        text = '\n'.join(lines)
         
         return text
     
@@ -5339,18 +5514,8 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
     try:
         if filename.endswith(".csv"):
             import csv
-            # Essayer différents encodages
-            text = None
-            for encoding in ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
-                try:
-                    text = content.decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-            
-            if text is None:
-                text = content.decode('utf-8', errors='replace')
-            
+            # Utiliser la détection d'encodage universelle
+            text = detect_and_fix_encoding(content)
             text = sanitize_text(text)
             reader = csv.DictReader(io.StringIO(text))
             rows = list(reader)
@@ -5373,24 +5538,64 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
             try:
                 import fitz
                 doc = fitz.open(stream=content, filetype="pdf")
-                full_text = "\n".join(page.get_text() for page in doc)
+                full_text = "\n".join(sanitize_text(page.get_text()) for page in doc)
             except Exception:
-                full_text = content.decode("utf-8", errors="replace")
+                # Fallback: décoder les bytes directement
+                full_text = detect_and_fix_encoding(content)
             full_text = sanitize_text(full_text)
             rows = _parse_text_to_rows(full_text)
         
         elif filename.endswith((".docx", ".doc")):
+            import zipfile
+            
+            full_text = ""
+            
+            # Simple approach: Extract ALL text from document
             try:
                 import docx
                 doc = docx.Document(io.BytesIO(content))
-                full_text = "\n".join(sanitize_text(p.text) for p in doc.paragraphs if p.text.strip())
+                
+                # Extract paragraphs
+                for p in doc.paragraphs:
+                    if p.text and p.text.strip():
+                        full_text += sanitize_text(p.text) + "\n"
+                
+                # Extract table content
                 for table in doc.tables:
                     for row in table.rows:
-                        full_text += "\n" + " | ".join(sanitize_text(cell.text) for cell in row.cells)
-            except Exception:
-                full_text = content.decode("utf-8", errors="replace")
-            full_text = sanitize_text(full_text)
+                        for cell in row.cells:
+                            if cell.text and cell.text.strip():
+                                full_text += sanitize_text(cell.text) + " "
+                    full_text += "\n"
+                
+                logger.info(f"✓ DOCX extraction OK: {len(full_text)} chars extracted")
+                    
+            except Exception as e1:
+                logger.warning(f"⚠️ DOCX extraction failed: {e1}, trying XML fallback...")
+                full_text = ""
+                
+                try:
+                    with zipfile.ZipFile(io.BytesIO(content)) as doczip:
+                        xml_bytes = doczip.read('word/document.xml')
+                        xml_text = detect_and_fix_encoding(xml_bytes)
+                        
+                        text_elements = re.findall(r'<w:t[^>]*>(.*?)</w:t>', xml_text, re.DOTALL)
+                        for elem in text_elements:
+                            elem = elem.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"').replace('&apos;', "'")
+                            full_text += sanitize_text(elem) + " "
+                        
+                        logger.info(f"✓ XML extraction OK: {len(full_text)} chars")
+                            
+                except Exception as e2:
+                    logger.warning(f"⚠️ XML extraction failed: {e2}")
+                    full_text = detect_and_fix_encoding(content)
+            
+            full_text = sanitize_text(full_text) if full_text else ""
+            logger.info(f"🔍 DEBUG - Total extracted: {len(full_text)} chars")
+            
+            # Use AI-based parsing
             rows = _parse_text_to_rows(full_text)
+
         
         else:
             raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV, XLSX, PDF ou DOCX.")
@@ -5429,8 +5634,8 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
                 )
                 # Insert or update solutions
                 conn.execute(
-                    "INSERT INTO solutions (code, cause, solution, priorite) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT (code) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
+                    "INSERT INTO solutions (mot_cle, cause, solution, priorite) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (mot_cle) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
                     (code, cause, solution, priorite)
                 )
                 imported += 1
@@ -7314,20 +7519,20 @@ async def import_clients_excel(file: UploadFile = File(...), user: dict = Depend
         filename = file.filename.lower()
         is_csv = filename.endswith('.csv')
         
-        # Read file
+        # Read file with universal encoding detection
         try:
             if is_csv:
-                # For CSV files, use StringIO
-                text_content = content.decode('utf-8')
+                # Utiliser la fonction globale detect_and_fix_encoding
+                text_content = detect_and_fix_encoding(content)
                 df = pd.read_csv(io.StringIO(text_content))
             else:
-                # For Excel files
+                # Pour Excel
                 try:
                     df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
                 except Exception:
                     df = pd.read_excel(io.BytesIO(content))
         except Exception as e:
-            logger.error(f"File read error: {e}")
+            logger.error(f"Erreur lecture fichier: {e}")
             return {"ok": False, "error": f"Erreur lecture fichier: {str(e)}", "imported": 0, "skipped": 0}
 
         if df.empty:
