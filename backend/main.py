@@ -1991,11 +1991,10 @@ def get_interventions(
     if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
-        # Try both name and username for filtering
-        user_identifier = user_username or user_nom_complet
-        if user_identifier and not df.empty and "technicien" in df.columns:
+        # Filter by name (primary) or username (secondary)
+        if user_nom_complet and not df.empty and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
-                lambda t: _tech_name_or_username_matches(user_identifier, t)
+                lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
             )]
         
         # Also fetch child interventions assigned to this technician
@@ -2203,11 +2202,13 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             if current_tech:
                 # Vérifier si c'est une correspondance par NOM (ex: "Salah Al Salah")
                 # OU par USERNAME (ex: "tech_07")
-                is_assigned_by_name = _tech_name_matches(user_nom_complet, current_tech)
-                is_assigned_by_username = (user_username.lower() == current_tech.lower())
-                is_assigned = is_assigned_by_name or is_assigned_by_username
+                # Check both directions: name->tech and username->tech
+                is_assigned = (
+                    _tech_name_or_username_matches(user_nom_complet, current_tech) or
+                    _tech_name_or_username_matches(user_username, current_tech)
+                )
                 
-                logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → by_name={is_assigned_by_name}, by_username={is_assigned_by_username}, assigned={is_assigned}")
+                logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → assigned={is_assigned}")
                 if not is_assigned:
                     raise HTTPException(
                         status_code=403,
@@ -3136,11 +3137,13 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 if current_tech:
                     # Vérifier si c'est une correspondance par NOM (ex: "Salah Al Salah")
                     # OU par USERNAME (ex: "tech_07")
-                    is_assigned_by_name = _tech_name_matches(user_nom_complet, current_tech)
-                    is_assigned_by_username = (user_username.lower() == current_tech.lower())
-                    is_assigned = is_assigned_by_name or is_assigned_by_username
+                    # Check both directions: name->tech and username->tech
+                    is_assigned = (
+                        _tech_name_or_username_matches(user_nom_complet, current_tech) or
+                        _tech_name_or_username_matches(user_username, current_tech)
+                    )
                     
-                    logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → by_name={is_assigned_by_name}, by_username={is_assigned_by_username}, assigned={is_assigned}")
+                    logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → assigned={is_assigned}")
                     if not is_assigned:
                         raise HTTPException(
                             status_code=403,
@@ -4346,11 +4349,10 @@ def get_planning(
     if user.get("role") == "Technicien" and not df.empty:
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
-        # Try both name and username for filtering
-        user_identifier = user_username or user_nom_complet
-        if user_identifier and "technicien_assigne" in df.columns:
+        # Filter by name (primary) or username (secondary)
+        if user_nom_complet and "technicien_assigne" in df.columns:
             df = df[df["technicien_assigne"].astype(str).apply(
-                lambda t: _tech_name_or_username_matches(user_identifier, t)
+                lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
             )]
     
     # Pour Lecteur : filtrer par les machines de son client
