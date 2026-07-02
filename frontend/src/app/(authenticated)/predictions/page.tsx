@@ -482,8 +482,62 @@ export default function PredictionsPage() {
 
             {/* Fallback: if only 'analyse' key exists (old format) */}
             {aiAnalysis.analyse && !aiAnalysis.alertes_critiques && (
-              <div className="bg-savia-bg/50 rounded-xl p-5 border border-savia-border/50">
-                <p className="text-sm text-savia-text whitespace-pre-wrap">{aiAnalysis.analyse}</p>
+              <div className="bg-savia-bg/50 rounded-xl p-5 border border-savia-border/50 space-y-3">
+                {aiAnalysis.analyse.split('\n').map((line: string, idx: number) => {
+                  // Headings (##, ###, ####)
+                  if (line.startsWith('####')) {
+                    return <h4 key={idx} className="text-xs font-bold text-savia-accent uppercase tracking-wider mt-3">{line.replace(/^#+\s?/, '')}</h4>;
+                  }
+                  if (line.startsWith('###')) {
+                    return <h3 key={idx} className="text-sm font-bold text-savia-accent mt-3">{line.replace(/^#+\s?/, '')}</h3>;
+                  }
+                  if (line.startsWith('##')) {
+                    return <h2 key={idx} className="text-base font-bold text-savia-accent mt-4">{line.replace(/^#+\s?/, '')}</h2>;
+                  }
+                  // Bullet points (- or *)
+                  if (line.match(/^[\s]*([-*])\s/)) {
+                    const content = line.replace(/^[\s]*([-*])\s/, '');
+                    return (
+                      <div key={idx} className="text-sm text-savia-text flex items-start gap-2 ml-2">
+                        <span className="text-savia-accent mt-0.5 flex-shrink-0">•</span>
+                        <span className="leading-relaxed">{content}</span>
+                      </div>
+                    );
+                  }
+                  // Numbered lists
+                  if (line.match(/^\d+\.\s/)) {
+                    const content = line.replace(/^\d+\.\s/, '');
+                    return (
+                      <div key={idx} className="text-sm text-savia-text flex items-start gap-2 ml-2">
+                        <span className="text-savia-accent font-semibold flex-shrink-0">{line.match(/^\d+/)?.[0]}</span>
+                        <span className="leading-relaxed">{content}</span>
+                      </div>
+                    );
+                  }
+                  // Bold text **text**
+                  if (line.includes('**')) {
+                    const parts = line.split(/(\*\*[^*]+\*\*)/);
+                    return (
+                      <p key={idx} className="text-sm text-savia-text leading-relaxed">
+                        {parts.map((part, pi) =>
+                          part.startsWith('**') ? (
+                            <span key={pi} className="font-bold text-savia-accent">
+                              {part.replace(/\*\*/g, '')}
+                            </span>
+                          ) : (
+                            part
+                          )
+                        )}
+                      </p>
+                    );
+                  }
+                  // Empty lines
+                  if (!line.trim()) {
+                    return <div key={idx} className="h-2" />;
+                  }
+                  // Regular paragraphs
+                  return <p key={idx} className="text-sm text-savia-text leading-relaxed">{line}</p>;
+                })}
               </div>
             )}
           </div>
