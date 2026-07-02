@@ -113,6 +113,7 @@ export default function SupervisionPage() {
   const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [selectedError, setSelectedError] = useState<string>('');
   const [loadedErrors, setLoadedErrors] = useState<{code:string;message:string;statut:string;type:string;frequence:number}[]|null>(null);
+  const [knowledgeResult, setKnowledgeResult] = useState<any>(null); // Solution from knowledge base
   const [selectedLogId, setSelectedLogId] = useState<number|null>(null);
   const [logLoadFailed, setLogLoadFailed] = useState<boolean>(false); // true when log selected but content unavailable
   const [logMergeApplied, setLogMergeApplied] = useState<boolean>(false); // prevents infinite loop in fleet/log merge
@@ -323,6 +324,41 @@ export default function SupervisionPage() {
     }
   };
 
+  // Fetch solution from knowledge base for a specific error code
+  const fetchKnowledgeForCode = async (errorCode: string) => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+      const res = await fetch('/api/knowledge', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      
+      if (res.ok) {
+        const knowledge = await res.json();
+        const solution = knowledge.find((k: any) => k.code === errorCode || k.code === String(errorCode));
+        
+        if (solution && (solution.solution || solution.cause)) {
+          // Convert knowledge entry to AiDiagnostic format
+          setKnowledgeResult({
+            probleme: `Code ${solution.code}: ${solution.message || 'Erreur détectée'}`,
+            cause: solution.cause || 'Cause non documentée',
+            solution: solution.solution || 'Solution non disponible',
+            prevention: '',
+            urgence: `Priorité: ${solution.priorite || 'MOYENNE'}`,
+            type: solution.type || '?',
+            priorite: solution.priorite || 'MOYENNE',
+            confidence: 95, // High confidence since it's from database
+            isFromKnowledgeBase: true,
+          });
+        } else {
+          setKnowledgeResult(null);
+        }
+      }
+    } catch (e) {
+      console.warn('fetchKnowledgeForCode failed:', e);
+      setKnowledgeResult(null);
+    }
+  };
+
   // Parse log content and return structured errors (shared by import + log viewer)
   const parseLogContent = (text: string): {code:string;message:string;statut:string;type:string;frequence:number}[] => {
     const lines = text.split('\n').filter(l => l.trim());
@@ -452,6 +488,15 @@ export default function SupervisionPage() {
       setSelectedMachine(selectedEquip); // still point to the equip even without logs
     }
   }, [selectedEquip, logHistory]);
+
+  // Fetch solution from knowledge base when error is selected
+  useEffect(() => {
+    if (selectedError) {
+      fetchKnowledgeForCode(selectedError);
+    } else {
+      setKnowledgeResult(null);
+    }
+  }, [selectedError]);
 
   const handleImportLog = async () => {
     if (!importFile || !importEquip) return;
@@ -809,9 +854,15 @@ export default function SupervisionPage() {
                 <Database className="w-5 h-5 inline mr-1 -mt-1 text-red-500" /> Code : <span className="text-savia-accent font-mono">{err.code}</span> — {err.message}
               </h3>
               <div className="flex items-center gap-2 mb-4">
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20">
-                  <AlertTriangle className="w-4 h-4 inline mr-1 -mt-0.5 text-red-400" /> Erreur INCONNUE — Aucune solution dans la base
-                </span>
+                {knowledgeResult ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-400 border border-green-500/20">
+                    <CheckCircle2 className="w-4 h-4 inline mr-1 -mt-0.5 text-green-400" /> Solution trouvée dans la base
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/20">
+                    <AlertTriangle className="w-4 h-4 inline mr-1 -mt-0.5 text-red-400" /> Erreur INCONNUE — Aucune solution dans la base
+                  </span>
+                )}
               </div>
 
               {/* AI Analysis Button */}
@@ -836,63 +887,83 @@ export default function SupervisionPage() {
               </button>
             </div>
 
-            {/* AI Diagnostic Results */}
-            {showAiDiag && aiResult && (
+            {/* AI/Knowledge Diagnostic Results */}
+            {((showAiDiag && aiResult) || knowledgeResult) ? (
               <div className="space-y-4 animate-fade-in">
-                <h3 className="text-lg font-bold gradient-text flex items-center gap-2"><Brain className="w-5 h-5" /> Résultat du Diagnostic IA</h3>
+                <h3 className="text-lg font-bold gradient-text flex items-center gap-2">
+                  {knowledgeResult && !showAiDiag ? (
+                    <>
+                      <Database className="w-5 h-5" /> Résultat de la Base de Connaissances
+                    </>
+                  ) : (
+                    <>
+                      <Brain className="w-5 h-5" /> Résultat du Diagnostic IA
+                    </>
+                  )}
+                </h3>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Problème */}
-                  <div className="rounded-xl p-4 border-l-4 border-l-red-500 bg-red-500/5">
-                    <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-wider mb-2"><AlertTriangle className="w-4 h-4" /> Problème identifié</div>
-                    <p className="text-savia-text text-sm">{aiResult.probleme}</p>
-                  </div>
-                  {/* Cause */}
-                  <div className="rounded-xl p-4 border-l-4 border-l-yellow-500 bg-yellow-500/5">
-                    <div className="flex items-center gap-2 text-yellow-400 font-bold text-xs uppercase tracking-wider mb-2"><Search className="w-4 h-4" /> Cause probable</div>
-                    <p className="text-savia-text text-sm">{aiResult.cause}</p>
-                  </div>
-                </div>
+                {/* Use knowledgeResult if available, otherwise use aiResult */}
+                {(() => {
+                  const result = knowledgeResult || aiResult;
+                  if (!result) return null;
+                  
+                  return (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Problème */}
+                        <div className="rounded-xl p-4 border-l-4 border-l-red-500 bg-red-500/5">
+                          <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-wider mb-2"><AlertTriangle className="w-4 h-4" /> Problème identifié</div>
+                          <p className="text-savia-text text-sm">{result.probleme}</p>
+                        </div>
+                        {/* Cause */}
+                        <div className="rounded-xl p-4 border-l-4 border-l-yellow-500 bg-yellow-500/5">
+                          <div className="flex items-center gap-2 text-yellow-400 font-bold text-xs uppercase tracking-wider mb-2"><Search className="w-4 h-4" /> Cause probable</div>
+                          <p className="text-savia-text text-sm">{result.cause}</p>
+                        </div>
+                      </div>
 
-                {/* Solution */}
-                <div className="rounded-xl p-4 border-l-4 border-l-green-500 bg-green-500/5">
-                  <div className="flex items-center gap-2 text-green-400 font-bold text-xs uppercase tracking-wider mb-2"><Settings className="w-4 h-4" /> Procédure d&apos;investigation</div>
-                  <pre className="text-savia-text text-sm whitespace-pre-wrap font-sans">{aiResult.solution}</pre>
-                </div>
+                      {/* Solution */}
+                      <div className="rounded-xl p-4 border-l-4 border-l-green-500 bg-green-500/5">
+                        <div className="flex items-center gap-2 text-green-400 font-bold text-xs uppercase tracking-wider mb-2"><Settings className="w-4 h-4" /> Procédure d&apos;investigation</div>
+                        <pre className="text-savia-text text-sm whitespace-pre-wrap font-sans">{result.solution}</pre>
+                      </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Prévention */}
-                  <div className="rounded-xl p-4 border-l-4 border-l-blue-500 bg-blue-500/5">
-                    <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-wider mb-2"><ShieldAlert className="w-4 h-4" /> Maintenance préventive</div>
-                    <p className="text-savia-text text-sm">{aiResult.prevention}</p>
-                  </div>
-                  {/* Urgence */}
-                  <div className="rounded-xl p-4 border-l-4 border-l-purple-500 bg-purple-500/5">
-                    <div className="flex items-center gap-2 text-purple-400 font-bold text-xs uppercase tracking-wider mb-2"><Activity className="w-4 h-4" /> Évaluation d&apos;urgence</div>
-                    <p className="text-savia-text text-sm">{aiResult.urgence}</p>
-                  </div>
-                </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Prévention */}
+                        <div className="rounded-xl p-4 border-l-4 border-l-blue-500 bg-blue-500/5">
+                          <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-wider mb-2"><ShieldAlert className="w-4 h-4" /> Maintenance préventive</div>
+                          <p className="text-savia-text text-sm">{result.prevention || 'Planifier maintenance préventive'}</p>
+                        </div>
+                        {/* Urgence */}
+                        <div className="rounded-xl p-4 border-l-4 border-l-purple-500 bg-purple-500/5">
+                          <div className="flex items-center gap-2 text-purple-400 font-bold text-xs uppercase tracking-wider mb-2"><Activity className="w-4 h-4" /> Évaluation d&apos;urgence</div>
+                          <p className="text-savia-text text-sm">{result.urgence}</p>
+                        </div>
+                      </div>
 
-                {/* Badges */}
-                <div className="flex gap-3">
-                  <span className="px-4 py-1.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400">
-                    <Folder className="w-3 h-3 inline mr-1 -mt-0.5" /> {aiResult.type}
-                  </span>
-                  <span className={`px-4 py-1.5 rounded-full text-xs font-bold
-                    ${aiResult.priorite === 'HAUTE' ? 'bg-red-500/10 text-red-400' :
-                      aiResult.priorite === 'MOYENNE' ? 'bg-yellow-500/10 text-yellow-400' :
-                      'bg-green-500/10 text-green-400'}`}>
-                    <Zap className="w-3 h-3 inline mr-1 -mt-0.5" /> {aiResult.priorite}
-                  </span>
-                  <span className={`px-4 py-1.5 rounded-full text-xs font-bold
-                    ${aiResult.confidence >= 80 ? 'bg-green-500/10 text-green-400' :
-                      aiResult.confidence >= 50 ? 'bg-yellow-500/10 text-yellow-400' :
-                      'bg-red-500/10 text-red-400'}`}>
-                    <CheckCircle2 className="w-3 h-3 inline mr-1 -mt-0.5" /> Confiance: {aiResult.confidence}%
-                  </span>
-                </div>
+                      {/* Badges */}
+                      <div className="flex gap-3">
+                        <span className="px-4 py-1.5 rounded-full text-xs font-bold bg-blue-500/10 text-blue-400">
+                          <Folder className="w-3 h-3 inline mr-1 -mt-0.5" /> {result.type}
+                        </span>
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold
+                          ${result.priorite === 'HAUTE' ? 'bg-red-500/10 text-red-400' :
+                            result.priorite === 'MOYENNE' ? 'bg-yellow-500/10 text-yellow-400' :
+                            'bg-green-500/10 text-green-400'}`}>
+                          <Zap className="w-3 h-3 inline mr-1 -mt-0.5" /> {result.priorite}
+                        </span>
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold
+                          ${result.confidence >= 80 ? 'bg-green-500/10 text-green-400' :
+                            result.confidence >= 50 ? 'bg-yellow-500/10 text-yellow-400' :
+                            'bg-red-500/10 text-red-400'}`}>
+                          <CheckCircle2 className="w-3 h-3 inline mr-1 -mt-0.5" /> Confiance: {result.confidence}%
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
-            )}
+            ) : null}
 
             {/* Save to Knowledge Base */}
             <SectionCard title={<span className="flex items-center gap-2"><Save className="w-4 h-4 text-savia-accent" /> Enregistrer dans la Base de Connaissances</span>}>
