@@ -5467,6 +5467,34 @@ def get_techniciens(user: dict = Depends(_verify_token)):
 
 @app.post("/api/techniciens")
 def create_technicien(body: dict, user: dict = Depends(_verify_token)):
+    # Validate username uniqueness if provided
+    username = body.get("username", "").strip()
+    if username:
+        with get_db() as conn:
+            # Check in utilisateurs
+            existing_user = conn.execute(
+                "SELECT id FROM utilisateurs WHERE username = ?",
+                (username,)
+            ).fetchone()
+            
+            if existing_user:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Ce nom d'utilisateur '{username}' est déjà utilisé dans le système utilisateurs. Veuillez choisir un autre."
+                )
+            
+            # Check in techniciens
+            existing_tech = conn.execute(
+                "SELECT id FROM techniciens WHERE username = ?",
+                (username,)
+            ).fetchone()
+            
+            if existing_tech:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Ce nom d'utilisateur '{username}' est déjà utilisé par un autre technicien. Veuillez choisir un autre."
+                )
+    
     ajouter_technicien(body)
     return {"ok": True}
 
@@ -6410,11 +6438,27 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
     if role not in valid_roles:
         return {"error": f"Invalid role. Must be one of: {', '.join(valid_roles)}"}, 400
     
-    hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    username = body.get("username", "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username est requis")
+    
+    # Check if username already exists
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM utilisateurs WHERE username = ?",
+            (username,)
+        ).fetchone()
+        
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ce nom d'utilisateur '{username}' est déjà utilisé. Veuillez choisir un autre."
+            )
+        
+        hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         conn.execute(
             "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
-            (body["username"], hashed, body.get("nom_complet", ""), role, body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
+            (username, hashed, body.get("nom_complet", ""), role, body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
         )
     return {"ok": True}
 
