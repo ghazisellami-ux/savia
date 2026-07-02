@@ -6789,6 +6789,42 @@ def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token))
         raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config: {e}")
 
 
+@app.put("/api/admin/settings")
+def update_admin_settings(body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Update admin-only settings (hourly rate, etc). Admin and Manager only."""
+    # Check permission - only Admin and Manager can modify
+    if user.get("role") not in ["Admin", "Manager"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Accès réservé aux Admins et Managers"
+        )
+    
+    try:
+        logger.info(f"[UPDATE_ADMIN_SETTINGS] User {user.get('sub')} updating settings: {body}")
+        with get_db() as conn:
+            for k, v in body.items():
+                # Only allow specific admin settings
+                allowed_keys = ["taux_horaire_technicien"]
+                if k not in allowed_keys:
+                    logger.warning(f"[UPDATE_ADMIN_SETTINGS] Attempt to modify non-allowed key: {k}")
+                    continue
+                
+                logger.info(f"[UPDATE_ADMIN_SETTINGS] Saving key='{k}', value='{v}'")
+                conn.execute(
+                    """
+                    INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
+                    """,
+                    (k, str(v))
+                )
+        logger.info(f"[UPDATE_ADMIN_SETTINGS] Admin settings saved successfully")
+        return {"ok": True}
+    except Exception as e:
+        import traceback
+        logger.error(f"[UPDATE_ADMIN_SETTINGS] Error: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Erreur sauvegarde config admin: {e}")
+
+
 # ==========================================
 # NOTIFICATION SCHEDULES
 # ==========================================

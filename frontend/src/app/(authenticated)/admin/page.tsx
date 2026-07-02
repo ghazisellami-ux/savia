@@ -216,6 +216,7 @@ export default function AdminPage() {
   const [devise, setDevise] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
   const [companyName, setCompanyName] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_company') || '' : ''));
   const [logoPreview, setLogoPreview] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_logo') || '' : ''));
+  const [tauxHoraire, setTauxHoraire] = useState('');
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [profilesSaving, setProfilesSaving] = useState(false);
   const [profilesSaved,  setProfilesSaved]  = useState(false);
@@ -228,7 +229,30 @@ export default function AdminPage() {
     reader.onload = ev => setLogoPreview(ev.target?.result as string);
     reader.readAsDataURL(file);
   };
-  const saveSettings = () => {
+  const saveSettings = async () => {
+    const jwtToken = localStorage.getItem('savia_token') || '';
+    try {
+      // Save to backend
+      const payload = {
+        taux_horaire_technicien: tauxHoraire,
+      };
+      const res = await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!res.ok) {
+        console.error('Failed to save hourly rate:', res.status);
+      }
+    } catch (err) {
+      console.error('Error saving hourly rate:', err);
+    }
+    
+    // Save local settings
     localStorage.setItem('savia_devise', devise);
     localStorage.setItem('savia_company', companyName);
     if (logoPreview) localStorage.setItem('savia_logo', logoPreview);
@@ -329,6 +353,11 @@ export default function AdminPage() {
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
           console.log('[ADMIN] settings data:', settingsData.role_permissions ? 'loaded' : 'empty');
+          
+          // Load hourly rate
+          const rate = settingsData.taux_horaire_technicien || '';
+          setTauxHoraire(rate);
+          
           const dbPerms = JSON.parse(settingsData.role_permissions || '{}');
           console.log('[ADMIN] parsed permissions keys:', Object.keys(dbPerms));
           if (Object.keys(dbPerms).length > 0) {
@@ -782,6 +811,20 @@ export default function AdminPage() {
               ))}
             </div>
           </SectionCard>
+
+          {/* Taux horaire technicien - Admin/Manager only */}
+          {(currentUser?.role === 'Admin' || currentUser?.role === 'Manager') && (
+            <SectionCard title={<span className="flex items-center gap-2"><DollarSign className="w-4 h-4 text-savia-accent" /> Taux horaire technicien</span>}>
+              <p className="text-xs text-savia-text-muted mb-4">Tarif appliqué pour les calculs de coût main d'œuvre dans les SAV et rapports financiers</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL}>Taux horaire ({DEVISES.find(d => d.code === devise)?.symbol || devise}/h)</label>
+                  <input type="number" className={INPUT} placeholder="65" min={0}
+                    value={tauxHoraire} onChange={e => setTauxHoraire(e.target.value)} />
+                </div>
+              </div>
+            </SectionCard>
+          )}
 
           {/* Identité client */}
           <SectionCard title={<span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-savia-accent" /> Identité de l'entreprise</span>}>

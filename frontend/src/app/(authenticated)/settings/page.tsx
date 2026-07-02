@@ -72,7 +72,6 @@ export default function SettingsPage() {
   );
 
   const [geminiKey, setGeminiKey] = useState('');
-  const [tauxHoraire, setTauxHoraire] = useState('');
   const [orgName, setOrgName] = useState('');
   const [showGemini, setShowGemini] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -108,7 +107,6 @@ export default function SettingsPage() {
         });
         setBots(newBots);
         setGeminiKey(data.gemini_api_key || '');
-        setTauxHoraire(data.taux_horaire_technicien || '');
         setOrgName(data.nom_organisation || 'SIC Radiologie');
       })
       .catch(err => {
@@ -189,7 +187,6 @@ export default function SettingsPage() {
         botPayload[`${b.key}_chat_id`] = bots[b.key]?.chatId || '';
       });
       botPayload.gemini_api_key = geminiKey;
-      botPayload.taux_horaire_technicien = tauxHoraire;
       botPayload.nom_organisation = orgName;
 
       const botRes = await fetch('/api/settings', {
@@ -500,19 +497,6 @@ export default function SettingsPage() {
           <label className={LABEL}>Nom de l&apos;organisation</label>
           <input type="text" className={INPUT} placeholder="SIC Radiologie"
             value={orgName} onChange={e => setOrgName(e.target.value)} />
-        </div>
-      </div>
-
-      {/* ━━━━ SAV ━━━━ */}
-      <div className={CARD}>
-        <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
-          <Wrench className="w-6 h-6 text-orange-400" />
-          <h2 className="font-bold text-base text-savia-text">SAV &amp; Financier</h2>
-        </div>
-        <div>
-          <label className={LABEL}><span className="inline-flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5" /> Taux horaire technicien (TND/h)</span></label>
-          <input type="number" className={INPUT} placeholder="65" min={0}
-            value={tauxHoraire} onChange={e => setTauxHoraire(e.target.value)} />
         </div>
       </div>
 
