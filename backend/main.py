@@ -130,6 +130,26 @@ def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
     return result
 
 
+def _tech_name_or_username_matches(user_name_or_username: str, technicien_field: str) -> bool:
+    """
+    Vérifie si le nom OU username du technicien correspond au champ technicien.
+    Utile pour les filtres où on peut avoir des usernames comme 'tech_07' ou des noms comme 'Salah Al Salah'.
+    
+    Returns True si:
+    - C'est une correspondance exacte par username (case-insensitive), OU
+    - C'est une correspondance par nom (case-insensitive word matching)
+    """
+    if not user_name_or_username or not technicien_field:
+        return False
+    
+    # Vérifier correspondance exacte par username (ex: "tech_07" == "tech_07")
+    if user_name_or_username.lower() == technicien_field.lower():
+        return True
+    
+    # Sinon, vérifier correspondance par nom
+    return _tech_name_matches(user_name_or_username, technicien_field)
+
+
 # ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
 def _ensure_dejavu_font():
     import shutil
@@ -1970,9 +1990,12 @@ def get_interventions(
     # ET inclure ses interventions enfants (temporary child interventions)
     if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
-        if user_nom_complet and not df.empty and "technicien" in df.columns:
+        user_username = (user.get("sub") or "").strip()
+        # Try both name and username for filtering
+        user_identifier = user_username or user_nom_complet
+        if user_identifier and not df.empty and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
-                lambda t: _tech_name_matches(user_nom_complet, t)
+                lambda t: _tech_name_or_username_matches(user_identifier, t)
             )]
         
         # Also fetch child interventions assigned to this technician
@@ -1990,7 +2013,7 @@ def get_interventions(
         
     elif technicien and not df.empty and "technicien" in df.columns:
         df = df[df["technicien"].astype(str).apply(
-            lambda t: _tech_name_matches(technicien, t)
+            lambda t: _tech_name_or_username_matches(technicien, t)
         )]
     
     # Filtrage par client pour Lecteur
@@ -2174,11 +2197,17 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             
             current_tech = str(row.get("technicien") or "").strip()
             user_nom_complet = (user.get("nom") or "").strip()
+            user_username = (user.get("sub") or "").strip()
             
             # Cas 1: Intervention avec champ technicien rempli (single-technicien)
             if current_tech:
-                is_assigned = _tech_name_matches(user_nom_complet, current_tech)
-                logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' vs tech='{current_tech}' → assigned={is_assigned}")
+                # Vérifier si c'est une correspondance par NOM (ex: "Salah Al Salah")
+                # OU par USERNAME (ex: "tech_07")
+                is_assigned_by_name = _tech_name_matches(user_nom_complet, current_tech)
+                is_assigned_by_username = (user_username.lower() == current_tech.lower())
+                is_assigned = is_assigned_by_name or is_assigned_by_username
+                
+                logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → by_name={is_assigned_by_name}, by_username={is_assigned_by_username}, assigned={is_assigned}")
                 if not is_assigned:
                     raise HTTPException(
                         status_code=403,
@@ -2189,12 +2218,12 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                 logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
                 tech_row = conn.execute(
                     "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
-                    (intervention_id, user.get("sub"))  # user.get("sub") est le username
+                    (intervention_id, user_username)  # user_username est le username
                 ).fetchone()
                 
                 if not tech_row:
                     # Technicien n'est pas dans la liste interventions_techniciens
-                    logger.warning(f"🔐 Technicien '{user_nom_complet}' (user_id={user.get('sub')}) not in interventions_techniciens for #{intervention_id}")
+                    logger.warning(f"🔐 Technicien '{user_nom_complet}' (username={user_username}) not in interventions_techniciens for #{intervention_id}")
                     raise HTTPException(
                         status_code=403,
                         detail="Vous ne pouvez éditer que vos propres interventions"
@@ -3101,11 +3130,17 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             if user.get("role") == "Technicien":
                 current_tech = str(intervention.get("technicien") or "").strip()
                 user_nom_complet = (user.get("nom") or "").strip()
+                user_username = (user.get("sub") or "").strip()
                 
                 # Cas 1: Intervention avec champ technicien rempli (single-technicien)
                 if current_tech:
-                    is_assigned = _tech_name_matches(user_nom_complet, current_tech)
-                    logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' vs tech='{current_tech}' → assigned={is_assigned}")
+                    # Vérifier si c'est une correspondance par NOM (ex: "Salah Al Salah")
+                    # OU par USERNAME (ex: "tech_07")
+                    is_assigned_by_name = _tech_name_matches(user_nom_complet, current_tech)
+                    is_assigned_by_username = (user_username.lower() == current_tech.lower())
+                    is_assigned = is_assigned_by_name or is_assigned_by_username
+                    
+                    logger.info(f"🔐 Permission check (single-tech): user='{user_nom_complet}' (username={user_username}) vs tech='{current_tech}' → by_name={is_assigned_by_name}, by_username={is_assigned_by_username}, assigned={is_assigned}")
                     if not is_assigned:
                         raise HTTPException(
                             status_code=403,
@@ -3116,12 +3151,12 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                     logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
                     tech_row = conn.execute(
                         "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
-                        (intervention_id, user.get("sub"))  # user.get("sub") est le username
+                        (intervention_id, user_username)  # user_username est le username
                     ).fetchone()
                     
                     if not tech_row:
                         # Technicien n'est pas dans la liste interventions_techniciens
-                        logger.warning(f"🔐 Technicien '{user_nom_complet}' (user_id={user.get('sub')}) not in interventions_techniciens for #{intervention_id}")
+                        logger.warning(f"🔐 Technicien '{user_nom_complet}' (username={user_username}) not in interventions_techniciens for #{intervention_id}")
                         raise HTTPException(
                             status_code=403,
                             detail="Vous ne pouvez éditer que vos propres interventions"
@@ -4310,9 +4345,12 @@ def get_planning(
     # Si le user est un Technicien → filtrer automatiquement ses plannings
     if user.get("role") == "Technicien" and not df.empty:
         user_nom_complet = (user.get("nom") or "").strip()
-        if user_nom_complet and "technicien_assigne" in df.columns:
+        user_username = (user.get("sub") or "").strip()
+        # Try both name and username for filtering
+        user_identifier = user_username or user_nom_complet
+        if user_identifier and "technicien_assigne" in df.columns:
             df = df[df["technicien_assigne"].astype(str).apply(
-                lambda t: _tech_name_matches(user_nom_complet, t)
+                lambda t: _tech_name_or_username_matches(user_identifier, t)
             )]
     
     # Pour Lecteur : filtrer par les machines de son client
