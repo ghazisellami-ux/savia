@@ -1916,10 +1916,12 @@ def get_interventions(
         user_nom_complet = (user.get("nom") or "").strip()
         # Découper en mots individuels → cherche TOUS les mots dans le champ technicien
         # Gère "Dridi Ali" vs "Ali Dridi" et autres variations d'ordre
+        # IMPORTANT: On compare mot-à-mot (split) et non par sous-chaîne (in)
+        # pour éviter que "al" ne matche "Salah" (sous-chaîne) 
         name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
         if name_words and not df.empty and "technicien" in df.columns:
             df = df[df["technicien"].astype(str).apply(
-                lambda t: all(word in t.lower() for word in name_words)
+                lambda t: all(word in t.lower().split() for word in name_words)
             )]
         
         # Also fetch child interventions assigned to this technician
@@ -1936,9 +1938,9 @@ def get_interventions(
             pass
         
     elif technicien and not df.empty and "technicien" in df.columns:
-        words = technicien.lower().split()
+        words = [w for w in technicien.lower().split() if len(w) > 1]
         df = df[df["technicien"].astype(str).apply(
-            lambda t: all(w in t.lower() for w in words)
+            lambda t: all(w in t.lower().split() for w in words)
         )]
     
     # Filtrage par client pour Lecteur
@@ -2124,8 +2126,10 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             user_nom_complet = (user.get("nom") or "").strip()
             
             # Vérifier que le technicien est assigné à l'intervention
+            # Comparaison mot-à-mot pour éviter les faux positifs (ex: "al" dans "Salah")
             name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
-            is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+            current_tech_words = current_tech.lower().split()
+            is_assigned = name_words and all(word in current_tech_words for word in name_words)
             
             if not is_assigned and current_tech:  # Si l'intervention est assignée et ce n'est pas ce technicien
                 raise HTTPException(
@@ -3034,7 +3038,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 current_tech = str(intervention.get("technicien") or "").strip()
                 user_nom_complet = (user.get("nom") or "").strip()
                 name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
-                is_assigned = name_words and all(word in current_tech.lower() for word in name_words)
+                current_tech_words = current_tech.lower().split()
+                is_assigned = name_words and all(word in current_tech_words for word in name_words)
                 
                 if not is_assigned and current_tech:
                     raise HTTPException(
@@ -4228,7 +4233,7 @@ def get_planning(
         name_words = [w.lower() for w in user_nom_complet.split() if len(w) > 1]
         if name_words and "technicien_assigne" in df.columns:
             df = df[df["technicien_assigne"].astype(str).apply(
-                lambda t: all(word in t.lower() for word in name_words)
+                lambda t: all(word in t.lower().split() for word in name_words)
             )]
     
     # Pour Lecteur : filtrer par les machines de son client

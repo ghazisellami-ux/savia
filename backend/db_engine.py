@@ -4181,6 +4181,8 @@ def lire_child_interventions_for_technician(technician_name):
     """
     with get_db() as conn:
         # Query child interventions assigned to this technician
+        # Use word-boundary regex matching to avoid false positives
+        # (e.g., "al" matching inside "Salah" for "Ahmed Ben Salah")
         base_query = """
             SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
                    i.description, i.probleme, i.cause, i.solution,
@@ -4197,13 +4199,22 @@ def lire_child_interventions_for_technician(technician_name):
                    i.parent_intervention_id
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
-            WHERE i.is_temporary = 1 AND i.technicien LIKE ?
+            WHERE i.is_temporary = 1 AND i.technicien ILIKE ?
             ORDER BY i.date DESC
         """
         
-        # Use wildcard matching for flexible tech name matching
+        # Use ILIKE for initial broad match, then filter precisely in Python
         search_pattern = f"%{technician_name}%"
         df = read_sql(base_query, conn, params=(search_pattern,))
+    
+    # Post-filter: ensure ALL words from technician_name appear as whole words
+    # in the technicien field (prevents "al" in "Salah Al Salah" from matching "Ahmed Ben Salah")
+    if not df.empty and "technicien" in df.columns:
+        name_words = [w.lower() for w in technician_name.split() if len(w) > 1]
+        if name_words:
+            df = df[df["technicien"].astype(str).apply(
+                lambda t: all(word in t.lower().split() for word in name_words)
+            )]
     
     # Apply text fixes
     text_columns = ["machine", "description", "probleme", "cause", "solution", "notes", "client"]
