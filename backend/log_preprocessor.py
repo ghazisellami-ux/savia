@@ -18,7 +18,7 @@ PATTERNS_TO_REMOVE = [
 # e.g., Dates (2024-04-19, 19/04/2024), Times (16:38:21)
 DATE_TIME_PATTERN = re.compile(r"\b(20\d{2}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]20\d{2}|\d{2}:\d{2}:\d{2})\b")
 LEVEL_PATTERN = re.compile(r"(?i)\b(INFO|WARN|WARNING|ERROR|ERR|FATAL|CRITICAL|FAIL|DEBUG)\b")
-ERROR_CODE_PATTERN = re.compile(r"\b(0x[0-9A-Fa-f]+|Err(?:or)?\s*\d+|Code\s*\d+)\b", re.IGNORECASE)
+ERROR_CODE_PATTERN = re.compile(r"\b(0x[0-9A-Fa-f]+|Err(?:or)?\s*\d+|Code\s*\d+|\b\d{1,5}\b)\b", re.IGNORECASE)
 
 def clean_log_line(line: str) -> str:
     """Removes proprietary/sensitive data from a single line."""
