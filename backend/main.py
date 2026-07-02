@@ -106,21 +106,28 @@ def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
     apparaissent comme mots entiers dans le champ technicien.
     """
     if not user_name or not technicien_field:
+        logger.warning(f"[_tech_name_matches] Empty inputs: user_name='{user_name}', technicien_field='{technicien_field}'")
         return False
     
     user_words = _extract_words(user_name)
     tech_words = _extract_words(technicien_field)
     
+    logger.info(f"[_tech_name_matches] Comparing: user='{user_name}' (words={user_words}) vs tech='{technicien_field}' (words={tech_words})")
+    
     # IMPORTANT: Si l'utilisateur n'a aucun mot (nom vide?), refuser
     if not user_words:
+        logger.warning(f"[_tech_name_matches] No user words extracted from '{user_name}'")
         return False
     
     # IMPORTANT: Si le champ technicien est vide, refuser
     if not tech_words:
+        logger.warning(f"[_tech_name_matches] No tech words extracted from '{technicien_field}'")
         return False
     
     # Tous les mots de l'utilisateur doivent être présents dans le champ technicien
-    return all(word in tech_words for word in user_words)
+    result = all(word in tech_words for word in user_words)
+    logger.info(f"[_tech_name_matches] Result: {result} (all user_words in tech_words: {[word in tech_words for word in user_words]})")
+    return result
 
 
 # ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
