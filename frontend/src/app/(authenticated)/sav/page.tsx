@@ -429,11 +429,11 @@ export default function SavPage() {
       const nb_installations = allInterv.filter(i => i.type.toLowerCase().includes('install')).length;
       
       // Calculate costs correctly (avoid double counting)
-      // Use the same logic as Rentabilité Client page
-      const totalCoutInterv = allInterv.reduce((a, b) => a + (b.cout || 0), 0);
-      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
-      const totalCoutTotal = totalCoutInterv + totalCoutPieces;  // ← Total = MO + Pièces
+      // Use the same logic as Rentabilité Client page - recalculate from duration × hourly rate
       const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
+      const totalCoutMORecalculated = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
+      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
+      const totalCoutTotal = totalCoutMORecalculated + totalCoutPieces;  // ← Total = MO (recalculated) + Pièces
       
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
 
@@ -478,15 +478,14 @@ export default function SavPage() {
       });
 
       const mttrH = terminees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
-      const totalCoutService = totalCoutInterv;
-      const totalCoutMOLocal = totalCoutInterv;
+      const totalCoutMOLocal = totalCoutMORecalculated;
       
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
-        cout_interventions: totalCoutService, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMOLocal,
+        cout_interventions: 0, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMOLocal,
         cout_total: totalCoutTotal,
         cout_moyen: nb_total > 0 ? Math.round(totalCoutTotal / nb_total) : 0,
         tech_details, machines_detail, clients_detail, interventions_detail,
@@ -638,8 +637,12 @@ export default function SavPage() {
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
   const totalCoutMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
   const totalCoutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const totalCout = totalCoutMO + totalCoutPieces;  // ← Total = MO + Pièces
-  const totalDureeH = Math.round(filtered.reduce((a, b) => a + b.duree_minutes, 0) / 60);
+  
+  // Recalculate labor cost based on duration × hourly rate (same as Charge Financière below)
+  const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
+  const totalCoutMORecalculated = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
+  const totalCout = totalCoutMORecalculated + totalCoutPieces;  // ← Total = MO (recalculated) + Pièces
+  const totalDureeH = Math.round(totalDureeMin / 60);
   const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
   const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
   const correctifs = filtered.filter(i => i.type.toLowerCase().includes('correct')).length;
@@ -666,8 +669,7 @@ export default function SavPage() {
   }, [filtered]);
 
   // Financial summary
-  // Recalculate costs using current hourly rate (same as Rentabilité Client page)
-  const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
+  // Recalculate costs using current hourly rate (same as Charge Financière below)
   const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
   const coutMainOeuvreMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
   const coutInterventions = coutMainOeuvreMO + coutPieces;  // ← Total = MO + Pièces

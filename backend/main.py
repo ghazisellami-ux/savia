@@ -1441,40 +1441,35 @@ def get_dashboard_kpis(
                     mttr = float(durations.mean())
         
         # Calculate total cost = cout_main_oeuvre + cout_pieces (NOT cout_interventions which double-counts)
-        # Only from CLOSED interventions
+        # Use ALL interventions (not just closed) to match SAV page calculation
+        # Recalculate cout_main_oeuvre from duration × current hourly rate (same as SAV page does)
         cout_main_oeuvre_total = 0.0
         cout_pieces_total = 0.0
         
         if not df_int.empty:
-            # First filter to only closed interventions
-            status_col = None
-            for col in ["Statut", "statut", "status", "Status"]:
-                if col in df_int.columns:
-                    status_col = col
-                    break
+            # Get current hourly rate from config
+            try:
+                with get_db() as conn:
+                    config_row = conn.execute(
+                        "SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'"
+                    ).fetchone()
+                    taux_horaire = float(config_row["valeur"]) if config_row else 100.0
+            except (ValueError, TypeError, AttributeError):
+                taux_horaire = 100.0
             
-            if status_col:
-                closed_statuses = {"clôturée", "cloturee", "closed", "resolved", "terminée", "terminee", "complétée", "completee"}
-                df_int_closed = df_int[df_int[status_col].astype(str).str.lower().str.strip().isin(closed_statuses)]
-            else:
-                df_int_closed = df_int
+            # Recalculate labor cost from duration × hourly rate (same as SAV page line 676)
+            # This matches the formula: (total_minutes / 60) × hourly_rate
+            if "duree_minutes" in df_int.columns:
+                durations = pd.to_numeric(df_int["duree_minutes"], errors="coerce").fillna(0)
+                total_minutes = float(durations.sum())
+                cout_main_oeuvre_total = (total_minutes / 60.0) * taux_horaire
             
-            # Debug: log available columns
-            logger.info(f"Available intervention columns: {list(df_int_closed.columns)}")
+            logger.info(f"Recalculated cout_main_oeuvre from duration: {total_minutes} min × {taux_horaire}/h = {cout_main_oeuvre_total} DT")
             
-            # Sum cout_main_oeuvre (column is named "cout" in interventions table)
-            for col in ["cout", "cout_main_oeuvre", "main_oeuvre", "cout_mo", "mo_cost", "cout_MO", "Cout_Main_Oeuvre", "Cout_MO"]:
-                if col in df_int_closed.columns:
-                    mo_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
-                    if len(mo_costs) > 0:
-                        cout_main_oeuvre_total = float(mo_costs.sum())
-                    logger.info(f"Found {col}: total = {cout_main_oeuvre_total}")
-                    break
-            
-            # Sum cout_pieces
+            # Sum cout_pieces from all interventions
             for col in ["cout_pieces", "pieces", "cout_pieces_utilisees", "pieces_cost", "cout_Pieces", "Cout_Pieces", "Cout_pieces_utilisees", "Cost_Pieces"]:
-                if col in df_int_closed.columns:
-                    pieces_costs = pd.to_numeric(df_int_closed[col], errors="coerce").dropna()
+                if col in df_int.columns:
+                    pieces_costs = pd.to_numeric(df_int[col], errors="coerce").dropna()
                     if len(pieces_costs) > 0:
                         cout_pieces_total = float(pieces_costs.sum())
                     logger.info(f"Found {col}: total = {cout_pieces_total}")
