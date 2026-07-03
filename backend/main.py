@@ -8565,7 +8565,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
                 pdf.cell(col_widths[2], 6, "", border=1)
                 pdf.cell(col_widths[3], 6, "", border=1)
                 pdf.cell(col_widths[4], 6, "", border=1)
-            pdf.ln(6)
+                pdf.ln(6)
         
         pdf.ln(8)
         
