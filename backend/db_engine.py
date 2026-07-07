@@ -564,7 +564,7 @@ def init_db():
             date_prevue DATE NOT NULL,
             date_realisee DATE,
             technicien_assigne TEXT DEFAULT '',
-            statut TEXT DEFAULT 'Planifiée' CHECK(statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé')),
+            statut TEXT DEFAULT 'Planifiée' CHECK(statut IN ('Planifiée', 'En cours', 'Cloturee', 'En retard', 'Décalé')),
             rappel_envoye INTEGER DEFAULT 0,
             recurrence TEXT DEFAULT '',
             notes TEXT DEFAULT '',
@@ -1138,7 +1138,7 @@ def init_db():
                     conn.execute("""
                         ALTER TABLE planning_maintenance 
                         ADD CONSTRAINT planning_maintenance_statut_check 
-                        CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
+                        CHECK (statut IN ('Planifiée', 'En cours', 'Cloturee', 'En retard', 'Décalé'))
                     """)
                     conn.commit()
                     logger.info("✅ Migration réussie: planning_maintenance statut constraint updated with 'Décalé' status")
@@ -1149,7 +1149,7 @@ def init_db():
                 conn.execute("""
                     ALTER TABLE planning_maintenance 
                     ADD CONSTRAINT planning_maintenance_statut_check 
-                    CHECK (statut IN ('Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'))
+                    CHECK (statut IN ('Planifiée', 'En cours', 'Cloturee', 'En retard', 'Décalé'))
                 """)
                 conn.commit()
                 logger.info("✅ Migration réussie: planning_maintenance statut constraint created with 'Décalé' status")
@@ -1175,6 +1175,85 @@ def init_db():
             logger.info("✅ Migration réussie: contrats_equipements peuplée depuis contrats.equipement")
         except Exception as e:
             logger.debug(f"Migration contrats_equipements ignorée: {e}")
+
+        # --- Migration: Fix CHECK constraint and link closed interventions to planning ---
+        # The constraint in the database may still have old values (Terminée instead of Cloturee)
+        # This migration fixes the constraint and updates related planning entries
+        try:
+            from datetime import datetime
+            cur = conn.cursor()
+            
+            logger.info("🔧 Starting planning_maintenance constraint and data migration...")
+            
+            # Step 0: FIRST - Convert any existing 'Réalisée' or 'Terminée' to 'Cloturee' BEFORE touching the constraint
+            try:
+                cur.execute("""
+                    UPDATE planning_maintenance 
+                    SET statut = 'Cloturee'
+                    WHERE statut IN ('Réalisée', 'Terminée')
+                """)
+                rows_changed = cur.rowcount
+                if rows_changed > 0:
+                    conn.commit()
+                    logger.info(f"✅ Converted {rows_changed} old planning entries from 'Réalisée'/'Terminée' to 'Cloturee'")
+            except Exception as e:
+                logger.debug(f"Could not convert old statuses: {e}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
+            # Step 1: Drop the old CHECK constraint if it exists
+            try:
+                cur.execute("""
+                    ALTER TABLE planning_maintenance DROP CONSTRAINT IF EXISTS planning_maintenance_statut_check
+                """)
+                conn.commit()
+                logger.info("✅ Dropped old planning_maintenance_statut_check constraint")
+            except Exception as e:
+                logger.debug(f"Could not drop constraint: {e}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
+            # Step 2: Add the new CHECK constraint with correct values
+            try:
+                cur.execute("""
+                    ALTER TABLE planning_maintenance 
+                    ADD CONSTRAINT planning_maintenance_statut_check 
+                    CHECK (statut IN ('Planifiée', 'En cours', 'Cloturee', 'En retard', 'Décalé'))
+                """)
+                conn.commit()
+                logger.info("✅ Added new planning_maintenance_statut_check constraint with 'Cloturee'")
+            except Exception as e:
+                logger.debug(f"Could not add constraint: {e}")
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
+            # Step 3: Update plannings that have closed interventions
+            cur.execute("""
+                UPDATE planning_maintenance 
+                SET statut = 'Cloturee', date_realisee = CURRENT_DATE
+                WHERE id IN (
+                    SELECT DISTINCT planning_id FROM interventions 
+                    WHERE planning_id IS NOT NULL AND statut = 'Cloturee'
+                )
+                AND statut != 'Cloturee'
+            """)
+            rows_updated = cur.rowcount
+            if rows_updated > 0:
+                conn.commit()
+                logger.info(f"✅ Migration réussie: {rows_updated} planning_maintenance entries linked to closed interventions and marked as 'Cloturee'")
+                
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.debug(f"Migration planning_maintenance constraint/data ignorée: {e}")
 
         # --- Migration: Add pieces_incluses and avec_pieces columns to contrats if not exist ---
         try:
@@ -4380,6 +4459,10 @@ def finalize_intervention_from_techniciens(intervention_id):
         # This is the key change - we now close it instead of leaving it "En cours"
         date_cloture = datetime.now().isoformat()
         
+        # Get planning_id before updating intervention
+        interv_row = conn.execute(f"SELECT planning_id FROM interventions WHERE id = {ph}", (intervention_id,)).fetchone()
+        planning_id = interv_row.get('planning_id') if interv_row else None
+        
         conn.execute(f"""
             UPDATE interventions 
             SET statut = {ph},
@@ -4391,6 +4474,16 @@ def finalize_intervention_from_techniciens(intervention_id):
                 pieces_utilisees = {ph}
             WHERE id = {ph}
         """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, intervention_id))
+        
+        # Update related planning to "Cloturee" if it exists
+        if planning_id:
+            conn.execute(f"""
+                UPDATE planning_maintenance
+                SET statut = {ph},
+                    date_realisee = {ph}
+                WHERE id = {ph} AND statut != {ph}
+            """, ('Cloturee', date_cloture[:10], planning_id, 'Cloturee'))
+            logger.info(f"✅ Planning #{planning_id} marked as Cloturee (intervention #{intervention_id} auto-closed)")
         
         logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {total_count} technicians completed")
         
