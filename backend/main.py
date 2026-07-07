@@ -1977,12 +1977,13 @@ def get_interventions(
     limit: int = 200,
     user: dict = Depends(_verify_token),
 ):
-    from db_engine import lire_child_interventions_for_technician
+    from db_engine import lire_child_interventions_for_technician, get_db
     
     df = lire_interventions(machine=machine)
     
     # Si le user est un Technicien → filtrer automatiquement ses interventions
     # ET inclure ses interventions enfants (temporary child interventions)
+    # ET inclure les interventions assignées via interventions_techniciens (multi-tech mode)
     if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
@@ -2003,6 +2004,37 @@ def get_interventions(
         except Exception as e:
             logger.warning(f"Error fetching child interventions for {user_nom_complet}: {e}")
             # Continue with just parent interventions if children fetch fails
+            pass
+        
+        # Also fetch interventions assigned via interventions_techniciens table (multi-tech mode from Planning)
+        try:
+            with get_db() as conn:
+                # Find intervention IDs where this technician is assigned
+                tech_intervention_ids = conn.execute(
+                    """SELECT DISTINCT intervention_id FROM interventions_techniciens 
+                       WHERE technicien_nom ILIKE ? OR technicien_nom ILIKE ?""",
+                    (f"%{user_nom_complet}%", f"%{user_username}%")
+                ).fetchall()
+                
+                if tech_intervention_ids:
+                    ids_list = [str(row['intervention_id']) for row in tech_intervention_ids]
+                    # Fetch full intervention records for these IDs
+                    if ids_list:
+                        id_placeholders = ",".join(["?"] * len(ids_list))
+                        multi_tech_rows = conn.execute(
+                            f"""SELECT * FROM interventions WHERE id IN ({id_placeholders})""",
+                            ids_list
+                        ).fetchall()
+                        
+                        if multi_tech_rows:
+                            import pandas as pd
+                            df_multi_tech = pd.DataFrame([dict(r) for r in multi_tech_rows])
+                            # Merge with existing dataframe, avoiding duplicates
+                            df = pd.concat([df, df_multi_tech], ignore_index=True).drop_duplicates(subset=['id'], keep='first')
+                            logger.info(f"Technician {user_nom_complet}: added {len(df_multi_tech)} multi-tech interventions")
+        except Exception as e:
+            logger.warning(f"Error fetching multi-tech interventions for {user_nom_complet}: {e}")
+            # Continue with previous results if this fetch fails
             pass
         
     elif technicien and not df.empty and "technicien" in df.columns:
@@ -2028,7 +2060,33 @@ def get_interventions(
     else:
         total = 0
     
-    return _df_to_records(df)
+    # Enrich technicien field with multi-tech assignments for display
+    records = _df_to_records(df)
+    try:
+        with get_db() as conn:
+            for record in records:
+                intervention_id = record.get('id')
+                if intervention_id:
+                    # Get all technicians assigned via interventions_techniciens
+                    multi_tech_rows = conn.execute(
+                        """SELECT DISTINCT technicien_nom FROM interventions_techniciens 
+                           WHERE intervention_id = ? ORDER BY technicien_nom""",
+                        (intervention_id,)
+                    ).fetchall()
+                    
+                    if multi_tech_rows:
+                        # Multiple technicians assigned via planning
+                        tech_names = [row['technicien_nom'] for row in multi_tech_rows]
+                        # Update technicien field to show comma-separated list of all assigned techs
+                        record['technicien'] = ", ".join(tech_names) if tech_names else record.get('technicien', 'Non assigné')
+                    elif not record.get('technicien') or record.get('technicien') == 'Non assigné':
+                        # No direct assignment and no multi-tech assignment
+                        record['technicien'] = 'Non assigné'
+    except Exception as e:
+        logger.warning(f"Error enriching technicien field: {e}")
+        # Continue with un-enriched records if this step fails
+    
+    return records
 
 
 @app.get("/api/interventions/{parent_id}/children")
@@ -2212,12 +2270,22 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             else:
                 # Cas 2: Intervention sans technicien principal (multi-technicien) → vérifier interventions_techniciens
                 logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
-                tech_row = conn.execute(
-                    "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
-                    (intervention_id, user_username)  # user_username est le username
-                ).fetchone()
+                tech_rows = conn.execute(
+                    "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
+                    (intervention_id,)
+                ).fetchall()
                 
-                if not tech_row:
+                # Vérifier si le technicien actuel est dans la liste
+                is_assigned = False
+                for row in tech_rows:
+                    stored_tech_nom = str(row.get("technicien_nom") or "").strip()
+                    if (stored_tech_nom and 
+                        (_tech_name_or_username_matches(user_nom_complet, stored_tech_nom) or
+                         _tech_name_or_username_matches(user_username, stored_tech_nom))):
+                        is_assigned = True
+                        break
+                
+                if not is_assigned:
                     # Technicien n'est pas dans la liste interventions_techniciens
                     logger.warning(f"🔐 Technicien '{user_nom_complet}' (username={user_username}) not in interventions_techniciens for #{intervention_id}")
                     raise HTTPException(
@@ -2534,6 +2602,40 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             with get_db() as conn:
                 conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
             logger.info(f"✅ update_intervention #{intervention_id}: SUCCESS - Updated {len(fields)} fields")
+            
+            # If technicien field was updated, also update interventions_techniciens table
+            if "technicien" in body:
+                new_technicien = body.get("technicien", "").strip()
+                logger.info(f"📍 Technicien field updated: {new_technicien}")
+                
+                if new_technicien and new_technicien != "Non assigné":
+                    try:
+                        with get_db() as conn:
+                            # Handle multiple technicians separated by commas
+                            techs = [t.strip() for t in new_technicien.split(",") if t.strip()]
+                            
+                            for tech_name in techs:
+                                # Check if this technician is already in interventions_techniciens
+                                existing = conn.execute(
+                                    """SELECT id FROM interventions_techniciens 
+                                       WHERE intervention_id = ? AND technicien_nom ILIKE ?""",
+                                    (intervention_id, f"%{tech_name}%")
+                                ).fetchone()
+                                
+                                if not existing:
+                                    # Insert new assignment
+                                    conn.execute(
+                                        """INSERT INTO interventions_techniciens 
+                                           (intervention_id, technicien_nom, statut) 
+                                           VALUES (?, ?, ?)""",
+                                        (intervention_id, tech_name, "Assigné")
+                                    )
+                                    logger.info(f"✅ Added technician '{tech_name}' to interventions_techniciens for #{intervention_id}")
+                                else:
+                                    logger.info(f"ℹ️ Technician '{tech_name}' already in interventions_techniciens for #{intervention_id}")
+                    except Exception as te:
+                        logger.warning(f"⚠️ Error updating interventions_techniciens: {te}")
+                        # Continue - don't fail the whole request
         except Exception as e:
             logger.error(f"❌ update_intervention #{intervention_id} FAILED: {e}")
             raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
@@ -3147,12 +3249,22 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 else:
                     # Cas 2: Intervention sans technicien principal (multi-technicien) → vérifier interventions_techniciens
                     logger.info(f"🔐 Permission check (multi-tech): checking interventions_techniciens table")
-                    tech_row = conn.execute(
-                        "SELECT user_id FROM interventions_techniciens WHERE intervention_id = ? AND user_id = ?",
-                        (intervention_id, user_username)  # user_username est le username
-                    ).fetchone()
+                    tech_rows = conn.execute(
+                        "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
+                        (intervention_id,)
+                    ).fetchall()
                     
-                    if not tech_row:
+                    # Vérifier si le technicien actuel est dans la liste
+                    is_assigned = False
+                    for row in tech_rows:
+                        stored_tech_nom = str(row.get("technicien_nom") or "").strip()
+                        if (stored_tech_nom and 
+                            (_tech_name_or_username_matches(user_nom_complet, stored_tech_nom) or
+                             _tech_name_or_username_matches(user_username, stored_tech_nom))):
+                            is_assigned = True
+                            break
+                    
+                    if not is_assigned:
                         # Technicien n'est pas dans la liste interventions_techniciens
                         logger.warning(f"🔐 Technicien '{user_nom_complet}' (username={user_username}) not in interventions_techniciens for #{intervention_id}")
                         raise HTTPException(
@@ -5128,6 +5240,97 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     logger.info(f"Telegram notification sent to {len(tech_list)} technician(s) for planning {planning_id}")
                 except Exception as e:
                     logger.warning(f"Failed to send Telegram notification for planning {planning_id}: {e}")
+            
+            # If technician was changed, also update interventions_techniciens for linked intervention
+            # OR create the intervention if it doesn't exist yet
+            if new_technicians:
+                logger.info(f"🔧 Processing technician assignment: {new_technicians} for planning #{planning_id}")
+                try:
+                    machine = current.get("machine", "")
+                    date_prevue = current.get("date_prevue", datetime.now().isoformat()[:10])
+                    
+                    # Find the intervention linked to this planning via planning_id
+                    linked_intervention = conn.execute(
+                        "SELECT id FROM interventions WHERE planning_id = %s LIMIT 1",
+                        (planning_id,)
+                    ).fetchone()
+                    
+                    # If not found by planning_id, try to find by machine + date (in case it was manually created)
+                    if not linked_intervention and machine:
+                        logger.info(f"  No planning_id match, searching by machine '{machine}' on date '{date_prevue}'")
+                        linked_intervention = conn.execute(
+                            "SELECT id FROM interventions WHERE machine = %s AND date = %s ORDER BY id DESC LIMIT 1",
+                            (machine, date_prevue)
+                        ).fetchone()
+                        if linked_intervention:
+                            logger.info(f"  Found intervention by machine+date: #{linked_intervention['id']}")
+                    
+                    # If still not found, CREATE IT
+                    if not linked_intervention:
+                        logger.info(f"  ❌ No intervention found, creating one...")
+                        
+                        client = current.get("client", "")
+                        description = current.get("description", "") or f"Maintenance préventive — {machine}"
+                        type_maintenance = current.get("type_maintenance", "Préventive")
+                        notes = f"[{client}] Maintenance planifiée #{planning_id}" if client else f"Maintenance planifiée #{planning_id}"
+                        
+                        logger.info(f"  Inserting intervention: date={date_prevue}, machine={machine}, technicien={new_technicians}")
+                        
+                        conn.execute(
+                            """INSERT INTO interventions
+                               (date, machine, technicien, type_intervention, description,
+                                statut, priorite, notes, planning_id)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (date_prevue, machine, new_technicians, type_maintenance, description,
+                             "En cours", "Moyenne", notes, planning_id)
+                        )
+                        
+                        # Get the newly created intervention ID
+                        new_intervention = conn.execute(
+                            "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                            (planning_id,)
+                        ).fetchone()
+                        
+                        if new_intervention:
+                            intervention_id = new_intervention['id']
+                            logger.info(f"  ✅ Created intervention #{intervention_id} from planning #{planning_id}")
+                        else:
+                            logger.warning(f"  ❌ Could not retrieve newly created intervention")
+                            intervention_id = None
+                    else:
+                        intervention_id = linked_intervention['id']
+                        logger.info(f"  ✅ Found existing intervention #{intervention_id}")
+                    
+                    # Now add technicians to interventions_techniciens
+                    if intervention_id:
+                        tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
+                        logger.info(f"  Adding {len(tech_list)} technician(s) to interventions_techniciens: {tech_list}")
+                        
+                        for tech_name in tech_list:
+                            # Check if technician is already assigned
+                            existing = conn.execute(
+                                """SELECT id FROM interventions_techniciens 
+                                   WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
+                                (intervention_id, f"%{tech_name}%")
+                            ).fetchone()
+                            
+                            if not existing:
+                                # Create new assignment
+                                conn.execute(
+                                    """INSERT INTO interventions_techniciens 
+                                       (intervention_id, technicien_nom, statut) 
+                                       VALUES (%s, %s, %s)""",
+                                    (intervention_id, tech_name, "Assigné")
+                                )
+                                logger.info(f"    ✅ Added '{tech_name}' to interventions_techniciens")
+                            else:
+                                logger.info(f"    ℹ️ '{tech_name}' already assigned")
+                        
+                        conn.commit()
+                        logger.info(f"  ✅ All technician assignments committed")
+                except Exception as e:
+                    logger.error(f"❌ Error in technician assignment: {e}", exc_info=True)
+                    # Don't fail the whole request - continue
             
             # Auto-sync planning to interventions (create intervention if date is today)
             try:
