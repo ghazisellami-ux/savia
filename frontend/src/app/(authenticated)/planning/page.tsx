@@ -40,6 +40,7 @@ const STATUT_COLORS: Record<string, { cell: string; badge: string; dot: string }
   'En cours':   { cell: 'bg-yellow-500/20 border-yellow-500 text-yellow-300', badge: 'bg-yellow-500/15 text-yellow-400', dot: 'bg-yellow-400' },
   'Terminée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'Réalisée':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
+  'Cloturee':   { cell: 'bg-green-500/20 border-green-500 text-green-300',  badge: 'bg-green-500/15 text-green-400',  dot: 'bg-green-400' },
   'En retard':  { cell: 'bg-red-500/20 border-red-500 text-red-300',        badge: 'bg-red-500/15 text-red-400',      dot: 'bg-red-400' },
   'Décalé':     { cell: 'bg-gray-500/20 border-gray-500 text-gray-400',     badge: 'bg-gray-500/15 text-gray-500',    dot: 'bg-gray-400' },
 };
@@ -63,8 +64,8 @@ const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string
   const plannedDate = new Date(datePlanifiee);
   plannedDate.setHours(0, 0, 0, 0);
   
-  // If already completed/terminated, keep that status
-  if (storedStatus === 'Réalisée' || storedStatus === 'Terminée' || storedStatus === 'Annulée') {
+  // If already completed/terminated/closed, keep that status
+  if (storedStatus === 'Réalisée' || storedStatus === 'Terminée' || storedStatus === 'Annulée' || storedStatus === 'Cloturee') {
     return storedStatus;
   }
   
@@ -499,7 +500,7 @@ export default function PlanningPage() {
         {[
           { label: 'Total planifié', value: data.length, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
           { label: 'Ce mois', value: monthEvents.length, color: 'text-blue-400', icon: <Calendar className="w-5 h-5" /> },
-          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée' || d.statut === 'Terminée').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
+          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée' || d.statut === 'Terminée' || d.statut === 'Cloturee').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
           <div key={kpi.label} className="glass rounded-xl p-4 text-center">
@@ -590,6 +591,7 @@ export default function PlanningPage() {
           { label: 'Planifiée',  dot: 'bg-blue-400',   text: 'text-blue-400'   },
           { label: 'En cours',   dot: 'bg-yellow-400', text: 'text-yellow-400' },
           { label: 'Terminée',   dot: 'bg-green-400',  text: 'text-green-400'  },
+          { label: 'Cloturee',   dot: 'bg-green-400',  text: 'text-green-400'  },
           { label: 'En retard',  dot: 'bg-red-400',    text: 'text-red-400'    },
           { label: 'Décalé',     dot: 'bg-gray-400',   text: 'text-gray-400'   },
         ].map(s => (
@@ -624,7 +626,7 @@ export default function PlanningPage() {
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
-        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'En retard', 'Décalé'];
+        const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Terminée', 'Cloturee', 'En retard', 'Décalé'];
         const filteredData = data
           .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
           .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
