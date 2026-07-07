@@ -596,6 +596,17 @@ def check_facturation_reminders():
             except Exception:
                 continue
 
+            # Si pas de technicien principal, récupérer depuis interventions_techniciens
+            if not d.get('technicien'):
+                with get_db() as conn:
+                    tech_rows = conn.execute(
+                        "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s ORDER BY technicien_nom",
+                        (d['id'],)
+                    ).fetchall()
+                    if tech_rows:
+                        tech_names = [str(row.get('technicien_nom', '')).strip() for row in tech_rows]
+                        d['technicien'] = ', '.join(tech_names)
+
             jours_depuis = (today - cloture_date).days
             rappel_level = d.get('rappel_facture_envoye', 0) or 0
             deadline = cloture_date + timedelta(days=10)
@@ -2350,6 +2361,15 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     # Convert technicien username to full name
                     if d.get('technicien'):
                         d['technicien'] = _get_technician_fullname(d['technicien'])
+                    else:
+                        # Si pas de technicien principal, récupérer depuis interventions_techniciens
+                        tech_rows = conn.execute(
+                            "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s ORDER BY technicien_nom",
+                            (intervention_id,)
+                        ).fetchall()
+                        if tech_rows:
+                            tech_names = [str(row.get('technicien_nom', '')).strip() for row in tech_rows]
+                            d['technicien'] = ', '.join(tech_names)
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
                     notes_raw = str(d.get('notes', '') or '')
                     # Extraire client depuis notes [Client]
