@@ -2346,7 +2346,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, duree_deplacement, notes, pieces_utilisees FROM interventions WHERE id = ?",
                         (intervention_id,)
                     ).fetchone()
                 if row:
@@ -2364,6 +2364,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                             tech_names = [str(row.get('technicien_nom', '')).strip() for row in tech_rows]
                             d['technicien'] = ', '.join(tech_names)
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
+                    deplacement_h = round((d.get('duree_deplacement') or 0) / 60, 1)
                     notes_raw = str(d.get('notes', '') or '')
                     # Extraire client depuis notes [Client]
                     client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
@@ -2382,6 +2383,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     notes_line = f"\n📌 Notes : {notes_raw}" if notes_raw and not notes_raw.startswith('[') else ""
                     client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
                     pieces_line = f"\n🔩 Pièces : {pieces}" if pieces else ""
+                    deplacement_line = f"\n\U0001f697 D\u00e9placement : <b>{deplacement_h}h</b>"
                     msg_tg = (
                         f"✅ <b>INTERVENTION CLÔTURÉE — #{intervention_id}</b>\n\n"
                         f"🏥 Machine : <b>{d.get('machine', '')}</b>"
@@ -2391,6 +2393,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         f"🔍 Cause : {str(d.get('cause', ''))[:200]}\n"
                         f"🟢 Solution : {str(d.get('solution', ''))[:200]}\n"
                         f"⏱️ Durée : <b>{duree_h}h</b>"
+                        f"{deplacement_line}"
                         f"{pieces_line}"
                         f"{notes_line}\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
@@ -2404,6 +2407,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         f"{client_line}\n"
                         f"👷 Technicien : {d.get('technicien', '')}\n"
                         f"⏱️ Durée : {duree_h}h"
+                        f"\n\U0001f697 D\u00e9placement : {deplacement_h}h"
                         f"{pieces_line}\n\n"
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
@@ -3460,6 +3464,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                     
                     machine = d.get('machine', '')
                     total_duree_h = round(finalize_result.get('total_duree_minutes', 0) / 60, 1)
+                    total_deplacement_h = round(finalize_result.get('total_duree_deplacement', 0) / 60, 1)
                     solutions = finalize_result.get('combined_solution', '')
                     pieces = str(d.get('pieces_utilisees', '') or '').strip()
                     
@@ -3476,6 +3481,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🚗 Déplacement total : <b>{total_deplacement_h}h</b>\n"
                         f"🔧 Solutions : {solutions}"
                         f"{pieces_line}\n"
                         f"✅ Intervention fermée automatiquement\n"
@@ -3492,6 +3498,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"{client_line}\n"
                         f"👷 Tous les techniciens : <b>{status_info['total']}/{status_info['total']}</b>\n"
                         f"⏱️ Durée totale : <b>{total_duree_h}h</b>\n"
+                        f"🚗 Déplacement total : <b>{total_deplacement_h}h</b>\n"
                         f"🔧 Solutions : {solutions}"
                         f"{pieces_line}\n"
                         f"✅ Intervention fermée automatiquement\n"
