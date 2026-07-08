@@ -429,6 +429,18 @@ export default function InterventionDetailPage() {
   };
 
   const selectedCount = Object.keys(piecesQty).length;
+  const shouldReturnToInterventions = (statut: string) =>
+    statut === 'Cloturee' || statut === 'En attente de piece';
+  const returnToInterventions = (delay = 900) => {
+    setTimeout(() => {
+      router.replace('/interventions');
+      window.setTimeout(() => {
+        if (window.location.pathname !== '/interventions') {
+          window.location.assign('/interventions');
+        }
+      }, 300);
+    }, delay);
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -505,7 +517,10 @@ export default function InterventionDetailPage() {
       await api.interventions.update(id, updatePayload);
       if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
       setSuccess('Intervention mise à jour !');
-      setTimeout(() => router.replace('/interventions'), 1500);
+      if (shouldReturnToInterventions(form.statut)) {
+        returnToInterventions();
+        return;
+      }
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la mise à jour.');
     } finally {
@@ -608,7 +623,12 @@ export default function InterventionDetailPage() {
       } else {
         setSuccess('✅ Vos données ont été enregistrées.');
       }
-      
+
+      if (shouldReturnToInterventions(techForm.statut)) {
+        returnToInterventions();
+        return;
+      }
+
       setTimeout(async () => {
         // Reload technician data to show updated values
         try {
@@ -698,7 +718,7 @@ export default function InterventionDetailPage() {
     try {
       await api.interventions.refuse(id, refuseRaison.trim());
       setSuccess('Intervention refusée. Le manager sera notifié.');
-      setTimeout(() => router.replace('/interventions'), 2000);
+      returnToInterventions(1200);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors du refus.');
     } finally {
