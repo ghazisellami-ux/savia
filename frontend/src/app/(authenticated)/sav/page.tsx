@@ -41,6 +41,7 @@ interface Intervention {
   pieces_utilisees: string;
   coutPieces: number;
   cout: number;
+  techniciens_detail?: { nom: string; duree_minutes: number; statut?: string }[];
 }
 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
@@ -183,6 +184,49 @@ export default function SavPage() {
     return Array.from(years).sort((a, b) => b - a);
   }, [data]);
 
+  const toNumber = useCallback((value: any): number => Number(value) || 0, []);
+  const getInterventionLaborCost = useCallback((intervention: Pick<Intervention, 'duree_minutes' | 'cout'>): number => {
+    const minutes = toNumber(intervention.duree_minutes);
+    if (tauxHoraire > 0 && minutes > 0) return (minutes / 60.0) * tauxHoraire;
+    return toNumber(intervention.cout);
+  }, [tauxHoraire, toNumber]);
+  const getInterventionPartsCost = useCallback((intervention: Pick<Intervention, 'coutPieces'>): number => {
+    return toNumber(intervention.coutPieces);
+  }, [toNumber]);
+  const getInterventionTotalCost = useCallback((intervention: Intervention): number => {
+    return getInterventionLaborCost(intervention) + getInterventionPartsCost(intervention);
+  }, [getInterventionLaborCost, getInterventionPartsCost]);
+  const splitTechnicians = useCallback((technicien?: string): string[] => {
+    const names = String(technicien || '')
+      .split(',')
+      .map(name => name.trim())
+      .filter(Boolean);
+    return names.length > 0 ? names : ['Inconnu'];
+  }, []);
+  const getTechnicianLaborShares = useCallback((intervention: Intervention): { nom: string; duree: number; cout: number }[] => {
+    const details = (intervention.techniciens_detail || [])
+      .map(detail => ({
+        nom: String(detail.nom || '').trim(),
+        duree: toNumber(detail.duree_minutes),
+      }))
+      .filter(detail => detail.nom);
+    const detailDuration = details.reduce((sum, detail) => sum + detail.duree, 0);
+
+    if (details.length > 0 && detailDuration > 0) {
+      const totalLaborCost = getInterventionLaborCost(intervention);
+      return details.map(detail => ({
+        nom: detail.nom,
+        duree: detail.duree,
+        cout: tauxHoraire > 0 ? (detail.duree / 60.0) * tauxHoraire : totalLaborCost * (detail.duree / detailDuration),
+      }));
+    }
+
+    const techNames = splitTechnicians(intervention.technicien);
+    const durationShare = toNumber(intervention.duree_minutes) / techNames.length;
+    const costShare = getInterventionLaborCost(intervention) / techNames.length;
+    return techNames.map(nom => ({ nom, duree: durationShare, cout: costShare }));
+  }, [getInterventionLaborCost, splitTechnicians, tauxHoraire, toNumber]);
+
   const loadData = useCallback(async (pageOffset: number = 0, append: boolean = false) => {
     if (pageOffset === 0) setIsLoading(true);
     else setIsLoadingMore(true);
@@ -217,9 +261,9 @@ export default function SavPage() {
         client: item.client || '',
         type: item.type_intervention || 'Corrective',
         technicien: item.technicien || 'Non assigné',
-        duree: Math.round((item.duree_minutes || 0) / 60),
-        duree_minutes: item.duree_minutes || 0,
-        deplacement: Math.round((item.duree_deplacement || 0) / 60 * 10) / 10,
+        duree: Math.round((Number(item.duree_minutes) || 0) / 60),
+        duree_minutes: Number(item.duree_minutes) || 0,
+        deplacement: Math.round((Number(item.duree_deplacement) || 0) / 60 * 10) / 10,
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         probleme: item.probleme || '',
@@ -229,8 +273,15 @@ export default function SavPage() {
         type_erreur: item.type_erreur || '',
         priorite: item.priorite || 'Moyenne',
         pieces_utilisees: item.pieces_utilisees || '',
-        coutPieces: item.cout_pieces || 0,
-        cout: item.cout || 0,
+        coutPieces: Number(item.cout_pieces) || 0,
+        cout: Number(item.cout) || 0,
+        techniciens_detail: Array.isArray(item.techniciens_detail)
+          ? item.techniciens_detail.map((detail: any) => ({
+              nom: String(detail.nom || ''),
+              duree_minutes: Number(detail.duree_minutes) || 0,
+              statut: detail.statut || '',
+            }))
+          : [],
       }));
       
       if (append) {
@@ -430,23 +481,24 @@ export default function SavPage() {
       
       // Calculate costs correctly (avoid double counting)
       // Use the same logic as Rentabilité Client page - recalculate from duration × hourly rate
-      const totalDureeMin = allInterv.reduce((a, b) => a + b.duree_minutes, 0);
-      const totalCoutMORecalculated = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
-      const totalCoutPieces = allInterv.reduce((a, b) => a + (b.coutPieces || 0), 0);
-      const totalCoutTotal = totalCoutMORecalculated + totalCoutPieces;  // ← Total = MO (recalculated) + Pièces
+      const totalDureeMin = allInterv.reduce((a, b) => a + toNumber(b.duree_minutes), 0);
+      const totalCoutMOLocal = allInterv.reduce((a, b) => a + getInterventionLaborCost(b), 0);
+      const totalCoutPieces = allInterv.reduce((a, b) => a + getInterventionPartsCost(b), 0);
+      const totalCoutTotal = totalCoutMOLocal + totalCoutPieces;
       
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
 
       // Build tech details string
       const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
       allInterv.forEach(i => {
-        const t = i.technicien || 'Inconnu';
-        const prev = techMap.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
-        prev.nb++;
-        if (i.statut.toLowerCase().includes('tur')) prev.clot++;
-        prev.duree += i.duree_minutes;
-        prev.cout += (i.cout || i.coutPieces);
-        techMap.set(t, prev);
+        getTechnicianLaborShares(i).forEach(share => {
+          const prev = techMap.get(share.nom) || {nb: 0, clot: 0, duree: 0, cout: 0};
+          prev.nb++;
+          if (i.statut.toLowerCase().includes('tur')) prev.clot++;
+          prev.duree += share.duree;
+          prev.cout += share.cout;
+          techMap.set(share.nom, prev);
+        });
       });
       let tech_details = '';
       techMap.forEach((s, nom) => {
@@ -473,12 +525,11 @@ export default function SavPage() {
 
       // Recent interventions
       let interventions_detail = '';
-      allInterv.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 20).forEach(i => {
-        interventions_detail += `- ${i.date.substring(0,10)} | ${i.machine} | ${i.technicien} | ${i.type} | ${i.statut} | ${i.duree}h | ${i.cout || i.coutPieces} TND | ${i.probleme || '-'}\n`;
+      [...allInterv].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 20).forEach(i => {
+        interventions_detail += `- ${i.date.substring(0,10)} | ${i.machine} | ${i.technicien} | ${i.type} | ${i.statut} | ${i.duree}h | ${getInterventionTotalCost(i)} TND | ${i.probleme || '-'}\n`;
       });
 
-      const mttrH = terminees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
-      const totalCoutMOLocal = totalCoutMORecalculated;
+      const mttrH = terminees > 0 ? Math.round(allInterv.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + toNumber(b.duree_minutes), 0) / terminees / 60 * 10) / 10 : 0;
       
       const sav_data = {
         nb_total, nb_cloturees, nb_en_cours, taux_resolution: tauxRes, mttr_h: mttrH,
@@ -520,7 +571,6 @@ export default function SavPage() {
       }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       const cloturees = pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length;
-      const coutT     = pdfFiltered.reduce((acc, b) => acc + (b.cout || b.coutPieces || 0), 0);
       const tauxRes   = pdfFiltered.length > 0 ? Math.round((cloturees / pdfFiltered.length) * 100) : 0;
 
       const payload = {
@@ -635,16 +685,15 @@ export default function SavPage() {
   const totalInterv = filtered.length;
   const terminees = filtered.filter(i => i.statut.toLowerCase().includes('tur') || i.statut.toLowerCase().includes('termin')).length;
   const enCours = filtered.filter(i => i.statut.toLowerCase().includes('cours')).length;
-  const totalCoutMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
-  const totalCoutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
+  const totalCoutPieces = filtered.reduce((a, b) => a + getInterventionPartsCost(b), 0);
   
   // Recalculate labor cost based on duration × hourly rate (same as Charge Financière below)
-  const totalDureeMin = filtered.reduce((a, b) => a + b.duree_minutes, 0);
-  const totalCoutMORecalculated = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
-  const totalCout = totalCoutMORecalculated + totalCoutPieces;  // ← Total = MO (recalculated) + Pièces
+  const totalDureeMin = filtered.reduce((a, b) => a + toNumber(b.duree_minutes), 0);
+  const coutMainOeuvre = filtered.reduce((a, b) => a + getInterventionLaborCost(b), 0);
+  const totalCout = coutMainOeuvre + totalCoutPieces;
   const totalDureeH = Math.round(totalDureeMin / 60);
   const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
-  const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + b.duree_minutes, 0) / terminees / 60 * 10) / 10 : 0;
+  const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + toNumber(b.duree_minutes), 0) / terminees / 60 * 10) / 10 : 0;
   const correctifs = filtered.filter(i => i.type.toLowerCase().includes('correct')).length;
   const preventifs = filtered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
 
@@ -652,13 +701,14 @@ export default function SavPage() {
   const techStats = useMemo(() => {
     const map = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
     filtered.forEach(i => {
-      const t = i.technicien || 'Inconnu';
-      const prev = map.get(t) || {nb: 0, clot: 0, duree: 0, cout: 0};
-      prev.nb++;
-      if (i.statut.toLowerCase().includes('tur')) prev.clot++;
-      prev.duree += i.duree_minutes;
-      prev.cout += (i.cout || i.coutPieces);
-      map.set(t, prev);
+      getTechnicianLaborShares(i).forEach(share => {
+        const prev = map.get(share.nom) || {nb: 0, clot: 0, duree: 0, cout: 0};
+        prev.nb++;
+        if (i.statut.toLowerCase().includes('tur')) prev.clot++;
+        prev.duree += share.duree;
+        prev.cout += share.cout;
+        map.set(share.nom, prev);
+      });
     });
     return Array.from(map.entries()).map(([nom, s]) => ({
       nom, nb: s.nb, clot: s.clot,
@@ -666,19 +716,11 @@ export default function SavPage() {
       mttr: s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0,
       cout: s.cout,
     })).sort((a, b) => b.taux - a.taux);
-  }, [filtered]);
+  }, [filtered, getTechnicianLaborShares]);
 
   // Financial summary
   // Recalculate costs using current hourly rate (same as Charge Financière below)
-  const coutPieces = filtered.reduce((a, b) => a + (b.coutPieces || 0), 0);
-  const coutMainOeuvreMO = filtered.reduce((a, b) => a + (b.cout || 0), 0);
-  const coutInterventions = coutMainOeuvreMO + coutPieces;  // ← Total = MO + Pièces
-  
-  // Recalculate labor cost based on current hourly rate
-  const coutMainOeuvre = tauxHoraire > 0 ? (totalDureeMin / 60.0) * tauxHoraire : 0;
-  
-  // Service cost = Total intervention cost - Labor cost - Parts cost
-  const coutService = Math.max(0, coutInterventions - coutMainOeuvre - coutPieces);
+  const coutPieces = totalCoutPieces;
 
   const tabs = [
     { icon: <Wrench className="w-4 h-4" />, label: 'Interventions' },
@@ -1149,7 +1191,7 @@ export default function SavPage() {
             </h3>
             <div className="space-y-3">
               {techStats.map(t => {
-                const pct = totalCout > 0 ? (t.cout / totalCout * 100) : 0;
+                const pct = coutMainOeuvre > 0 ? (t.cout / coutMainOeuvre * 100) : 0;
                 return (
                   <div key={t.nom} className="flex items-center gap-4">
                     <div className="w-40 font-semibold text-sm truncate">{t.nom}</div>
@@ -1172,7 +1214,7 @@ export default function SavPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {['Corrective', 'Préventive', 'Installation'].map(type => {
                 const typeData = filtered.filter(i => i.type.toLowerCase().includes(type.toLowerCase().substring(0, 5)));
-                const typeCout = typeData.reduce((a, b) => a + (b.cout || b.coutPieces), 0);
+                const typeCout = typeData.reduce((a, b) => a + getInterventionTotalCost(b), 0);
                 const color = type === 'Corrective' ? 'red' : type === 'Préventive' ? 'green' : 'blue';
                 const Icon = type === 'Corrective' ? XCircle : type === 'Préventive' ? Shield : Wrench;
                 return (
@@ -1226,13 +1268,12 @@ export default function SavPage() {
                   <div className="flex gap-4 mb-4">
                     <div className="glass rounded-lg p-3 text-center flex-1"><div className="flex justify-center mb-1"><Wrench className="w-4 h-4 text-savia-accent" /></div><div className="text-xl font-bold text-savia-accent">{pdfFiltered.length}</div><div className="text-xs text-savia-text-muted">Interventions</div></div>
                     <div className="glass rounded-lg p-3 text-center flex-1"><div className="flex justify-center mb-1"><CheckCircle className="w-4 h-4 text-green-400" /></div><div className="text-xl font-bold text-green-400">{pdfFiltered.filter(i => i.statut.toLowerCase().includes('tur')).length}</div><div className="text-xs text-savia-text-muted">Clôturées</div></div>
-                    <div className="glass rounded-lg p-3 text-center flex-1"><div className="flex justify-center mb-1"><DollarSign className="w-4 h-4 text-red-400" /></div><div className="text-xl font-bold text-red-400">{pdfFiltered.reduce((a, b) => a + (b.cout || b.coutPieces), 0).toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Coût total</div></div>
                   </div>
                   <div className="overflow-x-auto max-h-[250px] overflow-y-auto">
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-savia-surface-hover/80 backdrop-blur-sm">
                         <tr className="border-b border-savia-border">
-                          {['Date', 'Machine', 'Technicien', 'Type', 'Statut', 'Durée', 'Coût'].map(h => (
+                          {['Date', 'Machine', 'Technicien', 'Type', 'Statut', 'Durée'].map(h => (
                             <th key={h} className="text-left py-2 px-2 text-savia-text-muted">{h}</th>
                           ))}
                         </tr>
@@ -1246,7 +1287,6 @@ export default function SavPage() {
                             <td className="py-1.5 px-2">{i.type}</td>
                             <td className="py-1.5 px-2">{i.statut}</td>
                             <td className="py-1.5 px-2 font-mono">{i.duree}h</td>
-                            <td className="py-1.5 px-2 font-mono">{(i.cout || i.coutPieces).toLocaleString('fr')}</td>
                           </tr>
                         ))}
                       </tbody>

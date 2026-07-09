@@ -242,26 +242,54 @@ export default function DashboardPage() {
           filteredInterv = [];
         }
 
+        const dateFilteredInterv = filteredInterv.filter((i: any) => {
+          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
+          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
+        });
+
+        const activityAvailability = (() => {
+          const start = new Date(`${dateRange.date_start}T00:00:00`);
+          const end = new Date(`${dateRange.date_end}T00:00:00`);
+          if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 100;
+
+          const monthlyValues: number[] = [];
+          const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+          const endMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+
+          while (cursor <= endMonth) {
+            const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+            const monthInterv = dateFilteredInterv.filter((i: any) => (i.date || '').substring(0, 7) === monthKey);
+            const unfinished = monthInterv.filter((i: any) => String(i.statut || '').toLowerCase() !== 'terminée').length;
+            monthlyValues.push(Math.max(0, 100 - unfinished * 2));
+            cursor.setMonth(cursor.getMonth() + 1);
+          }
+
+          return monthlyValues.length > 0
+            ? Math.round((monthlyValues.reduce((a, b) => a + b, 0) / monthlyValues.length) * 10) / 10
+            : 100;
+        })();
+
         // Compute ALL KPIs from filtered data
         const nb_eq = filteredHealth.length;
         const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
-        const disponibilite = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
-        const nb_interventions = filteredInterv.length;
-        const nb_cloturees = filteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
+        const statusAvailability = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
+        const disponibilite = Math.min(statusAvailability, activityAvailability);
+        const nb_interventions = dateFilteredInterv.length;
+        const nb_cloturees = dateFilteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
         const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 100) : 0;
 
         // Calculate MTBF and MTTR from filtered interventions
         let mtbf = 0, mttr = 0;
-        if (filteredInterv.length > 0) {
-          const durations = filteredInterv
+        if (dateFilteredInterv.length > 0) {
+          const durations = dateFilteredInterv
             .filter((i: any) => i.duree_intervention)
             .map((i: any) => parseFloat(i.duree_intervention) || 0);
           if (durations.length > 0) {
             mttr = durations.reduce((a: number, b: number) => a + b, 0) / durations.length;
           }
           // MTBF = average time between failures (simplified: total days / number of interventions)
-          if (filteredInterv.length > 1) {
-            const dates = filteredInterv
+          if (dateFilteredInterv.length > 1) {
+            const dates = dateFilteredInterv
               .map((i: any) => new Date(i.date).getTime())
               .sort((a: number, b: number) => a - b);
             const daysBetween = [];
@@ -287,13 +315,7 @@ export default function DashboardPage() {
         });
         setHealthScores(filteredHealth);
         setAllInterventions(filteredInterv);
-        
-        // Filter interventions by date range for display
-        const dateFilteredInterv = filteredInterv.filter((i: any) => {
-          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
-          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
-        });
-        
+
         setRecentInterv(
           dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
         );
