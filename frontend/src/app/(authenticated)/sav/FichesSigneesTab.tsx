@@ -94,11 +94,11 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
         <div className="flex gap-6">
           <div>
             <p className="text-lg font-bold text-savia-text">{fichesAvecPhoto.length}</p>
-            <p className="text-xs text-savia-text-muted">fiche{fichesAvecPhoto.length !== 1 ? 's' : ''} signée{fichesAvecPhoto.length !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-savia-text-muted">{fichesAvecPhoto.length === 1 ? 'fiche signée' : 'fiches signées'}</p>
           </div>
           <div className="border-l border-savia-border/30 pl-6">
             <p className="text-lg font-bold text-green-400">{nbValidees}</p>
-            <p className="text-xs text-savia-text-muted">validée{nbValidees !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-savia-text-muted">{nbValidees === 1 ? 'validée' : 'validées'}</p>
           </div>
           <div className="border-l border-savia-border/30 pl-6">
             <p className="text-lg font-bold text-amber-400">{fichesAvecPhoto.length - nbValidees}</p>

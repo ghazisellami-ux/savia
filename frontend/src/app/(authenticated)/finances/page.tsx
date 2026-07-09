@@ -41,6 +41,7 @@ export default function FinancesPage() {
   const [aiRecos, setAiRecos] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [currency, setCurrency] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
 
   // Table filters
   const [tableSearch, setTableSearch] = useState('');
@@ -96,6 +97,23 @@ export default function FinancesPage() {
   }, [selectedClient]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const refreshCurrency = () => setCurrency(localStorage.getItem('savia_devise') || 'TND');
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'savia_devise') refreshCurrency();
+    };
+    window.addEventListener('savia_settings_changed', refreshCurrency);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('savia_settings_changed', refreshCurrency);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  const currencyCode = currency || 'TND';
+  const money = (n: number) => `${FMT(n)} ${currencyCode}`;
+  const moneyK = (n: number) => `${FMTK(n)} ${currencyCode}`;
 
   // Recalculate KPIs correctly: cout_total = cout_main_oeuvre + cout_pieces (NOT interventions which double-counts)
   const clientsData = useMemo(() => {
@@ -186,7 +204,7 @@ export default function FinancesPage() {
     setAiError('');
     setAiRecos(null);
     try {
-      const res = await ai.analyzeCosts(clientsData, kpis);
+      const res = await ai.analyzeCosts(clientsData, kpis, currencyCode);
       setAiRecos(res.result);
     } catch (err: any) {
       const msg = err.message || '';
@@ -198,7 +216,7 @@ export default function FinancesPage() {
     } finally {
       setAiLoading(false);
     }
-  }, [aiLoading, clientsData, kpis]);
+  }, [aiLoading, clientsData, kpis, currencyCode]);
 
   if (!canSeeCosts) {
     return (
@@ -248,11 +266,11 @@ export default function FinancesPage() {
 
       {/* Global KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <KpiCard icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={`${FMTK(kpis.revenu_total || 0)} TND`} label="Revenu Contrats" variant="success" />
-        <KpiCard icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={`${FMTK(kpis.cout_total || 0)} TND`} label="Coûts Totaux" variant="danger" />
+        <KpiCard icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={moneyK(kpis.revenu_total || 0)} label="Revenu Contrats" variant="success" />
+        <KpiCard icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={moneyK(kpis.cout_total || 0)} label="Coûts Totaux" variant="danger" />
         <KpiCard
           icon={<DollarSign className="w-6 h-6" style={{ color: (kpis.marge_globale || 0) >= 0 ? COLORS.green : COLORS.red }} />}
-          value={`${FMTK(kpis.marge_globale || 0)} TND`}
+          value={moneyK(kpis.marge_globale || 0)}
           label="Marge Globale"
           variant={(kpis.marge_globale || 0) >= 0 ? 'success' : 'danger'}
         />
@@ -273,7 +291,7 @@ export default function FinancesPage() {
               <YAxis stroke="#64748b" fontSize={11} />
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
-                formatter={(value: any) => [`${FMT(Number(value))} TND`]}
+                formatter={(value: any) => [money(Number(value))]}
               />
               <Bar dataKey="revenu" name="Revenu" fill={COLORS.green} radius={[4, 4, 0, 0]} />
               <Bar dataKey="cout" name="Coûts" fill={COLORS.red} radius={[4, 4, 0, 0]} />
@@ -290,7 +308,7 @@ export default function FinancesPage() {
               </Pie>
               <Tooltip
                 contentStyle={{ background: '#0f1729', border: '1px solid rgba(45,212,191,0.2)', borderRadius: 8, color: '#f1f5f9' }}
-                formatter={(value: any) => [`${FMT(Number(value))} TND`]}
+                formatter={(value: any) => [money(Number(value))]}
               />
               <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
             </PieChart>
@@ -396,7 +414,7 @@ export default function FinancesPage() {
                 </span>
               )}
               <div className="ml-auto flex items-center gap-2">
-                <button onClick={() => ai.analyzeCostsPdf(aiRecos, kpis)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white cursor-pointer" style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}>
+                <button onClick={() => ai.analyzeCostsPdf(aiRecos, kpis, currencyCode)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white cursor-pointer" style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}>
                   <Download className="w-3 h-3" /> Télécharger PDF
                 </button>
                 <button onClick={analyzeAiCosts} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-savia-text-muted hover:text-savia-accent transition-colors cursor-pointer">

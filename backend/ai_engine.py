@@ -253,7 +253,7 @@ def clean_json_response(text_response):
     return None
 
 
-def get_ai_suggestion(code, msg, context, log_context="", equipment_type=""):
+def get_ai_suggestion(code, msg, context, log_context="", equipment_type="", response_language="fr"):
     """
     Demande à l'IA un diagnostic précis.
     Inclut les solutions validées de la base locale pour un apprentissage continu.
@@ -323,8 +323,15 @@ CONTEXTE LOG (événements AVANT l'erreur, du plus ancien au plus récent) :
 ⚠️ Analyse cette séquence d'événements pour identifier la chaîne causale qui a mené à l'erreur.
 Les étapes précédentes peuvent révéler la vraie cause racine."""
 
+        language_instruction = (
+            "IMPORTANT LANGUAGE RULE: Write every user-facing JSON value in English only. Keep JSON keys exactly as requested. If examples or known solutions are in French, translate the generated values to English."
+            if str(response_language).lower().startswith("en")
+            else "IMPORTANT: Redige toutes les valeurs JSON destinees a l'utilisateur en francais. Garde exactement les cles JSON demandees."
+        )
+
         prompt = f"""Tu es un Ingénieur d'Escalade (Support Niveau 3) spécialisé en radiologie médicale (CT, IRM, RX, Mammo).
 Tu dois fournir un diagnostic clinique et technique pointu suite à une anomalie signalée.
+{language_instruction}
 
 🚨 Symptômes signalés :
 - Code Erreur : "{code}"

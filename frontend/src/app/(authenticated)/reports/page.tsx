@@ -46,6 +46,7 @@ export default function ReportsPage() {
   const [finData, setFinData] = useState<any>(null);
   const [finTco, setFinTco] = useState<any[]>([]);
   const [finLoading, setFinLoading] = useState(false);
+  const [currency, setCurrency] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
 
   const loadData = useCallback(async () => {
     try {
@@ -59,6 +60,19 @@ export default function ReportsPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const refreshCurrency = () => setCurrency(localStorage.getItem('savia_devise') || 'TND');
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'savia_devise') refreshCurrency();
+    };
+    window.addEventListener('savia_settings_changed', refreshCurrency);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('savia_settings_changed', refreshCurrency);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   const clients = useMemo(() =>
     [...new Set((equips as any[]).map((e: any) => e.Client).filter(Boolean))].sort() as string[], [equips]);
@@ -116,7 +130,7 @@ export default function ReportsPage() {
     const types: Record<string, number> = {};
     monthData.forEach((i: any) => { const t = i.type_intervention || 'Autre'; types[t] = (types[t] || 0) + 1; });
     const rows = monthData.slice(0, 30).map((i: any) =>
-      `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
+      `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${money(i.cout || 0)}</td></tr>`
     ).join('');
     const label = MOIS_LABELS[selMois-1] + ' ' + selAnnee;
     const padM = String(selMois).padStart(2,'0');
@@ -151,13 +165,13 @@ export default function ReportsPage() {
     const cout = clientData.reduce((a: number, b: any) => a + (b.cout || 0), 0);
     const coutPieces = clientData.reduce((a: number, b: any) => a + (b.cout_pieces || 0), 0);
     const rows = clientData.map((i: any) =>
-      `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${(i.cout||0).toLocaleString('fr')} TND</td></tr>`
+      `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${money(i.cout || 0)}</td></tr>`
     ).join('');
     const lbl2 = MOIS_LABELS[selClientMois-1] + ' ' + selClientAnnee;
     const padC = String(selClientMois).padStart(2,'0');
     const fnameC = 'rapport_client_' + selClient.replace(/\s+/g,'_') + '_' + selClientAnnee + '_' + padC;
-    const moStr = Math.round(cout).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + ' TND';
-    const pcStr = Math.round(coutPieces).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + ' TND';
+    const moStr = money(Math.round(cout));
+    const pcStr = money(Math.round(coutPieces));
     await generatePdf('Rapport Client ' + selClient + ' \u2014 ' + lbl2, {
       title: 'Rapport Client \u2014 ' + selClient,
       subtitle: 'Période : ' + lbl2,
@@ -167,7 +181,7 @@ export default function ReportsPage() {
         { label: 'Coût M.O.',     val: moStr, color: [22,163,74] },
         { label: 'Coût Pièces',   val: pcStr, color: [234,179,8] },
       ],
-      head: ['Date','Machine','Type','Technicien','Statut','Coût (TND)'],
+      head: ['Date','Machine','Type','Technicien','Statut',`Coût (${currencyCode})`],
       table_title: 'Interventions \u2014 ' + selClient + ' \u2014 ' + lbl2,
       rows: clientData.map(function(i: any) { return [
         (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
@@ -228,7 +242,7 @@ export default function ReportsPage() {
         cout_total_tnd: coutTotal,
         nb_equipements: equips.length,
         taux_cloture_pct: nb > 0 ? Math.round(nbClot / nb * 100) : 0,
-      }, 'TND');
+      }, currencyCode);
 
       if (res.ok && res.result) {
         setAiReport(res.result);
@@ -262,28 +276,61 @@ export default function ReportsPage() {
     if (Math.abs(n) >= 10_000) return Math.round(n / 1_000).toLocaleString('fr-FR') + 'K';
     return n.toLocaleString('fr-FR');
   };
+  const currencyCode = currency || 'TND';
+  const money = (n: number) => `${FMT(n)} ${currencyCode}`;
+  const moneyK = (n: number) => `${FMTK(n)} ${currencyCode}`;
 
   const handlePdfFinancier = async () => {
     if (!finData) { alert('Chargement des données en cours...'); return; }
     const kpis = finData.kpis || {};
     const clientsList = (finData.clients || []) as any[];
-    const periodeLabel = finAnnuel ? `Année ${finAnnee}` : `${MOIS_LABELS[finMois - 1]} ${finAnnee}`;
-    const clientLabel = finClient || 'Tous les clients';
+    const lang = typeof window !== 'undefined' && localStorage.getItem('savia_lang') === 'en' ? 'en' : 'fr';
+    const pdfLabels = lang === 'en'
+      ? {
+          reportTitle: 'Financial Report',
+          period: 'Period',
+          client: 'Client',
+          allClients: 'All clients',
+          year: 'Year',
+          months: ['January','February','March','April','May','June','July','August','September','October','November','December'],
+          contractRevenue: 'Contract Revenue',
+          totalCosts: 'Total Costs',
+          globalMargin: 'Global Margin',
+          marginRate: 'Margin Rate',
+          tableTitle: 'Client profitability',
+          head: ['Client', 'Equip.', `Revenue (${currencyCode})`, `Costs (${currencyCode})`, `Margin (${currencyCode})`, 'Margin %', 'Interventions'],
+        }
+      : {
+          reportTitle: 'Rapport Financier',
+          period: 'Période',
+          client: 'Client',
+          allClients: 'Tous les clients',
+          year: 'Année',
+          months: MOIS_LABELS,
+          contractRevenue: 'Revenu Contrats',
+          totalCosts: 'Coûts Totaux',
+          globalMargin: 'Marge Globale',
+          marginRate: 'Taux de Marge',
+          tableTitle: 'Rentabilité par Client',
+          head: ['Client', 'Équip.', `Revenu (${currencyCode})`, `Coûts (${currencyCode})`, `Marge (${currencyCode})`, 'Marge %', 'Interventions'],
+        };
+    const periodeLabel = finAnnuel ? `${pdfLabels.year} ${finAnnee}` : `${pdfLabels.months[finMois - 1]} ${finAnnee}`;
+    const clientLabel = finClient || pdfLabels.allClients;
     const padM = String(finMois).padStart(2, '0');
     const fname = `rapport_financier_${finAnnuel ? finAnnee : finAnnee + '_' + padM}${finClient ? '_' + finClient.replace(/\s+/g, '_') : ''}`;
 
-    await generatePdf('Rapport Financier — ' + periodeLabel, {
-      title: 'Rapport Financier',
-      subtitle: `Période : ${periodeLabel}  |  Client : ${clientLabel}`,
+    await generatePdf(`${pdfLabels.reportTitle} - ${periodeLabel}`, {
+      title: pdfLabels.reportTitle,
+      subtitle: `${pdfLabels.period}: ${periodeLabel}  |  ${pdfLabels.client}: ${clientLabel}`,
       filename: fname,
       kpis: [
-        { label: 'Revenu Contrats', val: FMTK(kpis.revenu_total || 0) + ' TND', color: [22, 163, 74] },
-        { label: 'Coûts Totaux', val: FMTK(kpis.cout_total || 0) + ' TND', color: [239, 68, 68] },
-        { label: 'Marge Globale', val: FMTK(kpis.marge_globale || 0) + ' TND', color: (kpis.marge_globale || 0) >= 0 ? [22, 163, 74] : [239, 68, 68] },
-        { label: 'Taux de Marge', val: (kpis.marge_pct || 0) + '%', color: [59, 130, 246] },
+        { label: pdfLabels.contractRevenue, val: moneyK(kpis.revenu_total || 0), color: [22, 163, 74] },
+        { label: pdfLabels.totalCosts, val: moneyK(kpis.cout_total || 0), color: [239, 68, 68] },
+        { label: pdfLabels.globalMargin, val: moneyK(kpis.marge_globale || 0), color: (kpis.marge_globale || 0) >= 0 ? [22, 163, 74] : [239, 68, 68] },
+        { label: pdfLabels.marginRate, val: (kpis.marge_pct || 0) + '%', color: [59, 130, 246] },
       ],
-      head: ['Client', 'Équip.', 'Revenu (TND)', 'Coûts (TND)', 'Marge (TND)', 'Marge %', 'Interventions'],
-      table_title: 'Rentabilité par Client — ' + periodeLabel,
+      head: pdfLabels.head,
+      table_title: `${pdfLabels.tableTitle} - ${periodeLabel}`,
       rows: clientsList.map((c: any) => [
         c.client || '',
         c.nb_equipements || 0,
@@ -433,12 +480,12 @@ export default function ReportsPage() {
                   <div className="glass rounded-xl p-4 text-center border border-purple-500/20">
                     <DollarSign className="w-5 h-5 text-purple-400 mx-auto mb-1" />
                     <div className="text-sm text-purple-400 font-bold">Coût M.O.</div>
-                    <div className="text-2xl font-black text-purple-400">{cout.toLocaleString('fr')} TND</div>
+                    <div className="text-2xl font-black text-purple-400">{money(cout)}</div>
                   </div>
                   <div className="glass rounded-xl p-4 text-center border border-cyan-500/20">
                     <Wrench className="w-5 h-5 text-cyan-400 mx-auto mb-1" />
                     <div className="text-sm text-cyan-400 font-bold">Coût Pièces</div>
-                    <div className="text-2xl font-black text-cyan-400">{coutPieces.toLocaleString('fr')} TND</div>
+                    <div className="text-2xl font-black text-cyan-400">{money(coutPieces)}</div>
                   </div>
                 </div>
                 <SectionCard title="Détail des interventions">
@@ -619,9 +666,9 @@ export default function ReportsPage() {
                 <div className="p-4 rounded-xl bg-yellow-500/10 border-l-4 border-yellow-500">
                   <h4 className="font-bold text-sm text-yellow-400 uppercase tracking-wider mb-3 flex items-center gap-2"><DollarSign className="w-4 h-4" /> Estimation des Coûts</h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="text-center p-3 rounded-lg bg-red-500/10"><div className="text-lg font-black text-red-400">{aiReport.estimation_couts.cout_curatif_historique?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Coût curatif</div></div>
-                    <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiReport.estimation_couts.cout_preventif_propose?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Préventif proposé</div></div>
-                    <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiReport.estimation_couts.gain_potentiel?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
+                    <div className="text-center p-3 rounded-lg bg-red-500/10"><div className="text-lg font-black text-red-400">{money(aiReport.estimation_couts.cout_curatif_historique || 0)}</div><div className="text-xs text-savia-text-muted">Coût curatif</div></div>
+                    <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{money(aiReport.estimation_couts.cout_preventif_propose || 0)}</div><div className="text-xs text-savia-text-muted">Préventif proposé</div></div>
+                    <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{money(aiReport.estimation_couts.gain_potentiel || 0)}</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
                     <div className="text-center p-3 rounded-lg bg-purple-500/10"><div className="text-sm font-bold text-purple-400 leading-tight">{aiReport.estimation_couts.ratio}</div><div className="text-xs text-savia-text-muted mt-1">Ratio ROI</div></div>
                   </div>
                 </div>
@@ -964,9 +1011,9 @@ export default function ReportsPage() {
                 {/* KPI cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
                   {[
-                    { icon: <TrendingUp className="w-5 h-5 text-green-400" />, val: FMTK(kpis.revenu_total || 0) + ' TND', label: 'Revenu Contrats', cls: 'border-green-500/20 bg-green-500/5' },
-                    { icon: <TrendingDown className="w-5 h-5 text-red-400" />, val: FMTK(kpis.cout_total || 0) + ' TND', label: 'Coûts Totaux', cls: 'border-red-500/20 bg-red-500/5' },
-                    { icon: <DollarSign className="w-5 h-5" style={{ color: (kpis.marge_globale || 0) >= 0 ? '#22c55e' : '#ef4444' }} />, val: FMTK(kpis.marge_globale || 0) + ' TND', label: 'Marge Globale', cls: (kpis.marge_globale || 0) >= 0 ? 'border-green-500/20 bg-green-500/5' : 'border-red-500/20 bg-red-500/5' },
+                    { icon: <TrendingUp className="w-5 h-5 text-green-400" />, val: moneyK(kpis.revenu_total || 0), label: 'Revenu Contrats', cls: 'border-green-500/20 bg-green-500/5' },
+                    { icon: <TrendingDown className="w-5 h-5 text-red-400" />, val: moneyK(kpis.cout_total || 0), label: 'Coûts Totaux', cls: 'border-red-500/20 bg-red-500/5' },
+                    { icon: <DollarSign className="w-5 h-5" style={{ color: (kpis.marge_globale || 0) >= 0 ? '#22c55e' : '#ef4444' }} />, val: moneyK(kpis.marge_globale || 0), label: 'Marge Globale', cls: (kpis.marge_globale || 0) >= 0 ? 'border-green-500/20 bg-green-500/5' : 'border-red-500/20 bg-red-500/5' },
                     { icon: <PieChartIcon className="w-5 h-5 text-blue-400" />, val: (kpis.marge_pct || 0) + '%', label: 'Taux de Marge', cls: 'border-blue-500/20 bg-blue-500/5' },
                     { icon: <Building2 className="w-5 h-5 text-cyan-400" />, val: String(kpis.nb_clients || 0), label: 'Clients', cls: 'border-cyan-500/20 bg-cyan-500/5' },
                     { icon: <CheckCircle2 className="w-5 h-5 text-green-400" />, val: String(kpis.nb_rentables || 0), label: 'Rentables', cls: 'border-green-500/20 bg-green-500/5' },
@@ -987,7 +1034,7 @@ export default function ReportsPage() {
                       <table className="w-full text-sm">
                         <thead className="sticky top-0 bg-savia-surface z-10">
                           <tr className="border-b border-savia-border">
-                            {['Client', 'Équip.', 'Revenu (TND)', 'Coûts (TND)', 'Marge (TND)', 'Marge %', 'Interventions', 'Statut'].map(h => (
+                            {['Client', 'Équip.', `Revenu (${currencyCode})`, `Coûts (${currencyCode})`, `Marge (${currencyCode})`, 'Marge %', 'Interventions', 'Statut'].map(h => (
                               <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs">{h}</th>
                             ))}
                           </tr>
