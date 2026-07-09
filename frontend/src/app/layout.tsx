@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import I18nRuntime from "@/components/i18n-runtime";
 
 export const metadata: Metadata = {
   title: "SAVIA — Superviseur Intelligent Clinique",
@@ -20,6 +21,7 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased min-h-screen bg-savia-bg text-savia-text">
+        <I18nRuntime />
         {children}
       </body>
     </html>

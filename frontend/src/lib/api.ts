@@ -20,9 +20,11 @@ class ApiError extends Error {
 
 async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+  const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
   
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-SAVIA-Lang': lang,
     ...options.headers,
   };
   
@@ -108,11 +110,12 @@ export const interventions = {
   // Fiche signée
   uploadFiche: async (id: number, file: File): Promise<{ ok: boolean; filename: string }> => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+    const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
     const form = new FormData();
     form.append('file', file);
     const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { 'X-SAVIA-Lang': lang, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: form,
     });
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
@@ -255,9 +258,10 @@ export const clients = {
     const fd = new FormData();
     fd.append('file', file);
     const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
+    const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
     const res = await fetch('/api/clients/import-excel', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
+      headers: { 'Authorization': `Bearer ${token}`, 'X-SAVIA-Lang': lang },
       body: fd,
     });
     if (!res.ok) throw new Error('Erreur import: ' + res.status);
@@ -303,17 +307,18 @@ export const ai = {
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym, domain, equipment_type } }),
   chat: (message: string, history: Array<{role: string, content: string}> = []) =>
     request<{response: string, suggestions: string[]}>('/api/ai/chat', { method: 'POST', body: { message, history } }),
-  analyzeCosts: (clients: Array<Record<string, unknown>>, kpis: Record<string, unknown>) =>
-    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis } }),
-  analyzeCostsPdf: async (result: Record<string, unknown>, kpis: Record<string, unknown>) => {
-    const token = localStorage.getItem('token');
+  analyzeCosts: (clients: Array<Record<string, unknown>>, kpis: Record<string, unknown>, sym: string = "TND") =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis, sym } }),
+  analyzeCostsPdf: async (result: Record<string, unknown>, kpis: Record<string, unknown>, sym: string = "TND") => {
+    const token = localStorage.getItem('savia_token') || localStorage.getItem('token');
+    const lang = localStorage.getItem('savia_lang') || 'fr';
     const base = process.env.NEXT_PUBLIC_API_URL || '';
     const cn = localStorage.getItem('savia_company') || 'SAVIA';
     const cl = localStorage.getItem('savia_logo') || '';
     const res = await fetch(`${base}/api/ai/analyze-costs/pdf`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ result, kpis, company_name: cn, company_logo: cl }),
+      headers: { 'Content-Type': 'application/json', 'X-SAVIA-Lang': lang, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ result, kpis, sym, company_name: cn, company_logo: cl }),
     });
     if (!res.ok) throw new Error('Erreur PDF');
     const blob = await res.blob();

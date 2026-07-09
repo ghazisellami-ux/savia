@@ -89,6 +89,9 @@ async function loadRolePermissions(role: string, token: string): Promise<Permiss
     });
     if (!res.ok) throw new Error('settings failed');
     const data = await res.json();
+    const lang = data.langue === 'en' ? 'en' : 'fr';
+    localStorage.setItem('savia_lang', lang);
+    window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang } }));
     const allRolePerms = JSON.parse(data.role_permissions || '{}');
     if (allRolePerms[role]) return allRolePerms[role];
   } catch {}

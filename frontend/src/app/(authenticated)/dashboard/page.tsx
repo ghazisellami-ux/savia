@@ -49,6 +49,16 @@ const CHART_STYLE = {
 
 const MONTH_NAMES = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
   'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+const MONTH_ABBR = {
+  fr: ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aou', 'Sep', 'Oct', 'Nov', 'Dec'],
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+} as const;
+type UiLang = keyof typeof MONTH_ABBR;
+
+function getUiLang(): UiLang {
+  if (typeof window === 'undefined') return 'fr';
+  return localStorage.getItem('savia_lang') === 'en' ? 'en' : 'fr';
+}
 
 // Color palette for error types
 const ERROR_TYPE_COLORS: Record<string, string> = {
@@ -90,13 +100,13 @@ function getDateRange(mode: 'mensuel' | 'annuel', month: number, year: number) {
   }
 }
 
-function getLast6Months(month: number, year: number) {
+function getLast6Months(month: number, year: number, lang: UiLang) {
   const months = [];
   for (let i = 5; i >= 0; i--) {
     let m = month - i;
     let y = year;
     while (m <= 0) { m += 12; y--; }
-    months.push({ mois: MONTH_NAMES[m - 1].substring(0, 3), month: m, year: y });
+    months.push({ mois: MONTH_ABBR[lang][m - 1], month: m, year: y });
   }
   return months;
 }
@@ -114,6 +124,7 @@ export default function DashboardPage() {
   const [periodMode, setPeriodMode] = useState<'mensuel' | 'annuel'>('annuel');
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [uiLang, setUiLang] = useState<UiLang>(() => getUiLang());
 
   // --- Dynamic equipment types for current client ---
   const [equipmentTypesForFilters, setEquipmentTypesForFilters] = useState<string[]>([]);
@@ -128,6 +139,16 @@ export default function DashboardPage() {
   const [showAnomalies, setShowAnomalies] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [trendData, setTrendData] = useState<any[]>([]);
+
+  useEffect(() => {
+    const syncLang = () => setUiLang(getUiLang());
+    window.addEventListener('savia_language_changed', syncLang);
+    window.addEventListener('storage', syncLang);
+    return () => {
+      window.removeEventListener('savia_language_changed', syncLang);
+      window.removeEventListener('storage', syncLang);
+    };
+  }, []);
 
   // --- Charger les types d'équipement filtrés quand le client change ---
   useEffect(() => {
@@ -401,7 +422,7 @@ export default function DashboardPage() {
 
   // Monthly bar chart data — compute from real interventions
   const monthlyChartData = useMemo(() => {
-    const months = getLast6Months(selectedMonth, selectedYear);
+    const months = getLast6Months(selectedMonth, selectedYear, uiLang);
     return months.map(m => {
       const filtered = allInterventions.filter((i: any) => {
         const d = new Date(i.date);
@@ -413,7 +434,7 @@ export default function DashboardPage() {
         preventive: filtered.filter((i: any) => (i.type_intervention || '').toLowerCase().includes('prevent') || (i.type_intervention || '').toLowerCase().includes('prévent')).length,
       };
     });
-  }, [allInterventions, selectedMonth, selectedYear]);
+  }, [allInterventions, selectedMonth, selectedYear, uiLang]);
 
   // Compute error types distribution from real interventions
   const errorTypesData = useMemo(() => {
@@ -751,7 +772,7 @@ export default function DashboardPage() {
             height={280}
             series={[
               { name: 'Corrective', data: monthlyChartData.map((d: any) => d.corrective) },
-              { name: 'Préventive', data: monthlyChartData.map((d: any) => d.preventive) },
+              { name: uiLang === 'en' ? 'Preventive' : 'Préventive', data: monthlyChartData.map((d: any) => d.preventive) },
             ]}
             options={{
               chart: {
@@ -883,8 +904,8 @@ export default function DashboardPage() {
           </div>
         </SectionCard>
 
-        {/* Gauge Santé Globale — Cercle SVG animé */}
-        <SectionCard title={<span className="flex items-center gap-2"><Target className="w-5 h-5 text-savia-accent" /> Jauge Santé Globale</span>}>
+        {/* Indicateur Santé Globale — Cercle SVG animé */}
+        <SectionCard title={<span className="flex items-center gap-2"><Target className="w-5 h-5 text-savia-accent" /> Indicateur Santé Globale</span>}>
           {(() => {
             const size = 200;
             const strokeWidth = 14;

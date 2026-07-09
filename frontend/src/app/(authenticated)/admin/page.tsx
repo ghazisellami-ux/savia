@@ -214,6 +214,7 @@ export default function AdminPage() {
     { code: 'XOF', label: 'Franc CFA (BCEAO)', flag: '🆈', symbol: 'FCFA' },
   ];
   const [devise, setDevise] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
+  const [language, setLanguage] = useState<'fr' | 'en'>(() => (typeof window !== 'undefined' && localStorage.getItem('savia_lang') === 'en' ? 'en' : 'fr'));
   const [companyName, setCompanyName] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_company') || '' : ''));
   const [logoPreview, setLogoPreview] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_logo') || '' : ''));
   const [tauxHoraire, setTauxHoraire] = useState('');
@@ -235,6 +236,7 @@ export default function AdminPage() {
       // Save to backend
       const payload = {
         taux_horaire_technicien: tauxHoraire,
+        langue: language,
       };
       const res = await fetch('/api/admin/settings', {
         method: 'PUT',
@@ -254,10 +256,12 @@ export default function AdminPage() {
     
     // Save local settings
     localStorage.setItem('savia_devise', devise);
+    localStorage.setItem('savia_lang', language);
     localStorage.setItem('savia_company', companyName);
     if (logoPreview) localStorage.setItem('savia_logo', logoPreview);
     else localStorage.removeItem('savia_logo');
     window.dispatchEvent(new Event('savia_settings_changed'));
+    window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang: language } }));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 2000);
   };
@@ -357,6 +361,10 @@ export default function AdminPage() {
           // Load hourly rate
           const rate = settingsData.taux_horaire_technicien || '';
           setTauxHoraire(rate);
+          const dbLang = settingsData.langue === 'en' ? 'en' : 'fr';
+          setLanguage(dbLang);
+          localStorage.setItem('savia_lang', dbLang);
+          window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang: dbLang } }));
           
           const dbPerms = JSON.parse(settingsData.role_permissions || '{}');
           console.log('[ADMIN] parsed permissions keys:', Object.keys(dbPerms));
@@ -547,6 +555,11 @@ export default function AdminPage() {
     return 'bg-green-500/10 text-green-400';
   };
 
+  const roleLabel = (role: string) => {
+    if (role === 'Gestionnaire') return 'Stock';
+    return role;
+  };
+
   if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
 
   return (
@@ -624,7 +637,7 @@ export default function AdminPage() {
                     <td className="py-2.5 px-3 font-mono text-xs text-savia-accent font-bold">{u.username}</td>
                     <td className="py-2.5 px-3 font-semibold">{u.nom_complet || '—'}</td>
                     <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${roleColor(u.role)}`}>{u.role}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${roleColor(u.role)}`}>{roleLabel(u.role)}</span>
                     </td>
                     <td className="py-2.5 px-3 text-sm text-savia-text-muted">{u.client || 'Global'}</td>
                     <td className="py-2.5 px-3">
@@ -790,6 +803,34 @@ export default function AdminPage() {
       {/* ─── TAB: SETTINGS ───────────────────────────────────── */}
       {tab === 'settings' && (
         <div className="space-y-6">
+          {/* Langue */}
+          <SectionCard title={<span className="flex items-center gap-2"><Globe className="w-4 h-4 text-savia-accent" /> Langue de l'application</span>}>
+            <p className="text-xs text-savia-text-muted mb-4">Le francais est utilise par defaut. Le choix anglais s'applique a l'interface, la PWA technicien, les rapports PDF et les reponses IA.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+              {[
+                { code: 'fr' as const, label: 'Francais', detail: 'Langue par defaut' },
+                { code: 'en' as const, label: 'English', detail: 'Full application translation' },
+              ].map(item => (
+                <button key={item.code} onClick={() => {
+                  setLanguage(item.code);
+                  localStorage.setItem('savia_lang', item.code);
+                  window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang: item.code } }));
+                }}
+                  className={`flex items-center justify-between gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                    language === item.code
+                      ? 'border-savia-accent bg-savia-accent/10 text-savia-accent'
+                      : 'border-savia-border hover:bg-savia-surface-hover text-savia-text'
+                  }`}>
+                  <span className="text-left">
+                    <span className="block text-sm font-black">{item.label}</span>
+                    <span className="block text-xs text-savia-text-muted mt-1">{item.detail}</span>
+                  </span>
+                  {language === item.code && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+              ))}
+            </div>
+          </SectionCard>
+
           {/* Devise */}
           <SectionCard title={<span className="flex items-center gap-2"><Globe className="w-4 h-4 text-savia-accent" /> Devise de l'application</span>}>
             <p className="text-xs text-savia-text-muted mb-4">La devise sélectionnée sera utilisée sur toutes les pages (rapports, pièces, contrats…)</p>

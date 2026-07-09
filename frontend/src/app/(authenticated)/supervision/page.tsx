@@ -667,11 +667,19 @@ export default function SupervisionPage() {
                   type="file"
                   accept=".log,.txt,.csv,.elg2"
                   onChange={e => setImportFile(e.target.files?.[0] || null)}
-                  className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2 text-savia-text
-                             file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0
-                             file:text-sm file:font-semibold file:bg-savia-accent/20 file:text-savia-accent
-                             hover:file:bg-savia-accent/30 file:cursor-pointer"
+                  className="hidden"
                 />
+                <div className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2 text-savia-text flex items-center gap-3 min-h-[46px]">
+                  <label
+                    htmlFor="log-file-input"
+                    className="shrink-0 px-3 py-1 rounded-md border-0 text-sm font-semibold bg-savia-accent/20 text-savia-accent hover:bg-savia-accent/30 cursor-pointer transition-colors"
+                  >
+                    Choisir un fichier
+                  </label>
+                  <span className="text-sm text-savia-text-muted truncate">
+                    {importFile?.name || 'Aucun fichier choisi'}
+                  </span>
+                </div>
               </div>
             </div>
             <button
