@@ -1777,6 +1777,42 @@ def get_dashboard_kpis(
                 df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
             logger.info(f"After date filter: {len(df_int)} interventions")
 
+        def _activity_availability() -> float:
+            """Average monthly availability for the selected period."""
+            if df_int.empty or "date" not in df_int.columns:
+                return 100.0
+
+            dates = pd.to_datetime(df_int["date"], errors="coerce")
+            if dates.dropna().empty:
+                return 100.0
+
+            start_date = pd.to_datetime(date_start, errors="coerce") if date_start else dates.min()
+            end_date = pd.to_datetime(date_end, errors="coerce") if date_end else dates.max()
+            if pd.isna(start_date) or pd.isna(end_date):
+                return 100.0
+
+            months = pd.period_range(start=start_date.to_period("M"), end=end_date.to_period("M"), freq="M")
+            if len(months) == 0:
+                return 100.0
+
+            monthly_values = []
+            for month in months:
+                month_start = month.to_timestamp()
+                month_end = (month + 1).to_timestamp()
+                month_int = df_int[(dates >= month_start) & (dates < month_end)]
+                nb_month_interventions = len(month_int)
+
+                availability = 100.0
+                if nb_month_interventions > 0:
+                    if "statut" in df_int.columns:
+                        unfinished = len(month_int[month_int["statut"].astype(str).str.lower() != "terminée"])
+                        availability = max(0.0, 100.0 - (unfinished * 2.0))
+                    else:
+                        availability = max(0.0, 100.0 - (nb_month_interventions * 2.0))
+                monthly_values.append(availability)
+
+            return round(sum(monthly_values) / len(monthly_values), 1)
+
         nb_eq = len(df_eq_for_status) if not df_eq_for_status.empty else 0
         nb_critiques = 0
         dispo = 100.0
@@ -1784,19 +1820,21 @@ def get_dashboard_kpis(
         # Alertes Critiques = CURRENT equipment status (not filtered by month)
         # Shows all equipment currently in critical/down state
         if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
-            nb_critiques = len(df_eq_for_status[df_eq_for_status["Statut"].isin(["Hors Service", "Critique"])])
+            def _status_key(value: Any) -> str:
+                text = unicodedata.normalize("NFD", str(value or "").strip().lower())
+                return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
 
-        # Disponibilité = based on interventions in selected period
-        # Equipment with interventions in the period = had issues = not available
-        # Disponibilité = % of equipment that had NO interventions in the period
-        if not df_int.empty and "machine" in df_int.columns:
-            machines_with_issues = df_int["machine"].unique()
-            equipment_with_issues_count = len(machines_with_issues)
-            available_equipment = nb_eq - equipment_with_issues_count
-            dispo = round((available_equipment / nb_eq) * 100, 1) if nb_eq > 0 else 100.0
-        elif nb_eq > 0:
-            # No interventions in period = all equipment available
-            dispo = 100.0
+            status_values = df_eq_for_status["Statut"].map(_status_key)
+            critical_statuses = {"hors service", "critique", "en panne"}
+            unavailable_statuses = critical_statuses | {"en atelier"}
+            nb_critiques = int(status_values.isin(critical_statuses).sum())
+            nb_unavailable = int(status_values.isin(unavailable_statuses).sum())
+            dispo = round(((nb_eq - nb_unavailable) / nb_eq) * 100, 1) if nb_eq > 0 else 100.0
+
+        # Combine current status availability with the same activity-based
+        # monthly availability used by the trend chart. Annual views average
+        # the monthly values instead of counting all yearly interventions at once.
+        dispo = min(dispo, _activity_availability())
 
         # Count unique clients
         # If NO filters applied: show ALL clients from clients table (66)
@@ -2467,7 +2505,7 @@ def get_interventions(
                 if intervention_id:
                     # Get all technicians assigned via interventions_techniciens
                     multi_tech_rows = conn.execute(
-                        """SELECT DISTINCT technicien_nom FROM interventions_techniciens 
+                        """SELECT DISTINCT technicien_nom, duree_minutes_tech, statut FROM interventions_techniciens
                            WHERE intervention_id = ? ORDER BY technicien_nom""",
                         (intervention_id,)
                     ).fetchall()
@@ -2475,6 +2513,14 @@ def get_interventions(
                     if multi_tech_rows:
                         # Multiple technicians assigned via planning
                         tech_names = [row['technicien_nom'] for row in multi_tech_rows]
+                        record['techniciens_detail'] = [
+                            {
+                                'nom': row.get('technicien_nom', ''),
+                                'duree_minutes': row.get('duree_minutes_tech', 0) or 0,
+                                'statut': row.get('statut', ''),
+                            }
+                            for row in multi_tech_rows
+                        ]
                         # Update technicien field to show comma-separated list of all assigned techs
                         record['technicien'] = ", ".join(tech_names) if tech_names else record.get('technicien', 'Non assigné')
                     elif not record.get('technicien') or record.get('technicien') == 'Non assigné':

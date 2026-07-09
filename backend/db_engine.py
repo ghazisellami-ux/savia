@@ -384,6 +384,87 @@ def read_sql(query, conn, params=None):
         return pd.DataFrame()
 
 
+_PIECE_REF_RE = re.compile(r"\bRef(?:erence)?\s*[:#-]\s*([^|\n;,]+)", re.IGNORECASE)
+_PIECE_QTY_RE = re.compile(r"\b(?:Qty|Qte|Quantite|Quantité)\s*[:#-]\s*(\d+)", re.IGNORECASE)
+_PIECE_PAREN_REF_RE = re.compile(r"\(([^()]+)\)")
+
+
+def _extract_piece_refs_from_text(pieces_text):
+    refs = []
+    text = str(pieces_text or "")
+    for line in re.split(r"[\n;]+", text):
+        ref_match = _PIECE_REF_RE.search(line)
+        if ref_match:
+            refs.append(ref_match.group(1).strip())
+            continue
+
+        for ref in _PIECE_PAREN_REF_RE.findall(line):
+            clean_ref = ref.strip()
+            if clean_ref:
+                refs.append(clean_ref)
+    return refs
+
+
+def _pieces_cost_from_text(pieces_text, price_by_ref):
+    total = 0.0
+    text = str(pieces_text or "")
+    for line in re.split(r"[\n;]+", text):
+        ref_match = _PIECE_REF_RE.search(line)
+        if ref_match:
+            ref = ref_match.group(1).strip()
+            qty_match = _PIECE_QTY_RE.search(line)
+            qty = int(qty_match.group(1)) if qty_match else 1
+            total += float(price_by_ref.get(ref.lower(), 0) or 0) * qty
+            continue
+
+        for ref in _PIECE_PAREN_REF_RE.findall(line):
+            clean_ref = ref.strip()
+            if clean_ref:
+                total += float(price_by_ref.get(clean_ref.lower(), 0) or 0)
+    return round(total, 2)
+
+
+def _fill_missing_cout_pieces(df, conn):
+    """Backfill display/API cost for legacy rows with pieces_utilisees but cout_pieces=0."""
+    if df.empty or "pieces_utilisees" not in df.columns:
+        return df
+
+    if "cout_pieces" not in df.columns:
+        df["cout_pieces"] = 0.0
+
+    current_costs = pd.to_numeric(df["cout_pieces"], errors="coerce").fillna(0)
+    pieces_text = df["pieces_utilisees"].fillna("").astype(str)
+    missing_mask = current_costs.le(0) & pieces_text.str.strip().ne("")
+    if not missing_mask.any():
+        return df
+
+    refs = set()
+    for text in pieces_text[missing_mask]:
+        refs.update(ref.lower() for ref in _extract_piece_refs_from_text(text) if ref)
+    if not refs:
+        return df
+
+    try:
+        placeholders = ", ".join(["%s"] * len(refs))
+        rows = conn.execute(
+            f"SELECT reference, prix_unitaire FROM pieces_rechange WHERE LOWER(reference) IN ({placeholders})",
+            tuple(refs)
+        ).fetchall()
+        price_by_ref = {
+            str(row.get("reference") or "").strip().lower(): float(row.get("prix_unitaire") or 0)
+            for row in rows
+        }
+    except Exception as e:
+        logger.warning(f"Unable to backfill cout_pieces from pieces_utilisees: {e}")
+        return df
+
+    for idx in df.index[missing_mask]:
+        cost = _pieces_cost_from_text(df.at[idx, "pieces_utilisees"], price_by_ref)
+        if cost > 0:
+            df.at[idx, "cout_pieces"] = cost
+    return df
+
+
 @contextmanager
 def get_db():
     """
@@ -1849,6 +1930,7 @@ def lire_interventions(machine=None):
                 conn, params=(machine,))
         else:
             df = read_sql(base_query + " ORDER BY i.date DESC", conn)
+        df = _fill_missing_cout_pieces(df, conn)
     
     # Only apply text fixes to text columns that need it
     text_columns = ["machine", "description", "probleme", "cause", "solution", "notes", "client"]
@@ -1909,10 +1991,10 @@ def ajouter_intervention(intervention_dict):
         conn.execute("""
             INSERT INTO interventions (date, machine, technicien, type_intervention,
                                        description, probleme, cause, solution,
-                                       pieces_utilisees, cout, duree_minutes,
+                                       pieces_utilisees, cout, cout_pieces, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite,
                                        duree_deplacement, start_time, end_time, fiche_validation)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
@@ -1924,6 +2006,7 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("solution") or "",
             intervention_dict.get("pieces_utilisees") or "",
             intervention_dict.get("cout", 0.0),
+            intervention_dict.get("cout_pieces", 0.0),
             intervention_dict.get("duree_minutes", 0),
             intervention_dict.get("code_erreur") or "",
             intervention_dict.get("statut", "Assignée"),
@@ -4447,7 +4530,22 @@ def finalize_intervention_from_techniciens(intervention_id):
         
         # Format pieces for display
         formatted_pieces = []
+        total_cout_pieces = 0.0
         for ref, piece_info in pieces_by_ref.items():
+            prix_unitaire = float(piece_info.get('prix_unitaire', 0) or 0)
+            try:
+                piece_row = conn.execute(
+                    f"SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = {ph} LIMIT 1",
+                    (ref,)
+                ).fetchone()
+                if piece_row:
+                    prix_unitaire = float(piece_row.get('prix_unitaire', 0) or prix_unitaire or 0)
+                    piece_info['designation'] = piece_row.get('designation', piece_info['designation'])
+                    piece_info['fournisseur'] = piece_row.get('fournisseur', piece_info['fournisseur'])
+            except Exception as piece_err:
+                logger.warning(f"Could not fetch price for piece {ref}: {piece_err}")
+
+            total_cout_pieces += prix_unitaire * int(piece_info.get('qty') or 0)
             # Format: Désignation | Ref: XXX | Fournisseur: YYY | Qty: Z
             piece_line = f"{piece_info['designation']} | Ref: {piece_info['ref']} | Fournisseur: {piece_info['fournisseur']} | Qty: {piece_info['qty']}"
             formatted_pieces.append(piece_line)
@@ -4455,14 +4553,25 @@ def finalize_intervention_from_techniciens(intervention_id):
         pieces_utilisees_str = "\n".join(formatted_pieces) if formatted_pieces else ""
         logger.info(f"Aggregated {len(formatted_pieces)} unique pieces for intervention {intervention_id}: {pieces_utilisees_str}")
         
+        try:
+            config_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
+            if not config_row or not config_row["valeur"]:
+                raise ValueError("Taux horaire technicien non configure")
+            taux_horaire = float(config_row["valeur"])
+        except (ValueError, TypeError) as e:
+            raise Exception(f"Erreur configuration: {str(e)}")
+
+        cout_main_oeuvre = round((total_duree / 60.0) * taux_horaire, 2)
+        total_cout_pieces = round(total_cout_pieces, 2)
+
         # ✅ AUTOMATICALLY CLOSE the parent intervention (statut = 'Cloturee')
         # This is the key change - we now close it instead of leaving it "En cours"
         date_cloture = datetime.now().isoformat()
-        
+
         # Get planning_id before updating intervention
         interv_row = conn.execute(f"SELECT planning_id FROM interventions WHERE id = {ph}", (intervention_id,)).fetchone()
         planning_id = interv_row.get('planning_id') if interv_row else None
-        
+
         conn.execute(f"""
             UPDATE interventions 
             SET statut = {ph},
@@ -4471,9 +4580,11 @@ def finalize_intervention_from_techniciens(intervention_id):
                 solution = CASE WHEN solution = '' THEN {ph} ELSE solution END,
                 type_erreur = CASE WHEN type_erreur = '' OR type_erreur IS NULL THEN {ph} ELSE type_erreur END,
                 date_cloture = {ph},
-                pieces_utilisees = {ph}
+                pieces_utilisees = {ph},
+                cout = {ph},
+                cout_pieces = {ph}
             WHERE id = {ph}
-        """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, intervention_id))
+        """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, cout_main_oeuvre, total_cout_pieces, intervention_id))
         
         # Update related planning to "Cloturee" if it exists
         if planning_id:
@@ -4494,6 +4605,8 @@ def finalize_intervention_from_techniciens(intervention_id):
             'success': True,
             'total_duree_minutes': total_duree,
             'total_duree_deplacement': total_deplacement,
+            'cout_main_oeuvre': cout_main_oeuvre,
+            'cout_pieces': total_cout_pieces,
             'combined_solution': combined_solution,
             'completed': completed_count,
             'total': total_count
