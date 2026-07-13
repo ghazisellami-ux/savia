@@ -25,6 +25,7 @@ from fpdf.enums import XPos, YPos
 from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from repositories.technician_names import DatabaseTechnicianNameRepository
@@ -381,6 +382,22 @@ _ensure_fa_font()
 # ─────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 
+
+def _cors_origins():
+    """Return configured origins plus the local frontend addresses used in development."""
+    configured = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv("CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    local_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+    return list(dict.fromkeys(configured + local_origins))
+
 # ---- Config ----
 JWT_SECRET = os.getenv("JWT_SECRET", "sic-terrain-secret-2026")
 JWT_EXPIRY_HOURS = 72
@@ -400,7 +417,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -415,5 +433,14 @@ async def savia_language_context(request: Request, call_next):
     finally:
         _LANG_CONTEXT.reset(token)
 
-__all__ = [name for name in globals() if not name.startswith("__")]
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a CORS-compatible JSON error instead of an opaque browser failure."""
+    logger.exception("Unhandled API error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Erreur interne du serveur"},
+    )
+
+__all__ = [name for name in globals() if not name.startswith("__")]

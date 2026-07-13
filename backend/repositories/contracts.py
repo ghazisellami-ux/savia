@@ -8,6 +8,8 @@ import pandas as pd
 
 from database.core import _trigger_backup, get_db, read_sql
 
+logger = logging.getLogger("db_engine")
+
 __all__ = [
     "lire_techniciens",
     "ajouter_technicien",
@@ -734,4 +736,3 @@ def lire_fichier_conformite(conformite_id):
         if row and row["fichier_data"]:
             return row["fichier_nom"], bytes(row["fichier_data"])
     return None, None
-

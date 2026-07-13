@@ -5,8 +5,6 @@ import { SectionCard } from '@/components/ui/cards';
 import { interventions } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
-const API = process.env.NEXT_PUBLIC_API_URL || '';
-
 interface Props {
   fiches: any[];
   setFiches: (f: any[]) => void;
