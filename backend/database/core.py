@@ -370,7 +370,12 @@ def _get_pandas_engine():
     """Return the shared SQLAlchemy engine used by pandas reads."""
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not configured")
-    return create_engine(DATABASE_URL, pool_pre_ping=True)
+    # Some VPS providers still expose the legacy postgres:// scheme.
+    # SQLAlchemy expects the explicit postgresql:// dialect name.
+    sqlalchemy_url = DATABASE_URL
+    if sqlalchemy_url.startswith("postgres://"):
+        sqlalchemy_url = "postgresql://" + sqlalchemy_url[len("postgres://"):]
+    return create_engine(sqlalchemy_url, pool_pre_ping=True)
 
 
 def read_sql(query, conn, params=None):
