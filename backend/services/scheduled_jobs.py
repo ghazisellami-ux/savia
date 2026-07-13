@@ -1,0 +1,906 @@
+"""Scheduled maintenance, notification, stock, and Telegram jobs."""
+
+from api.runtime import (
+    get_db,
+    lire_contrats,
+    lire_equipements,
+    lire_interventions,
+    lire_notification_schedules,
+    lire_planning,
+    logger,
+    math,
+    pd,
+    update_piece_parameters_batch,
+)
+
+def check_garantie_expiry():
+    """
+    Vérifie les garanties équipements qui expirent dans les 30 prochains jours
+    et envoie une notification Telegram pour chaque équipement concerné.
+    """
+    from datetime import date, timedelta
+    try:
+        df = lire_equipements()
+        if df is None or df.empty:
+            return []
+        today = date.today()
+        alert_limit = today + timedelta(days=30)
+        alerts = []
+        for _, row in df.iterrows():
+            debut_str = str(row.get('garantie_debut', '') or '').strip()
+            duree = int(row.get('garantie_duree', 0) or 0)
+            if not debut_str or not duree:
+                continue
+            try:
+                debut = date.fromisoformat(debut_str[:10])
+                # Add years without dateutil
+                try:
+                    fin = debut.replace(year=debut.year + duree)
+                except ValueError:  # Feb 29 edge case
+                    fin = debut.replace(year=debut.year + duree, day=28)
+                if today <= fin <= alert_limit:
+                    alerts.append({
+                        'nom': row.get('Nom') or row.get('nom', '?'),
+                        'client': row.get('Client') or row.get('client', '?'),
+                        'fin': fin.strftime('%d/%m/%Y'),
+                        'jours': (fin - today).days,
+                    })
+            except Exception:
+                continue
+        if alerts:
+            lines = '\n'.join(
+                f"  • <b>{a['nom']}</b> ({a['client']}) — expire le {a['fin']} ({a['jours']}j)"
+                for a in alerts
+            )
+            msg = (
+                f"⚠️ <b>Garanties expirant bientôt</b>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Garantie check: {len(alerts)} alerte(s) envoyée(s) aux bots SAV + Manager")
+        return alerts
+    except Exception as e:
+        logger.error(f"Garantie expiry check error: {e}")
+        return []
+
+
+def check_planning_reminder():
+    """
+    Vérifie les maintenances préventives planifiées dans les prochains jours
+    et envoie un rappel Telegram pour chacune.
+    
+    Utilise le rappel_avant_jours configuré dans le contrat associé.
+    Par défaut: 14 jours si pas de contrat ou rappel non configuré.
+    """
+    from datetime import date, timedelta
+    try:
+        df = lire_planning()
+        if df is None or df.empty:
+            return []
+        
+        today = date.today()
+        reminders = []
+        
+        # Track reminder days used - for logging
+        reminder_days_by_contrat = {}
+        
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip()
+            if statut not in ('Planifiée', 'En cours'):
+                continue
+            
+            date_str = str(row.get('date_prevue', '') or '').strip()
+            if not date_str:
+                continue
+            
+            try:
+                date_prevue = date.fromisoformat(date_str[:10])
+                
+                # Get contrat_id to fetch rappel_avant_jours
+                contrat_id = row.get('contrat_id')
+                reminder_days = 14  # Default
+                
+                if contrat_id:
+                    try:
+                        with get_db() as conn:
+                            ph = "%s"
+                            contrat_row = conn.execute(
+                                f"SELECT rappel_avant_jours FROM contrats WHERE id = {ph}",
+                                (contrat_id,)
+                            ).fetchone()
+                            if contrat_row:
+                                contrat_dict = dict(contrat_row)
+                                reminder_days = contrat_dict.get("rappel_avant_jours", 14) or 14
+                                reminder_days_by_contrat[contrat_id] = reminder_days
+                    except Exception as e:
+                        logger.debug(f"Could not fetch rappel_avant_jours for contrat {contrat_id}: {e}")
+                
+                alert_limit = today + timedelta(days=reminder_days)
+                
+                if today <= date_prevue <= alert_limit:
+                    jours = (date_prevue - today).days
+                    reminders.append({
+                        'id': row.get('id', '?'),
+                        'machine': row.get('machine', '?'),
+                        'client': row.get('client', ''),
+                        'type': row.get('type_maintenance', 'Préventive'),
+                        'description': row.get('description', ''),
+                        'date': date_prevue.strftime('%d/%m/%Y'),
+                        'technicien': row.get('technicien_assigne', ''),
+                        'jours': jours,
+                        'reminder_days': reminder_days,
+                    })
+            except Exception:
+                continue
+        
+        if reminders:
+            lines = '\n'.join(
+                f"  • <b>{r['machine']}</b>"
+                + (f" — {r['client']}" if r['client'] else "")
+                + f"\n    📅 {r['date']} ({r['jours']}j)"
+                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else " | ⚠️ <b>Technicien non assigné</b>")
+                + (f"\n    📝 {r['description'][:60]}" if r['description'] else "")
+                for r in sorted(reminders, key=lambda x: x['jours'])
+            )
+            
+            # Build dynamic message based on max reminder days used
+            max_days = max((r['reminder_days'] for r in reminders), default=14)
+            msg = (
+                f"🔧 <b>Rappel Maintenance Préventive</b>\n"
+                f"<i>{len(reminders)} maintenance(s) dans les {max_days} prochains jours :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram(msg)
+            logger.info(f"Planning reminder: {len(reminders)} rappel(s) envoyé(s) | Jours config: {reminder_days_by_contrat}")
+        return reminders
+    except Exception as e:
+        logger.error(f"Planning reminder check error: {e}")
+        return []
+
+
+def sync_planning_to_interventions():
+    """
+    Auto-crée des interventions pour les maintenances planifiées dont la date_prevue est aujourd'hui.
+    Envoie une notification au Bot Technicien pour chaque intervention créée.
+    """
+    from datetime import date
+    try:
+        today = date.today()
+        today_str = today.isoformat()
+        with get_db() as conn:
+            # Trouver les maintenances planifiées pour aujourd'hui sans intervention déjà créée
+            planned = conn.execute(
+                """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
+                          pm.type_maintenance
+                   FROM planning_maintenance pm
+                   WHERE pm.date_prevue = ?
+                     AND pm.statut = 'Planifiée'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM interventions i
+                         WHERE i.planning_id = pm.id
+                     )""",
+                (today_str,)
+            ).fetchall()
+
+        created = []
+        for row in planned:
+            pm = dict(row)
+            pm_id = pm['id']
+            machine = pm.get('machine', '')
+            client = pm.get('client', '')
+            technicien = pm.get('technicien_assigne', '')
+            description = pm.get('description', '') or f"Maintenance préventive — {machine}"
+            notes = f"[{client}] Maintenance préventive planifiée #{pm_id}" if client else f"Maintenance préventive planifiée #{pm_id}"
+
+            with get_db() as conn:
+                conn.execute(
+                    """INSERT INTO interventions
+                       (date, machine, technicien, type_intervention, description,
+                        statut, priorite, notes, planning_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (today_str, machine, technicien, 'Préventive', description,
+                     'En cours', 'Moyenne', notes, pm_id)
+                )
+                # Récupérer l'ID de l'intervention créée
+                new_id_row = conn.execute(
+                    "SELECT id FROM interventions WHERE planning_id = ? ORDER BY id DESC LIMIT 1",
+                    (pm_id,)
+                ).fetchone()
+                new_id = new_id_row['id'] if new_id_row else '?'
+
+                # Mettre à jour le statut du planning
+                conn.execute(
+                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = ?",
+                    (pm_id,)
+                )
+
+            created.append({
+                'intervention_id': new_id,
+                'planning_id': pm_id,
+                'machine': machine,
+                'technicien': technicien,
+                'client': client,
+            })
+
+        # Envoyer notification groupée au bot Technicien
+        if created:
+            lines = '\n'.join(
+                f"  • <b>#{c['intervention_id']}</b> — {c['machine']}"
+                + (f" ({c['client']})" if c['client'] else "")
+                + (f"\n    👨‍🔧 {c['technicien']}" if c['technicien'] else "")
+                for c in created
+            )
+            msg = (
+                f"🔧 <b>Maintenance Préventive — Jour J</b>\n"
+                f"<i>{len(created)} intervention(s) créée(s) automatiquement :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram", msg)
+            logger.info(f"Planning sync: {len(created)} intervention(s) créées pour {today_str}")
+
+        return created
+    except Exception as e:
+        logger.error(f"sync_planning_to_interventions error: {e}")
+        return []
+
+
+def check_stock_alerts():
+    """
+    Vérifie les pièces en rupture de stock (stock_actuel <= stock_minimum)
+    et les interventions en attente de pièce.
+    Envoie une notification au Bot Stock.
+    """
+    try:
+        alerts = []
+        with get_db() as conn:
+            # 1. Pièces en rupture de stock
+            ruptures = conn.execute(
+                """SELECT reference, designation, stock_actuel, stock_minimum, fournisseur
+                   FROM pieces_rechange
+                   WHERE stock_actuel <= stock_minimum AND stock_minimum > 0
+                   ORDER BY (stock_minimum - stock_actuel) DESC"""
+            ).fetchall()
+            for r in ruptures:
+                d = dict(r)
+                alerts.append(
+                    f"  🔴 <b>{d.get('designation', d.get('reference', '?'))}</b>"
+                    f" — Réf: {d.get('reference', '?')}"
+                    f"\n    Stock: <b>{d.get('stock_actuel', 0)}</b> / Min: {d.get('stock_minimum', 0)}"
+                    + (f" | Fournisseur: {d['fournisseur']}" if d.get('fournisseur') else "")
+                )
+
+            # 2. Interventions en attente de pièce
+            attente = conn.execute(
+                """SELECT id, machine, technicien FROM interventions
+                   WHERE statut = 'En attente de piece'
+                   ORDER BY id DESC"""
+            ).fetchall()
+            for a in attente:
+                d = dict(a)
+                alerts.append(
+                    f"  ⏳ Intervention <b>#{d['id']}</b> — {d.get('machine', '?')}"
+                    f" ({d.get('technicien', '?')}) en attente de pièce"
+                )
+
+        if alerts:
+            from datetime import date
+            msg = (
+                f"📦 <b>Alerte Stock & Pièces</b>\n"
+                f"<i>{len(alerts)} alerte(s) :</i>\n\n"
+                + '\n'.join(alerts) + "\n\n"
+                f"📅 Vérification SAVIA — {date.today().strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_stock", msg)
+            logger.info(f"Stock alerts: {len(alerts)} alerte(s) envoyée(s)")
+        return alerts
+    except Exception as e:
+        logger.error(f"check_stock_alerts error: {e}")
+        return []
+
+
+def check_facturation_reminders():
+    """
+    Vérifie les interventions clôturées pour envoyer des rappels de facturation :
+    - Bot SAV : rappel quand une intervention est clôturée depuis ~8 jours (J-2 avant deadline)
+    - Bot SAV : rappel quand clôturée depuis ~1 jour (première alerte)
+    - Bot Manager : alerte quand la facturation n'a pas eu lieu après 10 jours
+    """
+    from datetime import date, timedelta
+    try:
+        today = date.today()
+        sav_alerts = []
+        manager_alerts = []
+
+        with get_db() as conn:
+            # Interventions clôturées avec date_cloture, non encore facturées
+            rows = conn.execute(
+                """SELECT id, machine, technicien, date_cloture, notes,
+                          COALESCE(facture_envoyee, FALSE) as facture_envoyee,
+                          COALESCE(rappel_facture_envoye, 0) as rappel_facture_envoye
+                   FROM interventions
+                   WHERE statut = 'Cloturee'
+                     AND date_cloture IS NOT NULL
+                     AND COALESCE(facture_envoyee, FALSE) = FALSE
+                   ORDER BY date_cloture ASC"""
+            ).fetchall()
+
+        for row in rows:
+            d = dict(row)
+            try:
+                dc = d['date_cloture']
+                if isinstance(dc, str):
+                    cloture_date = date.fromisoformat(str(dc)[:10])
+                elif hasattr(dc, 'date'):
+                    # datetime object → convert to date
+                    cloture_date = dc.date()
+                elif hasattr(dc, 'year'):
+                    cloture_date = dc
+                else:
+                    cloture_date = date.fromisoformat(str(dc)[:10])
+            except Exception:
+                continue
+
+            # Si pas de technicien principal, récupérer depuis interventions_techniciens
+            if not d.get('technicien'):
+                with get_db() as conn:
+                    tech_rows = conn.execute(
+                        "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s ORDER BY technicien_nom",
+                        (d['id'],)
+                    ).fetchall()
+                    if tech_rows:
+                        tech_names = [str(row.get('technicien_nom', '')).strip() for row in tech_rows]
+                        d['technicien'] = ', '.join(tech_names)
+
+            jours_depuis = (today - cloture_date).days
+            rappel_level = d.get('rappel_facture_envoye', 0) or 0
+            deadline = cloture_date + timedelta(days=10)
+            jours_restants = (deadline - today).days
+
+            # Extraire client depuis notes
+            notes = str(d.get('notes', '') or '')
+            client = notes[1:notes.index(']')] if notes.startswith('[') and ']' in notes else ''
+            machine = d.get('machine', '?')
+            int_id = d['id']
+
+            # Rappel SAV : J+1 après clôture (première notification)
+            if jours_depuis >= 1 and rappel_level < 1:
+                sav_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_restants': jours_restants,
+                    'type': 'premier',
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = ?", (int_id,))
+
+            # Rappel SAV : J+8 (2 jours avant deadline)
+            elif jours_depuis >= 8 and rappel_level < 2:
+                sav_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_restants': jours_restants,
+                    'type': 'urgent',
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = ?", (int_id,))
+
+            # Bot Manager : > 10 jours sans facturation
+            if jours_depuis > 10 and rappel_level < 3:
+                manager_alerts.append({
+                    'id': int_id, 'machine': machine, 'client': client,
+                    'technicien': d.get('technicien', ''),
+                    'jours_retard': jours_depuis - 10,
+                })
+                with get_db() as conn:
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = ?", (int_id,))
+
+        # Envoyer notifications SAV
+        if sav_alerts:
+            lines = '\n'.join(
+                f"  {'🔴' if a['type']=='urgent' else '🟡'} <b>#{a['id']}</b> — {a['machine']}"
+                + (f" ({a['client']})" if a['client'] else "")
+                + f"\n    ⏳ {a['jours_restants']}j restants pour facturer"
+                for a in sav_alerts
+            )
+            msg = (
+                f"💰 <b>Rappel Facturation SAV</b>\n"
+                f"<i>{len(sav_alerts)} intervention(s) à facturer :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            logger.info(f"Facturation SAV: {len(sav_alerts)} rappel(s) envoyé(s)")
+
+        # Envoyer alertes Manager
+        if manager_alerts:
+            lines = '\n'.join(
+                f"  🚨 <b>#{a['id']}</b> — {a['machine']}"
+                + (f" ({a['client']})" if a['client'] else "")
+                + f"\n    ⚠️ {a['jours_retard']}j de retard de facturation"
+                for a in manager_alerts
+            )
+            msg = (
+                f"🚨 <b>ALERTE — Facturation en retard</b>\n"
+                f"<i>{len(manager_alerts)} intervention(s) non facturées après 10 jours :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Facturation Manager: {len(manager_alerts)} alerte(s) envoyée(s)")
+
+        return {'sav': len(sav_alerts), 'manager': len(manager_alerts)}
+    except Exception as e:
+        logger.error(f"check_facturation_reminders error: {e}")
+        return {'sav': 0, 'manager': 0}
+
+
+def check_sla_alerts():
+    """
+    Vérifie les interventions actives par rapport aux SLA des contrats :
+    - ⚠️ Bot SAV : alerte quand une intervention atteint 75% du SLA (zone danger)
+    - 🔴 Bot Manager : alerte quand une intervention dépasse le SLA du contrat
+    """
+    from datetime import datetime as _dt
+    
+    def _format_hours(hours: float) -> str:
+        """Format hours as 'X jours Y heures' or just 'X heures'"""
+        if hours < 24:
+            return f"{round(hours)}h"
+        days = int(hours // 24)
+        remaining_hours = int(hours % 24)
+        if remaining_hours == 0:
+            return f"{days}j"
+        return f"{days}j {remaining_hours}h"
+    
+    try:
+        df_contrats = lire_contrats()
+        df_interv = lire_interventions()
+        df_equip = lire_equipements()
+
+        # Build client → SLA mapping from active contracts
+        client_sla = {}
+        if df_contrats is not None and not df_contrats.empty:
+            for _, c in df_contrats.iterrows():
+                cl = c.get("client", "")
+                sla_h = c.get("sla_temps_reponse_h", 24)
+                statut = str(c.get("statut", "")).lower()
+                if cl and "actif" in statut:
+                    if cl not in client_sla or sla_h < client_sla[cl]:
+                        client_sla[cl] = int(sla_h)
+
+        if not client_sla:
+            return  # No active contracts with SLA
+
+        # Build machine → client mapping
+        machine_client = {}
+        if df_equip is not None and not df_equip.empty:
+            for _, eq in df_equip.iterrows():
+                machine_client[eq.get("Nom", "")] = eq.get("Client", "")
+
+        now = _dt.now()
+        danger_items = []   # 75-100% SLA
+        breached_items = [] # >100% SLA
+
+        if df_interv is not None and not df_interv.empty:
+            active = df_interv[~df_interv["statut"].str.lower().str.contains("termin|clotur|clôtur", na=False)]
+            for _, interv in active.iterrows():
+                machine = interv.get("machine", "")
+                cl = machine_client.get(machine, "")
+                if cl not in client_sla:
+                    continue  # No SLA for this client
+
+                sla_h = client_sla[cl]
+                start_str = interv.get("date_debut_intervention") or interv.get("date", "")
+                try:
+                    start = pd.to_datetime(start_str)
+                    if pd.isna(start):
+                        continue
+                except Exception:
+                    continue
+
+                elapsed_h = round((now - start).total_seconds() / 3600, 1)
+                pct = round((elapsed_h / sla_h) * 100, 1) if sla_h > 0 else 100
+                remaining_h = round(sla_h - elapsed_h, 1)
+
+                item = {
+                    "id": interv.get("id"),
+                    "machine": machine,
+                    "client": cl,
+                    "technicien": interv.get("technicien", ""),
+                    "statut": interv.get("statut", ""),
+                    "sla_h": sla_h,
+                    "elapsed_h": elapsed_h,
+                    "remaining_h": remaining_h,
+                    "pct": pct,
+                }
+
+                if pct > 100:
+                    breached_items.append(item)
+                elif pct >= 75:
+                    danger_items.append(item)
+
+        # ⚠️ Bot SAV : zone danger (75-100%)
+        if danger_items:
+            lines = '\n'.join(
+                f"  ⚠️ <b>#{d['id']}</b> — {d['machine']}"
+                f"\n    👤 {d['client']} | 👷 {d['technicien'] or 'Non assigné'}"
+                f"\n    ⏱ {d['elapsed_h']}h / {d['sla_h']}h ({d['pct']}%) — reste {max(0, d['remaining_h'])}h"
+                for d in sorted(danger_items, key=lambda x: -x['pct'])
+            )
+            msg = (
+                f"⚠️ <b>ALERTE SLA — Zone Danger</b>\n"
+                f"<i>{len(danger_items)} intervention(s) approchent le délai SLA :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {now.strftime('%d/%m/%Y %H:%M')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            logger.info(f"SLA danger alerts: {len(danger_items)} envoyée(s) au bot SAV")
+
+        # 🔴 Bot Manager : dépassement SLA
+        if breached_items:
+            lines = '\n'.join(
+                f"  🔴 <b>#{b['id']}</b> — {b['machine']}"
+                f"\n    👤 {b['client']} | 👷 {b['technicien'] or 'Non assigné'}"
+                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {_format_hours(b['elapsed_h'] - b['sla_h'])}</b>"
+                for b in sorted(breached_items, key=lambda x: -x['pct'])
+            )
+            msg = (
+                f"🔴 <b>ALERTE SLA — DÉPASSEMENT</b>\n"
+                f"<i>{len(breached_items)} intervention(s) dépassent le délai contractuel :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 {now.strftime('%d/%m/%Y %H:%M')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"SLA breach alerts: {len(breached_items)} envoyée(s) au bot Manager")
+
+    except Exception as e:
+        logger.error(f"check_sla_alerts error: {e}")
+
+
+
+def check_planning_retard():
+    """
+    Vérifie les maintenances planifiées en retard (date_prevue passée mais statut toujours 'Planifiée').
+    Envoie une alerte au Bot Manager.
+    """
+    from datetime import date
+    try:
+        df = lire_planning()
+        if df is None or df.empty:
+            return
+        today = date.today()
+        retard_items = []
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip()
+            if statut != 'Planifiée':
+                continue
+            date_str = str(row.get('date_prevue', '') or '').strip()
+            if not date_str:
+                continue
+            try:
+                date_prevue = date.fromisoformat(date_str[:10])
+                if date_prevue < today:
+                    jours_retard = (today - date_prevue).days
+                    retard_items.append({
+                        'id': row.get('id', '?'),
+                        'machine': row.get('machine', '?'),
+                        'client': row.get('client', ''),
+                        'technicien': row.get('technicien_assigne', ''),
+                        'date': date_prevue.strftime('%d/%m/%Y'),
+                        'jours': jours_retard,
+                        'description': row.get('description', ''),
+                    })
+            except Exception:
+                continue
+
+        if retard_items:
+            lines = '\n'.join(
+                f"  🔴 <b>#{r['id']}</b> — {r['machine']}"
+                + (f" — {r['client']}" if r['client'] else "")
+                + f"\n    📅 Prévue le {r['date']} (<b>{r['jours']}j de retard</b>)"
+                + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else " | ⚠️ Technicien non assigné")
+                for r in sorted(retard_items, key=lambda x: -x['jours'])
+            )
+            msg = (
+                f"🔴 <b>PLANNING EN RETARD</b>\n"
+                f"<i>{len(retard_items)} maintenance(s) non réalisée(s) :</i>\n\n"
+                f"{lines}\n\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Planning retard: {len(retard_items)} alerte(s) envoyée(s) au bot Manager")
+    except Exception as e:
+        logger.error(f"check_planning_retard error: {e}")
+
+
+def _start_garantie_daemon():
+    """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
+    import threading, time
+    LOCK_KEY = "notif_daemon_last_run"
+
+    def _already_ran_today() -> bool:
+        """Vérifie si les notifications ont déjà été envoyées aujourd'hui (évite les doublons lors des redéploiements)."""
+        from datetime import date
+        try:
+            with get_db() as conn:
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = ?", (LOCK_KEY,)).fetchone()
+                if row:
+                    return dict(row)['valeur'] == str(date.today())
+            return False
+        except Exception:
+            return False
+
+    def _mark_ran_today():
+        """Marque la date d'aujourd'hui comme traitée."""
+        from datetime import date
+        try:
+            with get_db() as conn:
+                conn.execute(
+                    """INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                       ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
+                    (LOCK_KEY, str(date.today()))
+                )
+        except Exception as e:
+            logger.error(f"Failed to mark notification run: {e}")
+
+    def _get_notification_schedule(bot_key: str) -> dict:
+        """Récupère l'horaire de notification pour un bot depuis la base de données."""
+        try:
+            schedule = lire_notification_schedules()
+            for s in schedule:
+                if s.get('bot_key') == bot_key:
+                    return s
+        except Exception as e:
+            logger.debug(f"Failed to get notification schedule for {bot_key}: {e}")
+        
+        # Fallback: horaire par défaut (8h30, tous les jours)
+        return {
+            'bot_key': bot_key,
+            'enabled': 1,
+            'hour': 8,
+            'minute': 30,
+            'days_of_week': '1,2,3,4,5,6,7'
+        }
+
+    def _should_send_notifications_today(schedule: dict) -> bool:
+        """Vérifie si les notifications doivent être envoyées aujourd'hui selon l'horaire."""
+        if schedule.get('enabled') != 1:
+            return False
+        
+        # Vérifier le jour de la semaine (1=Lundi, 7=Dimanche)
+        import datetime as _dt
+        today_weekday = _dt.date.today().isoweekday()  # 1=Monday, 7=Sunday
+        days_str = schedule.get('days_of_week', '1,2,3,4,5,6,7')
+        days_list = [int(d.strip()) for d in days_str.split(',') if d.strip().isdigit()]
+        
+        return today_weekday in days_list
+
+    def _run():
+        import datetime as _dt
+        time.sleep(30)
+        last_run_date = None
+        
+        while True:
+            try:
+                # Récupérer l'horaire de notification depuis la base de données
+                schedule = _get_notification_schedule('telegram')
+                target_hour = schedule.get('hour', 8)
+                target_minute = schedule.get('minute', 30)
+
+                # Obtenir l'heure actuelle (heure Tunisie UTC+1)
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo("Africa/Tunis")
+                except Exception:
+                    tz = _dt.timezone(_dt.timedelta(hours=1))
+                
+                now_local = _dt.datetime.now(tz)
+                today = now_local.date()
+
+                # Vérifier si c'est l'heure d'envoyer les notifications
+                is_target_time = (now_local.hour == target_hour and now_local.minute >= target_minute and now_local.minute < target_minute + 1)
+                
+                # Vérifier si c'est un jour configuré
+                should_send_today = _should_send_notifications_today(schedule)
+                
+                # Vérifier si on a déjà envoyé aujourd'hui
+                already_sent_today = (last_run_date == today)
+
+                if is_target_time and should_send_today and not already_sent_today:
+                    logger.info(f"Notifications daemon: déclenchement à {now_local.hour:02d}:{now_local.minute:02d}")
+                    
+                    # sync_planning_to_interventions crée les interventions ET envoie la notif Jour J
+                    try:
+                        sync_planning_to_interventions()
+                    except Exception as e:
+                        logger.error(f"Planning sync daemon error: {e}")
+
+                    try:
+                        check_garantie_expiry()
+                    except Exception as e:
+                        logger.error(f"Garantie daemon error: {e}")
+                    try:
+                        check_contrat_expiry()
+                    except Exception as e:
+                        logger.error(f"Contrat daemon error: {e}")
+                    try:
+                        check_planning_reminder()
+                    except Exception as e:
+                        logger.error(f"Planning reminder daemon error: {e}")
+                    try:
+                        check_stock_alerts()
+                    except Exception as e:
+                        logger.error(f"Stock alerts daemon error: {e}")
+                    
+                    # Update piece parameters (consommation, equipements, utilisation) from historical data
+                    try:
+                        result = update_piece_parameters_batch()
+                        if result.get('success'):
+                            logger.info(f"Piece parameters updated: {result['updated']} pieces, {result['failed']} failed")
+                        else:
+                            logger.error(f"Piece parameters update error: {result.get('error')}")
+                    except Exception as e:
+                        logger.error(f"Piece parameters daemon error: {e}")
+                    
+                    try:
+                        check_facturation_reminders()
+                    except Exception as e:
+                        logger.error(f"Facturation reminders daemon error: {e}")
+                    try:
+                        check_sla_alerts()
+                    except Exception as e:
+                        logger.error(f"SLA alerts daemon error: {e}")
+                    try:
+                        check_planning_retard()
+                    except Exception as e:
+                        logger.error(f"Planning retard daemon error: {e}")
+
+                    last_run_date = today
+                    _mark_ran_today()
+                    logger.info("Notifications daemon: cycle terminé")
+                
+                # Attendre 30 secondes avant de vérifier à nouveau
+                time.sleep(30)
+                
+            except Exception as e:
+                logger.error(f"Notifications daemon error: {e}")
+                time.sleep(30)
+                
+    threading.Thread(target=_run, daemon=True, name="notifications-daemon").start()
+    logger.info("⏰ Notifications daemon: démarré (garanties + contrats + planning + sync + stock + facturation + SLA + retards, horaires configurables)")
+
+
+def check_contrat_expiry():
+    """Vérifie les contrats actifs expirant dans les 30 prochains jours."""
+    from datetime import date, timedelta
+    try:
+        df = lire_contrats()
+        if df is None or df.empty:
+            return []
+        today = date.today()
+        alert_limit = today + timedelta(days=30)
+        alerts = []
+        for _, row in df.iterrows():
+            statut = str(row.get('statut', '') or '').strip().lower()
+            if statut not in ('actif', 'active', ''):
+                continue
+            date_fin_str = str(row.get('date_fin', '') or '').strip()
+            if not date_fin_str:
+                continue
+            try:
+                date_fin = date.fromisoformat(date_fin_str[:10])
+                if today <= date_fin <= alert_limit:
+                    jours = (date_fin - today).days
+                    alerts.append({
+                        'id': row.get('id', '?'),
+                        'client': row.get('client') or row.get('Client', '?'),
+                        'equipement': row.get('equipement', ''),
+                        'type_contrat': row.get('type_contrat', ''),
+                        'fin': date_fin.strftime('%d/%m/%Y'),
+                        'jours': jours,
+                    })
+            except Exception:
+                continue
+        if alerts:
+            lines = '\n'.join(
+                f"  • <b>#{a['id']}</b> {a['client']}"
+                + (f" ({a['equipement']})" if a['equipement'] else "")
+                + f" — <i>{a['type_contrat']}</i>"
+                + f" — expire le {a['fin']} ({a['jours']}j)"
+                for a in alerts
+            )
+            msg = (
+                f"📄 <b>Contrats expirant bientôt</b>\n"
+                f"{lines}\n"
+                f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
+            )
+            _send_telegram_bot("telegram_sav", msg)
+            _send_telegram_bot("telegram_manager", msg)
+            logger.info(f"Contrat check: {len(alerts)} alerte(s) envoyée(s) aux bots SAV + Manager")
+        return alerts
+    except Exception as e:
+        logger.error(f"Contrat expiry check error: {e}")
+        return []
+
+
+def _df_to_records(df) -> list:
+    """Convert DataFrame to JSON-safe list of dicts."""
+    if df is None or df.empty:
+        return []
+    records = df.to_dict(orient="records")
+    for r in records:
+        for k, v in r.items():
+            if isinstance(v, float) and math.isnan(v):
+                r[k] = None
+            elif hasattr(v, 'isoformat'):
+                r[k] = v.isoformat()
+    return records
+
+
+def _send_telegram_bot(bot_key: str, message: str) -> bool:
+    """
+    Envoie un message Telegram via un bot spécifique.
+    bot_key: 'telegram' (technicien), 'telegram_sav', 'telegram_manager', 'telegram_stock'
+    """
+    import urllib.request, urllib.parse, json as _json
+    token_key = f"{bot_key}_token"
+    chat_key = f"{bot_key}_chat_id"
+    try:
+        with get_db() as conn:
+            # Use database-agnostic query (SQLite + PostgreSQL compatible)
+            rows = conn.execute(
+                "SELECT cle, valeur FROM config_client WHERE cle = ? OR cle = ?",
+                (token_key, chat_key)
+            ).fetchall()
+        config = {r["cle"]: r["valeur"] for r in rows}
+        token   = config.get(token_key, "").strip()
+        chat_id = config.get(chat_key, "").strip()
+        if not token:
+            logger.warning(f"Telegram bot '{bot_key}' non configuré (pas de token) — notification ignorée")
+            return False
+        if not chat_id:
+            logger.warning(f"Telegram bot '{bot_key}' pas de chat_id — notification ignorée")
+            return False
+
+        url  = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({
+            "chat_id":    chat_id,
+            "text":       message,
+            "parse_mode": "HTML",
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=data)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read().decode())
+        if result.get("ok"):
+            logger.info(f"Message Telegram envoyé via {bot_key}")
+            return True
+        logger.error(f"Telegram API error ({bot_key}): {result}")
+        return False
+    except Exception as e:
+        logger.error(f"Erreur Telegram ({bot_key}): {e}")
+        return False
+
+
+def _send_telegram(message: str) -> bool:
+    """Rétrocompatibilité — envoie via le bot technicien."""
+    return _send_telegram_bot("telegram", message)
+
+__all__ = [
+    "check_garantie_expiry",
+    "check_planning_reminder",
+    "sync_planning_to_interventions",
+    "check_stock_alerts",
+    "check_facturation_reminders",
+    "check_sla_alerts",
+    "check_planning_retard",
+    "_start_garantie_daemon",
+    "check_contrat_expiry",
+    "_df_to_records",
+    "_send_telegram_bot",
+    "_send_telegram",
+]
+

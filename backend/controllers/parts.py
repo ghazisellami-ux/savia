@@ -1,0 +1,586 @@
+"""Spare-parts, stock-request, and prediction routes."""
+
+from api.runtime import (
+    Depends,
+    HTTPException,
+    ajouter_notification_piece,
+    ajouter_piece,
+    app,
+    calculate_piece_parameters,
+    datetime,
+    get_db,
+    lire_pieces,
+    lire_pieces_demandees_en_attente,
+    lire_toutes_pieces_demandees,
+    log_audit,
+    logger,
+    marquer_notification_traitee,
+    modifier_piece,
+    notifications_rupture_pour_piece,
+    predict_commande_date,
+    predict_pieces_a_commander,
+    resoudre_piece_demandee,
+    supprimer_piece,
+    update_piece_parameters_batch,
+)
+from api.security import (
+    Depends,
+    HTTPException,
+    _check_create_piece_permission,
+    _verify_token,
+    get_db,
+)
+from services.scheduled_jobs import (
+    _df_to_records,
+    _send_telegram,
+    _send_telegram_bot,
+    get_db,
+    logger,
+    update_piece_parameters_batch,
+)
+from controllers.auth_dashboard import (
+    Depends,
+    HTTPException,
+    _verify_token,
+    app,
+    datetime,
+    get_db,
+    log_audit,
+    logger,
+)
+
+@app.get("/api/pieces")
+def get_pieces(user: dict = Depends(_verify_token)):
+    return _df_to_records(lire_pieces())
+
+
+@app.get("/api/pieces/predictions/priorite")
+def get_pieces_a_commander(limit: int = 10, user: dict = Depends(_verify_token)):
+    """
+    Retourne les pièces à commander en priorité (N pièces les plus urgentes).
+    Utilise la prédiction avancée multi-facteur.
+    
+    Query params:
+        - limit: Nombre de pièces à retourner (défaut: 10)
+    
+    Returns:
+        List of pieces ranked by urgence (CRITIQUE, HAUTE, NORMALE, BASSE)
+    """
+    try:
+        predictions = predict_pieces_a_commander(nb_to_return=limit)
+        return predictions
+    except Exception as e:
+        logger.error(f"Erreur prédiction pièces: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pieces/{piece_id}/prediction")
+def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token)):
+    """
+    Génère une prédiction détaillée pour une pièce spécifique.
+    Utilise tous les paramètres avancés (consommation, lead time, criticité, etc).
+    
+    Returns:
+        {
+            'date_commande': ISO date,
+            'urgence': 'CRITIQUE' | 'HAUTE' | 'NORMALE' | 'BASSE',
+            'raison': str (explication du calcul),
+            'jours_avant_rupture': float,
+            'stock_previsionnel_jours': float,
+            'details': {...}
+        }
+    """
+    try:
+        with get_db() as conn:
+            piece = conn.execute(
+                """SELECT id, reference, designation, stock_actuel, stock_minimum,
+                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
+                          prix_unitaire, nombre_equipements_relies, utilisation_recente_30j
+                   FROM pieces_rechange WHERE id = ?""",
+                (piece_id,)
+            ).fetchone()
+        
+        if not piece:
+            raise HTTPException(status_code=404, detail="Pièce non trouvée")
+        
+        prediction = predict_commande_date(dict(piece))
+        return {
+            'piece_id': piece_id,
+            'reference': piece['reference'],
+            'designation': piece['designation'],
+            **prediction
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur prédiction pièce {piece_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _normalize_ref(ref: str) -> str:
+    """Normalise une référence pour matching flou: supprime tirets, espaces, points, underscores, met en minuscule."""
+    import re
+    return re.sub(r'[\s\-_.\\/]+', '', ref).lower().strip()
+
+
+def _refs_match(ref1: str, ref2: str) -> bool:
+    """Vérifie si deux références correspondent (matching strict normalisé).
+    Normalise en supprimant tirets, espaces, points, underscores et compare en minuscule.
+    Ex: PS-XR400 == PSXR400 == ps xr 400  ✅
+    Ex: XR400 != PS-XR400  ❌ (pas de matching partiel pour éviter les faux positifs)
+    """
+    n1 = _normalize_ref(ref1)
+    n2 = _normalize_ref(ref2)
+    if not n1 or not n2:
+        return False
+    return n1 == n2
+
+
+def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: int):
+    """Vérifie si des demandes de pièces en attente correspondent à cette référence.
+    Utilise un matching flou (normalisation des tirets, espaces, casse).
+    Si oui, envoie notifications PWA + Telegram et marque les demandes comme résolues."""
+    # Récupérer TOUTES les demandes en attente et filtrer par matching flou
+    df_demandes = lire_pieces_demandees_en_attente()  # sans filtre ref
+    if df_demandes.empty:
+        return
+
+    # Filtrer par matching flou
+    matched_indices = []
+    for idx, d in df_demandes.iterrows():
+        demande_ref = d.get("reference") or ""
+        if _refs_match(reference, demande_ref):
+            matched_indices.append(idx)
+    
+    if not matched_indices:
+        return
+    
+    df_matched = df_demandes.loc[matched_indices]
+
+    # Grouper par technicien
+    tech_map: dict = {}
+    for _, d in df_matched.iterrows():
+        t = d.get("technicien") or "inconnu"
+        if t not in tech_map:
+            tech_map[t] = []
+        tech_map[t].append({
+            "intervention_id": d.get("intervention_id") or "",
+            "equipement": d.get("equipement") or "",
+            "client": d.get("client") or "",
+            "probleme": d.get("probleme") or "",
+            "demande_id": int(d["id"]),
+        })
+
+    for tech, demandes in tech_map.items():
+        machines = ", ".join(set(d["equipement"] for d in demandes if d["equipement"]))
+        clients = ", ".join(set(d["client"] for d in demandes if d.get("client")))
+        problemes = "; ".join(set(d["probleme"] for d in demandes if d.get("probleme")))
+        inter_ids = ", ".join(f"#{d['intervention_id']}" for d in demandes if d.get("intervention_id"))
+        nb = len(demandes)
+        # Notification PWA → technicien
+        ajouter_notification_piece({
+            "type": "piece_dispo",
+            "piece_reference": reference,
+            "piece_nom": nom_piece,
+            "technicien": tech,
+            "equipement": machines,
+            "client": clients,
+            "message": (
+                f"✅ La pièce demandée {reference} ({nom_piece}) est maintenant disponible — "
+                f"{nb} intervention(s) en attente : {inter_ids or 'N/A'}"
+            ),
+            "source": "stock",
+            "destination": "technicien",
+        })
+        logger.info(f"Notif pièce demandée disponible pour {tech}: {reference}")
+
+    # Telegram : pièce demandée disponible
+    try:
+        all_techs = ", ".join(tech_map.keys()) or "N/A"
+        all_machines = ", ".join(
+            set(d["equipement"] for ds in tech_map.values() for d in ds if d.get("equipement"))
+        ) or "N/A"
+        all_clients = ", ".join(
+            set(d["client"] for ds in tech_map.values() for d in ds if d.get("client"))
+        ) or "N/A"
+        all_problemes = "; ".join(
+            set(d["probleme"] for ds in tech_map.values() for d in ds if d.get("probleme"))
+        )
+        all_inter_ids = ", ".join(
+            f"#{d['intervention_id']}" for ds in tech_map.values() for d in ds if d.get("intervention_id")
+        ) or "N/A"
+        client_line = f"\n👤 Client : <b>{all_clients}</b>" if all_clients != "N/A" else ""
+        probleme_line = f"\n🔧 Problème : {all_problemes}" if all_problemes else ""
+        msg_tg = (
+            f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
+            f"🔩 Pièce : <b>{nom_piece}</b>\n"
+            f"🏷 Référence : <b>{reference}</b>\n"
+            f"📦 Stock actuel : <b>{stock}</b>\n\n"
+            f"🔗 Intervention(s) : {all_inter_ids}\n"
+            f"🏥 Équipement(s) : {all_machines}"
+            f"{client_line}"
+            f"{probleme_line}\n"
+            f"👷 Technicien(s) : {all_techs}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        _send_telegram_bot("telegram", msg_tg)
+        logger.info(f"Telegram pièce demandée disponible envoyé: {reference}")
+    except Exception as tg_err:
+        logger.error(f"Telegram pièce demandée dispo erreur: {tg_err}")
+
+    # Marquer les demandes comme résolues
+    for ds in tech_map.values():
+        for d in ds:
+            try:
+                resoudre_piece_demandee(d["demande_id"])
+            except Exception:
+                pass
+
+
+# ── API Pièces demandées (non référencées) ──
+
+@app.get("/api/pieces-demandees")
+def get_pieces_demandees(statut: str = None, user: dict = Depends(_verify_token)):
+    """Liste les demandes de pièces. ?statut=en_attente pour filtrer."""
+    df = lire_toutes_pieces_demandees(statut=statut)
+    return _df_to_records(df)
+
+
+@app.post("/api/pieces-demandees/{demande_id}/resoudre")
+def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token)):
+    """Résoudre manuellement une demande de pièce (le gestionnaire confirme la disponibilité)."""
+    try:
+        # Récupérer la demande pour envoyer la notification
+        df = lire_toutes_pieces_demandees()
+        demande = None
+        for _, d in df.iterrows():
+            if int(d["id"]) == demande_id:
+                demande = d
+                break
+        
+        resoudre_piece_demandee(demande_id)
+        
+        # Envoyer notification au technicien si on a les infos
+        if demande is not None:
+            tech = demande.get("technicien") or ""
+            ref = demande.get("reference") or ""
+            designation = demande.get("designation") or ref
+            intervention_id = demande.get("intervention_id") or ""
+            client = demande.get("client") or ""
+            equipement = demande.get("equipement") or ""
+            probleme = demande.get("probleme") or ""
+            if tech:
+                ajouter_notification_piece({
+                    "type": "piece_dispo",
+                    "piece_reference": ref,
+                    "piece_nom": designation,
+                    "technicien": tech,
+                    "intervention_id": intervention_id,
+                    "equipement": equipement,
+                    "client": client,
+                    "message": f"✅ La pièce demandée {ref} ({designation}) est maintenant disponible — intervention #{intervention_id}",
+                    "source": "stock",
+                    "destination": "technicien",
+                })
+                # Telegram avec détails complets
+                client_line = f"\n👤 Client : <b>{client}</b>" if client else ""
+                equip_line = f"\n🏥 Équipement : <b>{equipement}</b>" if equipement else ""
+                probleme_line = f"\n🔧 Problème : {probleme}" if probleme else ""
+                msg_tg = (
+                    f"🟢 <b>PIÈCE DEMANDÉE DISPONIBLE</b>\n\n"
+                    f"🔩 Pièce : <b>{designation}</b>\n"
+                    f"🏷 Référence : <b>{ref}</b>\n"
+                    f"🔗 Intervention : #{intervention_id}"
+                    f"{client_line}"
+                    f"{equip_line}"
+                    f"{probleme_line}\n"
+                    f"👷 Technicien : {tech}\n"
+                    f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                )
+                _send_telegram_bot("telegram", msg_tg)
+        
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Erreur résolution pièce demandée: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pieces")
+def create_piece(body: dict, user: dict = Depends(_verify_token)):
+    # Check permission
+    if not _check_create_piece_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins"
+        )
+    
+    ajouter_piece(body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "reference": body.get("reference", ""),
+        "designation": body.get("designation", ""),
+        "stock_initial": body.get("stock_actuel", 0),
+    }, ensure_ascii=False)
+    log_audit(username, "CREATE_PIECE", details, "pieces")
+
+    # Vérifier si cette pièce était demandée par un technicien (non référencée)
+    reference = body.get("reference", "")
+    stock = int(body.get("stock_actuel", 0) or 0)
+    nom_piece = body.get("designation", "") or reference
+    if reference and stock > 0:
+        try:
+            _check_pieces_demandees_disponibles(reference, nom_piece, stock)
+        except Exception as e:
+            logger.error(f"Erreur check pièces demandées (POST): {e}")
+
+    return {"ok": True}
+
+
+@app.put("/api/pieces/{piece_id}")
+def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token)):
+    """Mise à jour d'une pièce. Si stock passe de 0 → >0, déclenche notifications pour les techniciens en attente."""
+    # Récupérer le stock AVANT modification pour détecter le réapprovisionnement
+    nouveau_stock = body.get("stock_actuel")
+    try:
+        with get_db() as conn:
+            old = conn.execute(
+                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = ?",
+                (piece_id,)
+            ).fetchone()
+        stock_avant = int(old["stock_actuel"]) if old else None
+        reference = old["reference"] if old else ""
+        nom_piece = old["designation"] if old else ""
+    except Exception:
+        stock_avant = None
+        reference = ""
+        nom_piece = ""
+
+    modifier_piece(piece_id, body)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "piece_id": piece_id,
+        "reference": reference,
+        "changes": body,
+    }, ensure_ascii=False)
+    log_audit(username, "UPDATE_PIECE", details, "pieces")
+
+    # Détecter réapprovisionnement : stock passe de 0 (ou négatif) → positif
+    if nouveau_stock is not None and stock_avant is not None:
+        try:
+            if int(stock_avant) <= 0 and int(nouveau_stock) > 0 and reference:
+                # Chercher toutes les notifications rupture non traitées pour cette pièce
+                df_notifs = notifications_rupture_pour_piece(reference)
+                if not df_notifs.empty:
+                    # Grouper par technicien
+                    tech_map: dict = {}
+                    for _, n in df_notifs.iterrows():
+                        t = n.get("technicien") or "inconnu"
+                        if t not in tech_map:
+                            tech_map[t] = []
+                        tech_map[t].append({
+                            "machine": n.get("equipement") or "",
+                            "intervention_id": n.get("intervention_id") or "",
+                        })
+
+                    for tech, interventions_list in tech_map.items():
+                        machines = ", ".join(set(i["machine"] for i in interventions_list if i["machine"]))
+                        nb = len(interventions_list)
+                        inter_ids = ", ".join(
+                            f"#{i['intervention_id']}" for i in interventions_list if i.get("intervention_id")
+                        )
+                        ajouter_notification_piece({
+                            "type": "piece_dispo",
+                            "piece_reference": reference,
+                            "piece_nom": nom_piece,
+                            "technicien": tech,
+                            "equipement": machines,
+                            "message": (
+                                f"✅ La pièce {reference} ({nom_piece}) est maintenant disponible — "
+                                f"{nb} intervention(s) en attente sur : {machines or 'N/A'}"
+                            ),
+                            "source": "stock",
+                            "destination": "technicien",
+                        })
+                        logger.info(f"Notif piece_dispo créée pour technicien {tech}: pièce {reference}")
+
+                    # --- Telegram : pièce à nouveau disponible ---
+                    try:
+                        all_techs = ", ".join(tech_map.keys()) or "N/A"
+                        all_machines = ", ".join(
+                            set(i["machine"] for ivs in tech_map.values() for i in ivs if i.get("machine"))
+                        ) or "N/A"
+                        all_inter_ids = ", ".join(
+                            f"#{i['intervention_id']}"
+                            for ivs in tech_map.values() for i in ivs
+                            if i.get("intervention_id")
+                        ) or "N/A"
+                        msg_tg = (
+                            f"🟢 <b>PIÈCE DISPONIBLE</b>\n\n"
+                            f"🔩 Pièce : <b>{nom_piece}</b>\n"
+                            f"🏷 Référence : <b>{reference}</b>\n"
+                            f"📦 Stock actuel : <b>{nouveau_stock}</b>\n\n"
+                            f"🔗 Intervention(s) concernée(s) : {all_inter_ids}\n"
+                            f"🏥 Équipement(s) : {all_machines}\n"
+                            f"👷 Technicien(s) : {all_techs}\n"
+                            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        _send_telegram(msg_tg)
+                        logger.info(f"Telegram pièce disponible envoyé: {reference}")
+                    except Exception as tg_err:
+                        logger.error(f"Telegram pièce dispo erreur: {tg_err}")
+
+                    # Marquer les notifications rupture comme traitées
+                    for _, n in df_notifs.iterrows():
+                        try:
+                            marquer_notification_traitee(int(n["id"]))
+                        except Exception:
+                            pass
+        except Exception as ne:
+            logger.error(f"Erreur notif réappro pièce {piece_id}: {ne}")
+
+    # Vérifier aussi les pièces demandées manuellement (non référencées)
+    if nouveau_stock is not None and reference:
+        try:
+            if int(nouveau_stock) > 0:
+                _check_pieces_demandees_disponibles(reference, nom_piece, int(nouveau_stock))
+        except Exception as e:
+            logger.error(f"Erreur check pièces demandées (PUT): {e}")
+
+    return {"ok": True}
+
+
+@app.delete("/api/pieces/{piece_id}")
+def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
+    # Get piece info before deleting
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT reference, designation FROM pieces_rechange WHERE id = ?",
+                (piece_id,)
+            ).fetchone()
+            piece_info = dict(row) if row else {"reference": "Unknown", "designation": "Unknown"}
+    except:
+        piece_info = {"reference": "Unknown", "designation": "Unknown"}
+    
+    supprimer_piece(piece_id)
+    
+    # Log audit
+    username = user.get("sub", "unknown")
+    import json
+    details = json.dumps({
+        "piece_id": piece_id,
+        "reference": piece_info.get("reference", ""),
+        "designation": piece_info.get("designation", ""),
+    }, ensure_ascii=False)
+    log_audit(username, "DELETE_PIECE", details, "pieces")
+    
+    return {"ok": True}
+
+
+@app.post("/api/pieces/recalculate-parameters")
+def recalculate_piece_parameters(user: dict = Depends(_verify_token)):
+    """
+    Recalculate and update all piece parameters from historical data.
+    This triggers the automatic calculation of:
+    - consommation_moyenne_mois
+    - nombre_equipements_relies  
+    - utilisation_recente_30j
+    - data_confidence level
+    
+    Used for testing or manual refresh.
+    """
+    try:
+        result = update_piece_parameters_batch()
+        
+        if result.get('success'):
+            logger.info(f"Piece parameters updated: {result['updated']} pieces updated, {result['failed']} failed")
+            
+            # Log audit
+            username = user.get("sub", "unknown")
+            log_audit(username, "RECALCULATE_PIECE_PARAMETERS", 
+                     f"Updated {result['updated']} pieces", "pieces")
+            
+            return {
+                'success': True,
+                'message': 'Parametres recalcules avec succes',
+                'updated': result['updated'],
+                'failed': result['failed'],
+                'total': result['total']
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Unknown error'))
+    except Exception as e:
+        logger.error(f"Erreur recalculate_piece_parameters: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pieces/{piece_id}/parameters")
+def get_piece_parameters(piece_id: int, user: dict = Depends(_verify_token)):
+    """
+    Get calculated parameters for a specific piece with confidence level.
+    Shows:
+    - consommation_moyenne_mois
+    - data_confidence level
+    - Reasoning for prediction reliability
+    """
+    try:
+        with get_db() as conn:
+            piece = conn.execute("""
+                SELECT reference, designation, equipement_type,
+                       consommation_moyenne_mois, delai_fournisseur_jours, criticite,
+                       nombre_equipements_relies, utilisation_recente_30j
+                FROM pieces_rechange WHERE id = %s
+            """, (piece_id,)).fetchone()
+            
+            if not piece:
+                raise HTTPException(status_code=404, detail="Piece not found")
+            
+            # Recalculate to get current confidence level
+            params = calculate_piece_parameters(
+                piece['reference'],
+                piece['equipement_type']
+            )
+            
+            return {
+                'piece_id': piece_id,
+                'reference': piece['reference'],
+                'designation': piece['designation'],
+                'consommation_moyenne_mois': piece['consommation_moyenne_mois'],
+                'data_confidence': params['data_confidence'],
+                'utilisation_recente_30j': piece['utilisation_recente_30j'],
+                'nombre_equipements_relies': piece['nombre_equipements_relies'],
+                'details': params['details']
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur get_piece_parameters: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# CONTRATS
+# ==========================================
+
+__all__ = [
+    "get_pieces",
+    "get_pieces_a_commander",
+    "predict_piece_order_date",
+    "_normalize_ref",
+    "_refs_match",
+    "_check_pieces_demandees_disponibles",
+    "get_pieces_demandees",
+    "resolve_piece_demandee",
+    "create_piece",
+    "update_piece",
+    "delete_piece",
+    "recalculate_piece_parameters",
+    "get_piece_parameters",
+]
+
