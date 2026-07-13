@@ -6,8 +6,10 @@ import logging
 import pandas as pd
 from datetime import datetime
 from contextlib import contextmanager
+from functools import lru_cache
 from urllib.parse import quote
 from config import BASE_DIR
+from sqlalchemy import create_engine
 
 # --- Configuration du Logging (Audit Trail - Pillier 3) ---
 logging.basicConfig(
@@ -363,6 +365,14 @@ def _auto_migrate_vps_schema(conn):
 
 
 
+@lru_cache(maxsize=1)
+def _get_pandas_engine():
+    """Return the shared SQLAlchemy engine used by pandas reads."""
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
+    return create_engine(DATABASE_URL, pool_pre_ping=True)
+
+
 def read_sql(query, conn, params=None):
     """
     Lecture SQL compatible PostgreSQL.
@@ -376,11 +386,12 @@ def read_sql(query, conn, params=None):
         pd.DataFrame: Résultats sous forme de DataFrame.
     """
     try:
-        # Get raw connection if wrapped
-        raw_conn = conn._raw if hasattr(conn, '_raw') else conn
         # PostgreSQL uses %s placeholders
         pg_query = query.replace("?", "%s")
-        return pd.read_sql_query(pg_query, raw_conn, params=params)
+        # pandas officially supports SQLAlchemy connections, not the custom
+        # PgConnWrapper/psycopg2 object used by the rest of the application.
+        with _get_pandas_engine().connect() as pandas_conn:
+            return pd.read_sql_query(pg_query, pandas_conn, params=params)
     except Exception as e:
         logger.error(f"Erreur read_sql: {e}")
         return pd.DataFrame()
@@ -1354,4 +1365,3 @@ def init_db():
             _auto_migrate_vps_schema(conn)
         except Exception as e:
             logger.warning(f"Auto-migration VPS schema failed: {e}")
-

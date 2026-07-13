@@ -341,20 +341,16 @@ _get_technician_fullname = _technician_identity_service.resolve_full_name
 _tech_name_or_username_matches = _technician_identity_service.name_or_username_matches
 
 
-# ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
+# ── Make DejaVu Sans available for Unicode PDF output ─────────────────
 def _ensure_dejavu_font():
     import shutil
     dst = "/app/DejaVuSans.ttf"
-    if os.path.exists(dst): return
+    src = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(dst) or not os.path.exists(src):
+        return
     try:
-        import matplotlib
-        src = os.path.join(os.path.dirname(matplotlib.__file__),
-                           "mpl-data", "fonts", "ttf", "DejaVuSans.ttf")
-        if os.path.exists(src):
-            shutil.copy2(src, dst)
-            logger.info(f"DejaVu Sans copied: {os.path.getsize(dst):,} bytes")
-        else:
-            logger.warning("DejaVu not found in matplotlib")
+        shutil.copy2(src, dst)
+        logger.info(f"DejaVu Sans copied: {os.path.getsize(dst):,} bytes")
     except Exception as _e:
         logger.warning(f"DejaVu copy failed: {_e}")
 
@@ -362,12 +358,11 @@ _ensure_dejavu_font()
 
 # ── Auto-convert Font Awesome WOFF2 → TTF on startup ─────────────────
 def _ensure_fa_font():
-    import shutil, subprocess as _sp
     dst = "/app/fa-solid-900.ttf"
     if os.path.exists(dst): return
     src_woff2 = "/usr/local/lib/node_modules/@fortawesome/fontawesome-free/webfonts/fa-solid-900.woff2"
     if not os.path.exists(src_woff2):
-        logger.warning("FA woff2 not found - run: npm install @fortawesome/fontawesome-free")
+        # Font Awesome is optional; PDF reports fall back to text symbols.
         return
     try:
         from fontTools.ttLib import TTFont
