@@ -466,10 +466,15 @@ def check_sla_alerts():
         if df_contrats is not None and not df_contrats.empty:
             for _, c in df_contrats.iterrows():
                 cl = c.get("client", "")
-                sla_h = c.get("sla_temps_reponse_h", 24)
+                sla_h_raw = c.get("sla_temps_reponse_h", 0)
+                try:
+                    sla_h = max(0, int(sla_h_raw)) if pd.notna(sla_h_raw) else 0
+                except (TypeError, ValueError):
+                    sla_h = 0
                 statut = str(c.get("statut", "")).lower()
                 if cl and "actif" in statut:
-                    if cl not in client_sla or sla_h < client_sla[cl]:
+                    # Un SLA à 0 désactive les alertes SLA pour ce client.
+                    if cl not in client_sla or (client_sla[cl] > 0 and (sla_h == 0 or sla_h < client_sla[cl])):
                         client_sla[cl] = int(sla_h)
 
         if not client_sla:
@@ -490,7 +495,7 @@ def check_sla_alerts():
             for _, interv in active.iterrows():
                 machine = interv.get("machine", "")
                 cl = machine_client.get(machine, "")
-                if cl not in client_sla:
+                if cl not in client_sla or client_sla[cl] <= 0:
                     continue  # No SLA for this client
 
                 sla_h = client_sla[cl]
@@ -903,4 +908,3 @@ __all__ = [
     "_send_telegram_bot",
     "_send_telegram",
 ]
-

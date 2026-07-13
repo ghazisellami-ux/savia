@@ -45,7 +45,8 @@ const emptyForm = () => ({
   type_contrat: TYPES_CONTRAT[0],
   date_debut: new Date().toISOString().substring(0, 10),
   date_fin: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
-  sla_temps_reponse_h: 4,
+  // 0 signifie qu'aucun engagement SLA de réponse n'est prévu.
+  sla_temps_reponse_h: 0,
   montant: 0,
   avec_pieces: false,
   pieces_selectionnees: [] as { ref: string; designation: string; quota: number }[],
@@ -57,6 +58,14 @@ const emptyForm = () => ({
   notes: '',
   statut: 'Actif',
 });
+
+const normalizeContractEquipments = (item: any): string[] => {
+  const names = [
+    ...(Array.isArray(item.equipements) ? item.equipements : []),
+    item.equipement,
+  ].filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
+  return [...new Set(names.map(name => name.trim()))];
+};
 
 export default function ContratsPage() {
   const { user } = useAuth();
@@ -85,12 +94,12 @@ export default function ContratsPage() {
       setData((ctrs as any[]).map((item: any) => ({
         id: String(item.id || ''),
         client: item.client || item.Client || '',
-        equipement: item.equipement || '',
-        equipements: item.equipements || [],
+        equipement: item.equipement || normalizeContractEquipments(item)[0] || '',
+        equipements: normalizeContractEquipments(item),
         type_contrat: item.type_contrat || 'Standard',
         date_debut: (item.date_debut || '').substring(0, 10),
         date_fin: (item.date_fin || '').substring(0, 10),
-        sla_temps_reponse_h: item.sla_temps_reponse_h || 4,
+        sla_temps_reponse_h: Number(item.sla_temps_reponse_h ?? 0),
         montant: item.montant || item.Montant_Annuel || 0,
         statut: item.statut || 'Actif',
         conditions: item.conditions || '',
@@ -132,9 +141,19 @@ export default function ContratsPage() {
 
   // Derived lists
   const clientsList = clients.map((c: any) => c.nom).sort();
-  const equipsByClient = form.client
+  const contractedEquipmentNames = new Set(
+    data.flatMap(contract => normalizeContractEquipments(contract))
+  );
+  const currentContractEquipmentNames = new Set(
+    editingContrat ? normalizeContractEquipments(editingContrat) : []
+  );
+  const allEquipsByClient = form.client
     ? equips.filter((e: any) => e.Client === form.client)
     : [];
+  const equipsByClient = allEquipsByClient.filter((e: any) => {
+    const equipmentName = String(e.Nom || e.nom || '').trim();
+    return !contractedEquipmentNames.has(equipmentName) || currentContractEquipmentNames.has(equipmentName);
+  });
 
   // Filter pieces — use designation + equipement_type (correct DB fields)
   // When multiple equipments are selected, show pieces for all of them
@@ -795,7 +814,11 @@ export default function ContratsPage() {
                           <div className="max-h-64 overflow-y-auto divide-y divide-savia-border/40">
                             {equipsByClient.length === 0 ? (
                               <div className="px-4 py-3 text-xs text-savia-text-muted italic">
-                                Aucun équipement disponible pour ce client
+                                {editingContrat
+                                  ? 'Aucun équipement disponible pour ce client'
+                                  : allEquipsByClient.length > 0
+                                    ? 'Tous les équipements de ce client ont déjà un contrat'
+                                    : 'Aucun équipement disponible pour ce client'}
                               </div>
                             ) : (
                               equipsByClient.map((e: any) => (
@@ -877,9 +900,9 @@ export default function ContratsPage() {
                   </div>
                   <div>
                     <label className={LABEL}>SLA Réponse (heures)</label>
-                    <input type="number" className={INPUT} value={form.sla_temps_reponse_h} min={1} max={240}
+                    <input type="number" className={INPUT} value={form.sla_temps_reponse_h} min={0} max={240}
                       onChange={e => set('sla_temps_reponse_h', Number(e.target.value))} />
-                    <p className="text-xs text-savia-text-muted mt-1">Délai max de réponse garantie</p>
+                    <p className="text-xs text-savia-text-muted mt-1">0h = aucun engagement SLA de réponse</p>
                   </div>
                   <div>
                     <label className={LABEL}>Montant annuel (TND)</label>
