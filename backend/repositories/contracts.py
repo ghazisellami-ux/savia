@@ -1,0 +1,737 @@
+"""Technician, contract, intervention completion, and compliance persistence."""
+
+import json
+import logging
+from datetime import datetime
+
+import pandas as pd
+
+from database.core import _trigger_backup, get_db, read_sql
+
+__all__ = [
+    "lire_techniciens",
+    "ajouter_technicien",
+    "update_technicien",
+    "supprimer_technicien",
+    "lire_contrats",
+    "get_contract_equipements",
+    "ajouter_contrat",
+    "generer_planning_from_contrat",
+    "modifier_contrat",
+    "supprimer_contrat",
+    "update_intervention_statut",
+    "cloturer_intervention",
+    "lire_conformite",
+    "ajouter_conformite",
+    "supprimer_conformite",
+    "lire_fichier_conformite",
+]
+
+# ==========================================
+# FONCTIONS CRUD — TECHNICIENS
+# ==========================================
+
+def lire_techniciens():
+    """
+    Lit la liste des techniciens.
+    
+    Returns:
+        pd.DataFrame: Liste des techniciens.
+    """
+    try:
+        with get_db() as conn:
+            return read_sql("""
+                SELECT 
+                    id, username, nom, prenom, specialite, 
+                    qualification, niveau_competence, dispo, notes,
+                    email, telephone, telegram_id
+                FROM techniciens
+                ORDER BY nom
+            """, conn)
+    except Exception as e:
+        logger.error(f"Erreur lire_techniciens: {e}")
+        return pd.DataFrame()
+
+def ajouter_technicien(tech_dict):
+    """
+    Ajoute un technicien.
+    """
+    try:
+        with get_db() as conn:
+            res = conn.execute("""
+                INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes, email, telephone, telegram_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+            """, (
+                tech_dict.get("nom", ""),
+                tech_dict.get("prenom", ""),
+                tech_dict.get("specialite", "Généraliste"),
+                tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
+                tech_dict.get("dispo", 1),
+                tech_dict.get("notes", ""),
+                tech_dict.get("email", ""),
+                tech_dict.get("telephone", ""),
+                tech_dict.get("telegram_id", ""),
+            ))
+            tech_id = res.lastrowid
+        
+        nom_comp = f"{tech_dict.get('nom', '')} {tech_dict.get('prenom', '')}".strip()
+        logger.info(f"Audit Trail: Nouveau technicien {nom_comp} ajouté (ID: {tech_id})")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur ajouter_technicien: {e}")
+        return False
+
+def update_technicien(tech_id, tech_dict):
+    """
+    Met à jour un technicien.
+    """
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                UPDATE techniciens
+                SET nom=?, prenom=?, specialite=?, qualification=?, niveau_competence=?, dispo=?, notes=?,
+                    email=?, telephone=?, telegram_id=?
+                WHERE id=?
+            """, (
+                tech_dict.get("nom", ""),
+                tech_dict.get("prenom", ""),
+                tech_dict.get("specialite", ""),
+                tech_dict.get("qualification", ""),
+                tech_dict.get("niveau_competence", "Junior"),
+                tech_dict.get("dispo", 1),
+                tech_dict.get("notes", ""),
+                tech_dict.get("email", ""),
+                tech_dict.get("telephone", ""),
+                tech_dict.get("telegram_id", ""),
+                tech_id
+            ))
+        
+        logger.info(f"Audit Trail: Technicien ID {tech_id} mis à jour.")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur update_technicien ID {tech_id}: {e}")
+        return False
+
+def supprimer_technicien(tech_id):
+    """Supprime un technicien."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM techniciens WHERE id = ?", (tech_id,))
+    return True
+
+
+# ==========================================
+
+# ==========================================
+# FONCTIONS CRUD — CONTRATS / SLA
+# ==========================================
+
+def lire_contrats(client=None):
+    """Lit les contrats, optionnellement filtrés par client."""
+    with get_db() as conn:
+        if client:
+            df = read_sql("SELECT * FROM contrats WHERE client=? ORDER BY date_fin DESC", conn, params=(client,))
+        else:
+            df = read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
+    return df
+
+def get_contract_equipements(contrat_id):
+    """Récupère tous les équipements d'un contrat (utilise equipement_id)."""
+    with get_db() as conn:
+        ph = "%s"
+        
+        try:
+            # Ensure contrat_id is a Python int (handles numpy.int64 from pandas)
+            contrat_id = int(contrat_id)
+            
+            rows = conn.execute(
+                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                    JOIN equipements e ON ce.equipement_id = e.id
+                    WHERE ce.contrat_id = {ph}
+                    ORDER BY ce.id""",
+                (contrat_id,)
+            ).fetchall()
+            
+            if rows:
+                equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+                logger.debug(f"Retrieved {len(equipements)} equipment(s) for contract {contrat_id}")
+                return equipements
+            
+            logger.debug(f"No equipements found for contract {contrat_id}")
+            return []
+        except Exception as e:
+            logger.error(f"Error retrieving equipements for contract {contrat_id}: {e}")
+            return []
+
+def ajouter_contrat(contrat_dict):
+    """
+    Ajoute un contrat et ses équipements, retourne son ID.
+    
+    Supporte deux formats:
+    - equipement (str): rétrocompatibilité - sera converti en array
+    - equipements (list): array d'équipements
+    
+    Stocke aussi les pièces incluses en JSON si avec_pieces=true
+    """
+    with get_db() as conn:
+        # Extract equipments (support both single and multiple)
+        equipements = contrat_dict.get("equipements", [])
+        if isinstance(equipements, str):
+            equipements = [equipements] if equipements else []
+        elif not isinstance(equipements, list):
+            equipements = []
+        
+        # For backward compatibility, also check for singular "equipement"
+        if not equipements:
+            single_eq = contrat_dict.get("equipement", "")
+            if single_eq:
+                equipements = [single_eq]
+        
+        # Store first equipment in main table for backward compatibility
+        first_equipment = equipements[0] if equipements else ""
+        
+        # Handle pieces_incluses - convert list to JSON string
+        pieces_incluses = contrat_dict.get("pieces_incluses", "")
+        if isinstance(pieces_incluses, (list, dict)):
+            import json
+            pieces_incluses = json.dumps(pieces_incluses)
+        
+        # Insert and retrieve ID - use RETURNING for PostgreSQL, fallback to MAX for SQLite
+        ph = "%s"
+        contrat_id = None
+        
+        try:
+            # PostgreSQL: Insert then use lastval() to get ID
+            conn.execute(f"""
+                INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
+                    sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
+                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                    pieces_incluses, avec_pieces, rappel_avant_jours)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """, (
+                contrat_dict.get("client", ""),
+                contrat_dict.get("type_contrat", "Standard"),
+                contrat_dict.get("date_debut", ""),
+                contrat_dict.get("date_fin", ""),
+                contrat_dict.get("sla_temps_reponse_h", 24),
+                contrat_dict.get("interventions_incluses", -1),
+                contrat_dict.get("montant", 0.0),
+                contrat_dict.get("conditions", ""),
+                contrat_dict.get("notes", ""),
+                contrat_dict.get("fichier_contrat", ""),
+                first_equipment,
+                contrat_dict.get("recurrence_maintenance", ""),
+                contrat_dict.get("date_premiere_maintenance", ""),
+                contrat_dict.get("statut", "Actif"),
+                pieces_incluses,
+                1 if contrat_dict.get("avec_pieces") else 0,
+                contrat_dict.get("rappel_avant_jours", 14),
+            ))
+            # Get the inserted ID using lastval() for PostgreSQL
+            row = conn.execute("SELECT lastval() as id").fetchone()
+            contrat_id = row["id"] if row else None
+            logger.info(f"✅ Contrat created with ID: {contrat_id}")
+        except Exception as e:
+            logger.error(f"Error inserting contrat: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+        
+        if not contrat_id:
+            logger.error("Failed to retrieve contrat ID after insertion")
+            return None
+        
+        # Insert equipments into junction table
+        # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
+        logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
+        
+        for eq in equipements:
+            if eq:  # Only insert non-empty equipments
+                try:
+                    ph = "%s"
+                    
+                    # Get equipement ID from equipements table
+                    eq_row = conn.execute(
+                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
+                        (eq,)
+                    ).fetchone()
+                    eq_id = eq_row["id"] if eq_row else None
+                    
+                    if eq_id:
+                        conn.execute(
+                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            (contrat_id, eq_id)
+                        )
+                        logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")
+                    else:
+                        logger.warning(f"Equipment '{eq}' not found in equipements table")
+                except Exception as e:
+                    logger.error(f"❌ Error inserting equipment '{eq}' for contract {contrat_id}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+    
+    _trigger_backup()
+    logger.info(f"✅ Contrat #{contrat_id} saved successfully with {len(equipements)} equipment(s)")
+    return contrat_id
+
+
+def generer_planning_from_contrat(contrat_id):
+    """
+    Génère automatiquement les entrées de planning de maintenance préventive
+    à partir d'un contrat, selon sa récurrence et ses dates.
+    
+    Supporte les équipements multiples: génère une entrée de planning pour 
+    CHAQUE équipement du contrat.
+    
+    Utilise le rappel_avant_jours du contrat pour les notifications.
+    
+    Retourne le nombre d'entrées créées.
+    """
+    from dateutil.relativedelta import relativedelta
+    import logging
+    logger = logging.getLogger("db_engine")
+    
+    # Ensure contrat_id is a Python int (handles numpy.int64 from pandas)
+    contrat_id = int(contrat_id)
+
+    RECURRENCE_DELTAS = {
+        "Hebdomadaire": relativedelta(weeks=1),
+        "Mensuelle": relativedelta(months=1),
+        "Trimestrielle": relativedelta(months=3),
+        "Semestrielle": relativedelta(months=6),
+        "Annuelle": relativedelta(years=1),
+    }
+
+    with get_db() as conn:
+        ph = "%s"
+        
+        try:
+            row = conn.execute(
+                f"SELECT * FROM contrats WHERE id = {ph}", (contrat_id,)
+            ).fetchone()
+            if not row:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} not found")
+                return 0
+
+            contrat = dict(row)
+            recurrence = (contrat.get("recurrence_maintenance") or "").strip()
+            if not recurrence or recurrence not in RECURRENCE_DELTAS:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} has invalid or missing recurrence: {recurrence}")
+                return 0
+
+            date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
+            date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
+            client = contrat.get("client", "")
+            rappel_avant_jours = contrat.get("rappel_avant_jours", 14) or 14
+
+            if not date_fin_str or not date_premiere_str:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} missing dates. date_fin={date_fin_str}, date_premiere={date_premiere_str}")
+                return 0
+
+            try:
+                from datetime import date as _date
+                date_premiere = _date.fromisoformat(date_premiere_str)
+                date_fin = _date.fromisoformat(date_fin_str)
+            except ValueError as ve:
+                logger.error(f"generer_planning: Invalid date format for contrat #{contrat_id}: {ve}")
+                return 0
+
+            # Récupérer tous les équipements du contrat (utilise le schema standard equipement_id)
+            equipements = []
+            
+            try:
+                equipements_rows = conn.execute(
+                    f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                        JOIN equipements e ON ce.equipement_id = e.id
+                        WHERE ce.contrat_id = {ph}
+                        ORDER BY ce.id""",
+                    (contrat_id,)
+                ).fetchall()
+                
+                if equipements_rows:
+                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+                    logger.debug(f"Retrieved {len(equipements)} equipment(s) for planning generation")
+            except Exception as e:
+                logger.error(f"Error retrieving equipements for planning generation: {e}")
+                equipements = []
+            
+            if not equipements:
+                logger.warning(f"generer_planning: Contrat #{contrat_id} has no equipments")
+                return 0  # Aucun équipement à planifier
+
+            delta = RECURRENCE_DELTAS[recurrence]
+            count = 0
+
+            # Générer planning pour CHAQUE équipement
+            for equipement in equipements:
+                if not equipement:
+                    logger.warning(f"generer_planning: Skipping empty equipement name for contrat #{contrat_id}")
+                    continue
+                    
+                current_date = date_premiere
+                while current_date <= date_fin:
+                    try:
+                        conn.execute(f"""
+                            INSERT INTO planning_maintenance
+                                (machine, client, type_maintenance, description,
+                                 date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
+                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                        """, (
+                            equipement,
+                            client,
+                            "Préventive",
+                            f"MP Contrat #{contrat_id} — {equipement}",
+                            current_date.isoformat(),
+                            "",  # Technicien non assigné — sera assigné via rappel
+                            recurrence,
+                            contrat_id,
+                            "Planifiée",
+                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id} | Rappel: {rappel_avant_jours}j",
+                        ))
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"generer_planning: Error inserting planning for {equipement} on {current_date}: {e}")
+                    
+                    current_date = current_date + delta
+
+            logger.info(f"✅ generer_planning: Generated {count} planning entries for contrat #{contrat_id} across {len(equipements)} equipements (Rappel: {rappel_avant_jours}j)")
+            return count
+            
+        except Exception as e:
+            logger.error(f"generer_planning: Unexpected error for contrat #{contrat_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return 0
+
+
+def modifier_contrat(contrat_id, contrat_dict):
+    """Modifie un contrat existant et ses équipements."""
+    with get_db() as conn:
+        # Extract equipments (support both single and multiple)
+        equipements = contrat_dict.get("equipements", [])
+        if isinstance(equipements, str):
+            equipements = [equipements] if equipements else []
+        elif not isinstance(equipements, list):
+            equipements = []
+        
+        # For backward compatibility, also check for singular "equipement"
+        if not equipements:
+            single_eq = contrat_dict.get("equipement", "")
+            if single_eq:
+                equipements = [single_eq]
+        
+        # Store first equipment in main table for backward compatibility
+        first_equipment = equipements[0] if equipements else ""
+        
+        # Handle pieces_incluses - convert list to JSON string
+        pieces_incluses = contrat_dict.get("pieces_incluses", "")
+        if isinstance(pieces_incluses, (list, dict)):
+            import json
+            pieces_incluses = json.dumps(pieces_incluses)
+        
+        ph = "%s"
+        conn.execute(f"""
+            UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
+                sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
+                fichier_contrat={ph}, equipement={ph}, pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
+            WHERE id={ph}
+        """, (
+            contrat_dict.get("client", ""),
+            contrat_dict.get("type_contrat", "Standard"),
+            contrat_dict.get("date_debut", ""),
+            contrat_dict.get("date_fin", ""),
+            contrat_dict.get("sla_temps_reponse_h", 24),
+            contrat_dict.get("interventions_incluses", -1),
+            contrat_dict.get("montant", 0.0),
+            contrat_dict.get("conditions", ""),
+            contrat_dict.get("notes", ""),
+            contrat_dict.get("statut", "Actif"),
+            contrat_dict.get("fichier_contrat", ""),
+            first_equipment,
+            pieces_incluses,
+            1 if contrat_dict.get("avec_pieces") else 0,
+            contrat_dict.get("rappel_avant_jours", 14),
+            contrat_id,
+        ))
+        
+        # Delete existing equipments for this contract
+        conn.execute("DELETE FROM contrats_equipements WHERE contrat_id=%s", (contrat_id,))
+        
+        # Insert new equipments into junction table
+        # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
+        logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
+        
+        for eq in equipements:
+            if eq:  # Only insert non-empty equipments
+                try:
+                    ph = "%s"
+                    
+                    # Get equipement ID from equipements table
+                    eq_row = conn.execute(
+                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
+                        (eq,)
+                    ).fetchone()
+                    eq_id = eq_row["id"] if eq_row else None
+                    
+                    if eq_id:
+                        conn.execute(
+                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            (contrat_id, eq_id)
+                        )
+                        logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")
+                    else:
+                        logger.warning(f"Equipment '{eq}' not found in equipements table")
+                except Exception as e:
+                    logger.error(f"Error inserting equipment '{eq}' for contract {contrat_id}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+    
+    _trigger_backup()
+
+def supprimer_contrat(contrat_id):
+    """Supprime un contrat et toutes ses données associées (planning, interventions, équipements)."""
+    with get_db() as conn:
+        try:
+            # 1. Delete planning entries for this contract
+            conn.execute("DELETE FROM planning_maintenance WHERE contrat_id = %s", (contrat_id,))
+            
+            # 2. Delete interventions associated through planning entries
+            # First, get all interventions that are linked through planning
+            # (Note: interventions may not have direct contrat_id, but are linked via planning)
+            
+            # 3. Delete equipment associations
+            conn.execute("DELETE FROM contrats_equipements WHERE contrat_id = %s", (contrat_id,))
+            
+            # 4. Delete the contract itself
+            conn.execute("DELETE FROM contrats WHERE id = %s", (contrat_id,))
+            
+            conn.commit()
+            logger.info(f"✅ Contrat #{contrat_id} et toutes ses données associées supprimés")
+        except Exception as e:
+            logger.error(f"Error deleting contrat #{contrat_id}: {e}")
+            try:
+                conn.rollback()
+            except:
+                pass
+            raise
+    _trigger_backup()
+
+def update_intervention_statut(intervention_id, nouveau_statut):
+    """Met a jour le statut d'une intervention avec horodatage."""
+    with get_db() as conn:
+        now = datetime.now().isoformat()
+        if nouveau_statut == "En cours":
+            conn.execute("UPDATE interventions SET statut=?, date_debut_intervention=? WHERE id=?",
+                         (nouveau_statut, now, intervention_id))
+        elif nouveau_statut in ("Cloturee", "Cl\u00f4tur\u00e9e"):
+            conn.execute("UPDATE interventions SET statut='Cloturee', date_cloture=? WHERE id=?",
+                         (now, intervention_id))
+        else:
+            conn.execute("UPDATE interventions SET statut=? WHERE id=?",
+                         (nouveau_statut, intervention_id))
+    _trigger_backup()
+
+
+# FONCTIONS SPÉCIALES — WORKFLOW SAV
+# ==========================================
+
+def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_deduire=None, duree_minutes=None, start_time=None, end_time=None, duree_deplacement=None):
+    """
+    Clôture une intervention, déduit le stock et alimente la base de connaissances.
+    pieces_a_deduire: liste de dict {'ref': str, 'qty': int, 'designation': str}
+    duree_minutes: durée de l'intervention en minutes
+    """
+    if not solution:
+        return False, "La Solution (ou Actions réalisées) est obligatoire pour clôturer."
+
+    print(f"[CLOTURE] intervention_id={intervention_id}, pieces_a_deduire={pieces_a_deduire}")
+
+    with get_db() as conn:
+        # NOTE: La migration cout_pieces est dans verifier_et_migrer_schema(), PAS ici.
+        # Un ALTER TABLE échoué invalide la transaction PostgreSQL !
+
+        # Use correct SQL placeholder based on database type
+        ph = "%s"
+
+        # 1. Gestion du Stock + calcul coût pièces
+        synthese_pieces = []
+        total_cout_pieces = 0.0
+        if pieces_a_deduire:
+            for p in pieces_a_deduire:
+                if not isinstance(p, dict):
+                    continue
+                ref = p.get('ref') or p.get('reference') or ''
+                qty = int(p.get('qty') or p.get('quantite') or 0)
+                prix = float(p.get('prix_unitaire', 0) or 0)
+                designation = p.get('designation', ref)
+                fournisseur = p.get('fournisseur', '')
+                
+                if qty > 0 and ref:
+                    print(f"[CLOTURE] Déduction stock: ref={ref}, qty={qty}, prix={prix}, designation={designation}")
+                    
+                    # Chercher la pièce dans la base de données pour obtenir les infos complètes
+                    piece_row = conn.execute(
+                        f"SELECT prix_unitaire, designation, fournisseur FROM pieces_rechange WHERE reference = {ph} LIMIT 1",
+                        (ref,)
+                    ).fetchone()
+                    
+                    if piece_row:
+                        # Utiliser les infos de la base de données
+                        prix = float(piece_row.get('prix_unitaire', 0) or prix or 0)
+                        designation = piece_row.get('designation', designation)
+                        fournisseur = piece_row.get('fournisseur', fournisseur)
+                    
+                    # Déduire le stock
+                    conn.execute(f"""
+                        UPDATE pieces_rechange
+                        SET stock_actuel = stock_actuel - {ph}
+                        WHERE reference = {ph}
+                    """, (qty, ref))
+                    
+                    cout_piece = prix * qty
+                    total_cout_pieces += cout_piece
+                    
+                    # Format: Désignation | Ref: XXX | Fournisseur: YYY | Qty: Z (sans prix)
+                    piece_line = f"{designation} | Ref: {ref} | Fournisseur: {fournisseur} | Qty: {qty}"
+                    synthese_pieces.append(piece_line)
+        else:
+            print(f"[CLOTURE] Aucune pièce à déduire (pieces_a_deduire={pieces_a_deduire})")
+
+        pieces_str = "\n".join(synthese_pieces)
+
+        # Calculer le coût main d'oeuvre (taux_horaire × durée)
+        # NOTE: cout = main d'oeuvre ONLY (NOT including pieces)
+        # cout_pieces = pieces cost ONLY (stored separately)
+        duree_val = duree_minutes if duree_minutes is not None else 0
+        cout_main_oeuvre = 0.0
+        try:
+            config_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
+            if not config_row or not config_row["valeur"]:
+                raise ValueError("Taux horaire technicien non configuré dans les paramètres")
+            taux_horaire = float(config_row["valeur"])
+        except (ValueError, TypeError) as e:
+            raise Exception(f"Erreur configuration: {str(e)}")
+        cout_main_oeuvre = round((duree_val / 60) * taux_horaire, 2)
+
+        # 2. Mettre à jour l'intervention (date = date de clôture)
+        date_cloture = datetime.now().isoformat()
+        
+        # Préparer l'UPDATE avec un dictionnaire pour éviter les décalages
+        # IMPORTANT: cout = main d'oeuvre ONLY (NOT including pieces)
+        # cout_pieces = pieces cost (stored separately)
+        # Dashboard calculates total cost as: cout + cout_pieces
+        update_data = {
+            "statut": "Cloturee",
+            "probleme": probleme,
+            "cause": cause,
+            "solution": solution,
+            "duree_minutes": duree_val,
+            "cout": cout_main_oeuvre,  # ← Main d'oeuvre ONLY
+            "date": date_cloture,
+            "date_cloture": date_cloture
+        }
+        
+        # Ajouter les champs optionnels s'ils sont fournis
+        if start_time is not None:
+            update_data["start_time"] = start_time
+        if end_time is not None:
+            update_data["end_time"] = end_time
+        if duree_deplacement is not None:
+            update_data["duree_deplacement"] = duree_deplacement
+        if pieces_str:
+            update_data["pieces_utilisees"] = pieces_str
+            update_data["cout_pieces"] = total_cout_pieces  # ← Pièces ONLY
+        
+        # Construire l'UPDATE dynamiquement
+        set_clauses = [f"{k}=%s" for k in update_data.keys()]
+        update_values = list(update_data.values())
+        update_values.append(intervention_id)
+        
+        sql = f"""
+            UPDATE interventions
+            SET {", ".join(set_clauses)}
+            WHERE id={ph}
+        """
+        conn.execute(sql, update_values)
+
+        # 3. Récupérer le code erreur associé pour l'auto-apprentissage
+        row = conn.execute(f"SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id={ph}", (intervention_id,)).fetchone()
+        code_erreur = row["code_erreur"] if row else ""
+
+        # 4. Auto-Learning : Alimenter la table solutions si un code erreur existe
+        # (sauf pour les Formations qui n'ont pas de diagnostic technique)
+        type_intervention = row["type_intervention"] if row else ""
+        type_erreur_val = row["type_erreur"] if row else "Hardware"
+        if code_erreur and type_intervention != "Formation":
+            conn.execute(f"""
+                INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                ON CONFLICT(mot_cle) DO UPDATE SET
+                    cause=excluded.cause,
+                    solution=excluded.solution,
+                    updated_at=excluded.updated_at,
+                    validated_by='Auto-Learning'
+            """, (code_erreur, type_erreur_val or "Hardware", "MOYENNE", cause, solution, "SAV-Auto", datetime.now().isoformat()))
+
+    return True, "Intervention clôturée, stock mis à jour et connaissances sauvegardées !"
+
+
+
+# ==========================================
+# FONCTIONS CRUD — CONFORMITÉ / QHSE
+# ==========================================
+
+def lire_conformite(client=None):
+    """Lit les contrôles de conformité, optionnellement filtrés par client."""
+    query = "SELECT id, equipement, client, type_controle, description, date_controle, date_expiration, fichier_nom, statut, notes, created_by, created_at FROM conformite"
+    params = []
+    if client:
+        query += " WHERE client = ?"
+        params.append(client)
+    query += " ORDER BY date_expiration ASC"
+    with get_db() as conn:
+        return read_sql(query, conn, params=params)
+
+
+def ajouter_conformite(data, fichier_bytes=None):
+    """Ajoute un contrôle de conformité avec fichier PDF optionnel."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO conformite (equipement, client, type_controle, description,
+                                     date_controle, date_expiration, fichier_nom, fichier_data,
+                                     statut, notes, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+        """, (
+            data.get("equipement", ""),
+            data.get("client", ""),
+            data.get("type_controle", ""),
+            data.get("description", ""),
+            data.get("date_controle", ""),
+            data.get("date_expiration", ""),
+            data.get("fichier_nom", ""),
+            fichier_bytes,
+            data.get("statut", "Conforme"),
+            data.get("notes", ""),
+            data.get("created_by", ""),
+        ))
+    return True
+
+
+def supprimer_conformite(conformite_id):
+    """Supprime un contrôle de conformité."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM conformite WHERE id = ?", (conformite_id,))
+    return True
+
+
+def lire_fichier_conformite(conformite_id):
+    """Récupère le fichier PDF d'un contrôle de conformité."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT fichier_nom, fichier_data FROM conformite WHERE id = ?",
+            (conformite_id,)
+        ).fetchone()
+        if row and row["fichier_data"]:
+            return row["fichier_nom"], bytes(row["fichier_data"])
+    return None, None
+
