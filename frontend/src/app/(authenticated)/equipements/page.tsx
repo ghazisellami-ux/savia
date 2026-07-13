@@ -211,6 +211,8 @@ export default function EquipementsPage() {
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, Array<{ id: number; nom: string }>>>({});
   const [customDomaineMode, setCustomDomaineMode] = useState(false);
   const [customDomaineValue, setCustomDomaineValue] = useState('');
+  const [savingCustomDomaine, setSavingCustomDomaine] = useState(false);
+  const [customDomaineError, setCustomDomaineError] = useState('');
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
   const [typeToDelete, setTypeToDelete] = useState<{ id: number; nom: string; domaine: string } | null>(null);
 
@@ -415,6 +417,33 @@ export default function EquipementsPage() {
       console.error("Erreur chargement types:", err);
     }
   }, []);
+
+  const handleSaveCustomDomaine = async () => {
+    const domaineName = customDomaineValue.trim();
+    if (!domaineName || savingCustomDomaine) return;
+
+    setSavingCustomDomaine(true);
+    setCustomDomaineError('');
+    try {
+      await domaines_custom.create(domaineName);
+
+      // Update the local catalogue immediately. The follow-up reload is best-effort.
+      setCustomDomaines(prev => Array.from(new Set([...prev, domaineName])).sort());
+      setForm(prev => ({ ...prev, Domaine: domaineName, Type: '', EstAnnexe: false }));
+      setCustomDomaineValue('');
+      setCustomDomaineMode(false);
+      setCustomTypeMode(true);
+      setCustomTypeValue('');
+
+      // Refresh the catalogue in the background without delaying the successful selection.
+      void Promise.all([loadCustomDomaines(), loadCustomTypes()]);
+    } catch (err) {
+      console.error("Erreur sauvegarde domaine:", err);
+      setCustomDomaineError(err instanceof Error ? err.message : "Impossible d'enregistrer le domaine");
+    } finally {
+      setSavingCustomDomaine(false);
+    }
+  };
 
   const loadDocs = useCallback(async () => {
     setDocsLoading(true);
@@ -919,34 +948,26 @@ export default function EquipementsPage() {
                               type="text"
                               placeholder="Ex: Cardiologie, Dermatologie, Ophtalmologie..."
                               value={customDomaineValue}
-                              onChange={e => setCustomDomaineValue(e.target.value)}
+                              onChange={e => {
+                                setCustomDomaineValue(e.target.value);
+                                if (customDomaineError) setCustomDomaineError('');
+                              }}
                               className={INPUT_CLS}
                             />
-                            <button type="button" onClick={async () => {
-                              if (customDomaineValue.trim()) {
-                                try {
-                                  const domaineName = customDomaineValue.trim();
-                                  await domaines_custom.create(domaineName);
-                                  // Reload custom domains to get the new domain
-                                  const updatedDomaines = await loadCustomDomaines();
-                                  // Load types for all domains
-                                  await loadCustomTypes();
-                                  // Select the newly created domain and enable custom type mode
-                                  setForm({ ...form, Domaine: domaineName, Type: '', EstAnnexe: false });
-                                  // Clear the domain input and enable type input
-                                  setCustomDomaineValue('');
-                                  setCustomDomaineMode(false);
-                                  // Automatically enable custom type mode so user can add a type
-                                  setCustomTypeMode(true);
-                                  setCustomTypeValue('');
-                                } catch (err) {
-                                  console.error("Erreur sauvegarde domaine:", err);
-                                }
-                              }
-                            }} className="px-3 py-2 rounded-lg bg-purple-600/20 text-purple-400 text-xs whitespace-nowrap hover:bg-purple-600/30 cursor-pointer font-bold">
-                              <Save className="w-3.5 h-3.5" />
+                            <button
+                              type="button"
+                              onClick={handleSaveCustomDomaine}
+                              disabled={savingCustomDomaine || !customDomaineValue.trim()}
+                              className="px-3 py-2 rounded-lg bg-purple-600/20 text-purple-400 text-xs whitespace-nowrap hover:bg-purple-600/30 cursor-pointer font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Enregistrer le domaine personnalisé"
+                              aria-label="Enregistrer le domaine personnalisé"
+                            >
+                              {savingCustomDomaine ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                             </button>
                           </div>
+                          {customDomaineError && (
+                            <p className="text-xs text-red-400 mt-2" role="alert">{customDomaineError}</p>
+                          )}
                           <p className="text-xs text-purple-400/70 mt-2">
                             Entrez le nom du domaine médical personnalisé et cliquez sur Enregistrer. Vous pourrez ensuite ajouter les types d'équipement pour ce domaine.
                           </p>

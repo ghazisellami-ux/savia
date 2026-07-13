@@ -2373,11 +2373,15 @@ def get_domaines_custom(user: dict = Depends(_verify_token)):
 @app.post("/api/domaines-custom")
 def post_domaine_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
     from db_engine import ajouter_domaine_custom
-    nom = payload.get("nom", "").strip()
+    nom = str(payload.get("nom") or "").strip()
     if not nom:
         raise HTTPException(400, "Nom requis")
-    ajouter_domaine_custom(nom)
-    return {"ok": True}
+    try:
+        domaine = ajouter_domaine_custom(nom)
+        return {"ok": True, "domaine": domaine}
+    except Exception as exc:
+        logger.error(f"Erreur sauvegarde domaine personnalisé: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le domaine")
 
 
 @app.delete("/api/domaines-custom/{nom}")
