@@ -1965,7 +1965,7 @@ def get_health_scores(
         # Load only necessary intervention columns for scoring
         with get_db() as conn:
             int_query = """
-            SELECT i.machine, i.type_intervention, i.date, i.statut
+            SELECT i.machine, i.type_intervention, i.date, i.date_cloture, i.statut
             FROM interventions i
             ORDER BY i.date DESC
             """
@@ -2015,102 +2015,139 @@ def get_health_scores(
         if equipment_type and not df_eq.empty and "Type" in df_eq.columns:
             df_eq = df_eq[df_eq["Type"].notna() & (df_eq["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
 
-        # Filter interventions by date range
+        # Filter interventions by date range. Closed interventions are scored on
+        # closure date so repaired equipment can recover over time.
         if not df_int.empty and "date" in df_int.columns:
             df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
+            if "date_cloture" in df_int.columns:
+                df_int["date_cloture"] = pd.to_datetime(df_int["date_cloture"], errors="coerce")
+                df_int["score_date"] = df_int["date_cloture"].fillna(df_int["date"])
+            else:
+                df_int["score_date"] = df_int["date"]
             if date_start:
-                df_int = df_int[df_int["date"] >= pd.to_datetime(date_start)]
+                df_int = df_int[df_int["score_date"] >= pd.to_datetime(date_start)]
             if date_end:
-                df_int = df_int[df_int["date"] <= pd.to_datetime(date_end)]
+                date_end_exclusive = pd.to_datetime(date_end) + pd.Timedelta(days=1)
+                df_int = df_int[df_int["score_date"] < date_end_exclusive]
 
         scores = []
 
         if df_eq.empty:
             return []
 
-        # Compute period duration in months (for rate-based scoring)
-        period_months = 12.0  # default: 1 year
-        if date_start and date_end:
-            import datetime as _dt
-            try:
-                d0 = _dt.date.fromisoformat(str(date_start))
-                d1 = _dt.date.fromisoformat(str(date_end))
-                days = max(1, (d1 - d0).days + 1)
-                period_months = max(0.1, days / 30.0)
-            except Exception:
-                period_months = 12.0
-
-        # Exclude tracabilite interventions from panne count
-        TRACABILITE = {"installation", "formation"}
-        df_sav = df_int.copy()
-        if not df_sav.empty and "type_intervention" in df_sav.columns:
-            df_sav = df_sav[~df_sav["type_intervention"].str.lower().isin(TRACABILITE)]
-
-        # Get current date for recent intervention calculation
         import datetime as _dt
-        today = _dt.date.today()
-        thirty_days_ago = today - _dt.timedelta(days=30)
+        today = pd.Timestamp(_dt.date.today())
+
+        def _norm(value: Any) -> str:
+            text = unicodedata.normalize("NFD", str(value or "").strip().lower())
+            return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+
+        def _is_closed(status: Any) -> bool:
+            status_key = _norm(status)
+            return any(token in status_key for token in [
+                "cloturee", "terminee", "completee", "closed", "resolved",
+            ])
+
+        def _is_cancelled(status: Any) -> bool:
+            status_key = _norm(status)
+            return any(token in status_key for token in [
+                "annule", "refuse", "cancelled", "canceled",
+            ])
+
+        def _is_traceability(intervention_type: Any) -> bool:
+            type_key = _norm(intervention_type)
+            return any(token in type_key for token in ["installation", "formation"])
+
+        def _is_preventive(intervention_type: Any) -> bool:
+            type_key = _norm(intervention_type)
+            return any(token in type_key for token in [
+                "prevent", "preven", "controle", "inspection", "maintenance preventive",
+            ])
 
         seen_keys = set()
         for _, eq in df_eq.iterrows():
             nom = eq.get("Nom", "")
             client_val = str(eq.get("Client", "") or "")
-            statut = str(eq.get("Statut", "")).lower()
-            dedup_key = (nom.lower(), client_val.lower())
+            statut = _norm(eq.get("Statut", ""))
+            dedup_key = (_norm(nom), _norm(client_val))
             if dedup_key in seen_keys:
                 continue
             seen_keys.add(dedup_key)
 
             pannes = 0
-            recent_interventions = 0
-            if not df_sav.empty and "machine" in df_sav.columns:
-                # Case-insensitive matching for machine names
-                pannes = len(df_sav[df_sav["machine"].str.lower() == nom.lower()])
-                # Count interventions in last 30 days
-                df_machine = df_sav[df_sav["machine"].str.lower() == nom.lower()]
-                if not df_machine.empty and "date" in df_machine.columns:
-                    df_machine_recent = df_machine[df_machine["date"] >= pd.Timestamp(thirty_days_ago)]
-                    recent_interventions = len(df_machine_recent)
+            open_correctives = 0
+            recent_correctives = 0
+            latest_corrective_date = None
+            corrective_penalty = 0
+            preventive_bonus = 0
 
-            # Score based on absolute number of pannes in the selected period
-            # Do NOT normalize by period duration - use absolute counts
-            # This ensures monthly view shows actual interventions for that month
-            if pannes <= 0:
-                score = 100
-            elif pannes <= 1:
-                score = 90
-            elif pannes <= 2:
-                score = 78
-            elif pannes <= 3:
-                score = 65
-            elif pannes <= 5:
-                score = 48
-            elif pannes <= 10:
-                score = 30
-            elif pannes <= 15:
-                score = 18
-            else:
-                score = 10
+            if not df_int.empty and "machine" in df_int.columns:
+                df_machine = df_int[df_int["machine"].map(_norm) == _norm(nom)]
 
-            # Apply penalties for critical status and recent interventions
-            # If equipment is in critical status, apply significant penalty
-            if statut in ["critique", "hors service", "en panne"]:
-                score = min(score, 35)  # Cap score at 35 for critical equipment
-                if recent_interventions >= 2:
-                    score = min(score, 20)  # Further reduce if multiple recent interventions
-                elif recent_interventions >= 1:
-                    score = min(score, 25)  # Reduce if at least one recent intervention
+                for _, intervention in df_machine.iterrows():
+                    intervention_type = intervention.get("type_intervention", "")
+                    if _is_traceability(intervention_type):
+                        continue
+                    if _is_cancelled(intervention.get("statut", "")):
+                        continue
 
-            # If equipment has multiple recent interventions (last 30 days), flag as at-risk
-            elif recent_interventions >= 3:
-                score = min(score, 40)  # Flag as at-risk if 3+ interventions in 30 days
-            elif recent_interventions >= 2:
-                score = min(score, 50)  # Moderate risk if 2 interventions in 30 days
+                    score_date = intervention.get("score_date")
+                    if pd.isna(score_date):
+                        score_date = intervention.get("date")
+                    if pd.isna(score_date):
+                        continue
+
+                    days_since = max(0, int((today - pd.Timestamp(score_date).normalize()).days))
+                    is_closed = _is_closed(intervention.get("statut", ""))
+
+                    if _is_preventive(intervention_type):
+                        if is_closed and days_since <= 180:
+                            preventive_bonus += 3
+                        continue
+
+                    pannes += 1
+                    latest_corrective_date = (
+                        pd.Timestamp(score_date)
+                        if latest_corrective_date is None
+                        else max(latest_corrective_date, pd.Timestamp(score_date))
+                    )
+                    if days_since <= 90:
+                        recent_correctives += 1
+
+                    if not is_closed:
+                        open_correctives += 1
+                        corrective_penalty += 25
+                    elif days_since <= 30:
+                        corrective_penalty += 15
+                    elif days_since <= 90:
+                        corrective_penalty += 8
+                    elif days_since <= 180:
+                        corrective_penalty += 4
+                    elif days_since <= 365:
+                        corrective_penalty += 1
+
+            stability_bonus = 0
+            if open_correctives == 0:
+                if latest_corrective_date is None:
+                    stability_bonus = 10
+                elif (today - latest_corrective_date.normalize()).days > 90:
+                    stability_bonus = 10
+
+            score = 100 - corrective_penalty + min(preventive_bonus, 10) + stability_bonus
+            score = max(0, min(100, round(score)))
+
+            # Current equipment status remains authoritative.
+            if statut == "hors service":
+                score = min(score, 25)
+            elif statut in {"critique", "en panne"}:
+                score = min(score, 45)
+            elif statut == "en atelier":
+                score = min(score, 60)
 
             tendance = "stable"
-            if pannes > 3:
+            if open_correctives > 0 or recent_correctives >= 2:
                 tendance = "baisse"
-            elif pannes == 0:
+            elif open_correctives == 0 and (pannes == 0 or stability_bonus > 0 or preventive_bonus > 0):
                 tendance = "hausse"
 
             scores.append({
