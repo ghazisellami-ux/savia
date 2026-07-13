@@ -10,14 +10,13 @@ import os
 import base64
 import tempfile
 import unicodedata
-from contextvars import ContextVar
 import jwt
 import bcrypt
 import logging
 import auth
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
@@ -25,6 +24,11 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+
+from repositories.technician_names import DatabaseTechnicianNameRepository
+from services.knowledge_import import detect_and_fix_encoding, parse_text_to_rows as _parse_text_to_rows
+from services.localization import LocalizationService
+from services.technician_identity import TechnicianIdentityService
 
 from db_engine import (
     init_db, get_db, read_sql, _trigger_backup,
@@ -53,8 +57,6 @@ from db_engine import (
 )
 
 logger = logging.getLogger("savia-api")
-
-_LANG_CONTEXT: ContextVar[str] = ContextVar("savia_lang", default="fr")
 
 _EN_TRANSLATIONS = {
     "Rapport SAVIA": "SAVIA Report",
@@ -316,216 +318,24 @@ _EN_TRANSLATIONS = {
 }
 
 
-def _repair_mojibake(text: str) -> str:
-    current = str(text)
-    for _ in range(2):
-        if not any(marker in current for marker in ("Ã", "Â", "â")):
-            break
-        try:
-            repaired = current.encode("latin-1", errors="strict").decode("utf-8", errors="strict")
-        except Exception:
-            break
-        if repaired == current:
-            break
-        current = repaired
-    return current
-
-
-def _strip_diacritics(text: str) -> str:
-    return "".join(
-        char for char in unicodedata.normalize("NFD", str(text))
-        if unicodedata.category(char) != "Mn"
-    )
-
-
-def _translation_variants(text: str) -> List[str]:
-    original = str(text)
-    repaired = _repair_mojibake(original)
-    variants = [original, repaired, _strip_diacritics(original), _strip_diacritics(repaired)]
-    return list(dict.fromkeys(v for v in variants if v))
-
-
-def _expanded_en_translations() -> Dict[str, str]:
-    expanded: Dict[str, str] = {}
-    for source, target in _EN_TRANSLATIONS.items():
-        for variant in _translation_variants(source):
-            expanded[variant] = target
-    return expanded
-
-
-def _normalize_lang(lang: Optional[str] = None) -> str:
-    return "en" if str(lang or "").lower().startswith("en") else "fr"
-
-
-def _get_app_language(header_lang: Optional[str] = None, body: Optional[dict] = None) -> str:
-    requested = None
-    if isinstance(body, dict):
-        requested = body.get("lang") or body.get("language") or body.get("locale")
-    try:
-        configured = get_config("langue", "fr") or "fr"
-    except Exception:
-        configured = "fr"
-    return _normalize_lang(requested or header_lang or configured)
-
-
-def _ai_language_instruction(lang: str) -> str:
-    if _normalize_lang(lang) == "en":
-        return (
-            "IMPORTANT LANGUAGE RULE: Write every user-facing value in English only. "
-            "Keep the JSON keys exactly as specified. If examples or source data below are in French, translate their labels and generated text to English."
-        )
-    return "IMPORTANT: Rédige toutes les valeurs destinées à l'utilisateur en français. Garde exactement les clés JSON demandées."
-
-
-def _translate_text_for_lang(text: str, lang: Optional[str] = None) -> str:
-    if _normalize_lang(lang or _LANG_CONTEXT.get()) != "en" or not text:
-        return text
-    out = _repair_mojibake(str(text))
-    translations = _expanded_en_translations()
-    for candidate in _translation_variants(out):
-        if candidate in translations:
-            return translations[candidate]
-    for fr, en in sorted(translations.items(), key=lambda item: len(item[0]), reverse=True):
-        out = out.replace(fr, en)
-    return out
-
-
-def _fallback_translate_payload_for_lang(payload: Any, lang: str) -> Any:
-    if _normalize_lang(lang) != "en":
-        return payload
-    if isinstance(payload, dict):
-        return {k: _fallback_translate_payload_for_lang(v, lang) for k, v in payload.items()}
-    if isinstance(payload, list):
-        return [_fallback_translate_payload_for_lang(v, lang) for v in payload]
-    if isinstance(payload, str):
-        return _translate_text_for_lang(payload, lang)
-    return payload
-
-
-def _force_ai_payload_language(payload: Any, lang: str, call_ia=None, clean_json=None) -> Any:
-    """Translate AI user-facing values to English while preserving JSON keys."""
-    if _normalize_lang(lang) != "en" or payload is None:
-        return payload
-    fallback = _fallback_translate_payload_for_lang(payload, lang)
-    if not call_ia or not clean_json:
-        return fallback
-    try:
-        import json as _json
-        wrapped = {"value": payload} if isinstance(payload, str) else payload
-        prompt = (
-            "Translate every user-facing string value in this JSON to natural professional English. "
-            "Preserve all JSON keys exactly, preserve numbers/booleans/nulls, preserve arrays and object structure. "
-            "Return only valid JSON, with no markdown.\n\n"
-            f"JSON:\n{_json.dumps(wrapped, ensure_ascii=False, default=str)}"
-        )
-        raw = call_ia(prompt, timeout=60, is_json=True)
-        translated = clean_json(raw) if raw else None
-        if isinstance(payload, str) and isinstance(translated, dict) and isinstance(translated.get("value"), str):
-            return translated["value"]
-        if isinstance(payload, dict) and isinstance(translated, dict):
-            return translated
-        if isinstance(payload, list) and isinstance(translated, list):
-            return translated
-    except Exception as exc:
-        logger.debug(f"AI language post-translation skipped: {exc}")
-    return fallback
+_localization_service = LocalizationService(_EN_TRANSLATIONS, get_config, logger)
+_LANG_CONTEXT = _localization_service.language_context
+_normalize_lang = _localization_service.normalize_language
+_get_app_language = _localization_service.get_app_language
+_ai_language_instruction = _localization_service.ai_language_instruction
+_translate_text_for_lang = _localization_service.translate_text
+_fallback_translate_payload_for_lang = _localization_service.fallback_translate_payload
+_force_ai_payload_language = _localization_service.force_ai_payload_language
 
 # ── Helper function to get technician full name from username ─────────
-def _get_technician_fullname(username: str) -> str:
-    """
-    Converts a username to technician full name (nom + prenom).
-    If not found, returns the username as fallback.
-    """
-    if not username:
-        return ""
-    try:
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT nom, prenom FROM techniciens WHERE username = ?",
-                (username,)
-            ).fetchone()
-            if row:
-                nom = row.get("nom", "").strip()
-                prenom = row.get("prenom", "").strip()
-                return f"{prenom} {nom}".strip() if prenom else nom
-    except Exception as e:
-        logger.debug(f"Failed to get technician name for {username}: {e}")
-    return username  # Fallback to username if not found
+_technician_identity_service = TechnicianIdentityService(
+    DatabaseTechnicianNameRepository(get_db),
+    logger,
+)
 
 
-import re as _re
-
-def _extract_words(text: str) -> list:
-    """
-    Extrait tous les mots significatifs d'un texte en supprimant la ponctuation.
-    NE PAS filtrer les mots courts (inclure les prénoms comme "Ali", "Al", etc).
-    
-    Ex: "Salah Al Salah, Ahmed Ben Salah" → ["salah", "al", "salah", "ahmed", "ben", "salah"]
-    Ex: "Ali Ben Haj" → ["ali", "ben", "haj"]
-    """
-    # Remplacer toute ponctuation par des espaces, puis split
-    cleaned = _re.sub(r'[,;/\-_\.\(\)\[\]]+', ' ', text.lower())
-    # Garder TOUS les mots non-vides (ne pas filtrer par len > 1)
-    return [w for w in cleaned.split() if w.strip()]
-
-
-def _tech_name_matches(user_name: str, technicien_field: str) -> bool:
-    """
-    Vérifie si le nom du technicien connecté correspond au champ technicien d'une intervention.
-    
-    Gère correctement :
-    - Ordre inversé des noms ("Salah Al Salah" vs "Al Salah Salah")
-    - Noms multiples séparés par virgule ("Salah Al Salah, Ahmed Ben Salah")
-    - Ponctuation dans les noms
-    - Noms courts et prénoms ("Ali", "Al", "A", etc)
-    - Évite les faux positifs par sous-chaîne ("al" ne matche PAS "Salah" mais "ali" = "ali")
-    
-    Returns True si TOUS les mots du nom utilisateur
-    apparaissent comme mots entiers dans le champ technicien.
-    """
-    if not user_name or not technicien_field:
-        logger.warning(f"[_tech_name_matches] Empty inputs: user_name='{user_name}', technicien_field='{technicien_field}'")
-        return False
-    
-    user_words = _extract_words(user_name)
-    tech_words = _extract_words(technicien_field)
-    
-    logger.info(f"[_tech_name_matches] Comparing: user='{user_name}' (words={user_words}) vs tech='{technicien_field}' (words={tech_words})")
-    
-    # IMPORTANT: Si l'utilisateur n'a aucun mot (nom vide?), refuser
-    if not user_words:
-        logger.warning(f"[_tech_name_matches] No user words extracted from '{user_name}'")
-        return False
-    
-    # IMPORTANT: Si le champ technicien est vide, refuser
-    if not tech_words:
-        logger.warning(f"[_tech_name_matches] No tech words extracted from '{technicien_field}'")
-        return False
-    
-    # Tous les mots de l'utilisateur doivent être présents dans le champ technicien
-    result = all(word in tech_words for word in user_words)
-    logger.info(f"[_tech_name_matches] Result: {result} (all user_words in tech_words: {[word in tech_words for word in user_words]})")
-    return result
-
-
-def _tech_name_or_username_matches(user_name_or_username: str, technicien_field: str) -> bool:
-    """
-    Vérifie si le nom OU username du technicien correspond au champ technicien.
-    Utile pour les filtres où on peut avoir des usernames comme 'tech_07' ou des noms comme 'Salah Al Salah'.
-    
-    Returns True si:
-    - C'est une correspondance exacte par username (case-insensitive), OU
-    - C'est une correspondance par nom (case-insensitive word matching)
-    """
-    if not user_name_or_username or not technicien_field:
-        return False
-    
-    # Vérifier correspondance exacte par username (ex: "tech_07" == "tech_07")
-    if user_name_or_username.lower() == technicien_field.lower():
-        return True
-    
-    # Sinon, vérifier correspondance par nom
-    return _tech_name_matches(user_name_or_username, technicien_field)
+_get_technician_fullname = _technician_identity_service.resolve_full_name
+_tech_name_or_username_matches = _technician_identity_service.name_or_username_matches
 
 
 # ── Auto-copy DejaVu Sans from matplotlib on startup ─────────────────
@@ -5889,201 +5699,7 @@ def get_knowledge(user: dict = Depends(_verify_token)):
     return results
 
 
-def _parse_text_to_rows(text: str) -> list:
-    """Parse unstructured text (from PDF/Word) into error code rows using AI with chunking or regex."""
-    import re
-    import json
-    rows = []
-
-    # Try AI extraction FIRST with chunking
-    try:
-        from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
-        if AI_AVAILABLE and len(text) > 50:
-            # Split into chunks to avoid token limits
-            chunk_size = 20000
-            chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-            
-            logger.info(f"📤 Sending {len(text)} chars to IA in {len(chunks)} chunk(s)")
-            
-            all_codes = {}  # Use dict to avoid duplicates
-            
-            for chunk_idx, text_chunk in enumerate(chunks):
-                if len(text_chunk) < 50:
-                    continue
-                    
-                logger.info(f"📤 Chunk {chunk_idx+1}/{len(chunks)} ({len(text_chunk)} chars)")
-                
-                prompt = f"""Extrais TOUS les codes d'erreur du texte.
-Pour chaque code: code, message, cause, solution.
-Réponds UNIQUEMENT en JSON:
-[{{"code":"105","message":"Error description","cause":"Root cause","solution":"How to fix"}}]
-
-Texte:
-{text_chunk}
-"""
-                
-                raw = _call_ia(prompt, timeout=60, is_json=True)
-                
-                if raw:
-                    raw_text = raw.strip()
-                    raw_text = re.sub(r'```\w*\s*', '', raw_text)
-                    raw_text = re.sub(r'```', '', raw_text)
-                    raw_text = raw_text.strip()
-                    
-                    try:
-                        result = json.loads(raw_text)
-                        if isinstance(result, list):
-                            logger.info(f"✓ Chunk {chunk_idx+1}: {len(result)} codes")
-                            for item in result:
-                                if isinstance(item, dict) and 'code' in item:
-                                    code = str(item['code'])
-                                    if code not in all_codes:
-                                        item['message'] = str(item.get('message', code))
-                                        item['cause'] = str(item.get('cause', ''))
-                                        item['solution'] = str(item.get('solution', ''))
-                                        item['type'] = 'Hardware'
-                                        item['priorite'] = 'MOYENNE'
-                                        all_codes[code] = item
-                    except json.JSONDecodeError:
-                        logger.warning(f"⚠️ Chunk {chunk_idx+1}: Parse error")
-            
-            if all_codes:
-                rows = list(all_codes.values())
-                logger.info(f"✓ IA: {len(rows)} unique codes from {len(chunks)} chunks")
-                if len(rows) >= 3:
-                    return rows
-            
-            logger.warning(f"⚠️ IA found only {len(rows)} codes, using regex fallback")
-                
-    except Exception as e:
-        logger.warning(f"⚠️ IA extraction failed: {e}")
-
-    # Fallback: regex-based extraction
-    logger.info("📌 Using regex fallback")
-    
-    found_codes = set()
-    
-    # Pattern 1: Number after Alarm/ERROR keywords
-    pattern1 = r'(?:Alarm|ALARM|ERROR|ERR|FAULT|CODE|code)\s+(\d{1,5})'
-    matches = list(re.finditer(pattern1, text, re.IGNORECASE))
-    logger.info(f"🔍 Pattern 1: {len(matches)} matches")
-    
-    for match in matches:
-        code_num = match.group(1)
-        if code_num not in found_codes:
-            found_codes.add(code_num)
-            start = max(0, match.start() - 30)
-            end = min(len(text), match.end() + 150)
-            context = text[start:end].replace('\n', ' ').strip()
-            rows.append({
-                "code": code_num,
-                "message": context[:150],
-                "type": "Hardware",
-                "cause": "",
-                "solution": "",
-                "priorite": "MOYENNE",
-            })
-    
-    # Pattern 2: Letter+number codes
-    pattern2 = r'\b([EHSN]\d{2,4})\b'
-    matches = list(re.finditer(pattern2, text, re.IGNORECASE))
-    logger.info(f"🔍 Pattern 2: {len(matches)} matches")
-    
-    for match in matches:
-        code_num = match.group(1)
-        if code_num not in found_codes:
-            found_codes.add(code_num)
-            start = max(0, match.start() - 30)
-            end = min(len(text), match.end() + 150)
-            context = text[start:end].replace('\n', ' ').strip()
-            rows.append({
-                "code": code_num,
-                "message": context[:150],
-                "type": "Hardware",
-                "cause": "",
-                "solution": "",
-                "priorite": "MOYENNE",
-            })
-    
-    # Pattern 3: Hex codes
-    pattern3 = r'\b(0x[0-9A-Fa-f]{2,8})\b'
-    matches = list(re.finditer(pattern3, text, re.IGNORECASE))
-    logger.info(f"🔍 Pattern 3: {len(matches)} matches")
-    
-    for match in matches:
-        code_num = match.group(1)
-        if code_num not in found_codes:
-            found_codes.add(code_num)
-            start = max(0, match.start() - 30)
-            end = min(len(text), match.end() + 150)
-            context = text[start:end].replace('\n', ' ').strip()
-            rows.append({
-                "code": code_num,
-                "message": context[:150],
-                "type": "Hardware",
-                "cause": "",
-                "solution": "",
-                "priorite": "MOYENNE",
-            })
-    
-    logger.info(f"📌 Regex: {len(rows)} codes")
-    
-    if not rows:
-        lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 10]
-        for i, line in enumerate(lines[:50]):
-            rows.append({
-                "code": f"DOC-{i+1:03d}",
-                "message": line[:150],
-                "type": "Documentation",
-                "cause": "",
-                "solution": "",
-                "priorite": "BASSE",
-            })
-
-    return rows
-
-
-# ==========================================
-# ENCODAGE UNIVERSEL - Fonctions globales
-# ==========================================
-
-def detect_and_fix_encoding(data: bytes) -> str:
-    """
-    Détecte et corrige l'encodage universel des données binaires.
-    Fonctionne pour tous les formats: CSV, DOCX, PDF texte, etc.
-    """
-    if not data:
-        return ""
-    
-    import chardet
-    
-    # Essayer chardet pour détecter l'encodage
-    detected = chardet.detect(data)
-    detected_encoding = detected.get('encoding') if detected and detected.get('confidence', 0) > 0.5 else None
-    
-    logger.info(f"🔍 Charset detection: {detected_encoding} (confidence: {detected.get('confidence', 0):.2f})")
-    
-    # Liste d'encodages à essayer, avec le détecté en priorité
-    encodings_to_try = []
-    if detected_encoding:
-        encodings_to_try.append(detected_encoding)
-    
-    # Ajouter les encodages courants dans l'ordre de probabilité
-    # UTF-8 first (avec BOM), then Latin-1, then CP1252
-    encodings_to_try.extend(['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'cp1250', 'ascii'])
-    
-    # Essayer les encodages
-    for encoding in encodings_to_try:
-        try:
-            text = data.decode(encoding)
-            logger.info(f"✓ Successfully decoded with: {encoding}")
-            return text
-        except (UnicodeDecodeError, AttributeError, LookupError):
-            continue
-    
-    # Fallback: décoder avec remplacement (ne jamais échouer)
-    logger.warning("⚠️ All encoding attempts failed, using UTF-8 with replacement")
-    return data.decode('utf-8', errors='replace')
+# Parsing and encoding are implemented in services.knowledge_import.
 
 
 @app.post("/api/knowledge/import")

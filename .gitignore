@@ -41,7 +41,10 @@ logs/
 
 # ---- Backups & données générées ----
 backups/
+backup_*/
 backup_complet.json
+*.dmp
+*.dump
 data/
 
 # ---- Rapports générés ----
@@ -50,10 +53,13 @@ reports/
 # ---- Fichiers binaires ----
 *.zip
 *.pptx
+*.docx
 
 # ---- IDE & Outils ----
 .qodo/
 .vscode/
+.kiro/
+.agents/
 .idea/
 *.swp
 *.swo

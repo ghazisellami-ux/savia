@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import I18nRuntime from '@/components/I18nRuntime';
 
 export const metadata: Metadata = {
   title: 'SAVIA Site',
@@ -25,7 +26,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
       </head>
-      <body>{children}</body>
+      <body>
+        <I18nRuntime />
+        {children}
+      </body>
     </html>
   );
 }

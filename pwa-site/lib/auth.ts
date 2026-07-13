@@ -31,6 +31,7 @@ export function saveSession(token: string, user: SaviaUser) {
     nom: (user as any).nom_complet || user.nom || user.username,
   };
   localStorage.setItem(USER_KEY, JSON.stringify(normalizedUser));
+  window.dispatchEvent(new Event('savia_site_session_changed'));
 }
 
 export function clearSession() {

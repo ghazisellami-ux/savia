@@ -6,10 +6,14 @@ const API_BASE = ''; // PWA has its own domain, no basePath needed
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_site_token') : null;
+  const lang = typeof window !== 'undefined'
+    ? (localStorage.getItem('savia_site_lang') || localStorage.getItem('savia_lang') || 'fr')
+    : 'fr';
   const res = await fetch(`${API_BASE}${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
+      'X-SAVIA-Lang': lang,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...opts.headers,
     },
@@ -51,6 +55,7 @@ export const api = {
     getTechnicianData: (id: number) => req<any[]>(`/api/interventions/${id}/techniciens`, { method: 'GET' }),
     uploadPhoto: async (id: number, file: File) => {
       const token = localStorage.getItem('savia_site_token') || '';
+      const lang = localStorage.getItem('savia_site_lang') || localStorage.getItem('savia_lang') || 'fr';
       const fd = new FormData();
       fd.append('file', file);
       // Upload directly to backend — Next.js rewrites don't reliably proxy
@@ -58,7 +63,7 @@ export const api = {
       // Nginx reverse-proxies directly to the backend container.
       const res = await fetch(`/api/interventions/${id}/photo`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, 'X-SAVIA-Lang': lang },
         body: fd,
       });
       if (!res.ok) {
