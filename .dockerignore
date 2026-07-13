@@ -9,6 +9,8 @@
 !.env.example
 .qodo/
 .vscode/
+.kiro/
+.agents/
 .idea/
 .devcontainer/
 .github/
@@ -28,6 +30,9 @@ env/
 backup_complet.json
 data/backup_complet.json
 backups/
+backup_*/
+*.dmp
+*.dump
 
 # Logs & Reports
 logs/
@@ -40,6 +45,7 @@ lancer.vbs
 start_hidden.py
 SIC_Radiologie_Pitch.pptx
 *.zip
+*.docx
 
 # Documentation
 LICENSE
