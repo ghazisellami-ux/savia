@@ -2,7 +2,9 @@
 // 🌐 API Client — Savia Frontend
 // ==========================================
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+// Browser requests stay same-origin and are forwarded by Next.js to the backend.
+// This avoids exposing a build-time localhost URL that breaks Docker and CORS.
+const API_BASE = '';
 
 interface ApiOptions {
   method?: string;
@@ -312,10 +314,9 @@ export const ai = {
   analyzeCostsPdf: async (result: Record<string, unknown>, kpis: Record<string, unknown>, sym: string = "TND") => {
     const token = localStorage.getItem('savia_token') || localStorage.getItem('token');
     const lang = localStorage.getItem('savia_lang') || 'fr';
-    const base = process.env.NEXT_PUBLIC_API_URL || '';
     const cn = localStorage.getItem('savia_company') || 'SAVIA';
     const cl = localStorage.getItem('savia_logo') || '';
-    const res = await fetch(`${base}/api/ai/analyze-costs/pdf`, {
+    const res = await fetch('/api/ai/analyze-costs/pdf', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-SAVIA-Lang': lang, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ result, kpis, sym, company_name: cn, company_logo: cl }),

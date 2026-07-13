@@ -87,7 +87,6 @@ services:
       dockerfile: Dockerfile
       target: runner
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
         BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
     container_name: savia_dev_frontend
     ports:
