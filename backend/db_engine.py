@@ -1806,17 +1806,41 @@ def ajouter_type_intervention_custom(nom):
 def lire_domaines_custom():
     """Retourne la liste des domaines médicaux personnalisés."""
     with get_db() as conn:
-        ph = "%s"
+        _ensure_domaines_custom_table(conn)
         rows = conn.execute("SELECT id, nom FROM domaines_custom ORDER BY nom").fetchall()
         return [dict(r) for r in rows]
 
 
 def ajouter_domaine_custom(nom):
-    """Ajoute un domaine médical personnalisé. Ignore si déjà existant."""
-    ph = "%s"
+    """Ajoute un domaine médical personnalisé et retourne son enregistrement."""
+    nom = str(nom or "").strip()
+    if not nom:
+        raise ValueError("Le nom du domaine est requis")
+
     with get_db() as conn:
-        conn.execute(f"INSERT INTO domaines_custom (nom) VALUES ({ph}) ON CONFLICT (nom) DO NOTHING", (nom.strip(),))
-    return True
+        _ensure_domaines_custom_table(conn)
+        conn.execute(
+            "INSERT INTO domaines_custom (nom) VALUES (%s) ON CONFLICT (nom) DO NOTHING",
+            (nom,)
+        )
+        row = conn.execute(
+            "SELECT id, nom FROM domaines_custom WHERE nom = %s",
+            (nom,)
+        ).fetchone()
+        if not row:
+            raise RuntimeError("Le domaine n'a pas pu être enregistré")
+        return dict(row)
+
+
+def _ensure_domaines_custom_table(conn):
+    """Garantit la présence de la table avant chaque lecture ou écriture."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS domaines_custom (
+            id SERIAL PRIMARY KEY,
+            nom TEXT UNIQUE NOT NULL,
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
 
 def supprimer_domaine_custom(nom):
