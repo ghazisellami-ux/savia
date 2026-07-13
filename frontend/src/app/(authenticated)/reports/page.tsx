@@ -6,7 +6,7 @@ import {
   AlertTriangle, Calendar, Wrench, TrendingUp, DollarSign, CheckCircle2,
   ClipboardList, Target, Activity, ShieldCheck, Bot, ChevronRight
 } from 'lucide-react';
-import { interventions, equipements, ai, finances, contrats } from '@/lib/api';
+import { interventions, equipements, ai, finances, contrats, settings } from '@/lib/api';
 import { TrendingDown, PieChart as PieChartIcon } from 'lucide-react';
 
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
@@ -47,6 +47,7 @@ export default function ReportsPage() {
   const [finTco, setFinTco] = useState<any[]>([]);
   const [finLoading, setFinLoading] = useState(false);
   const [currency, setCurrency] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
+  const [tauxHoraire, setTauxHoraire] = useState(0);
 
   const loadData = useCallback(async () => {
     try {
@@ -60,6 +61,14 @@ export default function ReportsPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    settings.get()
+      .then((settingsData) => {
+        setTauxHoraire(Number(settingsData.taux_horaire_technicien) || 0);
+      })
+      .catch(() => setTauxHoraire(0));
+  }, []);
 
   useEffect(() => {
     const refreshCurrency = () => setCurrency(localStorage.getItem('savia_devise') || 'TND');
@@ -96,6 +105,32 @@ export default function ReportsPage() {
     const machines = (equips as any[]).filter((e: any) => e.Client === client).map((e: any) => e.Nom);
     return d.filter((i: any) => machines.includes(i.machine));
   };
+
+  const getClientReportData = useCallback((client: string, month: number, year: number) => {
+    const clientMachines = (equips as any[])
+      .filter((e: any) => e.Client === client)
+      .map((e: any) => e.Nom);
+
+    return data.filter((i: any) => {
+      if (!clientMachines.includes(i.machine)) return false;
+      const dt = new Date(i.date);
+      return !isNaN(dt.getTime()) && dt.getMonth() + 1 === month && dt.getFullYear() === year;
+    });
+  }, [data, equips]);
+
+  const getClientLaborCost = useCallback((intervention: any) => {
+    const parentMinutes = Number(intervention.duree_minutes) || 0;
+    const detailMinutes = Array.isArray(intervention.techniciens_detail)
+      ? intervention.techniciens_detail.reduce(
+          (total: number, detail: any) => total + (Number(detail.duree_minutes) || 0),
+          0,
+        )
+      : 0;
+    const minutes = parentMinutes > 0 ? parentMinutes : detailMinutes;
+
+    if (tauxHoraire > 0 && minutes > 0) return (minutes / 60) * tauxHoraire;
+    return Number(intervention.cout) || 0;
+  }, [tauxHoraire]);
 
   // --- PDF generation via backend (server-side, direct download) ---
   const generatePdf = async (docTitle: string, pdfData: Record<string, any>) => {
@@ -156,17 +191,10 @@ export default function ReportsPage() {
   };
 
   const handlePdfClient = async () => {
-    const clientMachines = (equips as any[]).filter((e: any) => e.Client === selClient).map((e: any) => e.Nom);
-    const clientData = data.filter((i: any) => clientMachines.includes(i.machine)).filter((i: any) => {
-      const dt = new Date(i.date);
-      return dt.getMonth() + 1 === selClientMois && dt.getFullYear() === selClientAnnee;
-    });
+    const clientData = getClientReportData(selClient, selClientMois, selClientAnnee);
     const nbIntv = clientData.length;
-    const cout = clientData.reduce((a: number, b: any) => a + (b.cout || 0), 0);
+    const cout = clientData.reduce((a: number, b: any) => a + getClientLaborCost(b), 0);
     const coutPieces = clientData.reduce((a: number, b: any) => a + (b.cout_pieces || 0), 0);
-    const rows = clientData.map((i: any) =>
-      `<tr><td>${(i.date||'').substring(0,10)}</td><td>${i.machine||''}</td><td>${i.type_intervention||''}</td><td>${i.technicien||''}</td><td>${i.statut||''}</td><td>${money(i.cout || 0)}</td></tr>`
-    ).join('');
     const lbl2 = MOIS_LABELS[selClientMois-1] + ' ' + selClientAnnee;
     const padC = String(selClientMois).padStart(2,'0');
     const fnameC = 'rapport_client_' + selClient.replace(/\s+/g,'_') + '_' + selClientAnnee + '_' + padC;
@@ -185,7 +213,7 @@ export default function ReportsPage() {
       table_title: 'Interventions \u2014 ' + selClient + ' \u2014 ' + lbl2,
       rows: clientData.map(function(i: any) { return [
         (i.date||'').substring(0,10), i.machine||'', i.type_intervention||i.type||'',
-        i.technicien||'', i.statut||'', Math.round(i.cout||0),
+        i.technicien||'', i.statut||'', Math.round(getClientLaborCost(i)),
       ]; }),
     });
   };
@@ -462,12 +490,9 @@ export default function ReportsPage() {
           </SectionCard>
 
           {selClient && (() => {
-            const clientMachines = (equips as any[]).filter((e: any) => e.Client === selClient).map((e: any) => e.Nom);
-            const clientData = data.filter((i: any) => clientMachines.includes(i.machine) &&
-              (() => { const dt = new Date(i.date); return dt.getMonth()+1 === selClientMois && dt.getFullYear() === selClientAnnee; })()
-            );
+            const clientData = getClientReportData(selClient, selClientMois, selClientAnnee);
             const nbIntv = clientData.length;
-            const cout = clientData.reduce((a: number, b: any) => a + (b.cout || 0), 0);
+            const cout = clientData.reduce((a: number, b: any) => a + getClientLaborCost(b), 0);
             const coutPieces = clientData.reduce((a: number, b: any) => a + (b.cout_pieces || 0), 0);
             return nbIntv > 0 ? (
               <div className="space-y-4">
@@ -506,7 +531,7 @@ export default function ReportsPage() {
                             <td className="py-1.5 px-2">{i.type_intervention}</td>
                             <td className="py-1.5 px-2">{i.technicien}</td>
                             <td className="py-1.5 px-2">{i.statut}</td>
-                            <td className="py-1.5 px-2 font-mono">{(i.cout||0).toLocaleString('fr')}</td>
+                            <td className="py-1.5 px-2 font-mono">{Math.round(getClientLaborCost(i)).toLocaleString('fr')}</td>
                           </tr>
                         ))}
                       </tbody>
