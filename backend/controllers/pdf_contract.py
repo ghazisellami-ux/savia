@@ -66,7 +66,10 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
         type_contrat = str(contrat.get("type_contrat", "") or "Standard")
         date_debut = str(contrat.get("date_debut", "") or "")[:10]
         date_fin = str(contrat.get("date_fin", "") or "")[:10]
-        sla_h = int(contrat.get("sla_temps_reponse_h", 24) or 24)
+        try:
+            sla_h = max(0, int(contrat.get("sla_temps_reponse_h", 0) or 0))
+        except (TypeError, ValueError):
+            sla_h = 0
         montant = float(contrat.get("montant", 0) or 0)
         currency = str(body.get("sym") or body.get("devise") or get_config("devise", "TND") or "TND").strip().upper()
         statut = str(contrat.get("statut", "Actif") or "Actif")
@@ -391,12 +394,16 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
 
         # ARTICLE 4 - SLA
         section_title(4, "Engagements de service (SLA)")
-        body_text(
-            f"Le Prestataire s'engage \u00e0 intervenir dans un d\u00e9lai maximum de {sla_h} heure(s) "
-            f"\u00e0 compter de la r\u00e9ception de la demande d'intervention par le Client, durant les heures "
-            f"ouvr\u00e9es (du lundi au vendredi, 8h\u201318h). Pour les interventions hors plages ouvr\u00e9es, "
-            f"un d\u00e9lai compl\u00e9mentaire pourra s'appliquer."
-        )
+        if sla_h > 0:
+            sla_text = (
+                f"Le Prestataire s'engage \u00e0 intervenir dans un d\u00e9lai maximum de {sla_h} heure(s) "
+                f"\u00e0 compter de la r\u00e9ception de la demande d'intervention par le Client, durant les heures "
+                f"ouvr\u00e9es (du lundi au vendredi, 8h\u201318h). Pour les interventions hors plages ouvr\u00e9es, "
+                f"un d\u00e9lai compl\u00e9mentaire pourra s'appliquer."
+            )
+        else:
+            sla_text = "Aucun engagement de temps de r\u00e9ponse SLA n'est pr\u00e9vu dans ce contrat."
+        body_text(sla_text)
 
         # ARTICLE 5 - PLANNING (optionnel)
         if recurrence:
@@ -575,4 +582,3 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
 __all__ = [
     "generate_contrat_pdf",
 ]
-

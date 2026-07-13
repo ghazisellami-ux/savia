@@ -1067,7 +1067,7 @@ def init_db():
             type_contrat TEXT DEFAULT 'Standard',
             date_debut DATE NOT NULL,
             date_fin DATE NOT NULL,
-            sla_temps_reponse_h INTEGER DEFAULT 24,
+            sla_temps_reponse_h INTEGER DEFAULT 0,
             interventions_incluses INTEGER DEFAULT -1,
             montant REAL DEFAULT 0.0,
             conditions TEXT DEFAULT '',

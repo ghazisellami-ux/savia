@@ -436,10 +436,15 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
         if not df_contrats.empty:
             for _, c in df_contrats.iterrows():
                 cl = c.get("client", "")
-                sla_h = c.get("sla_temps_reponse_h", 24)
+                sla_h_raw = c.get("sla_temps_reponse_h", 0)
+                try:
+                    sla_h = max(0, int(sla_h_raw)) if pd.notna(sla_h_raw) else 0
+                except (TypeError, ValueError):
+                    sla_h = 0
                 statut = str(c.get("statut", "")).lower()
                 if cl and "actif" in statut:
-                    if cl not in client_sla or sla_h < client_sla[cl]:
+                    # Un SLA à 0 désactive le suivi pour ce client.
+                    if cl not in client_sla or (client_sla[cl] > 0 and (sla_h == 0 or sla_h < client_sla[cl])):
                         client_sla[cl] = int(sla_h)
 
         # Build machine → client mapping
@@ -461,7 +466,9 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
             for _, interv in active.iterrows():
                 machine = interv.get("machine", "")
                 cl = machine_client.get(machine, "")
-                sla_h = client_sla.get(cl, 24)  # Default 24h if no contract
+                sla_h = client_sla[cl] if cl in client_sla else 24
+                if sla_h <= 0:
+                    continue
 
                 # Start time: date_debut_intervention or date (creation)
                 start_str = interv.get("date_debut_intervention") or interv.get("date", "")
@@ -501,7 +508,9 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
 
             for _, dem in active_dem.iterrows():
                 cl = dem.get("client", "")
-                sla_h = client_sla.get(cl, 24)
+                sla_h = client_sla[cl] if cl in client_sla else 24
+                if sla_h <= 0:
+                    continue
                 start_str = dem.get("date_demande", "")
                 try:
                     start = pd.to_datetime(start_str)
@@ -554,7 +563,9 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                         if pd.isna(start) or pd.isna(end):
                             continue
                         cl_name = machine_client.get(ci.get("machine", ""), "")
-                        sla = client_sla.get(cl_name, 24)
+                        sla = client_sla[cl_name] if cl_name in client_sla else 24
+                        if sla <= 0:
+                            continue
                         duration_h = (end - start).total_seconds() / 3600
                         total_measured += 1
                         if duration_h <= sla:
@@ -594,4 +605,3 @@ __all__ = [
     "update_site_coordinates",
     "sla_status",
 ]
-
