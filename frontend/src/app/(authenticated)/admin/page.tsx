@@ -212,6 +212,10 @@ export default function AdminPage() {
     { code: 'DZD', label: 'Dinar Algérien', flag: '🇩🇿', symbol: 'DA' },
     { code: 'MAD', label: 'Dirham Marocain', flag: '🇲🇦', symbol: 'MAD' },
     { code: 'XOF', label: 'Franc CFA (BCEAO)', flag: '🆈', symbol: 'FCFA' },
+    { code: 'USD', label: 'Dollar Américain', flag: '🇺🇸', symbol: '$' },
+    { code: 'EUR', label: 'Euro', flag: '🇪🇺', symbol: '€' },
+    { code: 'QAR', label: 'Riyal Qatari', flag: '🇶🇦', symbol: 'ر.ق' },
+    { code: 'SAR', label: 'Riyal Saoudien', flag: '🇸🇦', symbol: 'ر.س' },
   ];
   const [devise, setDevise] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
   const [language, setLanguage] = useState<'fr' | 'en'>(() => (typeof window !== 'undefined' && localStorage.getItem('savia_lang') === 'en' ? 'en' : 'fr'));
@@ -834,22 +838,33 @@ export default function AdminPage() {
           {/* Devise */}
           <SectionCard title={<span className="flex items-center gap-2"><Globe className="w-4 h-4 text-savia-accent" /> Devise de l'application</span>}>
             <p className="text-xs text-savia-text-muted mb-4">La devise sélectionnée sera utilisée sur toutes les pages (rapports, pièces, contrats…)</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {DEVISES.map(d => (
-                <button key={d.code} onClick={() => setDevise(d.code)}
-                  className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                    devise === d.code
-                      ? 'border-savia-accent bg-savia-accent/10 text-savia-accent'
-                      : 'border-savia-border hover:bg-savia-surface-hover text-savia-text'
-                  }`}>
-                  <span className="text-3xl">{d.flag}</span>
-                  <div className="text-center">
-                    <div className="text-sm font-black">{d.symbol}</div>
-                    <div className="text-xs text-savia-text-muted">{d.label}</div>
+            <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
+              <div>
+                <label className={LABEL}>Devise</label>
+                <div className="relative">
+                  <select
+                    className={`${INPUT} appearance-none pr-10 cursor-pointer`}
+                    value={devise}
+                    onChange={e => setDevise(e.target.value)}
+                  >
+                    {DEVISES.map(d => (
+                      <option key={d.code} value={d.code}>
+                        {d.symbol} — {d.label} ({d.code})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-muted" />
+                </div>
+              </div>
+              {(() => {
+                const selected = DEVISES.find(d => d.code === devise) || DEVISES[0];
+                return (
+                  <div className="flex items-center gap-3 pb-1 text-sm text-savia-text-muted">
+                    <span className="text-2xl font-black text-savia-accent">{selected.symbol}</span>
+                    <span><strong className="text-savia-text">{selected.code}</strong> · {selected.label}</span>
                   </div>
-                  {devise === d.code && <Check className="w-4 h-4" />}
-                </button>
-              ))}
+                );
+              })()}
             </div>
           </SectionCard>
 
