@@ -61,6 +61,14 @@ from controllers.auth_dashboard import (
     logger,
 )
 
+
+def _planning_id_in_set(value, planning_ids):
+    """Compare dataframe identifiers without leaking NaN/string type issues."""
+    try:
+        return int(value) in {int(planning_id) for planning_id in planning_ids}
+    except (TypeError, ValueError):
+        return False
+
 @app.get("/api/interventions")
 def get_interventions(
     machine: Optional[str] = None,
@@ -128,11 +136,38 @@ def get_interventions(
             logger.warning(f"Error fetching multi-tech interventions for {user_nom_complet}: {e}")
             # Continue with previous results if this fetch fails
             pass
-        
+
     elif technicien and not df.empty and "technicien" in df.columns:
         df = df[df["technicien"].astype(str).apply(
             lambda t: _tech_name_or_username_matches(technicien, t)
         )]
+
+    # A maintenance planned for a future date must not appear in any
+    # intervention queue before its planned day. This keeps the SAV table
+    # consistent with the technician PWA while leaving the planning page as
+    # the source of truth for future scheduled work.
+    if not df.empty and "planning_id" in df.columns:
+        try:
+            with get_db() as conn:
+                future_planning_rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM planning_maintenance
+                    WHERE date_prevue > CURRENT_DATE
+                      AND statut NOT IN ('Cloturee', 'Réalisée', 'Terminée', 'Annulée')
+                    """
+                ).fetchall()
+            future_planning_ids = {
+                row.get("id")
+                for row in future_planning_rows
+                if row.get("id") is not None
+            }
+            if future_planning_ids:
+                df = df[~df["planning_id"].apply(
+                    lambda value: _planning_id_in_set(value, future_planning_ids)
+                )]
+        except Exception as e:
+            logger.warning(f"Error filtering future planned interventions: {e}")
     
     # Filtrage par client pour Lecteur
     client_filter = _get_client_filter(user)
@@ -520,7 +555,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             except Exception as de:
                 logger.error(f"Erreur mise à jour demande liée: {de}")
 
-            # --- Mettre à jour le planning lié (si planning_id) → statut "Réalisée" ---
+            # --- Mettre à jour le planning lié et son historique décalé ---
             try:
                 with get_db() as conn:
                     prow = conn.execute(
@@ -531,12 +566,12 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         pm_id = prow['planning_id']
                         conn.execute(
                             """UPDATE planning_maintenance
-                               SET statut = 'Réalisée',
+                               SET statut = 'Cloturee',
                                    date_realisee = ?
-                             WHERE id = ? AND statut != 'Réalisée'""",
+                             WHERE id = ? AND statut != 'Cloturee'""",
                             (datetime.now().strftime("%Y-%m-%d"), pm_id)
                         )
-                        logger.info(f"Planning #{pm_id} marqué Réalisée (intervention #{intervention_id} clôturée)")
+                        logger.info(f"Planning #{pm_id} marqué Cloturee (intervention #{intervention_id} clôturée)")
             except Exception as pe:
                 logger.error(f"Erreur mise à jour planning lié: {pe}")
 
@@ -978,4 +1013,3 @@ __all__ = [
     "update_fiche_validation",
     "delete_fiche",
 ]
-

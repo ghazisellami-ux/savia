@@ -51,12 +51,7 @@ const getStatutColor = (statut: string, isOverdue: boolean) => {
 // Helper function to calculate automatic status based on date and stored status
 const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string => {
   if (!datePlanifiee) return storedStatus;
-  
-  // If status is "Décalé" (ghost entry), keep it as is
-  if (storedStatus === 'Décalé') {
-    return 'Décalé';
-  }
-  
+
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   
@@ -66,6 +61,11 @@ const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string
   // If already completed/terminated/closed, keep that status
   if (storedStatus === 'Réalisée' || storedStatus === 'Annulée' || storedStatus === 'Cloturee') {
     return storedStatus;
+  }
+
+  // If status is "Décalé" (ghost entry), keep it as is
+  if (storedStatus === 'Décalé') {
+    return 'Décalé';
   }
   
   // If planned date is in the future (> today), it's "Planifiée"
@@ -100,7 +100,15 @@ interface PlanItem {
   type_maintenance: string;
   recurrence: string;
   notes: string;
+  is_ghost?: boolean;
+  original_planning_id?: number | null;
 }
+
+const CLOSED_PLANNING_STATUSES = new Set(['Réalisée', 'Cloturee', 'Annulée']);
+const canReschedule = (item: PlanItem) =>
+  !item.is_ghost &&
+  !CLOSED_PLANNING_STATUSES.has(item.statut) &&
+  !CLOSED_PLANNING_STATUSES.has(getAutomaticStatus(item.date_planifiee, item.statut));
 
 const emptyForm = {
   domaine: 'Radiologie' as string,
@@ -233,6 +241,8 @@ export default function PlanningPage() {
         type_maintenance: item.type_maintenance || 'Préventive',
         recurrence: item.recurrence || 'Aucune',
         notes: item.notes || '',
+        is_ghost: item.is_ghost === true || item.is_ghost === 1 || item.is_ghost === 'true',
+        original_planning_id: item.original_planning_id ?? null,
       }));
       setData(mapped);
 
@@ -1105,7 +1115,7 @@ export default function PlanningPage() {
                     )}
                     
                     {/* Action buttons for Admin/Manager */}
-                    {(user?.role === 'Admin' || user?.role === 'Manager') && (
+                    {(user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev) && (
                       <div className="flex items-center gap-2 pt-2 border-t border-savia-border">
                         <button
                           onClick={() => handleOpenReschedule(ev)}

@@ -518,6 +518,39 @@ def supprimer_contrat(contrat_id):
             raise
     _trigger_backup()
 
+def _mark_linked_planning_closed(conn, intervention_id, date_realisee=None):
+    """Close the real planning row while preserving the delay history."""
+    linked = conn.execute(
+        "SELECT planning_id FROM interventions WHERE id=%s",
+        (intervention_id,)
+    ).fetchone()
+    planning_id = linked.get("planning_id") if linked else None
+    if not planning_id:
+        return
+
+    planning = conn.execute(
+        "SELECT id, original_planning_id, is_ghost FROM planning_maintenance WHERE id=%s",
+        (planning_id,)
+    ).fetchone()
+    if not planning:
+        return
+
+    real_planning_id = (
+        planning.get("original_planning_id")
+        if planning.get("is_ghost") and planning.get("original_planning_id")
+        else planning_id
+    )
+    closed_date = date_realisee or datetime.now().date().isoformat()
+    conn.execute(
+        """
+        UPDATE planning_maintenance
+        SET statut='Cloturee', date_realisee=%s
+        WHERE id=%s
+        """,
+        (closed_date, real_planning_id)
+    )
+
+
 def update_intervention_statut(intervention_id, nouveau_statut):
     """Met a jour le statut d'une intervention avec horodatage."""
     with get_db() as conn:
@@ -531,6 +564,8 @@ def update_intervention_statut(intervention_id, nouveau_statut):
         else:
             conn.execute("UPDATE interventions SET statut=? WHERE id=?",
                          (nouveau_statut, intervention_id))
+        if nouveau_statut in ("Cloturee", "Clôturée"):
+            _mark_linked_planning_closed(conn, intervention_id, now[:10])
     _trigger_backup()
 
 
@@ -655,6 +690,8 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             WHERE id={ph}
         """
         conn.execute(sql, update_values)
+
+        _mark_linked_planning_closed(conn, intervention_id, date_cloture[:10])
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
         row = conn.execute(f"SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id={ph}", (intervention_id,)).fetchone()
