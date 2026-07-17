@@ -871,29 +871,30 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 f"Planning {planning_id}: {update_data}"
             )
             
-            # Send Telegram notification to assigned technicians
-            if new_technicians:
+            # Notify the technician bot about assignment and/or rescheduling.
+            if date_has_changed or new_technicians:
                 try:
                     machine = current.get("machine", "?")
                     client = current.get("client", "")
-                    tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
-                    
-                    msg = (
-                        f"🔧 <b>Nouvelle Intervention Assignée</b>\n"
-                        f"<i>{len(tech_list)} technicien(s) assigné(s) :</i>\n\n"
-                    )
-                    
-                    for tech in tech_list:
-                        msg += f"  • <b>{tech}</b>\n"
-                    
-                    msg += (
-                        f"\n<b>Détails :</b>\n"
-                        f"  📦 Équipement : {machine}\n"
-                    )
+                    tech_list = [t.strip() for t in (new_technicians or "").split(",") if t.strip()]
+
+                    if date_has_changed:
+                        title = "Intervention décalée"
+                        msg = f"🔄 <b>{title}</b>\n"
+                        msg += f"<i>Nouvelle date prévue : {target_date}</i>\n"
+                    else:
+                        title = "Technicien(s) assigné(s)"
+                        msg = f"🔧 <b>{title}</b>\n"
+
+                    if tech_list:
+                        msg += f"<i>{len(tech_list)} technicien(s) assigné(s) :</i>\n"
+                        for tech in tech_list:
+                            msg += f"  • <b>{tech}</b>\n"
+
+                    msg += f"\n<b>Détails :</b>\n  📦 Équipement : {machine}\n"
                     if client:
                         msg += f"  🏢 Client : {client}\n"
-                    if new_date:
-                        msg += f"  📅 Date : {new_date}\n"
+                    msg += f"  📅 Date : {target_date}\n"
                     if reason:
                         msg += f"  💬 Raison : {reason}\n"
                     
@@ -901,7 +902,9 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     
                     # Send to general telegram bot (technicien will receive it)
                     _send_telegram_bot("telegram", msg)
-                    logger.info(f"Telegram notification sent to {len(tech_list)} technician(s) for planning {planning_id}")
+                    logger.info(
+                        f"Telegram planning notification sent for planning {planning_id}"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to send Telegram notification for planning {planning_id}: {e}")
             
