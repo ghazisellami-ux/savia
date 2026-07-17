@@ -714,8 +714,64 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Planning item not found"
                 )
+
+            import unicodedata
+
+            def normalized_status(value):
+                return unicodedata.normalize("NFKD", str(value or "")).encode(
+                    "ascii", "ignore"
+                ).decode().lower().strip()
+
+            def is_closed_status(value):
+                return normalized_status(value) in {
+                    "cloturee", "terminee", "realisee", "annulee"
+                }
+
+            if current.get("is_ghost"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Une entrée historique décalée ne peut pas être reportée"
+                )
+
+            if is_closed_status(current.get("statut")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Une intervention clôturée ne peut pas être reportée"
+                )
+
+            linked_interventions = conn.execute(
+                "SELECT id, statut FROM interventions WHERE planning_id = %s",
+                (planning_id,)
+            ).fetchall()
+            if any(is_closed_status(row.get("statut")) for row in linked_interventions):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Une intervention déjà clôturée ne peut pas être reportée"
+                )
+
+            # Legacy rows created before planning_id was populated can still
+            # be matched by machine/date. Protect those closed interventions
+            # before changing the planning entry.
+            if not linked_interventions and current.get("machine") and current.get("date_prevue"):
+                legacy_intervention = conn.execute(
+                    """
+                    SELECT statut
+                    FROM interventions
+                    WHERE machine = %s AND date = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (current.get("machine"), str(current.get("date_prevue"))[:10])
+                ).fetchone()
+                if legacy_intervention and is_closed_status(legacy_intervention.get("statut")):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Une intervention déjà clôturée ne peut pas être reportée"
+                    )
             
             old_date = current.get("date_prevue")
+            target_date = str(new_date or old_date or "")[:10]
+            today_iso = datetime.now().date().isoformat()
             
             # Update the main planning entry
             update_data = {}
@@ -849,32 +905,61 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 except Exception as e:
                     logger.warning(f"Failed to send Telegram notification for planning {planning_id}: {e}")
             
-            # If technician was changed, also update interventions_techniciens for linked intervention
-            # OR create the intervention if it doesn't exist yet
-            if new_technicians:
+            # Keep a linked intervention aligned with the new planning date.
+            # Future interventions are created only when their planned day is reached.
+            if date_has_changed or new_technicians is not None:
                 logger.info(f"🔧 Processing technician assignment: {new_technicians} for planning #{planning_id}")
                 try:
                     machine = current.get("machine", "")
-                    date_prevue = current.get("date_prevue", datetime.now().isoformat()[:10])
+                    date_prevue = target_date or datetime.now().isoformat()[:10]
                     
                     # Find the intervention linked to this planning via planning_id
                     linked_intervention = conn.execute(
-                        "SELECT id FROM interventions WHERE planning_id = %s LIMIT 1",
+                        "SELECT id, planning_id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
                         (planning_id,)
                     ).fetchone()
                     
                     # If not found by planning_id, try to find by machine + date (in case it was manually created)
                     if not linked_intervention and machine:
-                        logger.info(f"  No planning_id match, searching by machine '{machine}' on date '{date_prevue}'")
-                        linked_intervention = conn.execute(
-                            "SELECT id FROM interventions WHERE machine = %s AND date = %s ORDER BY id DESC LIMIT 1",
-                            (machine, date_prevue)
-                        ).fetchone()
-                        if linked_intervention:
-                            logger.info(f"  Found intervention by machine+date: #{linked_intervention['id']}")
+                        lookup_dates = [str(old_date or "")[:10]]
+                        if date_prevue not in lookup_dates:
+                            lookup_dates.append(date_prevue)
+                        for lookup_date in lookup_dates:
+                            if not lookup_date:
+                                continue
+                            logger.info(f"  No planning_id match, searching by machine '{machine}' on date '{lookup_date}'")
+                            linked_intervention = conn.execute(
+                                "SELECT id, planning_id FROM interventions WHERE machine = %s AND date = %s ORDER BY id DESC LIMIT 1",
+                                (machine, lookup_date)
+                            ).fetchone()
+                            if linked_intervention:
+                                logger.info(f"  Found intervention by machine+date: #{linked_intervention['id']}")
+                                break
                     
-                    # If still not found, CREATE IT
-                    if not linked_intervention:
+                    # Existing interventions follow the new planning date.
+                    if linked_intervention:
+                        intervention_id = linked_intervention['id']
+                        intervention_updates = []
+                        intervention_values = []
+                        if date_has_changed:
+                            intervention_updates.append("date = %s")
+                            intervention_values.append(date_prevue)
+                        if new_technicians is not None:
+                            intervention_updates.append("technicien = %s")
+                            intervention_values.append(new_technicians)
+                        if linked_intervention.get("planning_id") != planning_id:
+                            intervention_updates.append("planning_id = %s")
+                            intervention_values.append(planning_id)
+                        if intervention_updates:
+                            conn.execute(
+                                f"UPDATE interventions SET {', '.join(intervention_updates)} WHERE id = %s",
+                                intervention_values + [intervention_id]
+                            )
+                        logger.info(f"  ✅ Found existing intervention #{intervention_id}")
+
+                    # Create an intervention immediately only for today or a
+                    # past date. Future items wait for the daily synchronizer.
+                    elif date_prevue <= today_iso:
                         logger.info(f"  ❌ No intervention found, creating one...")
                         
                         client = current.get("client", "")
@@ -906,11 +991,13 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                             logger.warning(f"  ❌ Could not retrieve newly created intervention")
                             intervention_id = None
                     else:
-                        intervention_id = linked_intervention['id']
-                        logger.info(f"  ✅ Found existing intervention #{intervention_id}")
+                        intervention_id = None
+                        logger.info(
+                            f"  ⏳ Future planning #{planning_id}: intervention creation deferred to {date_prevue}"
+                        )
                     
                     # Now add technicians to interventions_techniciens
-                    if intervention_id:
+                    if intervention_id and new_technicians:
                         tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
                         logger.info(f"  Adding {len(tech_list)} technician(s) to interventions_techniciens: {tech_list}")
                         
@@ -1004,4 +1091,3 @@ __all__ = [
     "force_planning_sync",
     "mark_intervention_factured",
 ]
-

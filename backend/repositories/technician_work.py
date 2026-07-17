@@ -747,4 +747,3 @@ def finalize_intervention_from_techniciens(intervention_id):
             'total_duree_deplacement': total_deplacement,
             'combined_solution': combined_solution
         }
-

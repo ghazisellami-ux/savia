@@ -40,7 +40,7 @@ def lire_interventions(machine=None):
                    i.code_erreur, i.statut, i.notes,
                    i.date_debut_intervention, i.date_cloture,
                    i.type_erreur, i.priorite,
-                   i.start_time, i.end_time,
+                   i.start_time, i.end_time, i.planning_id,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
@@ -56,6 +56,7 @@ def lire_interventions(machine=None):
         else:
             df = read_sql(base_query + " ORDER BY i.date DESC", conn)
         df = _fill_missing_cout_pieces(df, conn)
+
     
     # Only apply text fixes to text columns that need it
     text_columns = ["machine", "description", "probleme", "cause", "solution", "notes", "client"]
@@ -165,6 +166,37 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
 
     with get_db() as conn:
         df = read_sql(query, conn, params=params)
+
+        # A rescheduled maintenance keeps a historical ghost row at its
+        # original date. Once the linked maintenance is closed, expose that
+        # history as closed too, including rows created before this sync fix.
+        if not df.empty and {"is_ghost", "original_planning_id"}.issubset(df.columns):
+            closed_rows = conn.execute(
+                """
+                SELECT id AS planning_id
+                FROM planning_maintenance
+                WHERE statut IN ('Cloturee', 'Réalisée', 'Terminée', 'Annulée')
+                UNION
+                SELECT DISTINCT planning_id
+                FROM interventions
+                WHERE planning_id IS NOT NULL
+                  AND statut IN ('Cloturee', 'Clôturée', 'Terminée', 'Annulée')
+                """
+            ).fetchall()
+            closed_ids = {
+                row.get("planning_id")
+                for row in closed_rows
+                if row.get("planning_id") is not None
+            }
+            if closed_ids:
+                planning_mask = df["id"].isin(closed_ids)
+                df.loc[planning_mask, "statut"] = "Cloturee"
+
+            # The original-date ghost is an immutable visual reference for
+            # the delay and must remain grey after the real intervention is
+            # closed.
+            ghost_mask = df["is_ghost"].fillna(False).astype(bool)
+            df.loc[ghost_mask, "statut"] = "Décalé"
     
     # Apply region and ville filters if provided
     if (region or ville) and not df.empty:
@@ -283,4 +315,3 @@ def reprogrammer_planning(planning_id, nouvelle_date):
             (nouvelle_date, planning_id))
     _trigger_backup()
     return True
-

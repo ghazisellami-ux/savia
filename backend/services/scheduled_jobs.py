@@ -217,6 +217,22 @@ def sync_planning_to_interventions():
                     (pm_id,)
                 )
 
+                # Preserve multi-technician permissions when the intervention
+                # is created on its planned day rather than during rescheduling.
+                for tech_name in [t.strip() for t in technicien.split(',') if t.strip()]:
+                    existing_tech = conn.execute(
+                        """SELECT id FROM interventions_techniciens
+                           WHERE intervention_id = ? AND technicien_nom ILIKE ?""",
+                        (new_id, f"%{tech_name}%")
+                    ).fetchone()
+                    if not existing_tech:
+                        conn.execute(
+                            """INSERT INTO interventions_techniciens
+                               (intervention_id, technicien_nom, statut)
+                               VALUES (?, ?, ?)""",
+                            (new_id, tech_name, 'Assigné')
+                        )
+
             created.append({
                 'intervention_id': new_id,
                 'planning_id': pm_id,
