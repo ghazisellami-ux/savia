@@ -13,7 +13,9 @@ interface Piece {
   id: number;
   reference: string;
   designation: string;
+  domaine: string;
   equipement_type: string;
+  est_annexe: boolean;
   stock_actuel: number;
   stock_minimum: number;
   prix_unitaire: number;
@@ -76,7 +78,9 @@ export default function PiecesPage() {
         id: item.id || 0,
         reference: item.reference || item.Reference || '',
         designation: item.designation || item.Nom || '',
+        domaine: item.domaine || item.Domaine || '',
         equipement_type: item.equipement_type || item.Compatibilite || '',
+        est_annexe: Boolean(item.est_annexe),
         stock_actuel: Number(item.stock_actuel || item.Stock_Actuel || 0),
         stock_minimum: Number(item.stock_minimum || item.Seuil_Critique || 1),
         prix_unitaire: Number(item.prix_unitaire || item.Cout_Unitaire || 0),
@@ -643,21 +647,25 @@ export default function PiecesPage() {
 
       {/* TAB 2: MODIFIER / SUPPRIMER */}
       {activeTab === 2 && (() => {
-        const editFiltered = filtered.filter(p => {
-          if (editDomaineFilter && (p as any).domaine !== editDomaineFilter) return false;
+        const editDomaines = [...new Set(data.map(p => p.domaine).filter(Boolean))].sort();
+        const availableTypes = [...new Set(
+          data
+            .filter(p => !editDomaineFilter || p.domaine === editDomaineFilter)
+            .map(p => p.equipement_type)
+            .filter(Boolean)
+        )].sort();
+        const editFiltered = data.filter(p => {
+          if (editDomaineFilter && p.domaine !== editDomaineFilter) return false;
           if (editTypeFilter && p.equipement_type !== editTypeFilter) return false;
           return true;
         });
-        const availableTypes = editDomaineFilter
-          ? (DOMAINES_TYPES[editDomaineFilter] || [])
-          : [...new Set(filtered.map(p => p.equipement_type).filter(Boolean))].sort();
         return (
         <div className="space-y-3">
           <div className="flex gap-3 flex-wrap">
             <select value={editDomaineFilter} onChange={e => { setEditDomaineFilter(e.target.value); setEditTypeFilter(''); }}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
               <option value="">Tous domaines</option>
-              {customDomaines.map(d => <option key={d} value={d}>{d}</option>)}
+              {editDomaines.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
             <select value={editTypeFilter} onChange={e => setEditTypeFilter(e.target.value)}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
@@ -691,9 +699,9 @@ export default function PiecesPage() {
                       setSelectedPiece(p);
                       setForm({
                         reference: p.reference, designation: p.designation,
-                        domaine: (p as any).domaine || 'Radiologie',
+                        domaine: p.domaine || 'Radiologie',
                         equipement_type: p.equipement_type,
-                        est_annexe: !!(p as any).est_annexe,
+                        est_annexe: p.est_annexe,
                         stock_actuel: String(p.stock_actuel), stock_minimum: String(p.stock_minimum),
                         prix_unitaire: String(p.prix_unitaire), fournisseur: p.fournisseur, notes: p.notes,
                       });

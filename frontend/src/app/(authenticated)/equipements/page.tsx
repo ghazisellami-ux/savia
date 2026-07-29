@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, domaines_custom } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 
@@ -175,6 +175,7 @@ export default function EquipementsPage() {
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterDomaine, setFilterDomaine] = useState('Tous');
   const [filterStatut, setFilterStatut] = useState('Tous');
+  const [filterService, setFilterService] = useState('Tous');
   const [showAddForm, setShowAddForm] = useState(false);
   const [data, setData] = useState<Equipment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -269,6 +270,10 @@ export default function EquipementsPage() {
 
   // Fixed status options (matching form options)
   const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'Hors Service', 'En atelier'], []);
+  const dynamicServices = useMemo(
+    () => ['Tous', ...Array.from(new Set(data.map(equipment => equipment.service).filter(Boolean))).sort()],
+    [data],
+  );
 
   const matriculeClientMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -307,10 +312,21 @@ export default function EquipementsPage() {
   const [clientRegionFilter, setClientRegionFilter] = useState('');
   const [clientVilleFilter, setClientVilleFilter] = useState('');
   const [savingClient, setSavingClient] = useState(false);
+  const [customClientTypes, setCustomClientTypes] = useState<string[]>([]);
+  const [customClientTypeMode, setCustomClientTypeMode] = useState(false);
+  const [customClientTypeValue, setCustomClientTypeValue] = useState('');
+  const [savingCustomClientType, setSavingCustomClientType] = useState(false);
+  const [customClientTypeError, setCustomClientTypeError] = useState('');
   const [importingExcel, setImportingExcel] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
   const clientVilles = clientForm.international ? [] : (clientForm.region ? (REGIONS[clientForm.region] || []) : Object.values(REGIONS).flat());
+  const clientTypeOptions = useMemo(() => {
+    const savedTypes = [...customClientTypes, ...clientsList.map(client => client.type_client)]
+      .map(type => type.trim())
+      .filter(Boolean);
+    return ['Privé', 'Public', ...Array.from(new Set(savedTypes.filter(type => type !== 'Privé' && type !== 'Public'))).sort()];
+  }, [clientsList, customClientTypes]);
 
   // Computed warranty end date from form state
   const formGarantieFin = useMemo(
@@ -469,6 +485,15 @@ export default function EquipementsPage() {
   useEffect(() => { if (activeTab === 'documents') loadDocs(); }, [activeTab, loadDocs]);
 
   // Load clients
+  const loadCustomClientTypes = useCallback(async () => {
+    try {
+      const result = await typesClientApi.list();
+      setCustomClientTypes(result.map(type => type.nom).filter(Boolean));
+    } catch (err) {
+      console.error('Failed to load custom client types', err);
+    }
+  }, []);
+
   const loadClients = useCallback(async () => {
     setClientsLoading(true);
     try {
@@ -488,7 +513,27 @@ export default function EquipementsPage() {
   }, []);
 
   useEffect(() => { loadClients(); }, [loadClients]);
+  useEffect(() => { loadCustomClientTypes(); }, [loadCustomClientTypes]);
   useEffect(() => { if (activeTab === 'clients') loadClients(); }, [activeTab, loadClients]);
+
+  const handleSaveCustomClientType = async () => {
+    const value = customClientTypeValue.trim();
+    if (!value) return;
+    setSavingCustomClientType(true);
+    setCustomClientTypeError('');
+    try {
+      await typesClientApi.create(value);
+      await loadCustomClientTypes();
+      setClientForm(current => ({ ...current, type_client: value }));
+      setCustomClientTypeValue('');
+      setCustomClientTypeMode(false);
+    } catch (err) {
+      console.error('Failed to save custom client type', err);
+      setCustomClientTypeError("Impossible d'enregistrer ce type de client.");
+    } finally {
+      setSavingCustomClientType(false);
+    }
+  };
 
   const handleSaveClient = async () => {
     if (!clientForm.nom.trim()) return;
@@ -516,6 +561,9 @@ export default function EquipementsPage() {
   const startEditClient = (c: ClientRecord) => {
     setEditingClient(c);
     setClientForm({ nom: c.nom, code_client: c.code_client, matricule_fiscale: c.matricule_fiscale, ville: c.ville, region: c.region, contact: c.contact, telephone: c.telephone, adresse: c.adresse, type_client: c.type_client || 'Privé', international: c.international });
+    setCustomClientTypeMode(false);
+    setCustomClientTypeValue('');
+    setCustomClientTypeError('');
     setShowClientForm(true);
   };
 
@@ -718,10 +766,11 @@ export default function EquipementsPage() {
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
     if (filterDomaine !== 'Tous' && eq.domaine !== filterDomaine) return false;
     if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
+    if (filterService !== 'Tous' && eq.service !== filterService) return false;
     if (search && !eq.nom.toLowerCase().includes(search.toLowerCase()) &&
         !eq.numSerie.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [search, filterType, filterClient, filterDomaine, filterStatut, data, isLecteur, user]);
+  }), [search, filterType, filterClient, filterDomaine, filterStatut, filterService, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
     if (docFilterEquip !== 'Tous' && doc.equipement_nom !== docFilterEquip) return false;
@@ -1349,6 +1398,9 @@ export default function EquipementsPage() {
             <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
             </select>
+            <select value={filterService} onChange={e => setFilterService(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {dynamicServices.map(service => <option key={service} value={service}>{service === 'Tous' ? 'Tous les services' : service}</option>)}
+            </select>
             {!isLecteur && (
               <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
                 {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
@@ -1468,6 +1520,9 @@ export default function EquipementsPage() {
                     const autoCode = `CL${String(nextNumber).padStart(3, '0')}`;
                     setClientForm({ ...emptyClientForm, code_client: autoCode }); 
                     setIsCodeAutoGenerated(true);
+                    setCustomClientTypeMode(false);
+                    setCustomClientTypeValue('');
+                    setCustomClientTypeError('');
                     setShowClientForm(true); 
                   } 
                 }}
@@ -1524,10 +1579,56 @@ export default function EquipementsPage() {
                     <div className="flex items-center gap-4 flex-wrap">
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Type client *</label>
-                        <select className={INPUT_CLS} value={clientForm.type_client} onChange={e => setClientForm({ ...clientForm, type_client: e.target.value })}>
-                          <option value="Privé">Privé</option>
-                          <option value="Public">Public</option>
-                        </select>
+                        {customClientTypeMode ? (
+                          <div className="flex gap-2">
+                            <input
+                              autoFocus
+                              className={INPUT_CLS}
+                              placeholder="Nouveau type de client"
+                              value={customClientTypeValue}
+                              onChange={e => { setCustomClientTypeValue(e.target.value); setCustomClientTypeError(''); }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  void handleSaveCustomClientType();
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void handleSaveCustomClientType()}
+                              disabled={!customClientTypeValue.trim() || savingCustomClientType}
+                              className="px-3 rounded-lg bg-savia-accent text-white text-xs font-bold disabled:opacity-50"
+                            >
+                              {savingCustomClientType ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ajouter'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setCustomClientTypeMode(false); setCustomClientTypeValue(''); setCustomClientTypeError(''); }}
+                              className="px-3 rounded-lg bg-savia-surface-hover text-savia-text-muted text-xs font-bold"
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        ) : (
+                          <select
+                            className={INPUT_CLS}
+                            value={clientForm.type_client}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setCustomClientTypeMode(true);
+                                setCustomClientTypeValue('');
+                                setCustomClientTypeError('');
+                                return;
+                              }
+                              setClientForm({ ...clientForm, type_client: e.target.value });
+                            }}
+                          >
+                            {clientTypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
+                            <option value="__custom__">+ Autre (saisie manuelle)</option>
+                          </select>
+                        )}
+                        {customClientTypeError && <p className="mt-1 text-xs text-red-400">{customClientTypeError}</p>}
                       </div>
                       <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
                         <input type="checkbox" checked={clientForm.international}
@@ -1732,10 +1833,10 @@ export default function EquipementsPage() {
                 className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
             <select value={docFilterEquip} onChange={e => setDocFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {docEquipOptions.map(e => <option key={e} value={e}>{e === 'Tous' ? '🔧 Tous les équipements' : e}</option>)}
+              {docEquipOptions.map(e => <option key={e} value={e}>{e === 'Tous' ? 'Tous les équipements' : e}</option>)}
             </select>
             <select value={docFilterClient} onChange={e => setDocFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {docClientOptions.map(c => <option key={c} value={c}>{c === 'Tous' ? '🏢 Tous les clients' : c}</option>)}
+              {docClientOptions.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
             </select>
           </div>
 

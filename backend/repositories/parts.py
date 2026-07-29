@@ -35,17 +35,21 @@ def ajouter_piece(piece_dict):
     """Ajoute une pièce de rechange."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO pieces_rechange (reference, designation, equipement_type,
+            INSERT INTO pieces_rechange (reference, designation, domaine, equipement_type, est_annexe,
                                          stock_actuel, stock_minimum, fournisseur, prix_unitaire, notes,
                                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
                                          nombre_equipements_relies, utilisation_recente_30j)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(reference) DO UPDATE SET
-                stock_actuel=excluded.stock_actuel, prix_unitaire=excluded.prix_unitaire
+                domaine=excluded.domaine, equipement_type=excluded.equipement_type,
+                est_annexe=excluded.est_annexe, stock_actuel=excluded.stock_actuel,
+                prix_unitaire=excluded.prix_unitaire
         """, (
             piece_dict.get("reference", ""),
             piece_dict.get("designation", ""),
+            piece_dict.get("domaine", "Radiologie"),
             piece_dict.get("equipement_type", ""),
+            piece_dict.get("est_annexe", False),
             piece_dict.get("stock_actuel", 0),
             piece_dict.get("stock_minimum", 1),
             piece_dict.get("fournisseur", ""),
@@ -76,7 +80,7 @@ def modifier_piece(piece_id, piece_dict):
     with get_db() as conn:
         conn.execute("""
             UPDATE pieces_rechange SET
-                reference=?, designation=?, equipement_type=?,
+                reference=?, designation=?, domaine=?, equipement_type=?, est_annexe=?,
                 stock_actuel=?, stock_minimum=?, fournisseur=?,
                 prix_unitaire=?, notes=?,
                 consommation_moyenne_mois=?, delai_fournisseur_jours=?, criticite=?,
@@ -85,7 +89,9 @@ def modifier_piece(piece_id, piece_dict):
         """, (
             piece_dict.get("reference", ""),
             piece_dict.get("designation", ""),
+            piece_dict.get("domaine", "Radiologie"),
             piece_dict.get("equipement_type", ""),
+            piece_dict.get("est_annexe", False),
             piece_dict.get("stock_actuel", 0),
             piece_dict.get("stock_minimum", 1),
             piece_dict.get("fournisseur", ""),
@@ -291,4 +297,3 @@ def lire_toutes_pieces_demandees(statut=None):
     query += " ORDER BY date_creation DESC"
     with get_db() as conn:
         return read_sql(query, conn, params=params)
-

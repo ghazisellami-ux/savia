@@ -22,6 +22,8 @@ __all__ = [
     "ajouter_type_equipement_custom",
     "lire_types_intervention_custom",
     "ajouter_type_intervention_custom",
+    "lire_types_client_custom",
+    "ajouter_type_client_custom",
     "lire_domaines_custom",
     "ajouter_domaine_custom",
     "_ensure_domaines_custom_table",
@@ -167,7 +169,8 @@ def lire_equipements():
             df = read_sql("""
                 SELECT id, nom, type, fabricant, modele, num_serie, 
                        date_installation, derniere_maintenance, statut, notes, 
-                       client, domaine, est_annexe, garantie_debut, garantie_duree
+                       client, domaine, est_annexe, garantie_debut, garantie_duree,
+                       ville, region, service
                 FROM equipements 
                 ORDER BY client, nom
             """, conn)
@@ -345,6 +348,37 @@ def ajouter_type_intervention_custom(nom):
     return True
 
 
+def lire_types_client_custom():
+    """Retourne les types de clients ajoutés manuellement."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS types_client_custom (
+                id SERIAL PRIMARY KEY,
+                nom TEXT NOT NULL UNIQUE,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        rows = conn.execute("SELECT id, nom FROM types_client_custom ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_type_client_custom(nom):
+    """Ajoute un type de client personnalisé. Ignore les doublons."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS types_client_custom (
+                id SERIAL PRIMARY KEY,
+                nom TEXT NOT NULL UNIQUE,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "INSERT INTO types_client_custom (nom) VALUES (%s) ON CONFLICT (nom) DO NOTHING",
+            (nom.strip(),),
+        )
+    return True
+
+
 def lire_domaines_custom():
     """Retourne la liste des domaines médicaux personnalisés."""
     with get_db() as conn:
@@ -459,4 +493,3 @@ def lire_tous_documents_techniques():
             ORDER BY d.date_ajout DESC
         """).fetchall()
         return [dict(r) for r in rows]
-

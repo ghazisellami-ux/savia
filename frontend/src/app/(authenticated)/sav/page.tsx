@@ -1989,7 +1989,7 @@ export default function SavPage() {
                     { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date intervention', value: factDetailItem.date_intervention || '—' },
                     { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date clôture', value: factDetailItem.date_cloture },
                     { icon: <Timer className="w-3.5 h-3.5" />, label: 'Durée (h)', value: factDetailItem.duree_minutes ? `${+(factDetailItem.duree_minutes / 60).toFixed(2)}h` : '—' },
-                    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Déplacement (h)', value: factDetailItem.deplacement ? `${factDetailItem.deplacement}h` : '—' },
+                    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Déplacement (h)', value: Number(factDetailItem.duree_deplacement) > 0 ? `${+(Number(factDetailItem.duree_deplacement) / 60).toFixed(2)}h` : '—' },
                     { icon: <Gauge className="w-3.5 h-3.5" />, label: 'Priorité', value: factDetailItem.priorite || '—' },
                   ].map((item, i) => (
                     <div key={i} className="bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50">

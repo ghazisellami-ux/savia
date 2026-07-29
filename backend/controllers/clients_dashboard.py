@@ -13,9 +13,11 @@ from api.runtime import (
     get_db,
     lire_equipements,
     lire_interventions,
+    lire_types_client_custom,
     log_audit,
     logger,
     modifier_client,
+    ajouter_type_client_custom,
     pd,
     read_sql,
     supprimer_client,
@@ -475,6 +477,27 @@ def create_client(body: dict, user: dict = Depends(_verify_token)):
     return {"ok": True}
 
 
+@app.get("/api/types-client-custom")
+def get_types_client_custom(user: dict = Depends(_verify_token)):
+    """Liste les types de clients ajoutés manuellement."""
+    return lire_types_client_custom()
+
+
+@app.post("/api/types-client-custom")
+def create_type_client_custom(body: dict, user: dict = Depends(_verify_token)):
+    """Ajoute un type de client réutilisable."""
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins",
+        )
+    nom = str(body.get("nom", "")).strip()
+    if not nom:
+        raise HTTPException(status_code=400, detail="Nom requis")
+    ajouter_type_client_custom(nom)
+    return {"ok": True}
+
+
 @app.post("/api/clients/import-excel")
 async def import_clients_excel(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import clients from an Excel or CSV file with auto-detection of columns."""
@@ -614,8 +637,9 @@ __all__ = [
     "get_availability_trend",
     "get_clients_by_region",
     "create_client",
+    "get_types_client_custom",
+    "create_type_client_custom",
     "import_clients_excel",
     "update_client_api",
     "delete_client_api",
 ]
-
