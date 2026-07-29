@@ -287,6 +287,11 @@ export const typesIntervention = {
   create: (nom: string) => request<{ ok: boolean }>('/api/types-intervention-custom', { method: 'POST', body: { nom } }),
 };
 
+export const typesClient = {
+  list: () => request<Array<{ id: number; nom: string }>>('/api/types-client-custom'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/types-client-custom', { method: 'POST', body: { nom } }),
+};
+
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
   createUser: (data: Record<string, unknown>) =>

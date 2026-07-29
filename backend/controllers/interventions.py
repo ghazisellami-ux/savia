@@ -309,7 +309,7 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
                 SELECT i.id, i.machine, i.technicien, i.type_intervention,
                        COALESCE(i.date_cloture, i.date) as date_cloture,
                        i.facture_envoyee, i.notes,
-                       i.pieces_utilisees, i.cout, i.duree_minutes,
+                       i.pieces_utilisees, i.cout, i.duree_minutes, i.duree_deplacement,
                        i.description, i.probleme, i.cause, i.solution,
                        i.priorite, i.type_erreur, i.code_erreur,
                        i.date_debut_intervention, i.date, i.cout_pieces
@@ -351,6 +351,7 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
                 "cout": d.get('cout', 0) or 0,
                 "cout_pieces": d.get('cout_pieces', 0) or 0,
                 "duree_minutes": d.get('duree_minutes', 0) or 0,
+                "duree_deplacement": d.get('duree_deplacement', 0) or 0,
                 "en_retard": jours_restants < 0 and not d.get('facture_envoyee', False),
                 "description": d.get('description', ''),
                 "probleme": d.get('probleme', ''),

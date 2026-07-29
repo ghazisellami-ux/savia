@@ -115,7 +115,7 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {fichesAvecPhoto.map((f: any) => {
             const isValidee = f.fiche_validation === 'Validée';
-            const ficheUrl = `${API}/api/interventions/${f.id}/fiche?token=${token}`;
+            const ficheUrl = interventions.downloadFicheUrl(Number(f.id));
             return (
               <div
                 key={f.id}

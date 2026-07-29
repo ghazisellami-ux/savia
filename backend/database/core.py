@@ -554,6 +554,13 @@ def init_db():
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- Types de clients personnalisés
+        CREATE TABLE IF NOT EXISTS types_client_custom (
+            id SERIAL PRIMARY KEY,
+            nom TEXT NOT NULL UNIQUE,
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- Parc d'équipements
         CREATE TABLE IF NOT EXISTS equipements (
             id SERIAL PRIMARY KEY,
