@@ -71,3 +71,9 @@ jobs:
       
       - name: Build services via Docker Compose
         run: docker compose build
+        env:
+          # Valeurs non sensibles utilisées uniquement pour l'interpolation Compose en CI.
+          DATABASE_URL: postgresql://ci_user:ci_password@postgres:5432/savia_ci
+          SERVICE_USER_MINIO: ci-minio-user
+          SERVICE_PASSWORD_64_MINIO: ci-minio-password
+          SERVICE_REALBASE64_64_JWT: ci-jwt-secret-for-build-validation-only-0123456789abcdef
