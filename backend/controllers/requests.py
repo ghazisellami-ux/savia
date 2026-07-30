@@ -23,6 +23,8 @@ from api.security import (
     _check_create_demande_permission,
     _check_create_permission,
     _verify_token,
+    assert_resource_client_access,
+    resolve_client_scope,
 )
 from services.scheduled_jobs import (
     _df_to_records,
@@ -47,9 +49,9 @@ def get_demandes(
     statuts: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    df = lire_demandes_intervention()
-    # Lecteur : ne voit que les demandes de son client
     client_filter = _get_client_filter(user)
+    df = lire_demandes_intervention(client=client_filter)
+    # Lecteur : ne voit que les demandes de son client
     if client_filter and not df.empty and "client" in df.columns:
         df = df[df["client"].astype(str).str.lower() == client_filter.lower()]
     if statuts and not df.empty and "statut" in df.columns:
@@ -75,7 +77,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     demandeur          = body.get("demandeur") or user.get("username", "")
-    client             = body.get("client") or ""
+    client             = resolve_client_scope(user, body.get("client") or "") or ""
     equipement         = body.get("equipement") or ""
     urgence            = body.get("urgence") or "Moyenne"
     description        = body.get("description") or ""
@@ -140,8 +142,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             INSERT INTO interventions
               (date, machine, technicien, type_intervention, description,
                probleme, code_erreur, statut, priorite, notes,
-               is_temporary, parent_intervention_id)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+               is_temporary, parent_intervention_id, client)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             now,
             equipement,
@@ -155,6 +157,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             notes_intervention,
             0,  # is_temporary = FALSE (visible to all technicians)
             None,  # No parent - this is a standalone intervention
+            client,
         ))
         
         intervention = conn.execute(
@@ -223,6 +226,8 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
         )
     
     from db_engine import get_db
+    with get_db() as conn:
+        assert_resource_client_access(conn, "demande", demande_id, user)
     nouveau_statut      = body.get("statut") or "En cours"
     technicien_assigne  = body.get("technicien_assigne") or ""
     # Convert technicien username to full name

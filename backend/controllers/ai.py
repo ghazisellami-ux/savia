@@ -23,10 +23,12 @@ from api.runtime import (
 )
 from api.security import (
     _verify_token,
+    require_roles,
 )
 
 @app.post("/api/ai/analyze-diagnostic")
 def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     """Calls Gemini to diagnose a machine error code and log contexts."""
     try:
         from ai_engine import get_ai_suggestion, _call_ia, clean_json_response, AI_AVAILABLE
@@ -70,6 +72,7 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_
 
 @app.post("/api/ai/analyze-performance")
 def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Calls Gemini to produce a detailed predictive maintenance report (v2)."""
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
@@ -186,6 +189,7 @@ PRODUIS un rapport JSON STRICT :
 
 @app.post("/api/ai/analyze-pieces")
 def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Gestionnaire", "Gestionnaire de stock")
     """
     Advanced AI analysis of spare parts with historical usage and predictions.
     Uses calculated consumption, data confidence, and intervention history.
@@ -329,6 +333,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
 
 @app.post("/api/ai/analyze-sav")
 def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Comprehensive SAV/Interventions analysis using Gemini."""
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
@@ -445,6 +450,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 
 @app.post("/api/ai/analyze-costs")
 def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager")
     """Analyse IA structurée des coûts clients — retourne des cartes comme le diagnostic IA."""
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
@@ -569,6 +575,7 @@ IMPORTANT: Sois un consultant expert. Chaque section doit faire 4-8 lignes avec 
 
 @app.post("/api/ai/analyze-costs/pdf")
 def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager")
     """Genere un PDF a partir du resultat d'analyse IA des couts."""
     from io import BytesIO
     from starlette.responses import StreamingResponse
@@ -723,6 +730,7 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token), x_savi
 
 @app.post("/api/ai/chat")
 def ai_chat(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     """Assistant IA conversationnel — répond aux questions en langage naturel sur les données SAVIA."""
     from datetime import date, timedelta
     try:
@@ -866,4 +874,3 @@ __all__ = [
     "ai_analyze_costs_pdf",
     "ai_chat",
 ]
-

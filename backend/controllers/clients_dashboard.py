@@ -28,6 +28,8 @@ from api.security import (
     Optional,
     _check_create_permission,
     _verify_token,
+    get_client_scope,
+    resolve_client_scope,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -59,6 +61,7 @@ def get_clients(user: dict = Depends(_verify_token)):
     """List clients from the dedicated clients table, enriched with equipment stats using SQL aggregates."""
     try:
         with get_db() as conn:
+            scoped_client = get_client_scope(user)
             # Get all clients from clients table
             df_clients = read_sql("SELECT * FROM clients ORDER BY nom", conn)
             
@@ -93,6 +96,8 @@ def get_clients(user: dict = Depends(_verify_token)):
             result = []
             for _, row in df_clients.iterrows():
                 client_name = row.get("nom", "")
+                if scoped_client and str(client_name).strip().casefold() != scoped_client.casefold():
+                    continue
                 
                 # Find stats for this client (case-insensitive match)
                 eq_stat = None
@@ -147,7 +152,7 @@ def get_dashboard_equipment_types(
         equipment_types = set()
         
         # Pour Lecteur : forcer le filtre par son client
-        effective_client = _get_client_filter(user) or client
+        effective_client = resolve_client_scope(user, client)
 
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
@@ -207,6 +212,9 @@ def get_dashboard_regions(user: dict = Depends(_verify_token)):
     """Get all existing regions from clients table - ONLY the 4 main regions."""
     try:
         df_clients = db_lire_clients()
+        scoped_client = get_client_scope(user)
+        if scoped_client and not df_clients.empty and "nom" in df_clients.columns:
+            df_clients = df_clients[df_clients["nom"].astype(str).str.casefold() == scoped_client.casefold()]
         regions = set()
         
         # List of valid regions
@@ -237,6 +245,9 @@ def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_ver
     """Get all existing villes, optionally filtered by region."""
     try:
         df_clients = db_lire_clients()
+        scoped_client = get_client_scope(user)
+        if scoped_client and not df_clients.empty and "nom" in df_clients.columns:
+            df_clients = df_clients[df_clients["nom"].astype(str).str.casefold() == scoped_client.casefold()]
         villes = set()
         
         if not df_clients.empty and region:
@@ -296,7 +307,7 @@ def get_availability_trend(
         df_clients = db_lire_clients()
         
         # Apply same filters as KPI endpoint
-        effective_client = _get_client_filter(user) or client
+        effective_client = resolve_client_scope(user, client)
         
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:
@@ -405,6 +416,9 @@ def get_clients_by_region(region: Optional[str] = None, user: dict = Depends(_ve
     """Get all clients, optionally filtered by region."""
     try:
         df_clients = db_lire_clients()
+        scoped_client = get_client_scope(user)
+        if scoped_client and not df_clients.empty and "nom" in df_clients.columns:
+            df_clients = df_clients[df_clients["nom"].astype(str).str.casefold() == scoped_client.casefold()]
         clients = set()
         
         if not df_clients.empty and "nom" in df_clients.columns:

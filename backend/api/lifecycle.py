@@ -13,10 +13,15 @@ from api.runtime import (
 from services.scheduled_jobs import (
     _start_garantie_daemon,
 )
+from database.migrations import run_migrations
 
 @app.on_event("startup")
 def startup():
     init_db()
+    with get_db() as conn:
+        applied = run_migrations(conn)
+    if applied:
+        logger.info("Migrations PostgreSQL appliquées : %s", ", ".join(applied))
     auth.creer_admin_defaut()
     _ensure_dejavu_font()
     _ensure_fa_font()
@@ -64,4 +69,3 @@ def startup():
 __all__ = [
     "startup",
 ]
-

@@ -32,6 +32,10 @@ from api.security import (
     Optional,
     _check_create_permission,
     _verify_token,
+    assert_resource_client_access,
+    assert_intervention_write_access,
+    require_roles,
+    resolve_client_scope,
     get_db,
     jwt,
 )
@@ -198,14 +202,8 @@ def get_interventions(
     
     # Filtrage par client pour Lecteur
     client_filter = _get_client_filter(user)
-    if client_filter and not df.empty:
-        df_eq = lire_equipements()
-        if not df_eq.empty and "Client" in df_eq.columns and "Nom" in df_eq.columns:
-            machines_client = set(
-                df_eq[df_eq["Client"].astype(str).str.lower() == client_filter.lower()]["Nom"].tolist()
-            )
-            if "machine" in df.columns:
-                df = df[df["machine"].isin(machines_client)]
+    if client_filter and not df.empty and "client" in df.columns:
+        df = df[df["client"].astype(str).str.casefold() == client_filter.casefold()]
     
     # Apply pagination (offset + limit)
     if not df.empty:
@@ -263,6 +261,8 @@ def get_child_interventions_endpoint(
     from db_engine import get_child_interventions
     
     try:
+        with get_db() as conn:
+            assert_resource_client_access(conn, "intervention", parent_id, user)
         children = get_child_interventions(parent_id)
         return {
             "success": True,
@@ -283,6 +283,17 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
             status_code=403,
             detail="Cette action est réservée aux Responsables, Managers et Admins"
         )
+    body["client"] = resolve_client_scope(user, body.get("client")) or ""
+    if not body["client"] and body.get("machine"):
+        with get_db() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT client FROM equipements
+                   WHERE LOWER(nom) = LOWER(%s)
+                     AND NULLIF(BTRIM(client), '') IS NOT NULL""",
+                (body["machine"],),
+            ).fetchall()
+        if len(rows) == 1:
+            body["client"] = rows[0]["client"]
     
     # Convert technicien username to full name (nom + prenom)
     technicien_username = body.get("technicien", "")
@@ -398,6 +409,9 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 
 @app.put("/api/interventions/{intervention_id}")
 def update_intervention(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    with get_db() as conn:
+        require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
+        assert_intervention_write_access(conn, intervention_id, user)
     logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
     
     # Vérifier les permissions : un technicien ne peut éditer que ses interventions
@@ -813,6 +827,8 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
 
 @app.delete("/api/interventions/{intervention_id}")
 def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+    with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", intervention_id, user)
     """Supprime une intervention (Admin/Manager uniquement)."""
     # Vérifier les permissions
     if user.get("role") not in ["Admin", "Manager"]:
@@ -855,6 +871,9 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
 
 @app.post("/api/interventions/{intervention_id}/fiche")
 async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
+    with get_db() as conn:
+        assert_intervention_write_access(conn, intervention_id, user)
     """Upload la photo de la fiche signée pour une intervention clôturée."""
     contents = await _read_validated_fiche(file)
     logger.info(f"Fiche upload: intervention #{intervention_id}, file={file.filename}, size={len(contents)} bytes")
@@ -878,6 +897,9 @@ async def upload_photo_alias(intervention_id: int,
                              photo: UploadFile = File(None),
                              file: UploadFile = File(None),
                              user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
+    with get_db() as conn:
+        assert_intervention_write_access(conn, intervention_id, user)
     """Alias /photo → /fiche pour compatibilité avec l'ancien api_server.py (Streamlit).
     Accepte le champ 'photo' ou 'file'."""
     upload = photo or file
@@ -905,6 +927,7 @@ def download_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
     """Télécharge une fiche après vérification du JWT Bearer."""
     from fastapi.responses import Response
     with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", intervention_id, user)
         try:
             row = conn.execute(
                 "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
@@ -927,6 +950,7 @@ def download_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
 
 @app.get("/api/interventions/fiches")
 def list_fiches(user: dict = Depends(_verify_token)):
+    client_scope = _get_client_filter(user)
     """Liste uniquement les interventions clôturées AVEC photo attachée."""
     with get_db() as conn:
         try:
@@ -940,9 +964,10 @@ def list_fiches(user: dict = Depends(_verify_token)):
                 WHERE (statut ILIKE '%lotur%' OR statut ILIKE '%termin%' OR statut = 'Cloturee')
                   AND fiche_photo_data IS NOT NULL
                   AND octet_length(fiche_photo_data) > 0
+                  AND (%s = '' OR LOWER(client) = LOWER(%s))
                 ORDER BY id DESC
                 LIMIT 200
-            """).fetchall()
+            """, (client_scope or "", client_scope or "")).fetchall()
         except Exception as e:
             logger.error(f"Erreur list_fiches: {e}")
             return []
@@ -969,6 +994,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
         raise HTTPException(status_code=400, detail=f"Valeur invalide: {nouveau_statut}. Valeurs autorisées: {valeurs_autorisees}")
 
     with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", intervention_id, user)
         # Vérifier le statut actuel
         row = conn.execute(
             "SELECT fiche_validation FROM interventions WHERE id = %s",
@@ -997,6 +1023,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         raise HTTPException(status_code=403, detail="Seuls les Managers et Admins peuvent supprimer une fiche")
     
     with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", intervention_id, user)
         # Vérifier le statut de validation
         row = conn.execute(
             "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = %s",

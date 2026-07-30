@@ -16,6 +16,7 @@ from api.security import (
     Depends,
     HTTPException,
     _verify_token,
+    assert_resource_client_access,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -47,6 +48,8 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
     
     For multi-technician interventions, includes a table with one row per technician.
     """
+    with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", interv_id, user)
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
     from io import BytesIO
@@ -511,4 +514,3 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
 __all__ = [
     "generate_fiche_intervention_pdf",
 ]
-

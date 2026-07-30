@@ -10,6 +10,7 @@ from api.security import (
     Depends,
     HTTPException,
     _verify_token,
+    require_roles,
 )
 from controllers.auth_dashboard import (
     Depends,
@@ -26,6 +27,7 @@ except ImportError:
 
 @app.delete("/api/logs")
 def api_delete_log(key: str = Query(..., description="S3 key of the log to delete"), user=Depends(_verify_token)):
+    require_roles(user, "Admin")
     """Delete a specific log file from S3 by its key."""
     if not s3_storage:
         raise HTTPException(status_code=503, detail="S3 storage not available")
@@ -41,6 +43,7 @@ def api_delete_log(key: str = Query(..., description="S3 key of the log to delet
 
 @app.delete("/api/logs/machine/{machine_name}")
 def api_delete_machine_logs(machine_name: str, user=Depends(_verify_token)):
+    require_roles(user, "Admin")
     """Delete ALL log files for a given machine from S3."""
     if not s3_storage:
         raise HTTPException(status_code=503, detail="S3 storage not available")
@@ -72,4 +75,3 @@ __all__ = [
     "api_delete_machine_logs",
     "s3_storage",
 ]
-

@@ -15,6 +15,7 @@ from api.security import (
     Depends,
     HTTPException,
     _verify_token,
+    assert_resource_client_access,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -41,6 +42,8 @@ from controllers.report_helpers import (
 @app.post("/api/equipements/{equip_id}/attestation-pdf")
 def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
     """Generate an 'Attestation de Bon Fonctionnement' PDF for an operational equipment."""
+    with get_db() as conn:
+        assert_resource_client_access(conn, "equipement", equip_id, user)
     from io import BytesIO
     from fastapi.responses import Response
 
@@ -305,4 +308,3 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
 __all__ = [
     "generate_attestation_pdf",
 ]
-

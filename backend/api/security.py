@@ -15,6 +15,112 @@ from api.runtime import (
 )
 from pydantic import Field
 
+
+# A Lecteur represents a customer-facing account. Internal roles are deliberately
+# not client-bound because they operate SAVIA on behalf of every customer.
+CLIENT_BOUND_ROLES = frozenset({"Lecteur"})
+INTERNAL_WRITE_ROLES = frozenset({"Admin", "Manager", "Responsable Technique"})
+
+
+def _normalise_client(value: object) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def get_client_scope(user: dict) -> str | None:
+    """Return the enforced customer scope, or ``None`` for internal users.
+
+    Client-facing accounts without an assigned client are rejected instead of
+    silently receiving access to every client (the previous unsafe fallback).
+    """
+    if user.get("role") not in CLIENT_BOUND_ROLES:
+        return None
+    client = str(user.get("client") or "").strip()
+    if not client:
+        raise HTTPException(
+            status_code=403,
+            detail="Ce compte client n'est associé à aucun client actif",
+        )
+    return client
+
+
+def resolve_client_scope(user: dict, requested_client: str | None = None) -> str | None:
+    """Resolve a client filter without allowing a client account to override it."""
+    scoped_client = get_client_scope(user)
+    if scoped_client is None:
+        return requested_client
+    if requested_client and _normalise_client(requested_client) != _normalise_client(scoped_client):
+        raise HTTPException(status_code=403, detail="Accès à un autre client interdit")
+    return scoped_client
+
+
+def assert_client_access(user: dict, resource_client: str | None) -> None:
+    """Deny access when a client-bound account targets another customer's data."""
+    scoped_client = get_client_scope(user)
+    if scoped_client is None:
+        return
+    if _normalise_client(resource_client) != _normalise_client(scoped_client):
+        raise HTTPException(status_code=403, detail="Accès à cette ressource interdit")
+
+
+_RESOURCE_CLIENT_QUERIES = {
+    "equipement": "SELECT client FROM equipements WHERE id = %s",
+    "intervention": """SELECT COALESCE(NULLIF(i.client, ''), e.client, '') AS client
+                         FROM interventions i
+                         LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+                         WHERE i.id = %s""",
+    "contrat": "SELECT client FROM contrats WHERE id = %s",
+    "demande": "SELECT client FROM demandes_intervention WHERE id = %s",
+    "conformite": "SELECT client FROM conformite WHERE id = %s",
+    "document_technique": """SELECT e.client FROM documents_techniques d
+                              JOIN equipements e ON e.id = d.equipement_id
+                              WHERE d.id = %s""",
+}
+
+
+def assert_resource_client_access(conn, resource_type: str, resource_id: int, user: dict) -> None:
+    """Load the owning client from a fixed query and enforce customer isolation."""
+    query = _RESOURCE_CLIENT_QUERIES[resource_type]
+    row = conn.execute(query, (resource_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Ressource introuvable")
+    assert_client_access(user, row["client"])
+
+
+def assert_intervention_write_access(conn, intervention_id: int, user: dict) -> None:
+    """Restrict technicians to interventions to which they are assigned."""
+    assert_resource_client_access(conn, "intervention", intervention_id, user)
+    if user.get("role") != "Technicien":
+        return
+    identities = [
+        value.strip().casefold()
+        for value in (user.get("nom"), user.get("sub"))
+        if str(value or "").strip()
+    ]
+    if not identities:
+        raise HTTPException(status_code=403, detail="Technicien non identifiable")
+    row = conn.execute(
+        """SELECT 1
+           FROM interventions_techniciens it
+           WHERE it.intervention_id = %s
+             AND LOWER(BTRIM(it.technicien_nom)) = ANY(%s)
+           UNION ALL
+           SELECT 1
+           FROM interventions i
+           CROSS JOIN LATERAL regexp_split_to_table(COALESCE(i.technicien, ''), '\\s*,\\s*') AS assigned_name
+           WHERE i.id = %s
+             AND LOWER(BTRIM(assigned_name)) = ANY(%s)
+           LIMIT 1""",
+        (intervention_id, identities, intervention_id, identities),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Cette intervention ne vous est pas assignée")
+
+
+def require_roles(user: dict, *allowed_roles: str) -> None:
+    """Enforce server-side RBAC; UI visibility is never an authorization check."""
+    if user.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Votre rôle n'autorise pas cette action")
+
 def _decode_token(token: str) -> dict:
     """Decode a JWT and return its authenticated user payload."""
     try:
@@ -70,6 +176,10 @@ def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
             status_code=403,
             detail="Changement de mot de passe obligatoire avant de continuer",
         )
+    # Fail closed for customer-facing accounts that were created without a
+    # client assignment. This applies to every business route using this
+    # dependency, including routes added in the future.
+    get_client_scope(payload)
     return payload
 
 
@@ -100,8 +210,7 @@ def _check_create_permission(user: dict) -> bool:
     Autorisé pour: Admin, Manager, Responsable Technique
     """
     role = user.get("role", "")
-    allowed_roles = ["Admin", "Manager", "Responsable Technique"]
-    return role in allowed_roles
+    return role in INTERNAL_WRITE_ROLES
 
 
 def _check_create_demande_permission(user: dict) -> bool:
@@ -145,6 +254,14 @@ __all__ = [
     "_check_create_permission",
     "_check_create_demande_permission",
     "_check_create_piece_permission",
+    "CLIENT_BOUND_ROLES",
+    "INTERNAL_WRITE_ROLES",
+    "get_client_scope",
+    "resolve_client_scope",
+    "assert_client_access",
+    "assert_resource_client_access",
+    "assert_intervention_write_access",
+    "require_roles",
     "LoginRequest",
     "ChangePasswordRequest",
 ]

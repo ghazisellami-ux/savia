@@ -27,6 +27,7 @@ from api.security import (
     Optional,
     _check_create_permission,
     _verify_token,
+    require_roles,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -109,6 +110,7 @@ def create_planning(body: dict, user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/sync")
 def force_planning_sync(user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Force la synchronisation planning -> interventions pour aujourd'hui."""
     created = sync_planning_to_interventions()
     return {"ok": True, "created": len(created), "interventions": created}
@@ -116,6 +118,7 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/pdf")
 def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     """Generate a maintenance planning PDF using FPDF with proper header.
     Supports date range filtering. Uses landscape orientation for better column visibility."""
     from io import BytesIO
@@ -320,6 +323,7 @@ def generate_planning_pdf(body: dict = {}, user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/comparateur/pdf")
 def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """
     Generate PDF from comparateur data.
     Input: comparateur data from GET /api/planning/{id}/comparateur
@@ -437,6 +441,7 @@ def export_comparateur_pdf(body: dict, user: dict = Depends(_verify_token)):
 
 @app.get("/api/planning/{planning_id}/comparateur")
 def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """
     Get comparison between real planning and ghost (décalé) entry.
     Returns data for generating comparateur export (planning réel vs planning décalé).
@@ -556,6 +561,7 @@ def get_planning_comparateur_periode(
     date_fin: str = Query(..., description="End date (YYYY-MM-DD)"),
     user: dict = Depends(_verify_token)
 ):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """
     Get all reschedules (comparisons) within a date range.
     Returns all ghost entries (décalés) between date_debut and date_fin.
@@ -672,6 +678,7 @@ def get_planning_comparateur_periode(
 
 @app.put("/api/planning/{planning_id}")
 def update_planning_status(planning_id: int, body: dict, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     update_planning_statut(planning_id, body.get("statut", ""), body.get("date_realisee"))
     return {"ok": True}
 
@@ -1048,6 +1055,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
 
 @app.delete("/api/planning/{planning_id}")
 def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     supprimer_planning(planning_id)
     return {"ok": True}
 
@@ -1058,6 +1066,7 @@ def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
 
 @app.post("/api/planning/sync")
 def force_planning_sync(user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Force la synchronisation planning -> interventions pour aujourd'hui."""
     created = sync_planning_to_interventions()
     return {"ok": True, "created": len(created), "interventions": created}
@@ -1066,6 +1075,7 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 @app.post("/api/interventions/{intervention_id}/factured")
 
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager")
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:
         conn.execute(
