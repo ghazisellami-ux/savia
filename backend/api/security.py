@@ -25,18 +25,6 @@ def _decode_token(token: str) -> dict:
             issuer=JWT_ISSUER,
             options={"require": ["sub", "role", "iss", "iat", "nbf", "exp"]},
         )
-        # Rétrocompatibilité : si Lecteur mais client absent du token, le récupérer en DB
-        if payload.get("role") == "Lecteur" and not payload.get("client"):
-            try:
-                with get_db() as conn:
-                    row = conn.execute(
-                        "SELECT client FROM utilisateurs WHERE username = %s",
-                        (payload.get("sub", ""),)
-                    ).fetchone()
-                    if row and row["client"]:
-                        payload["client"] = row["client"]
-            except Exception:
-                pass
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expiré")
@@ -44,15 +32,59 @@ def _decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
-    """Require a valid Bearer JWT for every protected business route."""
+def _authenticated_user(credentials: Optional[HTTPAuthorizationCredentials]) -> dict:
     if not credentials:
         raise HTTPException(
             status_code=401,
             detail="Authentification requise",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return _decode_token(credentials.credentials)
+    payload = _decode_token(credentials.credentials)
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT username, role, nom_complet, client, pages_autorisees, actif,
+                      password_version, must_change_password
+               FROM utilisateurs WHERE username = %s""",
+            (payload.get("sub", ""),),
+        ).fetchone()
+    if not row or not row["actif"]:
+        raise HTTPException(status_code=401, detail="Compte indisponible")
+    if payload.get("pv") != row["password_version"]:
+        raise HTTPException(status_code=401, detail="Session révoquée : reconnectez-vous")
+
+    payload.update({
+        "role": row["role"],
+        "nom": row["nom_complet"] or "",
+        "client": row["client"] or "",
+        "pages_autorisees": row["pages_autorisees"] or "",
+        "password_change_required": bool(row["must_change_password"]),
+    })
+    return payload
+
+
+def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+    """Require a valid Bearer JWT for every protected business route."""
+    payload = _authenticated_user(credentials)
+    if payload["password_change_required"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Changement de mot de passe obligatoire avant de continuer",
+        )
+    return payload
+
+
+def _verify_password_change_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+    """Allow only the password-change flow for a session requiring rotation."""
+    return _authenticated_user(credentials)
+
+
+def validate_password_policy(password: str, username: str = "") -> None:
+    if not isinstance(password, str) or len(password) < 12 or len(password.encode("utf-8")) > 72:
+        raise ValueError("Le mot de passe doit contenir au moins 12 caractères")
+    if not all((any(c.islower() for c in password), any(c.isupper() for c in password), any(c.isdigit() for c in password))):
+        raise ValueError("Le mot de passe doit contenir une minuscule, une majuscule et un chiffre")
+    if username and username.casefold() in password.casefold():
+        raise ValueError("Le mot de passe ne doit pas contenir le nom d'utilisateur")
 
 
 def _verify_password(password: str, hashed: str) -> bool:
@@ -100,11 +132,19 @@ class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
 
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=72)
+
 __all__ = [
     "_verify_token",
+    "_verify_password_change_token",
     "_verify_password",
+    "validate_password_policy",
     "_check_create_permission",
     "_check_create_demande_permission",
     "_check_create_piece_permission",
     "LoginRequest",
+    "ChangePasswordRequest",
 ]

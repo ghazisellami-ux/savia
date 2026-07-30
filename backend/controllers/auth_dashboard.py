@@ -7,9 +7,11 @@ from api.runtime import (
     JWT_EXPIRY_HOURS,
     JWT_ISSUER,
     JWT_SECRET,
+    PASSWORD_ROTATION_DAYS,
     Optional,
     Request,
     app,
+    bcrypt,
     datetime,
     db_lire_clients,
     get_db,
@@ -24,9 +26,12 @@ from api.runtime import (
     unicodedata,
 )
 from api.security import (
+    ChangePasswordRequest,
     LoginRequest,
+    _verify_password_change_token,
     _verify_password,
     _verify_token,
+    validate_password_policy,
 )
 from collections import defaultdict, deque
 from threading import Lock
@@ -63,6 +68,47 @@ def _clear_login_attempts(*keys: str) -> None:
         for key in keys:
             _login_attempts.pop(key, None)
 
+
+def _password_rotation_due(password_changed_at: Any) -> bool:
+    if not isinstance(password_changed_at, datetime):
+        return True
+    if password_changed_at.tzinfo is not None:
+        password_changed_at = password_changed_at.replace(tzinfo=None)
+    return password_changed_at <= datetime.utcnow() - timedelta(days=PASSWORD_ROTATION_DAYS)
+
+
+def _issue_access_token(user_data: dict) -> str:
+    now = datetime.utcnow()
+    payload = {
+        "sub": user_data["username"],
+        "role": user_data["role"],
+        "nom": user_data.get("nom_complet", ""),
+        "client": user_data.get("client", "") or "",
+        "pages_autorisees": user_data.get("pages_autorisees", "") or "",
+        "pv": int(user_data.get("password_version") or 1),
+        "iss": JWT_ISSUER,
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def _login_response(user_data: dict, token: str) -> dict:
+    password_change_required = bool(user_data.get("must_change_password"))
+    return {
+        "token": token,
+        "password_change_required": password_change_required,
+        "user": {
+            "username": user_data["username"],
+            "nom": user_data.get("nom_complet", ""),
+            "role": user_data["role"],
+            "client": user_data.get("client", "") or "",
+            "pages_autorisees": user_data.get("pages_autorisees", "") or "",
+            "password_change_required": password_change_required,
+        },
+    }
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "SAVIA API", "version": "2.0.0"}
@@ -93,39 +139,64 @@ def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
     user_data = dict(row)
+    rotation_due = _password_rotation_due(user_data.get("password_changed_at"))
+    if rotation_due:
+        user_data["must_change_password"] = True
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE utilisateurs
+               SET last_login = CURRENT_TIMESTAMP,
+                   must_change_password = %s
+               WHERE id = %s""",
+            (bool(user_data.get("must_change_password")), user_data["id"]),
+        )
     
     # Log successful login
     log_audit(body.username, "LOGIN", "Connexion réussie", "auth", ip_address)
     _clear_login_attempts(ip_key, account_key)
     
-    payload = {
-        "sub": user_data["username"],
-        "role": user_data["role"],
-        "nom": user_data.get("nom_complet", ""),
-        "client": user_data.get("client", "") or "",
-        "pages_autorisees": user_data.get("pages_autorisees", "") or "",
-        "iss": JWT_ISSUER,
-        "iat": datetime.utcnow(),
-        "nbf": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
-    }
-    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    token = _issue_access_token(user_data)
 
-    return {
-        "token": token,
-        "user": {
-            "username": user_data["username"],
-            "nom": user_data.get("nom_complet", ""),
-            "role": user_data["role"],
-            "client": user_data.get("client", "") or "",
-            "pages_autorisees": user_data.get("pages_autorisees", "") or "",
-        }
-    }
+    return _login_response(user_data, token)
 
 
 @app.get("/api/auth/me")
-def me(user: dict = Depends(_verify_token)):
+def me(user: dict = Depends(_verify_password_change_token)):
     return {"user": user}
+
+
+@app.post("/api/auth/change-password")
+def change_password(body: ChangePasswordRequest, request: Request, user: dict = Depends(_verify_password_change_token)):
+    try:
+        validate_password_policy(body.new_password, user["sub"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=400, detail="Le nouveau mot de passe doit être différent de l'ancien")
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash FROM utilisateurs WHERE username = %s AND actif = 1",
+            (user["sub"],),
+        ).fetchone()
+        if not row or not _verify_password(body.current_password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Mot de passe actuel incorrect")
+        updated = conn.execute(
+            """UPDATE utilisateurs
+               SET password_hash = %s,
+                   password_changed_at = CURRENT_TIMESTAMP,
+                   must_change_password = false,
+                   password_version = COALESCE(password_version, 1) + 1
+               WHERE id = %s
+               RETURNING username, nom_complet, role, client, pages_autorisees,
+                         password_version, must_change_password""",
+            (bcrypt.hashpw(body.new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"), row["id"]),
+        ).fetchone()
+
+    user_data = dict(updated)
+    ip_address = request.client.host if request.client else "unknown"
+    log_audit(user_data["username"], "PASSWORD_CHANGED", "Mot de passe modifié par l'utilisateur", "auth", ip_address)
+    return _login_response(user_data, _issue_access_token(user_data))
 
 
 def _get_client_filter(user: dict) -> Optional[str]:

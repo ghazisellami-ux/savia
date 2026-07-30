@@ -186,7 +186,7 @@ const formatCompetences = (specialiteStr: string): string => {
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
   // Les non-admins commencent directement sur l'onglet Paramètres
-  const defaultTab = currentUser?.username === 'admin' ? 'users' : 'settings';
+  const defaultTab = currentUser?.role === 'Admin' ? 'users' : 'settings';
   const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs'>(defaultTab as any);
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);

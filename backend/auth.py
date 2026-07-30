@@ -29,6 +29,18 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def _password_is_strong(password: str, username: str = "") -> bool:
+    return (
+        isinstance(password, str)
+        and 12 <= len(password) <= 72
+        and len(password.encode("utf-8")) <= 72
+        and any(char.islower() for char in password)
+        and any(char.isupper() for char in password)
+        and any(char.isdigit() for char in password)
+        and (not username or username.casefold() not in password.casefold())
+    )
+
+
 def creer_admin_defaut():
     """
     Initialise le premier administrateur uniquement avec des identifiants fournis
@@ -40,16 +52,16 @@ def creer_admin_defaut():
             if row and row["cnt"] == 0:
                 username = os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip()
                 password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
-                if not username or len(password) < 12:
+                if not username or not _password_is_strong(password, username):
                     logger.warning(
                         "Aucun administrateur créé : définissez BOOTSTRAP_ADMIN_USERNAME "
-                        "et BOOTSTRAP_ADMIN_PASSWORD (12 caractères minimum) pour initialiser une base vide."
+                        "et BOOTSTRAP_ADMIN_PASSWORD (12 caractères, majuscule, minuscule et chiffre) pour initialiser une base vide."
                     )
                     return False
                 # Créer l'entrée auth
                 res = conn.execute("""
-                    INSERT INTO utilisateurs (username, password_hash, role, actif)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO utilisateurs (username, password_hash, role, actif, must_change_password, password_version)
+                    VALUES (%s, %s, %s, %s, true, 1)
                     RETURNING id
                 """, (username, hash_password(password), "Admin", 1))
                 admin_id = res.fetchone()["id"]
@@ -281,12 +293,15 @@ def creer_utilisateur(username, password, nom_complet, role, email="", client=""
     Returns:
         bool: Succès de l'opération complète.
     """
+    if not _password_is_strong(password, username):
+        logger.error("Erreur creation utilisateur : mot de passe non conforme à la politique de sécurité")
+        return False
     try:
         with get_db() as conn:
             # 1. Insertion technique
             res = conn.execute("""
-                INSERT INTO utilisateurs (username, password_hash, role, client)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO utilisateurs (username, password_hash, role, client, must_change_password, password_version)
+                VALUES (%s, %s, %s, %s, true, 1)
                 RETURNING id
             """, (username, hash_password(password), role, client))
             user_id = res.fetchone()["id"]
@@ -337,8 +352,15 @@ def modifier_utilisateur(user_id, nom_complet=None, role=None, email=None, actif
 def changer_mot_de_passe(user_id, nouveau_mdp):
     """Change le mot de passe d'un utilisateur."""
     with get_db() as conn:
+        user = conn.execute("SELECT username FROM utilisateurs WHERE id=%s", (user_id,)).fetchone()
+        if not user or not _password_is_strong(nouveau_mdp, user["username"]):
+            return False
         conn.execute(
-            "UPDATE utilisateurs SET password_hash=%s WHERE id=%s",
+            """UPDATE utilisateurs
+               SET password_hash=%s, password_changed_at=CURRENT_TIMESTAMP,
+                   must_change_password=false,
+                   password_version=COALESCE(password_version, 1) + 1
+               WHERE id=%s""",
             (hash_password(nouveau_mdp), user_id))
     return True
 def supprimer_utilisateur(user_id):

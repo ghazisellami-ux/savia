@@ -12,6 +12,7 @@ interface User {
   nom: string;
   role: string;
   client?: string;  // présent pour Lecteur
+  password_change_required?: boolean;
 }
 
 interface AuthContextType {
@@ -117,10 +118,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const u = JSON.parse(savedUser) as User;
-        await authApi.me();
+        const session = await authApi.me();
         if (!active) return;
-        setUser(u);
-        loadRolePermissions(u.role, token).then(setPermissions);
+        const restoredUser = {
+          ...u,
+          password_change_required: Boolean(session.user.password_change_required),
+        };
+        setUser(restoredUser);
+        localStorage.setItem('savia_user', JSON.stringify(restoredUser));
+        if (!restoredUser.password_change_required) {
+          loadRolePermissions(restoredUser.role, token).then(setPermissions);
+        }
       } catch {
         localStorage.removeItem('savia_token');
         localStorage.removeItem('savia_user');
@@ -138,8 +146,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('savia_token', res.token);
     localStorage.setItem('savia_user', JSON.stringify(res.user));
     setUser(res.user);
-    const perms = await loadRolePermissions(res.user.role, res.token);
-    setPermissions(perms);
+    if (!res.user.password_change_required) {
+      const perms = await loadRolePermissions(res.user.role, res.token);
+      setPermissions(perms);
+    } else {
+      setPermissions(DEFAULT_PERMS);
+    }
   }, []);
 
   const logout = useCallback(() => {
