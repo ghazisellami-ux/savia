@@ -38,7 +38,7 @@ proto-plus==1.27.1
 protobuf==5.29.6
 
 # Storage (MinIO/S3)
-boto3==1.38.0
+boto3==1.43.57
 
 # HTTP / Networking
 httpx==0.28.1
