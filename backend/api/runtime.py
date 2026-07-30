@@ -395,7 +395,7 @@ def _cors_origins():
         "http://127.0.0.1:3001",
     ]
     if IS_PRODUCTION:
-        return configured
+        return list(dict.fromkeys(configured))
     return list(dict.fromkeys(configured + local_origins))
 
 # ---- Config ----
