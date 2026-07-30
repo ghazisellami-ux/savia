@@ -51,7 +51,7 @@ def lire_interventions(machine=None):
         """
         if machine:
             df = read_sql(
-                base_query + " AND i.machine = ? ORDER BY i.date DESC",
+                base_query + " AND i.machine = %s ORDER BY i.date DESC",
                 conn, params=(machine,))
         else:
             df = read_sql(base_query + " ORDER BY i.date DESC", conn)
@@ -90,7 +90,7 @@ def lire_interventions(machine=None):
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                        "SELECT nom, prenom FROM techniciens WHERE username = %s",
                         (tech_str,)
                     ).fetchone()
                     if row:
@@ -157,10 +157,10 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
     query = "SELECT * FROM planning_maintenance WHERE 1=1"
     params = []
     if machine:
-        query += " AND machine = ?"
+        query += " AND machine = %s"
         params.append(machine)
     if statut:
-        query += " AND statut = ?"
+        query += " AND statut = %s"
         params.append(statut)
     query += " ORDER BY date_prevue ASC"
 
@@ -243,7 +243,7 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                        "SELECT nom, prenom FROM techniciens WHERE username = %s",
                         (tech_str,)
                     ).fetchone()
                     if row:
@@ -265,7 +265,7 @@ def ajouter_planning(planning_dict):
         conn.execute("""
             INSERT INTO planning_maintenance (machine, client, type_maintenance, description,
                                               date_prevue, technicien_assigne, recurrence, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             planning_dict.get("machine", ""),
             planning_dict.get("client", ""),
@@ -285,11 +285,11 @@ def update_planning_statut(planning_id, statut, date_realisee=None):
     with get_db() as conn:
         if date_realisee:
             conn.execute(
-                "UPDATE planning_maintenance SET statut=?, date_realisee=? WHERE id=?",
+                "UPDATE planning_maintenance SET statut=%s, date_realisee=%s WHERE id=%s",
                 (statut, date_realisee, planning_id))
         else:
             conn.execute(
-                "UPDATE planning_maintenance SET statut=? WHERE id=?",
+                "UPDATE planning_maintenance SET statut=%s WHERE id=%s",
                 (statut, planning_id))
     _trigger_backup()
     return True
@@ -302,7 +302,7 @@ def update_planning_statut(planning_id, statut, date_realisee=None):
 def supprimer_planning(planning_id):
     """Supprime une maintenance planifiée."""
     with get_db() as conn:
-        conn.execute("DELETE FROM planning_maintenance WHERE id=?", (planning_id,))
+        conn.execute("DELETE FROM planning_maintenance WHERE id=%s", (planning_id,))
     _trigger_backup()
     return True
 
@@ -311,7 +311,7 @@ def reprogrammer_planning(planning_id, nouvelle_date):
     """Reprogramme une maintenance à une nouvelle date et remet le statut à Planifiée."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE planning_maintenance SET date_prevue=?, statut='Planifiée' WHERE id=?",
+            "UPDATE planning_maintenance SET date_prevue=%s, statut='Planifiée' WHERE id=%s",
             (nouvelle_date, planning_id))
     _trigger_backup()
     return True

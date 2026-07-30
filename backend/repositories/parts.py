@@ -39,7 +39,7 @@ def ajouter_piece(piece_dict):
                                          stock_actuel, stock_minimum, fournisseur, prix_unitaire, notes,
                                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
                                          nombre_equipements_relies, utilisation_recente_30j)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(reference) DO UPDATE SET
                 domaine=excluded.domaine, equipement_type=excluded.equipement_type,
                 est_annexe=excluded.est_annexe, stock_actuel=excluded.stock_actuel,
@@ -69,7 +69,7 @@ def update_stock_piece(reference, nouveau_stock):
     """Met à jour le stock d'une pièce."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE pieces_rechange SET stock_actuel=? WHERE reference=?",
+            "UPDATE pieces_rechange SET stock_actuel=%s WHERE reference=%s",
             (nouveau_stock, reference))
     _trigger_backup()
     return True
@@ -80,12 +80,12 @@ def modifier_piece(piece_id, piece_dict):
     with get_db() as conn:
         conn.execute("""
             UPDATE pieces_rechange SET
-                reference=?, designation=?, domaine=?, equipement_type=?, est_annexe=?,
-                stock_actuel=?, stock_minimum=?, fournisseur=?,
-                prix_unitaire=?, notes=?,
-                consommation_moyenne_mois=?, delai_fournisseur_jours=?, criticite=?,
-                nombre_equipements_relies=?, utilisation_recente_30j=?
-            WHERE id=?
+                reference=%s, designation=%s, domaine=%s, equipement_type=%s, est_annexe=%s,
+                stock_actuel=%s, stock_minimum=%s, fournisseur=%s,
+                prix_unitaire=%s, notes=%s,
+                consommation_moyenne_mois=%s, delai_fournisseur_jours=%s, criticite=%s,
+                nombre_equipements_relies=%s, utilisation_recente_30j=%s
+            WHERE id=%s
         """, (
             piece_dict.get("reference", ""),
             piece_dict.get("designation", ""),
@@ -111,7 +111,7 @@ def modifier_piece(piece_id, piece_dict):
 def supprimer_piece(piece_id):
     """Supprime une pièce de rechange par son ID."""
     with get_db() as conn:
-        conn.execute("DELETE FROM pieces_rechange WHERE id=?", (piece_id,))
+        conn.execute("DELETE FROM pieces_rechange WHERE id=%s", (piece_id,))
     _trigger_backup()
     return True
 

@@ -7,12 +7,12 @@ Rôles : Admin, Manager, Responsable Technique, Gestionnaire de stock, Technicie
 """
 import bcrypt
 import logging
+import os
 try:
     import streamlit as st
 except ImportError:
     st = None
 from db_engine import get_db, log_audit
-
 logger = logging.getLogger("auth")
 
 
@@ -31,30 +31,36 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def creer_admin_defaut():
     """
-    Initialise le compte administrateur racine si la base est vide.
-    
-    Logic:
-        Vérifie le nombre d'utilisateurs. Si 0, insère 'admin/admin'
-        dans la table utilisateurs et l'entrée correspondante dans user_pii.
+    Initialise le premier administrateur uniquement avec des identifiants fournis
+    explicitement dans l'environnement de déploiement.
     """
     try:
         with get_db() as conn:
             row = conn.execute("SELECT COUNT(*) as cnt FROM utilisateurs").fetchone()
             if row and row["cnt"] == 0:
+                username = os.getenv("BOOTSTRAP_ADMIN_USERNAME", "").strip()
+                password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+                if not username or len(password) < 12:
+                    logger.warning(
+                        "Aucun administrateur créé : définissez BOOTSTRAP_ADMIN_USERNAME "
+                        "et BOOTSTRAP_ADMIN_PASSWORD (12 caractères minimum) pour initialiser une base vide."
+                    )
+                    return False
                 # Créer l'entrée auth
                 res = conn.execute("""
                     INSERT INTO utilisateurs (username, password_hash, role, actif)
-                    VALUES (?, ?, ?, ?)
-                """, ("admin", hash_password("admin"), "Admin", 1))
-                admin_id = res.lastrowid
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (username, hash_password(password), "Admin", 1))
+                admin_id = res.fetchone()["id"]
                 
                 # Créer l'entrée PII (Pillier 2)
                 conn.execute("""
                     INSERT INTO user_pii (user_id, nom_complet, email)
-                    VALUES (?, ?, ?)
-                """, (admin_id, "Administrateur Système", "admin@sic-radiologie.tn"))
+                    VALUES (%s, %s, %s)
+                """, (admin_id, "Administrateur Système", ""))
                 
-                logger.info("Audit Trail: Compte Admin par défaut créé.")
+                logger.info("Audit Trail: Compte administrateur initial créé.")
                 return True
     except Exception as e:
         logger.error(f"Erreur creer_admin_defaut: {e}")
@@ -80,12 +86,12 @@ def authentifier(username: str, password: str):
                 SELECT u.*, p.nom_complet, p.email, p.telephone
                 FROM utilisateurs u
                 LEFT JOIN user_pii p ON u.id = p.user_id
-                WHERE u.username = ? AND u.actif = 1
+                WHERE u.username = %s AND u.actif = 1
             """, (username,)).fetchone()
 
             if row and verify_password(password, row["password_hash"]):
                 conn.execute(
-                    "UPDATE utilisateurs SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+                    "UPDATE utilisateurs SET last_login = CURRENT_TIMESTAMP WHERE id = %s",
                     (row["id"],))
                 user_data = dict(row)
                 # Sécurité: Ne jamais faire circuler le hash du mot de passe en session
@@ -109,7 +115,7 @@ def authentifier_par_username(username: str):
     Utilisé uniquement pour la restauration de session à partir d'un token persisté."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
+            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
             (username,)
         ).fetchone()
         if row:
@@ -280,14 +286,15 @@ def creer_utilisateur(username, password, nom_complet, role, email="", client=""
             # 1. Insertion technique
             res = conn.execute("""
                 INSERT INTO utilisateurs (username, password_hash, role, client)
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
             """, (username, hash_password(password), role, client))
-            user_id = res.lastrowid
+            user_id = res.fetchone()["id"]
             
             # 2. Insertion PII (Pillier 2)
             conn.execute("""
                 INSERT INTO user_pii (user_id, nom_complet, email)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
             """, (user_id, nom_complet, email))
             
         logger.info(f"Audit Trail: Nouvel utilisateur {username} créé (ID: {user_id})")
@@ -305,22 +312,22 @@ def modifier_utilisateur(user_id, nom_complet=None, role=None, email=None, actif
         with get_db() as conn:
             # Update AUTH
             if role is not None:
-                conn.execute("UPDATE utilisateurs SET role=? WHERE id=?", (role, user_id))
+                conn.execute("UPDATE utilisateurs SET role=%s WHERE id=%s", (role, user_id))
             if actif is not None:
-                conn.execute("UPDATE utilisateurs SET actif=? WHERE id=?", (actif, user_id))
+                conn.execute("UPDATE utilisateurs SET actif=%s WHERE id=%s", (actif, user_id))
             
             # Update PII (Pillier 2)
             if nom_complet is not None or email is not None:
                 # Vérifier si l'entrée PII existe déjà
-                exist = conn.execute("SELECT 1 FROM user_pii WHERE user_id=?", (user_id,)).fetchone()
+                exist = conn.execute("SELECT 1 FROM user_pii WHERE user_id=%s", (user_id,)).fetchone()
                 if not exist:
-                    conn.execute("INSERT INTO user_pii (user_id, nom_complet, email) VALUES (?, ?, ?)", 
+                    conn.execute("INSERT INTO user_pii (user_id, nom_complet, email) VALUES (%s, %s, %s)",
                                  (user_id, nom_complet or "", email or ""))
                 else:
                     if nom_complet is not None:
-                        conn.execute("UPDATE user_pii SET nom_complet=? WHERE user_id=?", (nom_complet, user_id))
+                        conn.execute("UPDATE user_pii SET nom_complet=%s WHERE user_id=%s", (nom_complet, user_id))
                     if email is not None:
-                        conn.execute("UPDATE user_pii SET email=? WHERE user_id=?", (email, user_id))
+                        conn.execute("UPDATE user_pii SET email=%s WHERE user_id=%s", (email, user_id))
         return True
     except Exception as e:
         logger.error(f"Erreur modifier_utilisateur ID {user_id}: {e}")
@@ -331,23 +338,17 @@ def changer_mot_de_passe(user_id, nouveau_mdp):
     """Change le mot de passe d'un utilisateur."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE utilisateurs SET password_hash=? WHERE id=?",
+            "UPDATE utilisateurs SET password_hash=%s WHERE id=%s",
             (hash_password(nouveau_mdp), user_id))
     return True
-
-
 def supprimer_utilisateur(user_id):
     """Supprime un utilisateur (sauf le dernier admin)."""
     with get_db() as conn:
-        user = conn.execute("SELECT role FROM utilisateurs WHERE id=?", (user_id,)).fetchone()
+        user = conn.execute("SELECT role FROM utilisateurs WHERE id=%s", (user_id,)).fetchone()
         if user and user["role"] == "Admin":
             row_admin = conn.execute("SELECT COUNT(*) as cnt FROM utilisateurs WHERE role='Admin' AND actif=1").fetchone()
             admin_count = row_admin["cnt"] if row_admin else 0
             if admin_count <= 1:
                 return False  # Ne pas supprimer le dernier admin
-        conn.execute("DELETE FROM utilisateurs WHERE id=?", (user_id,))
+        conn.execute("DELETE FROM utilisateurs WHERE id=%s", (user_id,))
     return True
-
-
-# Créer l'admin par défaut au premier lancement
-creer_admin_defaut()

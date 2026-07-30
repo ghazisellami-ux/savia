@@ -90,7 +90,7 @@ def log_ai_inference(model_version, prompt_hash, confidence_score, outcome):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO ai_audit_log (model_version, prompt_hash, confidence_score, outcome)
-            VALUES (?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s)
         """, (model_version, prompt_hash, confidence_score, outcome))
 
 
@@ -103,7 +103,7 @@ def save_prediction_feedback(machine, date_predite, resultat, date_reelle="", no
     with get_db() as conn:
         conn.execute("""
             INSERT INTO prediction_feedback (machine, date_predite, resultat, date_reelle, note_technicien, username)
-            VALUES (?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (machine, date_predite, resultat, date_reelle, note, username))
 
 
@@ -112,10 +112,10 @@ def lire_prediction_feedback(machine=None, limit=50):
     with get_db() as conn:
         if machine:
             return read_sql(
-                "SELECT * FROM prediction_feedback WHERE machine = ? ORDER BY timestamp DESC LIMIT ?",
+                "SELECT * FROM prediction_feedback WHERE machine = %s ORDER BY timestamp DESC LIMIT %s",
                 conn, params=(machine, limit))
         return read_sql(
-            "SELECT * FROM prediction_feedback ORDER BY timestamp DESC LIMIT ?",
+            "SELECT * FROM prediction_feedback ORDER BY timestamp DESC LIMIT %s",
             conn, params=(limit,))
 
 
@@ -157,7 +157,7 @@ def get_prediction_accuracy(machine=None):
 def get_config(cle, default=""):
     """Récupère une valeur de configuration."""
     with get_db() as conn:
-        row = conn.execute("SELECT valeur FROM config_client WHERE cle = ?", (cle,)).fetchone()
+        row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (cle,)).fetchone()
         return row["valeur"] if row else default
 
 
@@ -165,17 +165,17 @@ def set_config(cle, valeur):
     """Définit une valeur de configuration."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO config_client (cle, valeur) VALUES (?, %s)
+            INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
             ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur
         """, (cle, valeur))
 
 
 # ==========================================
-# MIGRATION EXCEL → SQLITE
+# IMPORT INITIAL EXCEL → POSTGRESQL
 # ==========================================
 
 def migrer_depuis_excel(excel_path):
-    """Migre les données existantes depuis Excel vers SQLite/PostgreSQL."""
+    """Importe les données Excel historiques dans PostgreSQL."""
     if not os.path.exists(excel_path):
         return False
 
@@ -193,7 +193,7 @@ def migrer_depuis_excel(excel_path):
                     if code:
                         try:
                             conn.execute("""
-                                INSERT INTO codes_erreurs (code, message, niveau, type) VALUES (?, ?, ?, %s) ON CONFLICT DO NOTHING
+                                INSERT INTO codes_erreurs (code, message, niveau, type) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING
                             """, (code, row.get("Message", ""), row.get("Niveau", "ATTENTION"), row.get("Type", "")))
                             migrated += 1
                         except Exception as e:
@@ -213,7 +213,7 @@ def migrer_depuis_excel(excel_path):
                     if mot_cle:
                         try:
                             conn.execute("""
-                                INSERT INTO solutions (mot_cle, type, priorite, cause, solution) VALUES (?, ?, ?, ?, %s) ON CONFLICT DO NOTHING
+                                INSERT INTO solutions (mot_cle, type, priorite, cause, solution) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING
                             """, (mot_cle, row.get("Type", ""), row.get("Priorite", "MOYENNE"),
                                   row.get("Cause", ""), row.get("Solution", "")))
                             sol_count += 1
@@ -321,7 +321,7 @@ def log_telemetry(machine, sensor_type, value):
     """Enregistre une donnée télémétrique."""
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO telemetry (machine, sensor_type, value) VALUES (?, ?, %s)",
+            "INSERT INTO telemetry (machine, sensor_type, value) VALUES (%s, %s, %s)",
             (machine, sensor_type, float(value)))
     return True
 
@@ -331,19 +331,19 @@ def lire_telemetry(machine, sensor_type=None, hours=24):
     if "%" in machine:
         query = """
             SELECT timestamp, machine, sensor_type, value FROM telemetry
-            WHERE machine LIKE ?
-            AND timestamp > datetime('now', ?)
+            WHERE machine LIKE %s
+            AND timestamp > CURRENT_TIMESTAMP - (%s * INTERVAL '1 hour')
         """
     else:
         query = """
             SELECT timestamp, machine, sensor_type, value FROM telemetry
-            WHERE machine = ?
-            AND timestamp > datetime('now', ?)
+            WHERE machine = %s
+            AND timestamp > CURRENT_TIMESTAMP - (%s * INTERVAL '1 hour')
         """
-    params = [machine, f"-{hours} hours"]
+    params = [machine, hours]
     
     if sensor_type:
-        query += " AND sensor_type = ?"
+        query += " AND sensor_type = %s"
         params.append(sensor_type)
         
     query += " ORDER BY timestamp ASC"
@@ -447,83 +447,3 @@ def verifier_et_migrer_schema():
     except Exception as e:
         logger.error(f"Erreur migration PostgreSQL: {e}")
     return
-    
-    # Mode SQLite - utiliser la migration classique
-    with get_db() as conn:
-        # Vérifier colonnes table interventions
-        cursor = conn.execute("PRAGMA table_info(interventions)")
-        columns = [row["name"] for row in cursor.fetchall()]
-
-        missing_cols = {
-            "probleme": "TEXT DEFAULT ''",
-            "cause": "TEXT DEFAULT ''",
-            "solution": "TEXT DEFAULT ''",
-            "cout_pieces": "REAL DEFAULT 0.0",
-            "start_time": "TIME",
-            "end_time": "TIME",
-            "duree_deplacement": "INTEGER DEFAULT 0",
-            "type_erreur": "TEXT DEFAULT ''",
-            "priorite": "TEXT DEFAULT ''",
-            "fiche_validation": "TEXT DEFAULT 'En attente'",
-            "date_debut_intervention": "TIMESTAMP",
-            "date_cloture": "TIMESTAMP",
-        }
-
-        for col, type_def in missing_cols.items():
-            if col not in columns:
-                try:
-                    conn.execute(f"ALTER TABLE interventions ADD COLUMN {col} {type_def}")
-                    print(f"Migration: Ajout de la colonne '{col}' à la table 'interventions'.")
-                except Exception as e:
-                    print(f"Erreur migration colonne {col}: {e}")
-
-        # Vérifier colonnes table techniciens
-        cursor = conn.execute("PRAGMA table_info(techniciens)")
-        tech_cols = [row["name"] for row in cursor.fetchall()]
-        if "telegram_id" not in tech_cols:
-            try:
-                conn.execute("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''")
-                print("Migration: Ajout de la colonne 'telegram_id' à la table 'techniciens'.")
-            except Exception as e:
-                print(f"Erreur migration techniciens: {e}")
-
-        # Vérifier colonnes table equipements (Ajout Client)
-        cursor = conn.execute("PRAGMA table_info(equipements)")
-        eq_cols = [row["name"] for row in cursor.fetchall()]
-        if "client" not in eq_cols:
-            try:
-                conn.execute("ALTER TABLE equipements ADD COLUMN client TEXT DEFAULT 'Centre Principal'")
-                print("Migration: Ajout de la colonne 'client' à la table 'equipements'.")
-            except Exception as e:
-                print(f"Erreur migration equipements: {e}")
-
-        # Normaliser les statuts corrompus (encodage UTF-8/Latin-1)
-        try:
-            conn.execute("""
-                UPDATE interventions SET statut='Cloturee'
-                WHERE statut != 'Cloturee'
-                AND (statut LIKE '%lotur%' OR statut LIKE '%Cl%tur%')
-            """)
-        except Exception:
-            pass
-
-        # Vérifier colonnes table interventions_techniciens
-        try:
-            cursor = conn.execute("PRAGMA table_info(interventions_techniciens)")
-            tech_int_cols = [row["name"] for row in cursor.fetchall()]
-            if "type_erreur_tech" not in tech_int_cols:
-                try:
-                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN type_erreur_tech TEXT DEFAULT ''")
-                    print("Migration: Ajout de la colonne 'type_erreur_tech' à la table 'interventions_techniciens'.")
-                except Exception as e:
-                    print(f"Erreur migration interventions_techniciens: {e}")
-            # Add pieces_a_deduire column for spare parts tracking per technician
-            if "pieces_a_deduire" not in tech_int_cols:
-                try:
-                    conn.execute("ALTER TABLE interventions_techniciens ADD COLUMN pieces_a_deduire TEXT DEFAULT ''")
-                    print("Migration: Ajout de la colonne 'pieces_a_deduire' à la table 'interventions_techniciens'.")
-                except Exception as e:
-                    print(f"Erreur migration pieces_a_deduire: {e}")
-        except Exception as e:
-            print(f"Erreur vérification interventions_techniciens: {e}")
-

@@ -74,7 +74,7 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         if client_name and client_name != "-":
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville, adresse, telephone FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         d = dict(cl_row)
                         client_region = d.get("region", "") or ""

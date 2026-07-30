@@ -218,7 +218,7 @@ def get_interventions_techniciens(intervention_id):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT * FROM interventions_techniciens 
-            WHERE intervention_id = ?
+            WHERE intervention_id = %s
             ORDER BY created_at ASC
         """, (intervention_id,)).fetchall()
         return [dict(r) for r in rows]
@@ -239,7 +239,7 @@ def all_techniciens_completed(intervention_id):
             SELECT COUNT(*) as total, 
                    SUM(CASE WHEN statut = 'Cloturee' THEN 1 ELSE 0 END) as completed
             FROM interventions_techniciens 
-            WHERE intervention_id = ?
+            WHERE intervention_id = %s
         """, (intervention_id,)).fetchone()
         
         if not row:
@@ -267,7 +267,7 @@ def calculate_intervention_totals(intervention_id):
                 COALESCE(SUM(duree_minutes_tech), 0) as total_duree,
                 COALESCE(SUM(duree_deplacement_tech), 0) as total_deplacement
             FROM interventions_techniciens 
-            WHERE intervention_id = ? AND statut = 'Terminé'
+            WHERE intervention_id = %s AND statut = 'Terminé'
         """, (intervention_id,)).fetchone()
         
         if row:
@@ -419,7 +419,7 @@ def get_techniciens_status(intervention_id):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT technicien_nom, statut FROM interventions_techniciens 
-            WHERE intervention_id = ?
+            WHERE intervention_id = %s
             ORDER BY technicien_nom
         """, (intervention_id,)).fetchall()
         
@@ -454,7 +454,7 @@ def get_child_interventions(parent_intervention_id):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT id, technicien, statut FROM interventions 
-            WHERE parent_intervention_id = ? AND is_temporary = 1
+            WHERE parent_intervention_id = %s AND is_temporary = 1
             ORDER BY technicien
         """, (parent_intervention_id,)).fetchall()
         return [dict(r) for r in rows]
@@ -485,7 +485,7 @@ def lire_child_interventions_for_technician(technician_name):
                    i.parent_intervention_id
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
-            WHERE i.is_temporary = 1 AND i.technicien ILIKE ?
+            WHERE i.is_temporary = 1 AND i.technicien ILIKE %s
             ORDER BY i.date DESC
         """
         

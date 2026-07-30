@@ -18,6 +18,7 @@ from api.runtime import (
     supprimer_contrat,
 )
 from api.security import (
+    _check_create_permission,
     Depends,
     Optional,
     _verify_token,
@@ -64,6 +65,8 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
 
 @app.post("/api/contrats")
 def create_contrat(body: dict, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     contrat_id = ajouter_contrat(body)
     
     # Log audit
@@ -124,6 +127,8 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/contrats/{contrat_id}")
 def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     modifier_contrat(contrat_id, body)
     
     # Log audit
@@ -140,11 +145,13 @@ def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_tok
 
 @app.delete("/api/contrats/{contrat_id}")
 def delete_contrat(contrat_id: int, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     # Get contrat info before deleting
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT client FROM contrats WHERE id = ?",
+                "SELECT client FROM contrats WHERE id = %s",
                 (contrat_id,)
             ).fetchone()
             client = dict(row)["client"] if row else "Unknown"
@@ -176,12 +183,16 @@ def get_conformite(client: Optional[str] = None, user: dict = Depends(_verify_to
 
 @app.post("/api/conformite")
 def create_conformite(body: dict, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     ajouter_conformite(body)
     return {"ok": True}
 
 
 @app.delete("/api/conformite/{conformite_id}")
 def delete_conformite(conformite_id: int, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     supprimer_conformite(conformite_id)
     return {"ok": True}
 
@@ -199,4 +210,3 @@ __all__ = [
     "create_conformite",
     "delete_conformite",
 ]
-

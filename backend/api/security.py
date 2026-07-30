@@ -5,6 +5,7 @@ from api.runtime import (
     Depends,
     HTTPAuthorizationCredentials,
     HTTPException,
+    JWT_ISSUER,
     JWT_SECRET,
     Optional,
     bcrypt,
@@ -12,19 +13,24 @@ from api.runtime import (
     jwt,
     security,
 )
+from pydantic import Field
 
-def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """Verify JWT and return user payload. Returns guest user if no token (allows public read)."""
-    if not credentials:
-        return {"sub": "guest", "role": "Lecteur", "nom": "Visiteur"}
+def _decode_token(token: str) -> dict:
+    """Decode a JWT and return its authenticated user payload."""
     try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            issuer=JWT_ISSUER,
+            options={"require": ["sub", "role", "iss", "iat", "nbf", "exp"]},
+        )
         # Rétrocompatibilité : si Lecteur mais client absent du token, le récupérer en DB
         if payload.get("role") == "Lecteur" and not payload.get("client"):
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT client FROM utilisateurs WHERE username = ?",
+                        "SELECT client FROM utilisateurs WHERE username = %s",
                         (payload.get("sub", ""),)
                     ).fetchone()
                     if row and row["client"]:
@@ -38,15 +44,15 @@ def _verify_token(credentials: HTTPAuthorizationCredentials = Depends(security))
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-
-def _optional_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
-    """Verify JWT if present, return None if missing (allows public read access)."""
+def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+    """Require a valid Bearer JWT for every protected business route."""
     if not credentials:
-        return None
-    try:
-        return jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
-    except Exception:
-        return None
+        raise HTTPException(
+            status_code=401,
+            detail="Authentification requise",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return _decode_token(credentials.credentials)
 
 
 def _verify_password(password: str, hashed: str) -> bool:
@@ -91,16 +97,14 @@ def _check_create_piece_permission(user: dict) -> bool:
 # ==========================================
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
 
 __all__ = [
     "_verify_token",
-    "_optional_token",
     "_verify_password",
     "_check_create_permission",
     "_check_create_demande_permission",
     "_check_create_piece_permission",
     "LoginRequest",
 ]
-

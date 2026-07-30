@@ -13,7 +13,7 @@ class DatabaseTechnicianNameRepository:
     def find_full_name(self, username: str) -> str | None:
         with self._connection_factory() as connection:
             row = connection.execute(
-                "SELECT nom, prenom FROM techniciens WHERE username = ?",
+                "SELECT nom, prenom FROM techniciens WHERE username = %s",
                 (username,),
             ).fetchone()
         if not row:

@@ -75,7 +75,7 @@ def create_equipement(body: dict, user: dict = Depends(_verify_token)):
     client = body.get("Client", "Centre Principal")
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id FROM equipements WHERE nom = ? AND client = ?",
+            "SELECT id FROM equipements WHERE nom = %s AND client = %s",
             (nom, client)
         ).fetchone()
     equip_id = dict(row)["id"] if row else None
@@ -91,6 +91,8 @@ def create_equipement(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/equipements/{equip_id}")
 def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     modifier_equipement(equip_id, body)
     
     # Log audit
@@ -104,10 +106,12 @@ def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_to
 
 @app.delete("/api/equipements/{equip_id}")
 def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     # Get equipment name before deleting for logging
     try:
         with get_db() as conn:
-            row = conn.execute("SELECT nom, client FROM equipements WHERE id = ?", (equip_id,)).fetchone()
+            row = conn.execute("SELECT nom, client FROM equipements WHERE id = %s", (equip_id,)).fetchone()
             equip_name = dict(row)["nom"] if row else "Unknown"
     except:
         equip_name = "Unknown"
@@ -124,8 +128,10 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
 
 
 @app.post("/api/equipements/sync-region-ville")
-def sync_region_ville():
+def sync_region_ville(user: dict = Depends(_verify_token)):
     """Sync region and ville from clients to equipements based on client name. Admin operation."""
+    if user.get("role") != "Admin":
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
     try:
         from db_engine import _trigger_backup
         
@@ -210,6 +216,8 @@ def get_fabricants(user: dict = Depends(_verify_token)):
 
 @app.post("/api/fabricants")
 def post_fabricant(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     nom = payload.get("nom", "").strip()
     if not nom:
         raise HTTPException(400, "Nom requis")
@@ -224,6 +232,8 @@ def get_types_equipement_custom(domaine: str = Query(""), user: dict = Depends(_
 
 @app.post("/api/types-equipement-custom")
 def post_type_equipement_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     nom = payload.get("nom", "").strip()
     domaine = payload.get("domaine", "").strip()
     if not nom:
@@ -239,6 +249,8 @@ def get_types_intervention_custom(user: dict = Depends(_verify_token)):
 
 @app.post("/api/types-intervention-custom")
 def post_type_intervention_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     nom = payload.get("nom", "").strip()
     if not nom:
         raise HTTPException(400, "Nom requis")
@@ -254,6 +266,8 @@ def get_domaines_custom(user: dict = Depends(_verify_token)):
 
 @app.post("/api/domaines-custom")
 def post_domaine_custom(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import ajouter_domaine_custom
     nom = str(payload.get("nom") or "").strip()
     if not nom:
@@ -268,6 +282,8 @@ def post_domaine_custom(payload: dict = Body(...), user: dict = Depends(_verify_
 
 @app.delete("/api/domaines-custom/{nom}")
 def delete_domaine_custom(nom: str, user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import supprimer_domaine_custom
     if not nom.strip():
         raise HTTPException(400, "Nom requis")
@@ -282,6 +298,8 @@ def delete_domaine_custom(nom: str, user: dict = Depends(_verify_token)):
 @app.post("/api/documents-techniques/upload")
 def upload_document(body: dict, user: dict = Depends(_verify_token)):
     """Upload a technical document (base64 encoded) for an equipment."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import ajouter_document_technique
     equip_id = body.get("equipement_id")
     nom_fichier = body.get("nom_fichier", "")
@@ -319,6 +337,8 @@ def download_document(doc_id: int, user: dict = Depends(_verify_token)):
 @app.delete("/api/documents-techniques/{doc_id}")
 def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
     """Delete a technical document."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import supprimer_document_technique
     supprimer_document_technique(doc_id)
     return {"ok": True}
@@ -349,4 +369,3 @@ __all__ = [
     "download_document",
     "delete_document",
 ]
-

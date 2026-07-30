@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '@/lib/auth-context';
+import { demandes, notifications } from '@/lib/api';
 import { useEffect, useState, useCallback } from 'react';
 import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
@@ -67,13 +68,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
   const fetchNewCount = useCallback(async () => {
     if (!canSeeNotif) return;
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
-      if (!token) return;
-      const res = await fetch(`/api/demandes`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const data: any[] = await res.json();
+      const data = await demandes.list();
 
       const PENDING = ['En attente', 'Nouvelle', ''];
       const ACTIVE  = ['En attente', 'Nouvelle', 'Assignée', 'En cours'];
@@ -96,13 +91,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
   const fetchPiecesCount = useCallback(async () => {
     if (!canSeePiecesNotif) return;
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
-      if (!token) return;
-      const res = await fetch(`/api/notifications/count`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const data: { count: number } = await res.json();
+      const data = await notifications.count();
       setPiecesNotifCount(data.count || 0);
     } catch {
       // silencieux

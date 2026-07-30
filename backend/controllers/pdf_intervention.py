@@ -146,7 +146,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         if client_name:
             try:
                 with get_db() as conn:
-                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = ? LIMIT 1", (client_name,)).fetchone()
+                    cl_row = conn.execute("SELECT region, ville FROM clients WHERE nom = %s LIMIT 1", (client_name,)).fetchone()
                     if cl_row:
                         client_region = dict(cl_row).get("region", "") or ""
                         client_ville = dict(cl_row).get("ville", "") or ""

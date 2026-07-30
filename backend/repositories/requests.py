@@ -63,11 +63,11 @@ def lire_demandes_intervention(demandeur=None, client=None):
     with get_db() as conn:
         if demandeur:
             df = read_sql(
-                "SELECT * FROM demandes_intervention WHERE demandeur = ? ORDER BY date_demande DESC",
+                "SELECT * FROM demandes_intervention WHERE demandeur = %s ORDER BY date_demande DESC",
                 conn, params=(demandeur,))
         elif client:
             df = read_sql(
-                "SELECT * FROM demandes_intervention WHERE client = ? ORDER BY date_demande DESC",
+                "SELECT * FROM demandes_intervention WHERE client = %s ORDER BY date_demande DESC",
                 conn, params=(client,))
         else:
             df = read_sql("SELECT * FROM demandes_intervention ORDER BY date_demande DESC", conn)
@@ -83,7 +83,7 @@ def ajouter_demande_intervention(demande_dict):
             INSERT INTO demandes_intervention
                 (date_demande, demandeur, client, equipement, urgence,
                  description, code_erreur, contact_nom, contact_tel, statut)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             demande_dict.get("date_demande", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             demande_dict.get("demandeur", ""),
@@ -105,9 +105,9 @@ def traiter_demande_intervention(demande_id, statut, technicien="", notes="", da
     with get_db() as conn:
         conn.execute("""
             UPDATE demandes_intervention
-            SET statut = ?, technicien_assigne = ?, notes_traitement = ?,
-                date_traitement = ?, date_planifiee = ?
-            WHERE id = ?
+            SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
+                date_traitement = %s, date_planifiee = %s
+            WHERE id = %s
         """, (statut, technicien, notes,
               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
               str(date_planifiee) if date_planifiee else None,
@@ -121,9 +121,9 @@ def modifier_demande_intervention(demande_id, demande_dict):
     with get_db() as conn:
         conn.execute("""
             UPDATE demandes_intervention
-            SET client = ?, equipement = ?, urgence = ?, description = ?,
-                code_erreur = ?, contact_nom = ?, contact_tel = ?
-            WHERE id = ?
+            SET client = %s, equipement = %s, urgence = %s, description = %s,
+                code_erreur = %s, contact_nom = %s, contact_tel = %s
+            WHERE id = %s
         """, (
             demande_dict.get("client", ""),
             demande_dict.get("equipement", ""),
@@ -141,7 +141,7 @@ def modifier_demande_intervention(demande_id, demande_dict):
 def supprimer_demande_intervention(demande_id):
     """Supprime une demande d'intervention."""
     with get_db() as conn:
-        conn.execute("DELETE FROM demandes_intervention WHERE id = ?", (demande_id,))
+        conn.execute("DELETE FROM demandes_intervention WHERE id = %s", (demande_id,))
     _trigger_backup()
     return True
 
@@ -200,7 +200,7 @@ def lire_notification_schedule(bot_key):
         row = conn.execute("""
             SELECT id, bot_key, enabled, hour, minute, days_of_week, created_at, updated_at
             FROM notification_schedules
-            WHERE bot_key = ?
+            WHERE bot_key = %s
         """, (bot_key,)).fetchone()
         return dict(row) if row else None
 
@@ -210,21 +210,21 @@ def sauvegarder_notification_schedule(bot_key, enabled, hour, minute, days_of_we
     with get_db() as conn:
         # Vérifier si le bot existe déjà
         existing = conn.execute("""
-            SELECT id FROM notification_schedules WHERE bot_key = ?
+            SELECT id FROM notification_schedules WHERE bot_key = %s
         """, (bot_key,)).fetchone()
         
         if existing:
             # Mise à jour
             conn.execute("""
                 UPDATE notification_schedules
-                SET enabled = ?, hour = ?, minute = ?, days_of_week = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE bot_key = ?
+                SET enabled = %s, hour = %s, minute = %s, days_of_week = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE bot_key = %s
             """, (enabled, hour, minute, days_of_week, bot_key))
         else:
             # Insertion
             conn.execute("""
                 INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
-                VALUES (?, ?, ?, ?, %s)
+                VALUES (%s, %s, %s, %s, %s)
             """, (bot_key, enabled, hour, minute, days_of_week))
     
     _trigger_backup()
@@ -246,21 +246,21 @@ def sauvegarder_notification_schedules_batch(schedules):
             
             # Vérifier si le bot existe déjà
             existing = conn.execute("""
-                SELECT id FROM notification_schedules WHERE bot_key = ?
+                SELECT id FROM notification_schedules WHERE bot_key = %s
             """, (bot_key,)).fetchone()
             
             if existing:
                 # Mise à jour
                 conn.execute("""
                     UPDATE notification_schedules
-                    SET enabled = ?, hour = ?, minute = ?, days_of_week = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE bot_key = ?
+                    SET enabled = %s, hour = %s, minute = %s, days_of_week = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE bot_key = %s
                 """, (enabled, hour, minute, days_of_week, bot_key))
             else:
                 # Insertion
                 conn.execute("""
                     INSERT INTO notification_schedules (bot_key, enabled, hour, minute, days_of_week)
-                    VALUES (?, ?, ?, ?, %s)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, (bot_key, enabled, hour, minute, days_of_week))
     
     _trigger_backup()

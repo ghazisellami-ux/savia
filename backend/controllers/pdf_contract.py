@@ -113,7 +113,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             try:
                 with get_db() as conn:
                     cl_row = conn.execute(
-                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = ? LIMIT 1",
+                        "SELECT ville, adresse, telephone, contact, matricule_fiscale FROM clients WHERE nom = %s LIMIT 1",
                         (client_name,)
                     ).fetchone()
                     if cl_row:

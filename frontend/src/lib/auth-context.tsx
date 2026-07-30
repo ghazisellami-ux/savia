@@ -3,7 +3,7 @@
 // 🔐 Auth Context — Savia (avec permissions par rôle)
 // ==========================================
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { auth as authApi } from './api';
+import { auth as authApi, SESSION_EXPIRED_EVENT } from './api';
 
 export type PermissionsMap = Record<string, boolean>;
 
@@ -84,7 +84,7 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
 
 async function loadRolePermissions(role: string, token: string): Promise<PermissionsMap> {
   try {
-    const res = await fetch('/api/settings', {
+    const res = await fetch('/api/settings/public', {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error('settings failed');
@@ -105,19 +105,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Vérifier le token au chargement
   useEffect(() => {
-    const token     = localStorage.getItem('savia_token');
-    const savedUser = localStorage.getItem('savia_user');
-    if (token && savedUser) {
+    let active = true;
+
+    const restoreSession = async () => {
+      const token     = localStorage.getItem('savia_token');
+      const savedUser = localStorage.getItem('savia_user');
+      if (!token || !savedUser) {
+        if (active) setIsLoading(false);
+        return;
+      }
+
       try {
         const u = JSON.parse(savedUser) as User;
+        await authApi.me();
+        if (!active) return;
         setUser(u);
         loadRolePermissions(u.role, token).then(setPermissions);
       } catch {
         localStorage.removeItem('savia_token');
         localStorage.removeItem('savia_user');
+      } finally {
+        if (active) setIsLoading(false);
       }
-    }
-    setIsLoading(false);
+    };
+
+    restoreSession();
+    return () => { active = false; };
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -135,6 +148,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setPermissions(DEFAULT_PERMS);
   }, []);
+
+  useEffect(() => {
+    window.addEventListener(SESSION_EXPIRED_EVENT, logout);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, logout);
+  }, [logout]);
 
   const hasPermission = useCallback((page: string): boolean => {
     if (!user) return false;

@@ -234,16 +234,16 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     demande_info = {}
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = ?",
+            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
             (demande_id,)
         ).fetchone()
         if row:
             demande_info = dict(row)
         conn.execute("""
             UPDATE demandes_intervention
-            SET statut = ?, technicien_assigne = ?, notes_traitement = ?,
+            SET statut = %s, technicien_assigne = %s, notes_traitement = %s,
                 date_traitement = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE id = %s
         """, (nouveau_statut, technicien_assigne, notes_traitement, demande_id))
 
     # --- Notification Telegram (tous les changements de statut) ---
@@ -294,7 +294,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
             with get_db() as conn:
                 # Vérifier si une intervention existe déjà pour cette demande
                 existing = conn.execute(
-                    "SELECT intervention_id FROM demandes_intervention WHERE id = ?",
+                    "SELECT intervention_id FROM demandes_intervention WHERE id = %s",
                     (demande_id,)
                 ).fetchone()
                 already_linked = existing and existing["intervention_id"]
@@ -309,7 +309,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         INSERT INTO interventions
                           (date, machine, technicien, type_intervention, description,
                            probleme, code_erreur, statut, priorite, notes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         now,
                         equipement,
@@ -328,7 +328,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     ).fetchone()
                     if new_interv:
                         conn.execute(
-                            "UPDATE demandes_intervention SET intervention_id = ? WHERE id = ?",
+                            "UPDATE demandes_intervention SET intervention_id = %s WHERE id = %s",
                             (new_interv["id"], demande_id)
                         )
                         logger.info(f"Intervention #{new_interv['id']} auto-créée pour demande #{demande_id} → {technicien_assigne}")
@@ -336,7 +336,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                     # Intervention déjà liée → mettre à jour technicien + statut (ex: réassignation après refus)
                     interv_id = existing["intervention_id"]
                     conn.execute(
-                        "UPDATE interventions SET technicien = ?, statut = ? WHERE id = ?",
+                        "UPDATE interventions SET technicien = %s, statut = %s WHERE id = %s",
                         (technicien_assigne, "Assignée", interv_id)
                     )
                     logger.info(f"Intervention #{interv_id} réassignée à {technicien_assigne} (demande #{demande_id})")
@@ -386,7 +386,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         
         with get_db() as conn:
             intervention = conn.execute(
-                "SELECT id, machine, technicien FROM interventions WHERE id = ?",
+                "SELECT id, machine, technicien FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             
@@ -400,7 +400,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
             # Get client from equipements table (joined by machine name)
             try:
                 eq_row = conn.execute(
-                    "SELECT client FROM equipements WHERE nom = ? LIMIT 1",
+                    "SELECT client FROM equipements WHERE nom = %s LIMIT 1",
                     (machine,)
                 ).fetchone()
                 if eq_row:
@@ -506,7 +506,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                             # Create rupture notification (same as mode single tech)
                             conn.execute("""
                                 INSERT INTO notif_rupture (intervention_id, reference, designation, created_at)
-                                VALUES (?, ?, ?, datetime('now'))
+                                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
                             """, (intervention_id, ref, designation))
                             logger.info(f"      Created rupture badge: {ref} - {designation}")
                 
@@ -620,7 +620,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                     # Fetch updated intervention data with pieces_utilisees
                     with get_db() as conn:
                         updated_row = conn.execute(
-                            "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = ?",
+                            "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = %s",
                             (intervention_id,)
                         ).fetchone()
                     
@@ -877,14 +877,14 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
     from db_engine import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, machine, technicien, statut FROM interventions WHERE id = ?",
+            "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
             (intervention_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
 
         conn.execute(
-            "UPDATE interventions SET statut = ? WHERE id = ?",
+            "UPDATE interventions SET statut = %s WHERE id = %s",
             ("En cours", intervention_id)
         )
 
@@ -913,7 +913,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         row = conn.execute(
             """SELECT id, machine, technicien, statut, notes,
                       (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
-               FROM interventions WHERE id = ?""",
+               FROM interventions WHERE id = %s""",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -925,7 +925,7 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
 
         # Mark intervention back to "En attente" and clear technician
         conn.execute(
-            "UPDATE interventions SET statut = ?, technicien = ?, notes = COALESCE(notes, '') || ? WHERE id = ?",
+            "UPDATE interventions SET statut = %s, technicien = %s, notes = COALESCE(notes, '') || %s WHERE id = %s",
             ("En attente", "", f"\n[REFUS par {tech_name}] {raison}", intervention_id)
         )
 
@@ -933,8 +933,8 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         conn.execute("""
             UPDATE demandes_intervention
             SET statut = 'En attente', technicien_assigne = '',
-                notes_traitement = COALESCE(notes_traitement, '') || ?
-            WHERE intervention_id = ?
+                notes_traitement = COALESCE(notes_traitement, '') || %s
+            WHERE intervention_id = %s
         """, (f"\n[REFUS par {tech_name}] {raison}", intervention_id))
 
     # Send Telegram notification
@@ -966,4 +966,3 @@ __all__ = [
     "accept_intervention",
     "refuse_intervention",
 ]
-

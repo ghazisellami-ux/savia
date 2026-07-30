@@ -5,6 +5,7 @@ from api.runtime import (
     Depends,
     HTTPException,
     JWT_EXPIRY_HOURS,
+    JWT_ISSUER,
     JWT_SECRET,
     Optional,
     Request,
@@ -27,6 +28,40 @@ from api.security import (
     _verify_password,
     _verify_token,
 )
+from collections import defaultdict, deque
+from threading import Lock
+from time import monotonic
+
+
+_LOGIN_WINDOW_SECONDS = 15 * 60
+_LOGIN_MAX_ATTEMPTS = 5
+_login_attempts: dict[str, deque[float]] = defaultdict(deque)
+_login_attempts_lock = Lock()
+
+
+def _is_login_rate_limited(*keys: str) -> bool:
+    now = monotonic()
+    with _login_attempts_lock:
+        for key in keys:
+            attempts = _login_attempts[key]
+            while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
+                attempts.popleft()
+            if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+                return True
+    return False
+
+
+def _record_failed_login(*keys: str) -> None:
+    now = monotonic()
+    with _login_attempts_lock:
+        for key in keys:
+            _login_attempts[key].append(now)
+
+
+def _clear_login_attempts(*keys: str) -> None:
+    with _login_attempts_lock:
+        for key in keys:
+            _login_attempts.pop(key, None)
 
 @app.get("/")
 def root():
@@ -36,14 +71,24 @@ def root():
 @app.post("/api/auth/login")
 def login(body: LoginRequest, request: Request):
     ip_address = request.client.host if request.client else "unknown"
+    username_key = body.username.strip().casefold()
+    ip_key = f"ip:{ip_address}"
+    account_key = f"account:{username_key}"
+    if _is_login_rate_limited(ip_key, account_key):
+        raise HTTPException(
+            status_code=429,
+            detail="Trop de tentatives de connexion. Réessayez dans 15 minutes.",
+            headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+        )
     
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = ? AND actif = 1",
+            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
             (body.username,)
         ).fetchone()
 
     if not row or not _verify_password(body.password, row["password_hash"]):
+        _record_failed_login(ip_key, account_key)
         log_audit(body.username, "LOGIN_FAILED", f"Identifiants incorrects", "auth", ip_address)
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
@@ -51,6 +96,7 @@ def login(body: LoginRequest, request: Request):
     
     # Log successful login
     log_audit(body.username, "LOGIN", "Connexion réussie", "auth", ip_address)
+    _clear_login_attempts(ip_key, account_key)
     
     payload = {
         "sub": user_data["username"],
@@ -58,6 +104,9 @@ def login(body: LoginRequest, request: Request):
         "nom": user_data.get("nom_complet", ""),
         "client": user_data.get("client", "") or "",
         "pages_autorisees": user_data.get("pages_autorisees", "") or "",
+        "iss": JWT_ISSUER,
+        "iat": datetime.utcnow(),
+        "nbf": datetime.utcnow(),
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRY_HOURS),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
@@ -593,4 +642,3 @@ __all__ = [
     "get_dashboard_kpis",
     "get_health_scores",
 ]
-

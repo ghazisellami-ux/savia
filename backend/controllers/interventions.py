@@ -62,6 +62,33 @@ from controllers.auth_dashboard import (
 )
 
 
+_MAX_FICHE_BYTES = 10 * 1024 * 1024
+_FICHE_SIGNATURES = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "application/pdf": (b"%PDF-",),
+}
+
+
+async def _read_validated_fiche(upload: UploadFile) -> bytes:
+    """Accept only small, supported fiche files after verifying their binary signature."""
+    content_type = (upload.content_type or "").lower().split(";", 1)[0]
+    if content_type not in {*_FICHE_SIGNATURES, "image/webp"}:
+        raise HTTPException(status_code=415, detail="Format accepté : JPEG, PNG, WEBP ou PDF")
+    contents = await upload.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Le fichier est vide")
+    if len(contents) > _MAX_FICHE_BYTES:
+        raise HTTPException(status_code=413, detail="Le fichier ne doit pas dépasser 10 Mo")
+    if content_type == "image/webp":
+        valid_signature = contents.startswith(b"RIFF") and contents[8:12] == b"WEBP"
+    else:
+        valid_signature = contents.startswith(_FICHE_SIGNATURES[content_type])
+    if not valid_signature:
+        raise HTTPException(status_code=415, detail="Le contenu du fichier ne correspond pas à son format déclaré")
+    return contents
+
+
 def _planning_id_in_set(value, planning_ids):
     """Compare dataframe identifiers without leaking NaN/string type issues."""
     try:
@@ -112,7 +139,7 @@ def get_interventions(
                 # Find intervention IDs where this technician is assigned
                 tech_intervention_ids = conn.execute(
                     """SELECT DISTINCT intervention_id FROM interventions_techniciens 
-                       WHERE technicien_nom ILIKE ? OR technicien_nom ILIKE ?""",
+                       WHERE technicien_nom ILIKE %s OR technicien_nom ILIKE %s""",
                     (f"%{user_nom_complet}%", f"%{user_username}%")
                 ).fetchall()
                 
@@ -120,7 +147,7 @@ def get_interventions(
                     ids_list = [str(row['intervention_id']) for row in tech_intervention_ids]
                     # Fetch full intervention records for these IDs
                     if ids_list:
-                        id_placeholders = ",".join(["?"] * len(ids_list))
+                        id_placeholders = ",".join(["%s"] * len(ids_list))
                         multi_tech_rows = conn.execute(
                             f"""SELECT * FROM interventions WHERE id IN ({id_placeholders})""",
                             ids_list
@@ -197,7 +224,7 @@ def get_interventions(
                     # Get all technicians assigned via interventions_techniciens
                     multi_tech_rows = conn.execute(
                         """SELECT DISTINCT technicien_nom, duree_minutes_tech, statut FROM interventions_techniciens
-                           WHERE intervention_id = ? ORDER BY technicien_nom""",
+                           WHERE intervention_id = %s ORDER BY technicien_nom""",
                         (intervention_id,)
                     ).fetchall()
                     
@@ -377,7 +404,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
     if user.get("role") == "Technicien":
         with get_db() as conn:
             row = conn.execute(
-                "SELECT technicien FROM interventions WHERE id = ?",
+                "SELECT technicien FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             if not row:
@@ -463,7 +490,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             if body.get("type_erreur"):
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE interventions SET type_erreur = ? WHERE id = ?",
+                        "UPDATE interventions SET type_erreur = %s WHERE id = %s",
                         (body.get("type_erreur"), intervention_id)
                     )
 
@@ -471,7 +498,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, duree_deplacement, notes, pieces_utilisees FROM interventions WHERE id = ?",
+                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, duree_deplacement, notes, pieces_utilisees FROM interventions WHERE id = %s",
                         (intervention_id,)
                     ).fetchone()
                 if row:
@@ -497,7 +524,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     if not client_name:
                         try:
                             eq_row = conn.execute(
-                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = ? LIMIT 1",
+                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = %s LIMIT 1",
                                 (d.get('machine', ''),)
                             ).fetchone()
                             if eq_row:
@@ -547,8 +574,8 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     conn.execute(
                         """UPDATE demandes_intervention
                            SET statut = 'Résolue',
-                               date_traitement = ?
-                         WHERE intervention_id = ?
+                               date_traitement = %s
+                         WHERE intervention_id = %s
                            AND statut != 'Résolue'""",
                         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), intervention_id)
                     )
@@ -560,7 +587,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             try:
                 with get_db() as conn:
                     prow = conn.execute(
-                        "SELECT planning_id FROM interventions WHERE id = ?",
+                        "SELECT planning_id FROM interventions WHERE id = %s",
                         (intervention_id,)
                     ).fetchone()
                     if prow and prow['planning_id']:
@@ -568,8 +595,8 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         conn.execute(
                             """UPDATE planning_maintenance
                                SET statut = 'Cloturee',
-                                   date_realisee = ?
-                             WHERE id = ? AND statut != 'Cloturee'""",
+                                   date_realisee = %s
+                             WHERE id = %s AND statut != 'Cloturee'""",
                             (datetime.now().strftime("%Y-%m-%d"), pm_id)
                         )
                         logger.info(f"Planning #{pm_id} marqué Cloturee (intervention #{intervention_id} clôturée)")
@@ -588,7 +615,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
         try:
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = ?",
+                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = %s",
                     (intervention_id,)
                 ).fetchone()
             if row:
@@ -605,7 +632,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     try:
                         with get_db() as conn2:
                             eq_row = conn2.execute(
-                                'SELECT client FROM equipements WHERE nom = ? LIMIT 1',
+                                'SELECT client FROM equipements WHERE nom = %s LIMIT 1',
                                 (machine,)
                             ).fetchone()
                             if eq_row:
@@ -733,7 +760,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
     for body_field, db_column in field_mapping.items():
         if body_field in body:
             value = body[body_field]
-            fields.append(f"{db_column} = ?")
+            fields.append(f"{db_column} = %s")
             params.append(value)
             logger.info(f"  ✓ {db_column} = {value}")
     
@@ -742,7 +769,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
         logger.info(f"update_intervention #{intervention_id}: fields={fields}, params={params}")
         try:
             with get_db() as conn:
-                conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = ?", params)
+                conn.execute(f"UPDATE interventions SET {', '.join(fields)} WHERE id = %s", params)
             logger.info(f"✅ update_intervention #{intervention_id}: SUCCESS - Updated {len(fields)} fields")
             
             # If technicien field was updated, also update interventions_techniciens table
@@ -760,7 +787,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                                 # Check if this technician is already in interventions_techniciens
                                 existing = conn.execute(
                                     """SELECT id FROM interventions_techniciens 
-                                       WHERE intervention_id = ? AND technicien_nom ILIKE ?""",
+                                       WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
                                     (intervention_id, f"%{tech_name}%")
                                 ).fetchone()
                                 
@@ -769,7 +796,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                                     conn.execute(
                                         """INSERT INTO interventions_techniciens 
                                            (intervention_id, technicien_nom, statut) 
-                                           VALUES (?, ?, ?)""",
+                                           VALUES (%s, %s, %s)""",
                                         (intervention_id, tech_name, "Assigné")
                                     )
                                     logger.info(f"✅ Added technician '{tech_name}' to interventions_techniciens for #{intervention_id}")
@@ -795,7 +822,7 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
         with get_db() as conn:
             # Vérifier que l'intervention existe et récupérer ses infos
             row = conn.execute(
-                "SELECT id, machine, type_intervention FROM interventions WHERE id = ?",
+                "SELECT id, machine, type_intervention FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             if not row:
@@ -806,7 +833,7 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
             type_intervention = row_dict.get("type_intervention", "Unknown")
             
             # Supprimer l'intervention
-            conn.execute("DELETE FROM interventions WHERE id = ?", (intervention_id,))
+            conn.execute("DELETE FROM interventions WHERE id = %s", (intervention_id,))
             
             # Log audit
             username = user.get("sub", "unknown")
@@ -829,7 +856,7 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
 @app.post("/api/interventions/{intervention_id}/fiche")
 async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Upload la photo de la fiche signée pour une intervention clôturée."""
-    contents = await file.read()
+    contents = await _read_validated_fiche(file)
     logger.info(f"Fiche upload: intervention #{intervention_id}, file={file.filename}, size={len(contents)} bytes")
     # psycopg2 requires Binary wrapper for bytea columns
     try:
@@ -839,7 +866,7 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
+            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
             (file.filename, binary_data, intervention_id)
         )
     logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
@@ -856,7 +883,7 @@ async def upload_photo_alias(intervention_id: int,
     upload = photo or file
     if not upload:
         raise HTTPException(status_code=400, detail="Aucun fichier fourni")
-    contents = await upload.read()
+    contents = await _read_validated_fiche(upload)
     logger.info(f"Photo upload (alias): intervention #{intervention_id}, file={upload.filename}, size={len(contents)} bytes")
     # psycopg2 requires Binary wrapper for bytea columns
     try:
@@ -866,7 +893,7 @@ async def upload_photo_alias(intervention_id: int,
         binary_data = contents
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = ?, fiche_photo_data = ? WHERE id = ?",
+            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
             (upload.filename, binary_data, intervention_id)
         )
     logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
@@ -874,19 +901,13 @@ async def upload_photo_alias(intervention_id: int,
 
 
 @app.get("/api/interventions/{intervention_id}/fiche")
-def download_fiche(intervention_id: int, token: Optional[str] = Query(None), user: dict = Depends(_verify_token)):
-    """Télécharge la photo de fiche pour une intervention (accepte token en query param pour img src)."""
+def download_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Télécharge une fiche après vérification du JWT Bearer."""
     from fastapi.responses import Response
-    # Si token en query param, valider manuellement
-    if token:
-        try:
-            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        except Exception:
-            raise HTTPException(status_code=401, detail="Token invalide")
     with get_db() as conn:
         try:
             row = conn.execute(
-                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = ?",
+                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
         except Exception:
@@ -940,6 +961,8 @@ def list_fiches(user: dict = Depends(_verify_token)):
 def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
     """Met à jour le statut de validation client d'une fiche.
     Une fois 'Validée', aucune modification n'est plus possible."""
+    if user.get("role") not in {"Admin", "Manager"}:
+        raise HTTPException(status_code=403, detail="Seuls les Managers et Admins peuvent valider une fiche")
     nouveau_statut = body.get("validation", "").strip()
     valeurs_autorisees = {"En attente", "Validée"}
     if nouveau_statut not in valeurs_autorisees:
@@ -948,7 +971,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
     with get_db() as conn:
         # Vérifier le statut actuel
         row = conn.execute(
-            "SELECT fiche_validation FROM interventions WHERE id = ?",
+            "SELECT fiche_validation FROM interventions WHERE id = %s",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -957,7 +980,7 @@ def update_fiche_validation(intervention_id: int, body: dict, user: dict = Depen
         if statut_actuel == "Validée":
             raise HTTPException(status_code=403, detail="Fiche déjà validée — aucune modification possible")
         conn.execute(
-            "UPDATE interventions SET fiche_validation = ? WHERE id = ?",
+            "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
             (nouveau_statut, intervention_id)
         )
     logger.info(f"Fiche #{intervention_id}: validation mise à jour → '{nouveau_statut}' par {user.get('nom', '?')}")
@@ -976,7 +999,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
     with get_db() as conn:
         # Vérifier le statut de validation
         row = conn.execute(
-            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = ?",
+            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = %s",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -988,7 +1011,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         
         # Supprimer la fiche
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = ?",
+            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = %s",
             (intervention_id,)
         )
     

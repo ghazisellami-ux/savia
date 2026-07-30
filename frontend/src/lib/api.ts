@@ -5,6 +5,14 @@
 // Browser requests stay same-origin and are forwarded by Next.js to the backend.
 // This avoids exposing a build-time localhost URL that breaks Docker and CORS.
 const API_BASE = '';
+export const SESSION_EXPIRED_EVENT = 'savia_session_expired';
+
+export function expireSession(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('savia_token');
+  localStorage.removeItem('savia_user');
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
 
 interface ApiOptions {
   method?: string;
@@ -54,6 +62,9 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
   clearTimeout(timer);
 
   if (!res.ok) {
+    if (res.status === 401 && endpoint !== '/api/auth/login') {
+      expireSession();
+    }
     const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
     throw new ApiError(data.error || `HTTP ${res.status}`, res.status);
   }
@@ -72,6 +83,19 @@ export const auth = {
 
 // --- Dashboard ---
 export const dashboard = {
+  regions: () => request<string[]>('/api/dashboard/regions'),
+  villes: (region: string) =>
+    request<string[]>(`/api/dashboard/villes?region=${encodeURIComponent(region)}`),
+  clientsByRegion: (region?: string) =>
+    request<string[]>(`/api/dashboard/clients-by-region${region ? `?region=${encodeURIComponent(region)}` : ''}`),
+  equipmentTypes: (params?: { client?: string; region?: string; ville?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.client) p.set('client', params.client);
+    if (params?.region) p.set('region', params.region);
+    if (params?.ville) p.set('ville', params.ville);
+    const qs = p.toString();
+    return request<string[]>(`/api/dashboard/equipment-types${qs ? '?' + qs : ''}`);
+  },
   kpis: (params?: { date_start?: string; date_end?: string; client?: string; region?: string; ville?: string; equipment_type?: string }) => {
     const p = new URLSearchParams();
     if (params?.client) p.set('client', params.client);
@@ -123,9 +147,13 @@ export const interventions = {
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     return res.json();
   },
-  downloadFicheUrl: (id: number): string => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
-    return `${API_BASE}/api/interventions/${id}/fiche?token=${token}`;
+  downloadFiche: async (id: number): Promise<Blob> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+    const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new ApiError(`Impossible de télécharger la fiche (${res.status})`, res.status);
+    return res.blob();
   },
   listFiches: () =>
     request<Array<Record<string, unknown>>>('/api/interventions/fiches'),
