@@ -22,6 +22,8 @@ from api.security import (
     Depends,
     Optional,
     _verify_token,
+    assert_resource_client_access,
+    resolve_client_scope,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -45,7 +47,7 @@ from controllers.auth_dashboard import (
 @app.get("/api/contrats")
 def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     # Pour Lecteur : forcer le filtre par son client
-    effective_client = _get_client_filter(user) or client
+    effective_client = resolve_client_scope(user, client)
     df = lire_contrats(client=effective_client)
     records = _df_to_records(df)
     
@@ -129,6 +131,8 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
 def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
     modifier_contrat(contrat_id, body)
     
     # Log audit
@@ -147,6 +151,8 @@ def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_tok
 def delete_contrat(contrat_id: int, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
     # Get contrat info before deleting
     try:
         with get_db() as conn:
@@ -178,7 +184,7 @@ def delete_contrat(contrat_id: int, user: dict = Depends(_verify_token)):
 
 @app.get("/api/conformite")
 def get_conformite(client: Optional[str] = None, user: dict = Depends(_verify_token)):
-    return _df_to_records(lire_conformite(client=client))
+    return _df_to_records(lire_conformite(client=resolve_client_scope(user, client)))
 
 
 @app.post("/api/conformite")
@@ -193,6 +199,8 @@ def create_conformite(body: dict, user: dict = Depends(_verify_token)):
 def delete_conformite(conformite_id: int, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    with get_db() as conn:
+        assert_resource_client_access(conn, "conformite", conformite_id, user)
     supprimer_conformite(conformite_id)
     return {"ok": True}
 

@@ -44,7 +44,7 @@ def lire_interventions(machine=None):
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
-                   COALESCE(e.client, '') AS client
+                   COALESCE(NULLIF(i.client, ''), e.client, '') AS client
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
             WHERE i.is_temporary = 0
@@ -119,8 +119,8 @@ def ajouter_intervention(intervention_dict):
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, cout_pieces, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite,
-                                       duree_deplacement, start_time, end_time, fiche_validation)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       duree_deplacement, start_time, end_time, fiche_validation, client)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
@@ -143,6 +143,7 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("start_time") or None,
             intervention_dict.get("end_time") or None,
             intervention_dict.get("fiche_validation", "En attente"),
+            intervention_dict.get("client") or "",
         ))
     _trigger_backup()
     return True

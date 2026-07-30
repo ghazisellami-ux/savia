@@ -28,6 +28,9 @@ from api.security import (
     Optional,
     _check_create_permission,
     _verify_token,
+    assert_resource_client_access,
+    get_client_scope,
+    resolve_client_scope,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -54,7 +57,7 @@ from controllers.auth_dashboard import (
 def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     df = lire_equipements()
     # Priority: explicit ?client= param, then user's client filter
-    client_filter = client or _get_client_filter(user)
+    client_filter = resolve_client_scope(user, client)
     if client_filter and not df.empty and "Client" in df.columns:
         df = df[df["Client"].astype(str).str.lower() == client_filter.lower()]
     return _df_to_records(df)
@@ -306,6 +309,8 @@ def upload_document(body: dict, user: dict = Depends(_verify_token)):
     contenu_base64 = body.get("contenu_base64", "")
     if not equip_id or not nom_fichier or not contenu_base64:
         raise HTTPException(status_code=400, detail="equipement_id, nom_fichier et contenu_base64 requis")
+    with get_db() as conn:
+        assert_resource_client_access(conn, "equipement", int(equip_id), user)
     ajouter_document_technique(equip_id, nom_fichier, contenu_base64)
     return {"ok": True}
 
@@ -314,13 +319,22 @@ def upload_document(body: dict, user: dict = Depends(_verify_token)):
 def get_all_documents(user: dict = Depends(_verify_token)):
     """List all technical documents with associated equipment info."""
     from db_engine import lire_tous_documents_techniques
-    return lire_tous_documents_techniques()
+    documents = lire_tous_documents_techniques()
+    client_scope = get_client_scope(user)
+    if client_scope:
+        documents = [
+            doc for doc in documents
+            if str(doc.get("client") or "").strip().casefold() == client_scope.casefold()
+        ]
+    return documents
 
 
 @app.get("/api/documents-techniques/{equip_id}")
 def get_documents_by_equipment(equip_id: int, user: dict = Depends(_verify_token)):
     """List technical documents for a specific equipment."""
     from db_engine import lire_documents_techniques
+    with get_db() as conn:
+        assert_resource_client_access(conn, "equipement", equip_id, user)
     return lire_documents_techniques(equip_id)
 
 
@@ -328,6 +342,8 @@ def get_documents_by_equipment(equip_id: int, user: dict = Depends(_verify_token
 def download_document(doc_id: int, user: dict = Depends(_verify_token)):
     """Download a specific technical document (returns base64 content)."""
     from db_engine import lire_document_technique_contenu
+    with get_db() as conn:
+        assert_resource_client_access(conn, "document_technique", doc_id, user)
     doc = lire_document_technique_contenu(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document non trouvé")
@@ -340,6 +356,8 @@ def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import supprimer_document_technique
+    with get_db() as conn:
+        assert_resource_client_access(conn, "document_technique", doc_id, user)
     supprimer_document_technique(doc_id)
     return {"ok": True}
 

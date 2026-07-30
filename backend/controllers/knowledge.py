@@ -20,6 +20,7 @@ from api.security import (
     Depends,
     HTTPException,
     _verify_token,
+    require_roles,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -36,8 +37,12 @@ from controllers.auth_dashboard import (
     logger,
 )
 
+KNOWLEDGE_READ_ROLES = ("Admin", "Manager", "Responsable Technique", "Technicien")
+KNOWLEDGE_WRITE_ROLES = ("Admin", "Manager", "Responsable Technique")
+
 @app.get("/api/knowledge")
 def get_knowledge(user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_READ_ROLES)
     """Return error codes + solutions merged."""
     hex_db, sol_db = lire_base()
     results = []
@@ -60,6 +65,7 @@ def get_knowledge(user: dict = Depends(_verify_token)):
 
 @app.post("/api/knowledge/import")
 async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
     """Import error codes from an uploaded Excel/CSV file."""
     import io
     import unicodedata
@@ -306,6 +312,7 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
 
 @app.delete("/api/knowledge/{code}")
 def delete_knowledge_code(code: str, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
     """Supprimer un code d'erreur spécifique et ses solutions."""
     try:
         with get_db() as conn:
@@ -324,11 +331,13 @@ def delete_knowledge_code(code: str, user: dict = Depends(_verify_token)):
 
 @app.get("/api/techniciens")
 def get_techniciens(user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_READ_ROLES)
     return _df_to_records(lire_techniciens())
 
 
 @app.post("/api/techniciens")
 def create_technicien(body: dict, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
     # Validate username uniqueness if provided
     username = body.get("username", "").strip()
     if username:
@@ -363,12 +372,14 @@ def create_technicien(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/techniciens/{tech_id}")
 def modifier_techniciens_route(tech_id: int, body: dict, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
     update_technicien(tech_id, body)
     return {"ok": True}
 
 
 @app.delete("/api/techniciens/{tech_id}")
 def delete_technicien(tech_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
     supprimer_technicien(tech_id)
     return {"ok": True}
 
@@ -379,6 +390,7 @@ def delete_technicien(tech_id: int, user: dict = Depends(_verify_token)):
 
 @app.post("/api/logs/upload")
 def upload_log(body: dict, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_READ_ROLES)
     """Upload un fichier log : contenu vers S3/MinIO, métadonnées vers PostgreSQL."""
     import hashlib
     equipement = body.get("equipement", "")
@@ -447,6 +459,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
 
 @app.get("/api/logs")
 def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_READ_ROLES)
     """Liste les logs uploadés (métadonnées depuis PostgreSQL)."""
     try:
         with get_db() as conn:
@@ -470,6 +483,7 @@ def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
 
 @app.get("/api/logs/{log_id}")
 def get_log(log_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, *KNOWLEDGE_READ_ROLES)
     """Récupère le contenu d'un log depuis S3/MinIO."""
     try:
         with get_db() as conn:

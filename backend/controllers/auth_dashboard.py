@@ -31,6 +31,8 @@ from api.security import (
     _verify_password_change_token,
     _verify_password,
     _verify_token,
+    get_client_scope,
+    resolve_client_scope,
     validate_password_policy,
 )
 from collections import defaultdict, deque
@@ -201,10 +203,7 @@ def change_password(body: ChangePasswordRequest, request: Request, user: dict = 
 
 def _get_client_filter(user: dict) -> Optional[str]:
     """Retourne le client restricté pour un Lecteur, None sinon (accès total)."""
-    if user.get("role") == "Lecteur":
-        c = user.get("client", "").strip()
-        return c if c else None
-    return None
+    return get_client_scope(user)
 
 
 # ==========================================
@@ -234,7 +233,7 @@ def get_dashboard_kpis(
         logger.info(f"Total clients in database: {len(df_clients)}")
 
         # Pour Lecteur : forcer le filtre par son client
-        effective_client = _get_client_filter(user) or client
+        effective_client = resolve_client_scope(user, client)
 
         # IMPORTANT: Count unique clients from ALL clients table (not just equipements)
         # This ensures we show all clients, even those without equipment
@@ -511,7 +510,7 @@ def get_health_scores(
         df_clients = db_lire_clients()  # Get clients table for region/ville filtering
 
         # Pour Lecteur : forcer le filtre par son client
-        effective_client = _get_client_filter(user) or client
+        effective_client = resolve_client_scope(user, client)
 
         # Filter equipements by client
         if effective_client and not df_eq.empty and "Client" in df_eq.columns:

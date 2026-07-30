@@ -16,6 +16,7 @@ from api.security import (
     Depends,
     HTTPException,
     _verify_token,
+    assert_resource_client_access,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -42,6 +43,8 @@ from controllers.report_helpers import (
 @app.post("/api/contrats/{contrat_id}/contrat-pdf")
 def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
     """Genere un PDF de contrat de maintenance reel (parties, articles, signatures)."""
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
     from io import BytesIO
     from fastapi.responses import Response
     import base64 as _b64

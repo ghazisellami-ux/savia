@@ -28,6 +28,7 @@ from api.security import (
     HTTPException,
     _check_create_piece_permission,
     _verify_token,
+    require_roles,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -49,13 +50,17 @@ from controllers.auth_dashboard import (
     logger,
 )
 
+STOCK_READ_ROLES = ("Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire", "Gestionnaire de stock")
+
 @app.get("/api/pieces")
 def get_pieces(user: dict = Depends(_verify_token)):
+    require_roles(user, *STOCK_READ_ROLES)
     return _df_to_records(lire_pieces())
 
 
 @app.get("/api/pieces/predictions/priorite")
 def get_pieces_a_commander(limit: int = 10, user: dict = Depends(_verify_token)):
+    require_roles(user, *STOCK_READ_ROLES)
     """
     Retourne les pièces à commander en priorité (N pièces les plus urgentes).
     Utilise la prédiction avancée multi-facteur.
@@ -76,6 +81,7 @@ def get_pieces_a_commander(limit: int = 10, user: dict = Depends(_verify_token))
 
 @app.post("/api/pieces/{piece_id}/prediction")
 def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, *STOCK_READ_ROLES)
     """
     Génère une prédiction détaillée pour une pièce spécifique.
     Utilise tous les paramètres avancés (consommation, lead time, criticité, etc).
@@ -241,6 +247,7 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
 
 @app.get("/api/pieces-demandees")
 def get_pieces_demandees(statut: str = None, user: dict = Depends(_verify_token)):
+    require_roles(user, *STOCK_READ_ROLES)
     """Liste les demandes de pièces. ?statut=en_attente pour filtrer."""
     df = lire_toutes_pieces_demandees(statut=statut)
     return _df_to_records(df)
@@ -248,6 +255,8 @@ def get_pieces_demandees(statut: str = None, user: dict = Depends(_verify_token)
 
 @app.post("/api/pieces-demandees/{demande_id}/resoudre")
 def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token)):
+    if not _check_create_piece_permission(user):
+        raise HTTPException(status_code=403, detail="Votre rôle n'autorise pas cette action sur le stock")
     """Résoudre manuellement une demande de pièce (le gestionnaire confirme la disponibilité)."""
     try:
         # Récupérer la demande pour envoyer la notification
@@ -489,6 +498,8 @@ def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
 
 @app.post("/api/pieces/recalculate-parameters")
 def recalculate_piece_parameters(user: dict = Depends(_verify_token)):
+    if not _check_create_piece_permission(user):
+        raise HTTPException(status_code=403, detail="Votre rôle n'autorise pas cette action sur le stock")
     """
     Recalculate and update all piece parameters from historical data.
     This triggers the automatic calculation of:
@@ -526,6 +537,7 @@ def recalculate_piece_parameters(user: dict = Depends(_verify_token)):
 
 @app.get("/api/pieces/{piece_id}/parameters")
 def get_piece_parameters(piece_id: int, user: dict = Depends(_verify_token)):
+    require_roles(user, *STOCK_READ_ROLES)
     """
     Get calculated parameters for a specific piece with confidence level.
     Shows:

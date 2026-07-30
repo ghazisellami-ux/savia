@@ -23,6 +23,7 @@ from api.security import (
     HTTPException,
     Optional,
     _verify_token,
+    require_roles,
     get_db,
 )
 from services.scheduled_jobs import (
@@ -51,6 +52,7 @@ from controllers.auth_dashboard import (
 
 @app.get("/api/finances/dashboard")
 def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager")
     """Dashboard financier : rentabilité par client, marges, TCO."""
     try:
         df_contrats = lire_contrats()
@@ -156,6 +158,7 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
 
 @app.get("/api/finances/tco")
 def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_token)):
+    require_roles(user, "Admin", "Manager")
     """Total Cost of Ownership par équipement."""
     try:
         df_equip = lire_equipements()
