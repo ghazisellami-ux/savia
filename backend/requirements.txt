@@ -53,7 +53,7 @@ python-docx==0.8.11
 chardet==5.2.0
 
 # Scheduling
-APScheduler==3.11.2
+APScheduler==3.11.3
 
 # Utils
 python-dotenv==1.2.2
