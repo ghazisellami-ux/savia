@@ -446,7 +446,7 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
         with get_db() as conn:
             # Check if the provided ID is a ghost entry
             test_entry = conn.execute(
-                "SELECT * FROM planning_maintenance WHERE id = ?",
+                "SELECT * FROM planning_maintenance WHERE id = %s",
                 (planning_id,)
             ).fetchone()
             
@@ -470,7 +470,7 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
             
             # Get the real planning entry
             real = conn.execute(
-                "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                "SELECT * FROM planning_maintenance WHERE id = %s AND is_ghost = false",
                 (real_planning_id,)
             ).fetchone()
             
@@ -482,7 +482,7 @@ def get_planning_comparateur(planning_id: int, user: dict = Depends(_verify_toke
             
             # Get the ghost entry associated with this planning
             ghost = conn.execute(
-                "SELECT * FROM planning_maintenance WHERE original_planning_id = ? AND is_ghost = true",
+                "SELECT * FROM planning_maintenance WHERE original_planning_id = %s AND is_ghost = true",
                 (real_planning_id,)
             ).fetchone()
             
@@ -583,7 +583,7 @@ def get_planning_comparateur_periode(
             ghosts = conn.execute(
                 """SELECT * FROM planning_maintenance 
                    WHERE is_ghost = true 
-                   AND date_prevue BETWEEN ? AND ?
+                   AND date_prevue BETWEEN %s AND %s
                    ORDER BY date_prevue ASC""",
                 (date_debut, date_fin)
             ).fetchall()
@@ -598,7 +598,7 @@ def get_planning_comparateur_periode(
                 
                 # Get the real planning entry
                 real = conn.execute(
-                    "SELECT * FROM planning_maintenance WHERE id = ? AND is_ghost = false",
+                    "SELECT * FROM planning_maintenance WHERE id = %s AND is_ghost = false",
                     (original_planning_id,)
                 ).fetchone()
                 
@@ -1069,7 +1069,7 @@ def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verif
     """Marque une intervention comme facturee (arrete les rappels)."""
     with get_db() as conn:
         conn.execute(
-            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = ?",
+            "UPDATE interventions SET facture_envoyee = TRUE WHERE id = %s",
             (intervention_id,)
         )
     return {"ok": True}

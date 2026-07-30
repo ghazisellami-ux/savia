@@ -380,7 +380,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 def _cors_origins():
-    """Return configured origins plus the local frontend addresses used in development."""
+    """Return only explicitly configured origins in production."""
     configured = [
         origin.strip().rstrip("/")
         for origin in os.getenv("CORS_ORIGINS", "").split(",")
@@ -392,11 +392,23 @@ def _cors_origins():
         "http://localhost:3001",
         "http://127.0.0.1:3001",
     ]
+    if IS_PRODUCTION:
+        return configured
     return list(dict.fromkeys(configured + local_origins))
 
 # ---- Config ----
-JWT_SECRET = os.getenv("JWT_SECRET", "sic-terrain-secret-2026")
-JWT_EXPIRY_HOURS = 72
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+if len(JWT_SECRET.encode("utf-8")) < 32:
+    raise RuntimeError(
+        "JWT_SECRET doit contenir au moins 32 octets et être configuré dans l'environnement."
+    )
+JWT_ISSUER = "savia-api"
+try:
+    JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
+except ValueError as exc:
+    raise RuntimeError("JWT_EXPIRY_HOURS doit être un entier") from exc
+if not 1 <= JWT_EXPIRY_HOURS <= 72:
+    raise RuntimeError("JWT_EXPIRY_HOURS doit être compris entre 1 et 72")
 security = HTTPBearer(auto_error=False)
 
 IS_PRODUCTION = os.getenv("NODE_ENV") == "production"
@@ -414,7 +426,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=None if IS_PRODUCTION else r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -428,6 +440,18 @@ async def savia_language_context(request: Request, call_next):
         return await call_next(request)
     finally:
         _LANG_CONTEXT.reset(token)
+
+
+@app.middleware("http")
+async def security_response_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(self), geolocation=(), microphone=()"
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.exception_handler(Exception)

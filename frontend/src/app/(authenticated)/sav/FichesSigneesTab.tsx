@@ -1,6 +1,6 @@
 'use client';
 import { Camera, CheckCircle, Clock, Eye, Download, Trash2, Upload, X } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { interventions } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -14,11 +14,44 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
   const { user } = useAuth();
   const [uploadingId, setUploadingId] = useState<number | null>(null);
+  const [ficheUrls, setFicheUrls] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   
   // Seulement celles avec photo jointe
   const fichesAvecPhoto = fiches.filter((f: any) => f.has_fiche);
+  const ficheIds = fichesAvecPhoto.map((f: any) => Number(f.id)).join(',');
+
+  useEffect(() => {
+    let active = true;
+    const objectUrls: string[] = [];
+
+    const loadFiches = async () => {
+      const entries = await Promise.all(fichesAvecPhoto.map(async (fiche: any) => {
+        try {
+          const blob = await interventions.downloadFiche(Number(fiche.id));
+          const url = URL.createObjectURL(blob);
+          objectUrls.push(url);
+          return [Number(fiche.id), url] as const;
+        } catch {
+          return null;
+        }
+      }));
+      if (active) {
+        setFicheUrls(Object.fromEntries(entries.filter(Boolean) as [number, string][]));
+      } else {
+        objectUrls.forEach(URL.revokeObjectURL);
+      }
+    };
+
+    loadFiches();
+    return () => {
+      active = false;
+      objectUrls.forEach(URL.revokeObjectURL);
+    };
+  // The IDs, rather than the array identity, determine the files to reload.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ficheIds]);
   
   // Vérifier si l'utilisateur peut supprimer/modifier
   const canManageFiches = user?.role === 'Admin' || user?.role === 'Manager';
@@ -115,7 +148,7 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {fichesAvecPhoto.map((f: any) => {
             const isValidee = f.fiche_validation === 'Validée';
-            const ficheUrl = interventions.downloadFicheUrl(Number(f.id));
+            const ficheUrl = ficheUrls[Number(f.id)] || '';
             return (
               <div
                 key={f.id}
@@ -127,12 +160,12 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
               >
                 {/* ── Photo ── */}
                 <div className="relative h-52 bg-savia-surface group">
-                  <img
+                  {ficheUrl && <img
                     src={ficheUrl}
                     alt={`Fiche #${f.id}`}
                     className="w-full h-full object-cover"
                     onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />
+                  />}
                   {/* Badge statut */}
                   <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 ${
                     isValidee ? 'bg-green-500 text-white' : 'bg-amber-500 text-white'
@@ -142,14 +175,14 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                   </div>
                   {/* Hover actions */}
                   <div className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
-                    <a href={ficheUrl} target="_blank" rel="noopener noreferrer"
+                    {ficheUrl && <a href={ficheUrl} target="_blank" rel="noopener noreferrer"
                       className="w-11 h-11 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition-colors" title="Voir en plein écran">
                       <Eye className="w-5 h-5 text-white" />
-                    </a>
-                    <a href={ficheUrl} download={f.fiche_photo_nom || `fiche_${f.id}.jpg`}
+                    </a>}
+                    {ficheUrl && <a href={ficheUrl} download={f.fiche_photo_nom || `fiche_${f.id}.jpg`}
                       className="w-11 h-11 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition-colors" title="Télécharger">
                       <Download className="w-5 h-5 text-white" />
-                    </a>
+                    </a>}
                     {canManageFiches && !isValidee && (
                       <button
                         onClick={() => handleDeleteFiche(f.id)}
@@ -192,13 +225,13 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                           <p className="text-xs font-medium">En attente de validation</p>
                         </div>
                         <div className="flex gap-2">
-                          <button
+                          {canManageFiches && <button
                             onClick={() => handleValidation(Number(f.id))}
                             className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-green-500/15 hover:bg-green-500/25 text-green-400 text-xs font-bold transition-colors cursor-pointer border border-green-500/30"
                           >
                             <CheckCircle className="w-3.5 h-3.5" />
                             Valider
-                          </button>
+                          </button>}
                           {canManageFiches && (
                             <button
                               onClick={() => handleDeleteFiche(Number(f.id))}

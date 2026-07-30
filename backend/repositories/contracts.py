@@ -62,7 +62,8 @@ def ajouter_technicien(tech_dict):
         with get_db() as conn:
             res = conn.execute("""
                 INSERT INTO techniciens (nom, prenom, specialite, qualification, niveau_competence, dispo, notes, email, telephone, telegram_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
@@ -75,7 +76,7 @@ def ajouter_technicien(tech_dict):
                 tech_dict.get("telephone", ""),
                 tech_dict.get("telegram_id", ""),
             ))
-            tech_id = res.lastrowid
+            tech_id = res.fetchone()["id"]
         
         nom_comp = f"{tech_dict.get('nom', '')} {tech_dict.get('prenom', '')}".strip()
         logger.info(f"Audit Trail: Nouveau technicien {nom_comp} ajouté (ID: {tech_id})")
@@ -92,9 +93,9 @@ def update_technicien(tech_id, tech_dict):
         with get_db() as conn:
             conn.execute("""
                 UPDATE techniciens
-                SET nom=?, prenom=?, specialite=?, qualification=?, niveau_competence=?, dispo=?, notes=?,
-                    email=?, telephone=?, telegram_id=?
-                WHERE id=?
+                SET nom=%s, prenom=%s, specialite=%s, qualification=%s, niveau_competence=%s, dispo=%s, notes=%s,
+                    email=%s, telephone=%s, telegram_id=%s
+                WHERE id=%s
             """, (
                 tech_dict.get("nom", ""),
                 tech_dict.get("prenom", ""),
@@ -118,7 +119,7 @@ def update_technicien(tech_id, tech_dict):
 def supprimer_technicien(tech_id):
     """Supprime un technicien."""
     with get_db() as conn:
-        conn.execute("DELETE FROM techniciens WHERE id = ?", (tech_id,))
+        conn.execute("DELETE FROM techniciens WHERE id = %s", (tech_id,))
     return True
 
 
@@ -132,7 +133,7 @@ def lire_contrats(client=None):
     """Lit les contrats, optionnellement filtrés par client."""
     with get_db() as conn:
         if client:
-            df = read_sql("SELECT * FROM contrats WHERE client=? ORDER BY date_fin DESC", conn, params=(client,))
+            df = read_sql("SELECT * FROM contrats WHERE client=%s ORDER BY date_fin DESC", conn, params=(client,))
         else:
             df = read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
     return df
@@ -198,18 +199,18 @@ def ajouter_contrat(contrat_dict):
             import json
             pieces_incluses = json.dumps(pieces_incluses)
         
-        # Insert and retrieve ID - use RETURNING for PostgreSQL, fallback to MAX for SQLite
+        # PostgreSQL returns the generated identifier atomically.
         ph = "%s"
         contrat_id = None
         
         try:
-            # PostgreSQL: Insert then use lastval() to get ID
-            conn.execute(f"""
+            row = conn.execute(f"""
                 INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                     sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
                     fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
                     pieces_incluses, avec_pieces, rappel_avant_jours)
                 VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                RETURNING id
             """, (
                 contrat_dict.get("client", ""),
                 contrat_dict.get("type_contrat", "Standard"),
@@ -229,9 +230,8 @@ def ajouter_contrat(contrat_dict):
                 1 if contrat_dict.get("avec_pieces") else 0,
                 contrat_dict.get("rappel_avant_jours", 14),
             ))
-            # Get the inserted ID using lastval() for PostgreSQL
-            row = conn.execute("SELECT lastval() as id").fetchone()
-            contrat_id = row["id"] if row else None
+            inserted = row.fetchone()
+            contrat_id = inserted["id"] if inserted else None
             logger.info(f"✅ Contrat created with ID: {contrat_id}")
         except Exception as e:
             logger.error(f"Error inserting contrat: {e}")
@@ -556,13 +556,13 @@ def update_intervention_statut(intervention_id, nouveau_statut):
     with get_db() as conn:
         now = datetime.now().isoformat()
         if nouveau_statut == "En cours":
-            conn.execute("UPDATE interventions SET statut=?, date_debut_intervention=? WHERE id=?",
+            conn.execute("UPDATE interventions SET statut=%s, date_debut_intervention=%s WHERE id=%s",
                          (nouveau_statut, now, intervention_id))
         elif nouveau_statut in ("Cloturee", "Cl\u00f4tur\u00e9e"):
-            conn.execute("UPDATE interventions SET statut='Cloturee', date_cloture=? WHERE id=?",
+            conn.execute("UPDATE interventions SET statut='Cloturee', date_cloture=%s WHERE id=%s",
                          (now, intervention_id))
         else:
-            conn.execute("UPDATE interventions SET statut=? WHERE id=?",
+            conn.execute("UPDATE interventions SET statut=%s WHERE id=%s",
                          (nouveau_statut, intervention_id))
         if nouveau_statut in ("Cloturee", "Clôturée"):
             _mark_linked_planning_closed(conn, intervention_id, now[:10])
@@ -725,7 +725,7 @@ def lire_conformite(client=None):
     query = "SELECT id, equipement, client, type_controle, description, date_controle, date_expiration, fichier_nom, statut, notes, created_by, created_at FROM conformite"
     params = []
     if client:
-        query += " WHERE client = ?"
+        query += " WHERE client = %s"
         params.append(client)
     query += " ORDER BY date_expiration ASC"
     with get_db() as conn:
@@ -739,7 +739,7 @@ def ajouter_conformite(data, fichier_bytes=None):
             INSERT INTO conformite (equipement, client, type_controle, description,
                                      date_controle, date_expiration, fichier_nom, fichier_data,
                                      statut, notes, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             data.get("equipement", ""),
             data.get("client", ""),
@@ -759,7 +759,7 @@ def ajouter_conformite(data, fichier_bytes=None):
 def supprimer_conformite(conformite_id):
     """Supprime un contrôle de conformité."""
     with get_db() as conn:
-        conn.execute("DELETE FROM conformite WHERE id = ?", (conformite_id,))
+        conn.execute("DELETE FROM conformite WHERE id = %s", (conformite_id,))
     return True
 
 
@@ -767,7 +767,7 @@ def lire_fichier_conformite(conformite_id):
     """Récupère le fichier PDF d'un contrôle de conformité."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT fichier_nom, fichier_data FROM conformite WHERE id = ?",
+            "SELECT fichier_nom, fichier_data FROM conformite WHERE id = %s",
             (conformite_id,)
         ).fetchone()
         if row and row["fichier_data"]:

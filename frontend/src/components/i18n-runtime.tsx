@@ -31,7 +31,7 @@ export default function I18nRuntime() {
       const token = localStorage.getItem('savia_token');
       if (!token) return;
       try {
-        const res = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) return;
         const data = await res.json();
         const next = normalizeLang(data.langue);

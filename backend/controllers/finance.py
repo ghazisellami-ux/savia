@@ -410,7 +410,7 @@ def update_site_coordinates(client_name: str, body: dict, user: dict = Depends(_
         with get_db() as conn:
             # Update all equipments for this client
             conn.execute(
-                "UPDATE equipements SET latitude = ?, longitude = ?, adresse = ? WHERE client = ?",
+                "UPDATE equipements SET latitude = %s, longitude = %s, adresse = %s WHERE client = %s",
                 (float(lat), float(lng), adresse, client_name)
             )
         return {"ok": True, "message": f"Coordonnées mises à jour pour {client_name}"}

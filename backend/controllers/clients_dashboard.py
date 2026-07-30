@@ -614,6 +614,8 @@ async def import_clients_excel(file: UploadFile = File(...), user: dict = Depend
 @app.put("/api/clients/{client_id}")
 def update_client_api(client_id: int, body: dict, user: dict = Depends(_verify_token)):
     """Update an existing client."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     modifier_client(client_id, body)
     return {"ok": True}
 
@@ -621,6 +623,8 @@ def update_client_api(client_id: int, body: dict, user: dict = Depends(_verify_t
 @app.delete("/api/clients/{client_id}")
 def delete_client_api(client_id: int, user: dict = Depends(_verify_token)):
     """Delete a client."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     supprimer_client(client_id)
     return {"ok": True}
 

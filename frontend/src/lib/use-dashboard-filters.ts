@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { clients as clientsApi, dashboard } from '@/lib/api';
+import { dashboard } from '@/lib/api';
 
 export interface FilterOptions {
   clients: string[];
@@ -37,9 +37,7 @@ export function useDashboardFilters() {
       setIsLoadingFilters(true);
       
       // Récupérer les régions via l'API dédiée
-      const regions = await fetch('/api/dashboard/regions')
-        .then(r => r.json())
-        .catch(() => []);
+      const regions = await dashboard.regions().catch(() => []);
 
       // Filtrer les régions pour s'assurer que seules les 4 régions valides sont affichées
       const VALID_REGIONS = ['Sud', 'Centre', 'Nord', 'International'];
@@ -48,14 +46,10 @@ export function useDashboardFilters() {
         : [];
 
       // Récupérer tous les clients via l'API dédiée
-      const clients = await fetch('/api/dashboard/clients-by-region')
-        .then(r => r.json())
-        .catch(() => []);
+      const clients = await dashboard.clientsByRegion().catch(() => []);
 
       // Récupérer les types d'équipement via l'API dédiée (sans filtres au démarrage)
-      const equipmentTypes = await fetch('/api/dashboard/equipment-types')
-        .then(r => r.json())
-        .catch(() => []);
+      const equipmentTypes = await dashboard.equipmentTypes().catch(() => []);
 
       setFilterOptions({
         clients,
@@ -86,9 +80,7 @@ export function useDashboardFilters() {
         return [];
       }
 
-      const villes = await fetch(`/api/dashboard/villes?region=${encodeURIComponent(region)}`)
-        .then(r => r.json())
-        .catch(() => []);
+      const villes = await dashboard.villes(region).catch(() => []);
 
       // Filtrer les villes pour exclure les régions
       const filteredVilles = Array.isArray(villes) 
@@ -120,9 +112,7 @@ export function useDashboardFilters() {
       }
 
       // Appel API avec paramètre region
-      const clients = await fetch(`/api/dashboard/clients-by-region?region=${encodeURIComponent(region)}`)
-        .then(r => r.json())
-        .catch(() => []);
+      const clients = await dashboard.clientsByRegion(region).catch(() => []);
 
       // Mettre en cache
       setClientsCache(prev => ({
@@ -155,16 +145,7 @@ export function useDashboardFilters() {
         return equipmentTypesCache[cacheKey];
       }
 
-      // Construire les paramètres de requête
-      const params = new URLSearchParams();
-      if (client) params.set('client', client);
-      if (region) params.set('region', region);
-      if (ville) params.set('ville', ville);
-
-      // Appel API avec paramètres de filtrage
-      const equipmentTypes = await fetch(`/api/dashboard/equipment-types?${params.toString()}`)
-        .then(r => r.json())
-        .catch(() => []);
+      const equipmentTypes = await dashboard.equipmentTypes({ client, region, ville }).catch(() => []);
 
       // Mettre en cache
       setEquipmentTypesCache(prev => ({

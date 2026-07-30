@@ -44,39 +44,16 @@ except ImportError:
     logger.error("psycopg2 not found. Application requires psycopg2 to connect to PostgreSQL.")
 
 
-# ---- Minimal wrapper for psycopg2 for backward compatibility ----
-class PgConnWrapper:
-    """Adds SQLite-like .execute() and .executescript() methods to psycopg2 connection."""
+# ---- PostgreSQL connection helper ----
+class PostgresConnection:
+    """Expose convenient execute helpers while keeping native PostgreSQL SQL."""
     
     def __init__(self, pg_conn):
         self._conn = pg_conn
     
-    def _translate_sql(self, sql):
-        """Translate SQLite SQL to PostgreSQL SQL."""
-        # Convert ? to %s
-        sql = sql.replace("?", "%s")
-        # Convert to nothing (PostgreSQL uses SERIAL)
-        sql = re.sub(r'\s+AUTOINCREMENT', '', sql, flags=re.IGNORECASE)
-        # Convert INTEGER PRIMARY KEY to SERIAL PRIMARY KEY
-        sql = re.sub(r'INTEGER\s+PRIMARY\s+KEY(?!\s+AUTOINCREMENT)', 'SERIAL PRIMARY KEY', sql, flags=re.IGNORECASE)
-        # Convert BYTEA to BYTEA
-        sql = re.sub(r'\bBLOB\b', 'BYTEA', sql)
-        # Skip PRAGMA statements (PostgreSQL specific)
-        if sql.strip().upper().startswith("PRAGMA"):
-            return None
-        # Convert INSERT OR IGNORE to INSERT (with ON CONFLICT for PostgreSQL)
-        # This will be handled case-by-case
-        sql = re.sub(r'INSERT\s+OR\s+IGNORE', 'INSERT', sql, flags=re.IGNORECASE)
-        return sql
-    
     def execute(self, sql, params=None):
-        """Execute a single statement (returns cursor for compatibility)."""
+        """Execute one PostgreSQL statement and return a dictionary cursor."""
         cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        # Translate SQL
-        sql = self._translate_sql(sql)
-        if sql is None:
-            # PRAGMA statement, skip it
-            return cur
         cur.execute(sql, params)
         return cur
     
@@ -87,12 +64,6 @@ class PgConnWrapper:
         
         for i, stmt in enumerate(statements):
             cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            # Translate SQL
-            stmt = self._translate_sql(stmt)
-            if stmt is None:
-                # PRAGMA statement, skip it
-                continue
-            
             try:
                 # Use SAVEPOINT for each statement to allow failures without aborting transaction
                 sp_name = f"sp_{i}"
@@ -117,10 +88,8 @@ class PgConnWrapper:
     
     def executemany(self, sql, seq_of_params):
         """Execute statement multiple times."""
-        cur = self._conn.cursor()
-        sql = self._translate_sql(sql)
-        for params in seq_of_params:
-            cur.execute(sql, params)
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.executemany(sql, seq_of_params)
         return cur
     
     def cursor(self):
@@ -383,20 +352,18 @@ def read_sql(query, conn, params=None):
     Lecture SQL compatible PostgreSQL.
     
     Args:
-        query (str): Requête SQL (avec placeholders ? ou %s).
-        conn (PgConnWrapper): Connexion PostgreSQL wrappée.
+        query (str): Requête SQL PostgreSQL (placeholders %s).
+        conn (PostgresConnection): Connexion PostgreSQL.
         params (tuple, optional): Paramètres de la requête.
         
     Returns:
         pd.DataFrame: Résultats sous forme de DataFrame.
     """
     try:
-        # PostgreSQL uses %s placeholders
-        pg_query = query.replace("?", "%s")
         # pandas officially supports SQLAlchemy connections, not the custom
-        # PgConnWrapper/psycopg2 object used by the rest of the application.
+        # PostgresConnection object used by the rest of the application.
         with _get_pandas_engine().connect() as pandas_conn:
-            return pd.read_sql_query(pg_query, pandas_conn, params=params)
+            return pd.read_sql_query(query, pandas_conn, params=params)
     except Exception as e:
         logger.error(f"Erreur read_sql: {e}")
         return pd.DataFrame()
@@ -493,12 +460,12 @@ def get_db():
         et gère le commit/rollback automatique en cas d'erreur.
     
     Yields:
-        PgConnWrapper: Wrapper autour psycopg2.connection pour compatibilité SQLite.
+        PostgresConnection: Connexion PostgreSQL avec curseurs dictionnaires.
     """
     try:
         conn = psycopg2.connect(DATABASE_URL)
         conn.set_client_encoding('UTF8')
-        wrapped = PgConnWrapper(conn)
+        wrapped = PostgresConnection(conn)
         try:
             yield wrapped
             conn.commit()
@@ -619,7 +586,7 @@ def init_db():
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             nom_complet TEXT DEFAULT '',
-            role TEXT DEFAULT 'Technicien' CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire')),
+            role TEXT DEFAULT 'Technicien' CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire', 'Gestionnaire de stock')),
             client TEXT DEFAULT '',
             email TEXT DEFAULT '',
             actif INTEGER DEFAULT 1,
@@ -822,7 +789,7 @@ def init_db():
                 # On logue l'erreur mais on continue (souvent dû à une colonne déjà existante)
                 logger.debug(f"Migration ignorée ({description}): {e}")
 
-        # Migration helper: ajouter colonne si elle n'existe pas (compatible PG + SQLite)
+        # Migration helper PostgreSQL: ajouter une colonne si elle n'existe pas.
         def _safe_add_column(tbl, col, col_type="TEXT", default="''"):
             """Ajoute une colonne de manière sécurisée sans interrompre le flux."""
             try:
@@ -1187,13 +1154,14 @@ def init_db():
         try:
             # Transférer nom_complet et email de utilisateurs vers user_pii
             conn.execute("""
-                INSERT OR IGNORE INTO user_pii (user_id, nom_complet, email)
+                INSERT INTO user_pii (user_id, nom_complet, email)
                 SELECT id, nom_complet, email FROM utilisateurs
                 WHERE nom_complet != '' OR email != ''
+                ON CONFLICT (user_id) DO NOTHING
             """)
             # Transférer nom, prenom, email de techniciens vers technicien_pii
             # Note: on concatène nom et prenom pour nom_complet si besoin
-            # Use COALESCE for PostgreSQL compatibility (IFNULL is SQLite-only)
+            # COALESCE est la fonction PostgreSQL standard pour les valeurs NULL.
             conn.execute("""
                 INSERT INTO technicien_pii (tech_id, nom_complet, email, telegram_id)
                 SELECT id, (COALESCE(nom, '') || ' ' || COALESCE(prenom, '')), email, telegram_id FROM techniciens
@@ -1202,20 +1170,24 @@ def init_db():
             """)
             logger.info("Audit Trail: Migration PII effectuée avec succès.")
         except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             logger.debug(f"Migration PII ignorée (Pillar 2): {e}")
 
         # --- Migration: Update CHECK constraint for utilisateurs.role ---
-        # Add new roles: 'Responsable Technique' and 'Gestionnaire'
+        # Keep the database constraint aligned with all application roles.
         try:
             # Drop old constraint if exists
             conn.execute("ALTER TABLE utilisateurs DROP CONSTRAINT IF EXISTS utilisateurs_role_check")
             # Add new constraint with all roles
             conn.execute("""
                 ALTER TABLE utilisateurs ADD CONSTRAINT utilisateurs_role_check 
-                CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire'))
+                CHECK(role IN ('Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire', 'Gestionnaire de stock'))
             """)
             conn.commit()
-            logger.info("✅ Migration réussie: utilisateurs role constraint updated with Responsable Technique + Gestionnaire roles")
+            logger.info("✅ Migration réussie: utilisateurs role constraint updated with all application roles")
         except Exception as e:
             try:
                 conn.rollback()

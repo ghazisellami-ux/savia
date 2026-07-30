@@ -30,8 +30,37 @@ from services.scheduled_jobs import (
     _df_to_records,
 )
 
+
+VALID_ROLES = [
+    'Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique',
+    'Gestionnaire', 'Gestionnaire de stock',
+]
+PUBLIC_SETTING_KEYS = ["nom_organisation", "logo_path", "langue", "theme", "devise", "role_permissions"]
+PRIVATE_SETTING_KEYS = [
+    "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
+    "telegram_sav_token", "telegram_sav_chat_id", "telegram_manager_token",
+    "telegram_manager_chat_id", "telegram_stock_token", "telegram_stock_chat_id",
+    "gemini_api_key",
+]
+SETTING_KEYS = set(PUBLIC_SETTING_KEYS + PRIVATE_SETTING_KEYS)
+
+
+def _require_admin(user: dict) -> None:
+    if user.get("role") != "Admin":
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
+
+
+def _validate_password(password: str, username: str = "") -> None:
+    if not isinstance(password, str) or len(password) < 12 or len(password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 12 caractères")
+    if not all((any(c.islower() for c in password), any(c.isupper() for c in password), any(c.isdigit() for c in password))):
+        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir une minuscule, une majuscule et un chiffre")
+    if username and username.casefold() in password.casefold():
+        raise HTTPException(status_code=400, detail="Le mot de passe ne doit pas contenir le nom d'utilisateur")
+
 @app.get("/api/admin/users")
 def get_users(user: dict = Depends(_verify_token)):
+    _require_admin(user)
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, username, nom_complet, role, client, email, actif, profil, pages_autorisees, created_at, last_login FROM utilisateurs ORDER BY id"
@@ -41,20 +70,21 @@ def get_users(user: dict = Depends(_verify_token)):
 
 @app.post("/api/admin/users")
 def create_user(body: dict, user: dict = Depends(_verify_token)):
+    _require_admin(user)
     # Validate role
-    valid_roles = ['Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique', 'Gestionnaire']
     role = body.get("role", "Lecteur")
-    if role not in valid_roles:
-        return {"error": f"Invalid role. Must be one of: {', '.join(valid_roles)}"}, 400
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Rôle invalide. Valeurs autorisées : {', '.join(VALID_ROLES)}")
     
     username = body.get("username", "").strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username est requis")
+    _validate_password(body.get("password", ""), username)
     
     # Check if username already exists
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id FROM utilisateurs WHERE username = ?",
+            "SELECT id FROM utilisateurs WHERE username = %s",
             (username,)
         ).fetchone()
         
@@ -66,7 +96,7 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
         
         hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         conn.execute(
-            "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)",
             (username, hashed, body.get("nom_complet", ""), role, body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
         )
     return {"ok": True}
@@ -74,26 +104,55 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/admin/users/{user_id}")
 def update_user(user_id: int, body: dict, user: dict = Depends(_verify_token)):
+    _require_admin(user)
+    if "role" in body and body["role"] not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Rôle invalide")
+    if "password" in body and body["password"]:
+        _validate_password(body["password"])
+
+    with get_db() as conn:
+        target = conn.execute("SELECT username, role, actif FROM utilisateurs WHERE id = %s", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        removes_last_admin = (
+            target["role"] == "Admin"
+            and (("role" in body and body["role"] != "Admin") or ("actif" in body and not bool(body["actif"])))
+        )
+        if removes_last_admin:
+            count = conn.execute("SELECT COUNT(*) AS cnt FROM utilisateurs WHERE role = 'Admin' AND actif = 1").fetchone()["cnt"]
+            if count <= 1:
+                raise HTTPException(status_code=400, detail="Impossible de désactiver ou rétrograder le dernier administrateur")
+
     fields = []
     params = []
     for f in ["nom_complet", "role", "client", "actif", "email", "profil", "pages_autorisees"]:
         if f in body:
-            fields.append(f"{f} = ?")
+            fields.append(f"{f} = %s")
             params.append(body[f])
     if "password" in body and body["password"]:
-        fields.append("password_hash = ?")
+        fields.append("password_hash = %s")
         params.append(bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8"))
     if fields:
         params.append(user_id)
         with get_db() as conn:
-            conn.execute(f"UPDATE utilisateurs SET {', '.join(fields)} WHERE id = ?", params)
+            conn.execute(f"UPDATE utilisateurs SET {', '.join(fields)} WHERE id = %s", params)
     return {"ok": True}
 
 
 @app.delete("/api/admin/users/{user_id}")
 def delete_user(user_id: int, user: dict = Depends(_verify_token)):
+    _require_admin(user)
     with get_db() as conn:
-        conn.execute("DELETE FROM utilisateurs WHERE id = ?", (user_id,))
+        target = conn.execute("SELECT username, role FROM utilisateurs WHERE id = %s", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        if target["username"] == user.get("sub"):
+            raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte")
+        if target["role"] == "Admin":
+            count = conn.execute("SELECT COUNT(*) AS cnt FROM utilisateurs WHERE role = 'Admin' AND actif = 1").fetchone()["cnt"]
+            if count <= 1:
+                raise HTTPException(status_code=400, detail="Impossible de supprimer le dernier administrateur")
+        conn.execute("DELETE FROM utilisateurs WHERE id = %s", (user_id,))
     return {"ok": True}
 
 
@@ -103,6 +162,7 @@ def delete_user(user_id: int, user: dict = Depends(_verify_token)):
 
 @app.get("/api/audit")
 def get_audit_log(limit: int = 100, user: dict = Depends(_verify_token)):
+    _require_admin(user)
     return _df_to_records(lire_audit(limit=limit))
 
 
@@ -342,22 +402,31 @@ def mark_notification_done(notif_id: int, user: dict = Depends(_verify_token)):
 # SETTINGS / CONFIG
 # ==========================================
 
+@app.get("/api/settings/public")
+def get_public_settings(user: dict = Depends(_verify_token)):
+    """Configuration non sensible nécessaire à l'interface après authentification."""
+    try:
+        with get_db() as conn:
+            result = {k: "" for k in PUBLIC_SETTING_KEYS}
+            for k in PUBLIC_SETTING_KEYS:
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (k,)).fetchone()
+                if row:
+                    result[k] = row["valeur"] or ""
+            return result
+    except Exception:
+        return {k: get_config(k, "") for k in PUBLIC_SETTING_KEYS}
+
+
 @app.get("/api/settings")
 def get_settings(user: dict = Depends(_verify_token)):
-    keys = [
-        "nom_organisation", "logo_path", "langue", "theme",
-        "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
-        "telegram_sav_token", "telegram_sav_chat_id",
-        "telegram_manager_token", "telegram_manager_chat_id",
-        "telegram_stock_token", "telegram_stock_chat_id",
-        "gemini_api_key", "role_permissions",
-    ]
+    _require_admin(user)
+    keys = list(SETTING_KEYS)
     try:
         with get_db() as conn:
             result = {k: "" for k in keys}
             for k in keys:
                 row = conn.execute(
-                    "SELECT valeur FROM config_client WHERE cle = ?",
+                    "SELECT valeur FROM config_client WHERE cle = %s",
                     (k,)
                 ).fetchone()
                 if row:
@@ -375,22 +444,21 @@ def get_settings(user: dict = Depends(_verify_token)):
 
 @app.put("/api/settings")
 def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token)):
+    _require_admin(user)
+    forbidden_keys = set(body) - SETTING_KEYS
+    if forbidden_keys:
+        raise HTTPException(status_code=400, detail="Clés de configuration non autorisées")
     try:
-        logger.info(f"[UPDATE_SETTINGS] Received body: {body}")
         with get_db() as conn:
             for k, v in body.items():
-                logger.info(f"[UPDATE_SETTINGS] Saving key='{k}', value_type={type(v).__name__}, value_length={len(str(v))}")
-                # Use SQLite-compatible syntax with ? placeholder
-                # Note: PgCursorWrapper translates ? to ? and EXCLUDED handles both SQLite and PostgreSQL
                 conn.execute(
                     """
-                    INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
                     ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
                     """,
                     (k, str(v))
                 )
-                logger.info(f"[UPDATE_SETTINGS] Successfully saved key='{k}'")
-        logger.info(f"[UPDATE_SETTINGS] All settings saved successfully")
+        logger.info("Configuration administrateur mise à jour par %s (%d clés)", user.get("sub"), len(body))
         return {"ok": True}
     except Exception as e:
         import traceback
@@ -421,7 +489,7 @@ def update_admin_settings(body: dict = Body(...), user: dict = Depends(_verify_t
                 logger.info(f"[UPDATE_ADMIN_SETTINGS] Saving key='{k}', value='{v}'")
                 conn.execute(
                     """
-                    INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
                     ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur
                     """,
                     (k, str(v))
@@ -441,6 +509,7 @@ def update_admin_settings(body: dict = Body(...), user: dict = Depends(_verify_t
 @app.get("/api/notification-schedules")
 def get_notification_schedules(user: dict = Depends(_verify_token)):
     """Récupère tous les horaires de notification pour les bots Telegram."""
+    _require_admin(user)
     try:
         schedules = lire_notification_schedules()
         
@@ -469,6 +538,7 @@ def update_notification_schedules(body: dict, user: dict = Depends(_verify_token
         ...
     }
     """
+    _require_admin(user)
     try:
         sauvegarder_notification_schedules_batch(body)
         return {"ok": True}
@@ -501,4 +571,3 @@ __all__ = [
     "get_notification_schedules",
     "update_notification_schedules",
 ]
-

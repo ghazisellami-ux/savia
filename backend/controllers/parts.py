@@ -96,7 +96,7 @@ def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token))
                 """SELECT id, reference, designation, stock_actuel, stock_minimum,
                           consommation_moyenne_mois, delai_fournisseur_jours, criticite,
                           prix_unitaire, nombre_equipements_relies, utilisation_recente_30j
-                   FROM pieces_rechange WHERE id = ?""",
+                   FROM pieces_rechange WHERE id = %s""",
                 (piece_id,)
             ).fetchone()
         
@@ -342,12 +342,14 @@ def create_piece(body: dict, user: dict = Depends(_verify_token)):
 @app.put("/api/pieces/{piece_id}")
 def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token)):
     """Mise à jour d'une pièce. Si stock passe de 0 → >0, déclenche notifications pour les techniciens en attente."""
+    if not _check_create_piece_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins")
     # Récupérer le stock AVANT modification pour détecter le réapprovisionnement
     nouveau_stock = body.get("stock_actuel")
     try:
         with get_db() as conn:
             old = conn.execute(
-                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = ?",
+                "SELECT reference, designation, stock_actuel FROM pieces_rechange WHERE id = %s",
                 (piece_id,)
             ).fetchone()
         stock_avant = int(old["stock_actuel"]) if old else None
@@ -457,11 +459,13 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
 
 @app.delete("/api/pieces/{piece_id}")
 def delete_piece(piece_id: int, user: dict = Depends(_verify_token)):
+    if not _check_create_piece_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins")
     # Get piece info before deleting
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT reference, designation FROM pieces_rechange WHERE id = ?",
+                "SELECT reference, designation FROM pieces_rechange WHERE id = %s",
                 (piece_id,)
             ).fetchone()
             piece_info = dict(row) if row else {"reference": "Unknown", "designation": "Unknown"}
@@ -583,4 +587,3 @@ __all__ = [
     "recalculate_piece_parameters",
     "get_piece_parameters",
 ]
-

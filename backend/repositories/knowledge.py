@@ -113,13 +113,13 @@ def ajouter_code(code, message, cause, solution, type_err, priorite, username="s
     with get_db() as conn:
         conn.execute("""
             INSERT INTO codes_erreurs (code, message, type)
-            VALUES (?, ?, %s)
+            VALUES (%s, %s, %s)
             ON CONFLICT(code) DO UPDATE SET message=excluded.message, type=excluded.type
         """, (code, message[:200], type_err))
 
         conn.execute("""
             INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(mot_cle) DO UPDATE SET
                 type=excluded.type, priorite=excluded.priorite,
                 cause=excluded.cause, solution=excluded.solution,
@@ -135,14 +135,14 @@ def ajouter_codes_batch(rows_hex, rows_txt):
         for row in rows_hex:
             conn.execute("""
                 INSERT INTO codes_erreurs (code, message, niveau, type)
-                VALUES (?, ?, ?, %s)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT(code) DO UPDATE SET message=excluded.message, niveau=excluded.niveau, type=excluded.type
             """, (row.get("Code", ""), row.get("Message", ""), row.get("Niveau", "ATTENTION"), row.get("Type", "")))
 
         for row in rows_txt:
             conn.execute("""
                 INSERT INTO solutions (mot_cle, type, priorite, cause, solution)
-                VALUES (?, ?, ?, ?, %s)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT(mot_cle) DO UPDATE SET
                     type=excluded.type, priorite=excluded.priorite,
                     cause=excluded.cause, solution=excluded.solution

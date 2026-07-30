@@ -176,7 +176,7 @@ def sync_planning_to_interventions():
                 """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
                           pm.type_maintenance
                    FROM planning_maintenance pm
-                   WHERE pm.date_prevue = ?
+                   WHERE pm.date_prevue = %s
                      AND pm.statut = 'Planifiée'
                      AND NOT EXISTS (
                          SELECT 1 FROM interventions i
@@ -200,20 +200,20 @@ def sync_planning_to_interventions():
                     """INSERT INTO interventions
                        (date, machine, technicien, type_intervention, description,
                         statut, priorite, notes, planning_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (today_str, machine, technicien, 'Préventive', description,
                      'En cours', 'Moyenne', notes, pm_id)
                 )
                 # Récupérer l'ID de l'intervention créée
                 new_id_row = conn.execute(
-                    "SELECT id FROM interventions WHERE planning_id = ? ORDER BY id DESC LIMIT 1",
+                    "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
                     (pm_id,)
                 ).fetchone()
                 new_id = new_id_row['id'] if new_id_row else '?'
 
                 # Mettre à jour le statut du planning
                 conn.execute(
-                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = ?",
+                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
                     (pm_id,)
                 )
 
@@ -222,14 +222,14 @@ def sync_planning_to_interventions():
                 for tech_name in [t.strip() for t in technicien.split(',') if t.strip()]:
                     existing_tech = conn.execute(
                         """SELECT id FROM interventions_techniciens
-                           WHERE intervention_id = ? AND technicien_nom ILIKE ?""",
+                           WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
                         (new_id, f"%{tech_name}%")
                     ).fetchone()
                     if not existing_tech:
                         conn.execute(
                             """INSERT INTO interventions_techniciens
                                (intervention_id, technicien_nom, statut)
-                               VALUES (?, ?, ?)""",
+                               VALUES (%s, %s, %s)""",
                             (new_id, tech_name, 'Assigné')
                         )
 
@@ -391,7 +391,7 @@ def check_facturation_reminders():
                     'type': 'premier',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = ?", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 1 WHERE id = %s", (int_id,))
 
             # Rappel SAV : J+8 (2 jours avant deadline)
             elif jours_depuis >= 8 and rappel_level < 2:
@@ -402,7 +402,7 @@ def check_facturation_reminders():
                     'type': 'urgent',
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = ?", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 2 WHERE id = %s", (int_id,))
 
             # Bot Manager : > 10 jours sans facturation
             if jours_depuis > 10 and rappel_level < 3:
@@ -412,7 +412,7 @@ def check_facturation_reminders():
                     'jours_retard': jours_depuis - 10,
                 })
                 with get_db() as conn:
-                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = ?", (int_id,))
+                    conn.execute("UPDATE interventions SET rappel_facture_envoye = 3 WHERE id = %s", (int_id,))
 
         # Envoyer notifications SAV
         if sav_alerts:
@@ -648,7 +648,7 @@ def _start_garantie_daemon():
         from datetime import date
         try:
             with get_db() as conn:
-                row = conn.execute("SELECT valeur FROM config_client WHERE cle = ?", (LOCK_KEY,)).fetchone()
+                row = conn.execute("SELECT valeur FROM config_client WHERE cle = %s", (LOCK_KEY,)).fetchone()
                 if row:
                     return dict(row)['valeur'] == str(date.today())
             return False
@@ -661,7 +661,7 @@ def _start_garantie_daemon():
         try:
             with get_db() as conn:
                 conn.execute(
-                    """INSERT INTO config_client (cle, valeur) VALUES (?, ?)
+                    """INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
                        ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
                     (LOCK_KEY, str(date.today()))
                 )
@@ -872,9 +872,9 @@ def _send_telegram_bot(bot_key: str, message: str) -> bool:
     chat_key = f"{bot_key}_chat_id"
     try:
         with get_db() as conn:
-            # Use database-agnostic query (SQLite + PostgreSQL compatible)
+            # Requête PostgreSQL sur la configuration des notifications.
             rows = conn.execute(
-                "SELECT cle, valeur FROM config_client WHERE cle = ? OR cle = ?",
+                "SELECT cle, valeur FROM config_client WHERE cle = %s OR cle = %s",
                 (token_key, chat_key)
             ).fetchall()
         config = {r["cle"]: r["valeur"] for r in rows}

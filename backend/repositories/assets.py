@@ -62,7 +62,7 @@ def ajouter_client(client_dict):
         conn.execute("""
             INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse,
                                 code_client, region, type_client, international)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(nom) DO UPDATE SET
                 matricule_fiscale=excluded.matricule_fiscale,
                 ville=excluded.ville,
@@ -94,10 +94,10 @@ def modifier_client(client_id, client_dict):
     with get_db() as conn:
         conn.execute("""
             UPDATE clients SET
-                nom = ?, matricule_fiscale = ?, ville = ?,
-                contact = ?, telephone = ?, adresse = ?,
-                code_client = ?, region = ?, type_client = ?, international = ?
-            WHERE id = ?
+                nom = %s, matricule_fiscale = %s, ville = %s,
+                contact = %s, telephone = %s, adresse = %s,
+                code_client = %s, region = %s, type_client = %s, international = %s
+            WHERE id = %s
         """, (
             client_dict.get("nom", ""),
             client_dict.get("matricule_fiscale", ""),
@@ -118,7 +118,7 @@ def modifier_client(client_id, client_dict):
 def supprimer_client(client_id):
     """Supprime un client par son ID."""
     with get_db() as conn:
-        conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        conn.execute("DELETE FROM clients WHERE id = %s", (client_id,))
     _trigger_backup()
     return True
 
@@ -141,7 +141,7 @@ def migrer_clients_depuis_equipements():
                 if not nom:
                     continue
                 conn.execute("""
-                    INSERT INTO clients (nom, matricule_fiscale, ville) VALUES (?, ?, %s) ON CONFLICT DO NOTHING
+                    INSERT INTO clients (nom, matricule_fiscale, ville) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING
                 """, (nom, r.get("matricule_fiscale", ""), r.get("ville", "")))
             logger.info(f"Migré {len(rows)} clients depuis equipements")
     except Exception as e:
@@ -201,7 +201,7 @@ def chercher_client_par_matricule(matricule_fiscale):
         return None
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client FROM equipements WHERE matricule_fiscale = ? LIMIT 1",
+            "SELECT client FROM equipements WHERE matricule_fiscale = %s LIMIT 1",
             (matricule_fiscale.strip(),)
         ).fetchone()
         if row:
@@ -217,7 +217,7 @@ def ajouter_equipement(equipement_dict):
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
                                      domaine, est_annexe, garantie_debut, garantie_duree, ville, region, service)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(nom, client) DO UPDATE SET
                 type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
                 num_serie=excluded.num_serie, date_installation=excluded.date_installation,
@@ -255,7 +255,7 @@ def ajouter_equipement(equipement_dict):
 def supprimer_equipement(equip_id):
     """Supprime un équipement par son ID."""
     with get_db() as conn:
-        conn.execute("DELETE FROM equipements WHERE id = ?", (equip_id,))
+        conn.execute("DELETE FROM equipements WHERE id = %s", (equip_id,))
     _trigger_backup()
     return True
 
@@ -265,12 +265,12 @@ def modifier_equipement(equip_id, equipement_dict):
     with get_db() as conn:
         conn.execute("""
             UPDATE equipements SET
-                nom = ?, type = ?, fabricant = ?, modele = ?, num_serie = ?,
-                date_installation = ?, derniere_maintenance = ?, statut = ?,
-                notes = ?, client = ?, matricule_fiscale = ?, document_technique = ?,
-                domaine = ?, est_annexe = ?, garantie_debut = ?, garantie_duree = ?,
-                ville = ?, region = ?, service = ?
-            WHERE id = ?
+                nom = %s, type = %s, fabricant = %s, modele = %s, num_serie = %s,
+                date_installation = %s, derniere_maintenance = %s, statut = %s,
+                notes = %s, client = %s, matricule_fiscale = %s, document_technique = %s,
+                domaine = %s, est_annexe = %s, garantie_debut = %s, garantie_duree = %s,
+                ville = %s, region = %s, service = %s
+            WHERE id = %s
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -423,16 +423,16 @@ def supprimer_domaine_custom(nom):
     """Supprime un domaine médical personnalisé et ses types associés."""
     with get_db() as conn:
         # Supprimer les types d'équipement associés au domaine
-        conn.execute("DELETE FROM types_equipement_custom WHERE domaine = ?", (nom.strip(),))
+        conn.execute("DELETE FROM types_equipement_custom WHERE domaine = %s", (nom.strip(),))
         # Supprimer le domaine
-        conn.execute("DELETE FROM domaines_custom WHERE nom = ?", (nom.strip(),))
+        conn.execute("DELETE FROM domaines_custom WHERE nom = %s", (nom.strip(),))
     return True
 
 
 def lire_equipement_par_id(equip_id):
     """Lit un équipement par son ID."""
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM equipements WHERE id = ?", (equip_id,)).fetchone()
+        row = conn.execute("SELECT * FROM equipements WHERE id = %s", (equip_id,)).fetchone()
         if row:
             return dict(row)
     return None
@@ -447,7 +447,7 @@ def ajouter_document_technique(equipement_id, nom_fichier, contenu_base64):
     with get_db() as conn:
         conn.execute("""
             INSERT INTO documents_techniques (equipement_id, nom_fichier, contenu_base64)
-            VALUES (?, ?, %s)
+            VALUES (%s, %s, %s)
         """, (equipement_id, nom_fichier, contenu_base64))
     return True
 
@@ -456,7 +456,7 @@ def lire_documents_techniques(equipement_id):
     """Lit les documents techniques d'un équipement (métadonnées sans contenu pour la perf)."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, nom_fichier, date_ajout FROM documents_techniques WHERE equipement_id = ? ORDER BY date_ajout DESC",
+            "SELECT id, nom_fichier, date_ajout FROM documents_techniques WHERE equipement_id = %s ORDER BY date_ajout DESC",
             (equipement_id,)
         ).fetchall()
         return [dict(r) for r in rows]
@@ -466,7 +466,7 @@ def lire_document_technique_contenu(doc_id):
     """Lit le contenu base64 d'un document technique par son ID."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT contenu_base64, nom_fichier FROM documents_techniques WHERE id = ?",
+            "SELECT contenu_base64, nom_fichier FROM documents_techniques WHERE id = %s",
             (doc_id,)
         ).fetchone()
         if row:
@@ -477,7 +477,7 @@ def lire_document_technique_contenu(doc_id):
 def supprimer_document_technique(doc_id):
     """Supprime un document technique par son ID."""
     with get_db() as conn:
-        conn.execute("DELETE FROM documents_techniques WHERE id = ?", (doc_id,))
+        conn.execute("DELETE FROM documents_techniques WHERE id = %s", (doc_id,))
     return True
 
 
