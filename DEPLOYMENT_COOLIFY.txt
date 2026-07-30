@@ -1,0 +1,25 @@
+DEPLOIEMENT COOLIFY SECURISE
+
+Chaque client a deux domaines publics. Les noms de domaine sont configures dans
+Coolify et dans les variables d'environnement, jamais dans le code.
+
+Pour un client utilisant client.tn, configurer dans Coolify :
+  frontend : https://app.client.tn:3000
+  pwa-site : https://site.client.tn:3001
+  backend  : laisser vide
+  minio    : laisser vide
+
+Le port indique dans Coolify est le port interne du conteneur. Les utilisateurs
+visitent seulement :
+  https://app.client.tn
+  https://site.client.tn
+
+Le frontend et la PWA transmettent deja /api/* au backend par le reseau Docker
+interne. Ne pas exposer de domaine public pour le backend, MinIO ou PostgreSQL.
+
+Pour ce deploiement, configurer :
+  CORS_ORIGINS=https://app.client.tn,https://site.client.tn
+
+Ne jamais utiliser * dans CORS_ORIGINS. Ajouter un enregistrement DNS A pour
+chaque sous-domaine public, vers le VPS. Coolify obtient et renouvelle alors les
+certificats TLS. Les ports 80 et 443 doivent etre accessibles depuis Internet.
