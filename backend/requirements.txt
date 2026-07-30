@@ -22,7 +22,7 @@ psycopg2-binary==2.9.11
 SQLAlchemy==2.0.48
 
 # Data
-pandas==2.3.3
+pandas==3.0.5
 numpy==2.4.2
 openpyxl==3.1.5
 pyarrow==23.0.1
