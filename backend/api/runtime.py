@@ -380,12 +380,14 @@ logging.basicConfig(level=logging.INFO)
 
 
 def _cors_origins():
-    """Return only explicitly configured origins in production."""
+    """Return only explicitly configured browser origins in production."""
     configured = [
         origin.strip().rstrip("/")
         for origin in os.getenv("CORS_ORIGINS", "").split(",")
         if origin.strip()
     ]
+    if IS_PRODUCTION and "*" in configured:
+        raise RuntimeError("CORS_ORIGINS ne peut pas contenir '*' en production.")
     local_origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -433,9 +435,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
     allow_origin_regex=None if IS_PRODUCTION else r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # L'authentification SAVIA utilise le jeton Bearer, jamais un cookie :
+    # aucune origine n'a besoin d'envoyer des identifiants de navigateur.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-SAVIA-Lang"],
 )
 
 
