@@ -13,10 +13,8 @@
     "@nivo/core": "^0.99.0",
     "apexcharts": "^5.11.0",
     "clsx": "^2.1.1",
-    "jspdf": "^2.5.1",
-    "jspdf-autotable": "^3.8.2",
     "lucide-react": "^1.8.0",
-    "next": "16.2.3",
+    "next": "16.2.12",
     "react": "19.2.4",
     "react-apexcharts": "^2.1.0",
     "react-dom": "19.2.4",
@@ -28,8 +26,12 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.3",
+    "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
   }
 }

@@ -6,12 +6,13 @@
 FROM node:20-alpine AS deps
 # libc6-compat doesn't exist in Alpine, using build tools instead for Next.js
 RUN apk add --no-cache python3 make g++
+RUN npm install --global npm@11.6.3
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # On force l'installation de TOUTES les dépendances (y compris devDeps)
 # Try alternative npm registry if default fails
-RUN npm ci --include=dev --registry https://registry.npmmirror.com || \
-    npm ci --include=dev
+RUN npm ci --include=dev --fetch-timeout=180000 --fetch-retries=10 --no-audit --fund=false && \
+    test -x node_modules/.bin/next
 
 # ── Stage 2: Development ──────────────────
 FROM deps AS dev
