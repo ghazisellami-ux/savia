@@ -1,5 +1,7 @@
 """Equipment, catalogue, and technical-document routes."""
 
+import base64
+
 from api.runtime import (
     Body,
     Depends,
@@ -52,6 +54,7 @@ from controllers.auth_dashboard import (
     log_audit,
     logger,
 )
+from services.file_security import decode_and_validate_base64
 
 @app.get("/api/equipements")
 def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_token)):
@@ -311,8 +314,24 @@ def upload_document(body: dict, user: dict = Depends(_verify_token)):
         raise HTTPException(status_code=400, detail="equipement_id, nom_fichier et contenu_base64 requis")
     with get_db() as conn:
         assert_resource_client_access(conn, "equipement", int(equip_id), user)
-    ajouter_document_technique(equip_id, nom_fichier, contenu_base64)
-    return {"ok": True}
+    validated = decode_and_validate_base64(nom_fichier, contenu_base64, "document_technique")
+    from s3_storage import upload_private_file
+    stored = upload_private_file(
+        validated.data,
+        category="documents-techniques",
+        extension=validated.extension,
+        content_type=validated.content_type,
+        original_name=validated.display_name,
+        content_hash=validated.sha256,
+        metadata={"equipment-id": equip_id, "uploaded-by": user.get("sub", "unknown")},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+    ajouter_document_technique(
+        equip_id, validated.display_name, "", storage_key=stored["s3_key"],
+        content_type=validated.content_type, size_bytes=stored["size_bytes"], sha256=validated.sha256,
+    )
+    return {"ok": True, "filename": validated.display_name}
 
 
 @app.get("/api/documents-techniques")
@@ -345,6 +364,16 @@ def download_document(doc_id: int, user: dict = Depends(_verify_token)):
     with get_db() as conn:
         assert_resource_client_access(conn, "document_technique", doc_id, user)
     doc = lire_document_technique_contenu(doc_id)
+    if doc and doc.get("storage_key"):
+        from s3_storage import download_private_file
+        stored = download_private_file(doc["storage_key"])
+        if not stored:
+            raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+        content, _ = stored
+        return {
+            "contenu_base64": base64.b64encode(content).decode("ascii"),
+            "nom_fichier": doc["nom_fichier"],
+        }
     if not doc:
         raise HTTPException(status_code=404, detail="Document non trouvé")
     return doc
@@ -355,9 +384,14 @@ def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
     """Delete a technical document."""
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
-    from db_engine import supprimer_document_technique
+    from db_engine import lire_document_technique_stockage, supprimer_document_technique
     with get_db() as conn:
         assert_resource_client_access(conn, "document_technique", doc_id, user)
+    storage_key = lire_document_technique_stockage(doc_id)
+    if storage_key:
+        from s3_storage import delete_file
+        if not delete_file(storage_key):
+            raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
     supprimer_document_technique(doc_id)
     return {"ok": True}
 

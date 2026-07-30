@@ -32,6 +32,7 @@ from api.security import (
     resolve_client_scope,
     get_db,
 )
+from services.file_security import read_validated_upload
 from services.scheduled_jobs import (
     get_db,
     lire_equipements,
@@ -524,10 +525,11 @@ async def import_clients_excel(file: UploadFile = File(...), user: dict = Depend
     
     import io
     try:
-        content = await file.read()
+        validated_upload = await read_validated_upload(file, "clients_import")
+        content = validated_upload.data
         
         # Determine file type
-        filename = file.filename.lower()
+        filename = validated_upload.display_name.lower()
         is_csv = filename.endswith('.csv')
         
         # Read file with universal encoding detection

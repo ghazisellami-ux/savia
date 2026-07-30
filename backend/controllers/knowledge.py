@@ -23,6 +23,7 @@ from api.security import (
     require_roles,
     get_db,
 )
+from services.file_security import read_validated_upload, validate_log_upload
 from services.scheduled_jobs import (
     _df_to_records,
     get_db,
@@ -171,8 +172,9 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         
         return text
     
-    filename = file.filename or ""
-    content = await file.read()
+    validated_upload = await read_validated_upload(file, "knowledge_import")
+    filename = validated_upload.display_name
+    content = validated_upload.data
 
     try:
         if filename.endswith(".csv"):
@@ -404,6 +406,7 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
 
     if not equipement or not content:
         raise HTTPException(status_code=400, detail="Équipement et contenu requis")
+    filename, content = validate_log_upload(filename, content)
 
     content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
     username = user.get("sub", "system") if user else "system"

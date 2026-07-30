@@ -43,7 +43,8 @@ def lire_interventions(machine=None):
                    i.start_time, i.end_time, i.planning_id,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
-                   (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
+                   (NULLIF(i.fiche_storage_key, '') IS NOT NULL OR
+                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0)) AS has_fiche,
                    COALESCE(NULLIF(i.client, ''), e.client, '') AS client
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)

@@ -8,6 +8,7 @@ from api.runtime import (
     JWT_ISSUER,
     JWT_SECRET,
     Optional,
+    _tech_name_or_username_matches,
     bcrypt,
     get_db,
     jwt,
@@ -92,28 +93,33 @@ def assert_intervention_write_access(conn, intervention_id: int, user: dict) -> 
     if user.get("role") != "Technicien":
         return
     identities = [
-        value.strip().casefold()
+        str(value).strip()
         for value in (user.get("nom"), user.get("sub"))
         if str(value or "").strip()
     ]
     if not identities:
         raise HTTPException(status_code=403, detail="Technicien non identifiable")
-    row = conn.execute(
-        """SELECT 1
-           FROM interventions_techniciens it
-           WHERE it.intervention_id = %s
-             AND LOWER(BTRIM(it.technicien_nom)) = ANY(%s)
+    assignments = conn.execute(
+        """SELECT technicien_nom AS assigned_name
+           FROM interventions_techniciens
+           WHERE intervention_id = %s
            UNION ALL
-           SELECT 1
-           FROM interventions i
-           CROSS JOIN LATERAL regexp_split_to_table(COALESCE(i.technicien, ''), '\\s*,\\s*') AS assigned_name
-           WHERE i.id = %s
-             AND LOWER(BTRIM(assigned_name)) = ANY(%s)
-           LIMIT 1""",
-        (intervention_id, identities, intervention_id, identities),
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=403, detail="Cette intervention ne vous est pas assignée")
+           SELECT technicien AS assigned_name
+           FROM interventions
+           WHERE id = %s""",
+        (intervention_id, intervention_id),
+    ).fetchall()
+    for row in assignments:
+        # A comma separates distinct technicians. Match against each person
+        # independently so words from two different names cannot be combined.
+        for assigned_name in str(row.get("assigned_name") or "").split(","):
+            assigned_name = assigned_name.strip()
+            if assigned_name and any(
+                _tech_name_or_username_matches(identity, assigned_name)
+                for identity in identities
+            ):
+                return
+    raise HTTPException(status_code=403, detail="Cette intervention ne vous est pas assignée")
 
 
 def require_roles(user: dict, *allowed_roles: str) -> None:

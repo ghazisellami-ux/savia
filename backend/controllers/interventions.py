@@ -64,33 +64,46 @@ from controllers.auth_dashboard import (
     log_audit,
     logger,
 )
+from services.file_security import read_validated_upload
 
 
-_MAX_FICHE_BYTES = 10 * 1024 * 1024
-_FICHE_SIGNATURES = {
-    "image/jpeg": (b"\xff\xd8\xff",),
-    "image/png": (b"\x89PNG\r\n\x1a\n",),
-    "application/pdf": (b"%PDF-",),
-}
+async def _store_fiche(upload: UploadFile, intervention_id: int, username: str) -> dict:
+    """Validate then store a fiche under a server-generated private object key."""
+    validated = await read_validated_upload(upload, "fiche")
+    from s3_storage import upload_private_file
 
-
-async def _read_validated_fiche(upload: UploadFile) -> bytes:
-    """Accept only small, supported fiche files after verifying their binary signature."""
-    content_type = (upload.content_type or "").lower().split(";", 1)[0]
-    if content_type not in {*_FICHE_SIGNATURES, "image/webp"}:
-        raise HTTPException(status_code=415, detail="Format accepté : JPEG, PNG, WEBP ou PDF")
-    contents = await upload.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Le fichier est vide")
-    if len(contents) > _MAX_FICHE_BYTES:
-        raise HTTPException(status_code=413, detail="Le fichier ne doit pas dépasser 10 Mo")
-    if content_type == "image/webp":
-        valid_signature = contents.startswith(b"RIFF") and contents[8:12] == b"WEBP"
-    else:
-        valid_signature = contents.startswith(_FICHE_SIGNATURES[content_type])
-    if not valid_signature:
-        raise HTTPException(status_code=415, detail="Le contenu du fichier ne correspond pas à son format déclaré")
-    return contents
+    stored = upload_private_file(
+        validated.data,
+        category="fiches",
+        extension=validated.extension,
+        content_type=validated.content_type,
+        original_name=validated.display_name,
+        content_hash=validated.sha256,
+        metadata={"intervention-id": intervention_id, "uploaded-by": username},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+    with get_db() as conn:
+        previous = conn.execute(
+            "SELECT fiche_storage_key FROM interventions WHERE id = %s", (intervention_id,)
+        ).fetchone()
+        old_key = previous.get("fiche_storage_key") if previous else None
+        conn.execute(
+            """UPDATE interventions
+               SET fiche_photo_nom = %s, fiche_photo_data = NULL,
+                   fiche_storage_key = %s, fiche_content_type = %s,
+                   fiche_size_bytes = %s, fiche_sha256 = %s
+               WHERE id = %s""",
+            (validated.display_name, stored["s3_key"], validated.content_type,
+             stored["size_bytes"], validated.sha256, intervention_id),
+        )
+    if old_key and old_key != stored["s3_key"]:
+        try:
+            from s3_storage import delete_file
+            delete_file(old_key)
+        except Exception:
+            logger.warning("Unable to remove replaced fiche object for intervention %s", intervention_id)
+    return {"ok": True, "filename": validated.display_name}
 
 
 def _planning_id_in_set(value, planning_ids):
@@ -617,6 +630,19 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             except Exception as pe:
                 logger.error(f"Erreur mise à jour planning lié: {pe}")
 
+            # cloturer_intervention returns above the generic field-update
+            # block. Persist the signed-fiche status here as well so a PWA
+            # closure does not silently discard the technician's selection.
+            if "fiche_validation" in body:
+                fiche_validation = str(body.get("fiche_validation") or "").strip()
+                if fiche_validation not in {"En attente", "Validée"}:
+                    raise HTTPException(status_code=400, detail="Statut de fiche invalide")
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
+                        (fiche_validation, intervention_id),
+                    )
+
             return {"ok": True, "message": msg}
         except HTTPException:
             raise
@@ -874,22 +900,7 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
     require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     with get_db() as conn:
         assert_intervention_write_access(conn, intervention_id, user)
-    """Upload la photo de la fiche signée pour une intervention clôturée."""
-    contents = await _read_validated_fiche(file)
-    logger.info(f"Fiche upload: intervention #{intervention_id}, file={file.filename}, size={len(contents)} bytes")
-    # psycopg2 requires Binary wrapper for bytea columns
-    try:
-        import psycopg2
-        binary_data = psycopg2.Binary(contents)
-    except ImportError:
-        binary_data = contents
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
-            (file.filename, binary_data, intervention_id)
-        )
-    logger.info(f"Fiche photo uploadée pour intervention #{intervention_id}: {file.filename}")
-    return {"ok": True, "filename": file.filename}
+    return await _store_fiche(file, intervention_id, user.get("sub", "unknown"))
 
 
 @app.post("/api/interventions/{intervention_id}/photo")
@@ -905,21 +916,8 @@ async def upload_photo_alias(intervention_id: int,
     upload = photo or file
     if not upload:
         raise HTTPException(status_code=400, detail="Aucun fichier fourni")
-    contents = await _read_validated_fiche(upload)
-    logger.info(f"Photo upload (alias): intervention #{intervention_id}, file={upload.filename}, size={len(contents)} bytes")
-    # psycopg2 requires Binary wrapper for bytea columns
-    try:
-        import psycopg2
-        binary_data = psycopg2.Binary(contents)
-    except ImportError:
-        binary_data = contents
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = %s, fiche_photo_data = %s WHERE id = %s",
-            (upload.filename, binary_data, intervention_id)
-        )
-    logger.info(f"[/photo alias] Fiche photo uploadée pour intervention #{intervention_id}: {upload.filename}")
-    return {"ok": True, "message": "Photo enregistrée", "filename": upload.filename}
+    result = await _store_fiche(upload, intervention_id, user.get("sub", "unknown"))
+    return {**result, "message": "Photo enregistrée"}
 
 
 @app.get("/api/interventions/{intervention_id}/fiche")
@@ -930,19 +928,30 @@ def download_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         assert_resource_client_access(conn, "intervention", intervention_id, user)
         try:
             row = conn.execute(
-                "SELECT fiche_photo_nom, fiche_photo_data FROM interventions WHERE id = %s",
+                """SELECT fiche_photo_nom, fiche_photo_data, fiche_storage_key,
+                          fiche_content_type
+                   FROM interventions WHERE id = %s""",
                 (intervention_id,)
             ).fetchone()
         except Exception:
             raise HTTPException(status_code=404, detail="Colonne fiche non trouvée")
-    if not row or not row["fiche_photo_data"]:
+    if not row:
         raise HTTPException(status_code=404, detail="Aucune fiche pour cette intervention")
     nom = row["fiche_photo_nom"] or f"fiche_{intervention_id}.jpg"
-    data = bytes(row["fiche_photo_data"])
-    ext = nom.rsplit('.', 1)[-1].lower() if '.' in nom else 'jpg'
-    mime_map = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-                'pdf': 'application/pdf', 'webp': 'image/webp'}
-    mime = mime_map.get(ext, 'application/octet-stream')
+    if row.get("fiche_storage_key"):
+        from s3_storage import download_private_file
+        stored = download_private_file(row["fiche_storage_key"])
+        if not stored:
+            raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+        data, mime = stored
+    elif row.get("fiche_photo_data"):
+        data = bytes(row["fiche_photo_data"])
+        ext = nom.rsplit('.', 1)[-1].lower() if '.' in nom else 'jpg'
+        mime_map = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+                    'pdf': 'application/pdf', 'webp': 'image/webp'}
+        mime = mime_map.get(ext, 'application/octet-stream')
+    else:
+        raise HTTPException(status_code=404, detail="Aucune fiche pour cette intervention")
     return Response(content=data, media_type=mime,
                     headers={"Content-Disposition": f'inline; filename="{nom}"'})
 
@@ -951,19 +960,24 @@ def download_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
 @app.get("/api/interventions/fiches")
 def list_fiches(user: dict = Depends(_verify_token)):
     client_scope = _get_client_filter(user)
-    """Liste uniquement les interventions clôturées AVEC photo attachée."""
+    """List every intervention with a signed fiche attached.
+
+    A PWA technician can submit a fiche while a multi-technician intervention
+    is still awaiting the final aggregate closure, so closure status must not
+    hide a file that was successfully stored.
+    """
     with get_db() as conn:
         try:
             rows = conn.execute("""
                 SELECT id, date, machine, technicien, statut, probleme, solution,
                        duree_minutes,
                        COALESCE(fiche_photo_nom, '') AS fiche_photo_nom,
-                       (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0) AS has_fiche,
+                       (NULLIF(fiche_storage_key, '') IS NOT NULL OR
+                        (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0)) AS has_fiche,
                        COALESCE(fiche_validation, 'En attente') AS fiche_validation
                 FROM interventions
-                WHERE (statut ILIKE '%lotur%' OR statut ILIKE '%termin%' OR statut = 'Cloturee')
-                  AND fiche_photo_data IS NOT NULL
-                  AND octet_length(fiche_photo_data) > 0
+                WHERE (NULLIF(fiche_storage_key, '') IS NOT NULL OR
+                       (fiche_photo_data IS NOT NULL AND octet_length(fiche_photo_data) > 0))
                   AND (%s = '' OR LOWER(client) = LOWER(%s))
                 ORDER BY id DESC
                 LIMIT 200
@@ -1026,7 +1040,7 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         assert_resource_client_access(conn, "intervention", intervention_id, user)
         # Vérifier le statut de validation
         row = conn.execute(
-            "SELECT fiche_validation, fiche_photo_nom FROM interventions WHERE id = %s",
+            "SELECT fiche_validation, fiche_photo_nom, fiche_storage_key FROM interventions WHERE id = %s",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -1036,9 +1050,18 @@ def delete_fiche(intervention_id: int, user: dict = Depends(_verify_token)):
         if statut_validation == "Validée":
             raise HTTPException(status_code=403, detail="Impossible de supprimer une fiche validée")
         
-        # Supprimer la fiche
+        # Remove the object first. If object storage is temporarily unavailable,
+        # keep the database reference instead of creating a broken attachment.
+        storage_key = row.get("fiche_storage_key")
+        if storage_key:
+            from s3_storage import delete_file
+            if not delete_file(storage_key):
+                raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
         conn.execute(
-            "UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL, fiche_validation = 'En attente' WHERE id = %s",
+            """UPDATE interventions SET fiche_photo_nom = '', fiche_photo_data = NULL,
+                   fiche_storage_key = NULL, fiche_content_type = NULL,
+                   fiche_size_bytes = NULL, fiche_sha256 = NULL,
+                   fiche_validation = 'En attente' WHERE id = %s""",
             (intervention_id,)
         )
     
