@@ -591,7 +591,10 @@ def init_db():
             email TEXT DEFAULT '',
             actif INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP
+            last_login TIMESTAMP,
+            password_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            must_change_password BOOLEAN DEFAULT false,
+            password_version INTEGER DEFAULT 1
         );
 
         -- Journal d'audit
@@ -782,11 +785,19 @@ def init_db():
 
         # --- Migrations pour bases existantes (Pillier 3: Logging des migrations) ---
         def _run_migration(sql, description):
+            savepoint = "migration_statement"
             try:
+                conn.execute(f"SAVEPOINT {savepoint}")
                 conn.execute(sql)
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 logger.info(f"Migration réussie: {description}")
             except Exception as e:
-                # On logue l'erreur mais on continue (souvent dû à une colonne déjà existante)
+                # Une migration déjà appliquée ne doit pas annuler ni bloquer les suivantes.
+                try:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                except Exception:
+                    conn.rollback()
                 logger.debug(f"Migration ignorée ({description}): {e}")
 
         # Migration helper PostgreSQL: ajouter une colonne si elle n'existe pas.
@@ -821,6 +832,15 @@ def init_db():
         _run_migration("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''", "telegram_id sur techniciens")
         _run_migration("ALTER TABLE planning_maintenance ADD COLUMN client TEXT DEFAULT ''", "client sur planning")
         _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
+        _safe_add_column("utilisateurs", "password_changed_at", "TIMESTAMP", "CURRENT_TIMESTAMP")
+        _safe_add_column("utilisateurs", "must_change_password", "BOOLEAN", "false")
+        _safe_add_column("utilisateurs", "password_version", "INTEGER", "1")
+        conn.execute("""
+            UPDATE utilisateurs
+            SET password_changed_at = COALESCE(password_changed_at, last_login, created_at, CURRENT_TIMESTAMP),
+                password_version = COALESCE(password_version, 1),
+                must_change_password = COALESCE(must_change_password, false)
+        """)
         _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
         _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")

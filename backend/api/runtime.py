@@ -409,6 +409,12 @@ except ValueError as exc:
     raise RuntimeError("JWT_EXPIRY_HOURS doit être un entier") from exc
 if not 1 <= JWT_EXPIRY_HOURS <= 72:
     raise RuntimeError("JWT_EXPIRY_HOURS doit être compris entre 1 et 72")
+try:
+    PASSWORD_ROTATION_DAYS = int(os.getenv("PASSWORD_ROTATION_DAYS", "90"))
+except ValueError as exc:
+    raise RuntimeError("PASSWORD_ROTATION_DAYS doit être un entier") from exc
+if not 30 <= PASSWORD_ROTATION_DAYS <= 365:
+    raise RuntimeError("PASSWORD_ROTATION_DAYS doit être compris entre 30 et 365")
 security = HTTPBearer(auto_error=False)
 
 IS_PRODUCTION = os.getenv("NODE_ENV") == "production"

@@ -62,7 +62,7 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
   clearTimeout(timer);
 
   if (!res.ok) {
-    if (res.status === 401 && endpoint !== '/api/auth/login') {
+    if (res.status === 401 && endpoint !== '/api/auth/login' && endpoint !== '/api/auth/change-password') {
       expireSession();
     }
     const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
@@ -75,10 +75,14 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
 // --- Auth ---
 export const auth = {
   login: (username: string, password: string) =>
-    request<{ token: string; user: { username: string; nom: string; role: string } }>(
+    request<{ token: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
       '/api/auth/login', { method: 'POST', body: { username, password } }
     ),
-  me: () => request<{ user: { sub: string; role: string; nom: string } }>('/api/auth/me'),
+  me: () => request<{ user: { sub: string; role: string; nom: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>('/api/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ token: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
+      '/api/auth/change-password', { method: 'POST', body: { current_password: currentPassword, new_password: newPassword } }
+    ),
 };
 
 // --- Dashboard ---

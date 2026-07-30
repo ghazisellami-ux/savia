@@ -24,7 +24,7 @@ export default function LoginPage() {
       const res = await auth.login(username, password);
       localStorage.setItem('savia_token', res.token);
       localStorage.setItem('savia_user', JSON.stringify(res.user));
-      router.push('/dashboard');
+      router.push(res.password_change_required ? '/change-password' : '/dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erreur de connexion';
       setError(message);
@@ -75,7 +75,7 @@ export default function LoginPage() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="admin"
+                  placeholder="votre.identifiant"
                   className="w-full bg-savia-bg/50 border border-savia-border rounded-lg pl-10 pr-4 py-3
                              text-savia-text placeholder:text-savia-text-dim
                              focus:outline-none focus:ring-2 focus:ring-savia-accent/40 focus:border-savia-accent/40

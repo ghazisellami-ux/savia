@@ -25,6 +25,7 @@ from api.runtime import (
 )
 from api.security import (
     _verify_token,
+    validate_password_policy,
 )
 from services.scheduled_jobs import (
     _df_to_records,
@@ -51,19 +52,20 @@ def _require_admin(user: dict) -> None:
 
 
 def _validate_password(password: str, username: str = "") -> None:
-    if not isinstance(password, str) or len(password) < 12 or len(password.encode("utf-8")) > 72:
-        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 12 caractères")
-    if not all((any(c.islower() for c in password), any(c.isupper() for c in password), any(c.isdigit() for c in password))):
-        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir une minuscule, une majuscule et un chiffre")
-    if username and username.casefold() in password.casefold():
-        raise HTTPException(status_code=400, detail="Le mot de passe ne doit pas contenir le nom d'utilisateur")
+    try:
+        validate_password_policy(password, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/admin/users")
 def get_users(user: dict = Depends(_verify_token)):
     _require_admin(user)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, username, nom_complet, role, client, email, actif, profil, pages_autorisees, created_at, last_login FROM utilisateurs ORDER BY id"
+            """SELECT id, username, nom_complet, role, client, email, actif, profil,
+                      pages_autorisees, created_at, last_login, password_changed_at,
+                      must_change_password
+               FROM utilisateurs ORDER BY id"""
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -96,7 +98,10 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
         
         hashed = bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         conn.execute(
-            "INSERT INTO utilisateurs (username, password_hash, nom_complet, role, client, email, actif, profil, pages_autorisees) VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)",
+            """INSERT INTO utilisateurs
+               (username, password_hash, nom_complet, role, client, email, actif, profil,
+                pages_autorisees, password_changed_at, must_change_password, password_version)
+               VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s, CURRENT_TIMESTAMP, true, 1)""",
             (username, hashed, body.get("nom_complet", ""), role, body.get("client", ""), body.get("email", ""), body.get("profil", ""), body.get("pages_autorisees", ""))
         )
     return {"ok": True}
@@ -107,13 +112,12 @@ def update_user(user_id: int, body: dict, user: dict = Depends(_verify_token)):
     _require_admin(user)
     if "role" in body and body["role"] not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Rôle invalide")
-    if "password" in body and body["password"]:
-        _validate_password(body["password"])
-
     with get_db() as conn:
         target = conn.execute("SELECT username, role, actif FROM utilisateurs WHERE id = %s", (user_id,)).fetchone()
         if not target:
             raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        if "password" in body and body["password"]:
+            _validate_password(body["password"], target["username"])
         removes_last_admin = (
             target["role"] == "Admin"
             and (("role" in body and body["role"] != "Admin") or ("actif" in body and not bool(body["actif"])))
@@ -132,6 +136,11 @@ def update_user(user_id: int, body: dict, user: dict = Depends(_verify_token)):
     if "password" in body and body["password"]:
         fields.append("password_hash = %s")
         params.append(bcrypt.hashpw(body["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8"))
+        fields.extend([
+            "password_changed_at = CURRENT_TIMESTAMP",
+            "must_change_password = true",
+            "password_version = COALESCE(password_version, 1) + 1",
+        ])
     if fields:
         params.append(user_id)
         with get_db() as conn:

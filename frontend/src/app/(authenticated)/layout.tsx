@@ -3,7 +3,7 @@
 // 🔒 Layout Authentifié — avec Sidebar collapsible
 // ==========================================
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import Sidebar from '@/components/layout/sidebar';
 import { clsx } from 'clsx';
@@ -11,8 +11,9 @@ import { clsx } from 'clsx';
 const SIDEBAR_COLLAPSED_KEY = 'savia_sidebar_collapsed';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -37,6 +38,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthenticated, isLoading, router]);
 
+  useEffect(() => {
+    if (!isLoading && user?.password_change_required && pathname !== '/change-password') {
+      router.replace('/change-password');
+    }
+  }, [isLoading, pathname, router, user?.password_change_required]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-savia-bg">
@@ -49,6 +56,11 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAuthenticated) return null;
+
+  if (user?.password_change_required) {
+    if (pathname !== '/change-password') return null;
+    return <main className="min-h-screen bg-savia-bg">{children}</main>;
+  }
 
   return (
     <div className="flex min-h-screen">
