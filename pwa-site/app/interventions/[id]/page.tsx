@@ -503,6 +503,7 @@ export default function InterventionDetailPage() {
         start_time: form.start_time,  // Send HH:MM directly
         end_time: form.end_time,      // Send HH:MM directly
         deplacement: deploymentMinutes,  // Send in minutes
+        fiche_validation: form.fiche_validation,
         pieces_a_deduire, 
         pieces_rupture, 
         ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) 
@@ -515,7 +516,14 @@ export default function InterventionDetailPage() {
       console.log('  deplacement:', updatePayload.deplacement, 'minutes');
       
       await api.interventions.update(id, updatePayload);
-      if (photoFile) await api.interventions.uploadPhoto(id, photoFile).catch(err => console.error('Photo upload failed:', err));
+      if (photoFile) {
+        try {
+          await api.interventions.uploadPhoto(id, photoFile);
+        } catch (error) {
+          console.error('Photo upload failed:', error);
+          throw new Error("L'intervention est mise à jour, mais l'envoi de la fiche signée a échoué.");
+        }
+      }
       setSuccess('Intervention mise à jour !');
       if (shouldReturnToInterventions(form.statut)) {
         returnToInterventions();

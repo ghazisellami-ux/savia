@@ -480,7 +480,8 @@ def lire_child_interventions_for_technician(technician_name):
                    i.start_time, i.end_time,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
-                   (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0) AS has_fiche,
+                   (NULLIF(i.fiche_storage_key, '') IS NOT NULL OR
+                    (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0)) AS has_fiche,
                    COALESCE(e.client, '') AS client,
                    i.parent_intervention_id
             FROM interventions i

@@ -99,8 +99,27 @@ def _migration_001_integrity_and_indexes(conn) -> None:
     )
 
 
+def _migration_002_private_file_metadata(conn) -> None:
+    """Keep new uploads in object storage while retaining legacy blobs safely."""
+    statements = (
+        "ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_storage_key TEXT",
+        "ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_content_type TEXT",
+        "ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_size_bytes BIGINT",
+        "ALTER TABLE interventions ADD COLUMN IF NOT EXISTS fiche_sha256 TEXT",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS storage_key TEXT",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS content_type TEXT",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS size_bytes BIGINT",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS sha256 TEXT",
+    )
+    for statement in statements:
+        conn.execute(statement)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_interventions_fiche_storage_key ON interventions(fiche_storage_key) WHERE fiche_storage_key IS NOT NULL")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_techniques_storage_key ON documents_techniques(storage_key) WHERE storage_key IS NOT NULL")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
+    ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
 )
 
 

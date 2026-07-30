@@ -32,6 +32,7 @@ __all__ = [
     "ajouter_document_technique",
     "lire_documents_techniques",
     "lire_document_technique_contenu",
+    "lire_document_technique_stockage",
     "supprimer_document_technique",
     "lire_tous_documents_techniques",
 ]
@@ -442,13 +443,15 @@ def lire_equipement_par_id(equip_id):
 # FONCTIONS CRUD — DOCUMENTS TECHNIQUES
 # ==========================================
 
-def ajouter_document_technique(equipement_id, nom_fichier, contenu_base64):
-    """Ajoute un document technique pour un équipement (un par un pour éviter les timeouts)."""
+def ajouter_document_technique(equipement_id, nom_fichier, contenu_base64, *, storage_key=None,
+                              content_type=None, size_bytes=None, sha256=None):
+    """Save document metadata; new files live in private object storage."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO documents_techniques (equipement_id, nom_fichier, contenu_base64)
-            VALUES (%s, %s, %s)
-        """, (equipement_id, nom_fichier, contenu_base64))
+            INSERT INTO documents_techniques
+            (equipement_id, nom_fichier, contenu_base64, storage_key, content_type, size_bytes, sha256)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (equipement_id, nom_fichier, contenu_base64, storage_key, content_type, size_bytes, sha256))
     return True
 
 
@@ -466,7 +469,8 @@ def lire_document_technique_contenu(doc_id):
     """Lit le contenu base64 d'un document technique par son ID."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT contenu_base64, nom_fichier FROM documents_techniques WHERE id = %s",
+            """SELECT contenu_base64, nom_fichier, storage_key, content_type,
+                      size_bytes, sha256 FROM documents_techniques WHERE id = %s""",
             (doc_id,)
         ).fetchone()
         if row:
@@ -479,6 +483,14 @@ def supprimer_document_technique(doc_id):
     with get_db() as conn:
         conn.execute("DELETE FROM documents_techniques WHERE id = %s", (doc_id,))
     return True
+
+
+def lire_document_technique_stockage(doc_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT storage_key FROM documents_techniques WHERE id = %s", (doc_id,)
+        ).fetchone()
+        return row.get("storage_key") if row else None
 
 
 def lire_tous_documents_techniques():
