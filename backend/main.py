@@ -19,6 +19,7 @@ from controllers.contracts import *
 from controllers.planning import *
 from controllers.knowledge import *
 from controllers.ai import *
+from controllers.ai_governance import *
 from controllers.admin import *
 from controllers.clients_dashboard import *
 from controllers.storage import *

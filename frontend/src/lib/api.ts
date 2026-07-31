@@ -66,7 +66,10 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
       expireSession();
     }
     const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
-    throw new ApiError(data.error || `HTTP ${res.status}`, res.status);
+    if (res.status === 428 && isAiEndpoint && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('savia_ai_consent_required'));
+    }
+    throw new ApiError(data.error || data.detail || `HTTP ${res.status}`, res.status);
   }
 
   return res.json();
@@ -332,6 +335,15 @@ export const admin = {
     request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'PUT', body: data }),
   deleteUser: (id: number) =>
     request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+  aiGovernance: () => request<any>('/api/admin/ai-governance'),
+  updateAiOffer: (code: string, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/admin/ai-governance/offers/${code}`, { method: 'PUT', body: data }),
+  updateActiveAiOffer: (offer_code: string) =>
+    request<{ ok: boolean }>('/api/admin/ai-governance/active-offer', { method: 'PUT', body: { offer_code } }),
+  updateAiUser: (id: number, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/admin/ai-governance/users/${id}`, { method: 'PUT', body: data }),
+  updateAiDataLocation: (data_location: string) =>
+    request<{ ok: boolean }>('/api/admin/ai-governance/data-location', { method: 'PUT', body: { data_location } }),
 };
 
 // --- AI Engine ---

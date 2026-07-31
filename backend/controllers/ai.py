@@ -25,8 +25,10 @@ from api.security import (
     _verify_token,
     require_roles,
 )
+from services.ai_governance import governed_ai_endpoint
 
 @app.post("/api/ai/analyze-diagnostic")
+@governed_ai_endpoint("diagnostic", ("Admin", "Manager", "Responsable Technique", "Technicien"))
 def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     """Calls Gemini to diagnose a machine error code and log contexts."""
@@ -71,6 +73,7 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_
         raise HTTPException(status_code=500, detail=f"Diagnostic IA échoué: {e}")
 
 @app.post("/api/ai/analyze-performance")
+@governed_ai_endpoint("performance", ("Admin", "Manager", "Responsable Technique"))
 def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Calls Gemini to produce a detailed predictive maintenance report (v2)."""
@@ -188,6 +191,7 @@ PRODUIS un rapport JSON STRICT :
 
 
 @app.post("/api/ai/analyze-pieces")
+@governed_ai_endpoint("pieces", ("Admin", "Manager", "Responsable Technique", "Gestionnaire", "Gestionnaire de stock"))
 def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager", "Responsable Technique", "Gestionnaire", "Gestionnaire de stock")
     """
@@ -332,6 +336,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
 
 
 @app.post("/api/ai/analyze-sav")
+@governed_ai_endpoint("sav", ("Admin", "Manager", "Responsable Technique"))
 def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager", "Responsable Technique")
     """Comprehensive SAV/Interventions analysis using Gemini."""
@@ -449,6 +454,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
 # ==========================================
 
 @app.post("/api/ai/analyze-costs")
+@governed_ai_endpoint("costs", ("Admin", "Manager"))
 def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager")
     """Analyse IA structurée des coûts clients — retourne des cartes comme le diagnostic IA."""
@@ -574,6 +580,7 @@ IMPORTANT: Sois un consultant expert. Chaque section doit faire 4-8 lignes avec 
 
 
 @app.post("/api/ai/analyze-costs/pdf")
+@governed_ai_endpoint("costs_pdf", ("Admin", "Manager"))
 def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager")
     """Genere un PDF a partir du resultat d'analyse IA des couts."""
@@ -729,6 +736,7 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token), x_savi
 # ==========================================
 
 @app.post("/api/ai/chat")
+@governed_ai_endpoint("chat", ("Admin", "Manager", "Responsable Technique", "Technicien"))
 def ai_chat(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
     require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     """Assistant IA conversationnel — répond aux questions en langage naturel sur les données SAVIA."""

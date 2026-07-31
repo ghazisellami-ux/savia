@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff, Bot, Headphones, BarChart3, Package, Settings, MessageCircle, ClipboardList, Building2, Wrench, DollarSign, Brain, KeyRound } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
+import AiPrivacyPanel from '@/components/ai/ai-privacy-panel';
 
 const INPUT = "w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 focus:outline-none";
 const LABEL = "block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2";
@@ -501,6 +502,8 @@ export default function SettingsPage() {
       </div>
 
       {/* ━━━━ IA ━━━━ */}
+      <AiPrivacyPanel />
+
       <div className={CARD}>
         <div className="flex items-center gap-3 pb-2 border-b border-savia-border">
           <Brain className="w-6 h-6 text-purple-400" />
