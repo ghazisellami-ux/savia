@@ -5,6 +5,7 @@ import re
 import json
 import time
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from google import genai
 from google.genai import types
@@ -30,7 +31,32 @@ def mask_pii_locally(text):
     return text
 
 # Modèles à essayer par ordre de préférence (chacun a son propre quota)
-MODELS = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"]
+_configured_models = os.getenv("GEMINI_MODELS", "gemini-3.1-flash-lite")
+MODELS = [model.strip() for model in _configured_models.split(",") if model.strip()]
+AI_ATTEMPT_TIMEOUT_SECONDS = max(5, int(os.getenv("GEMINI_ATTEMPT_TIMEOUT_SECONDS", "35")))
+
+
+def _generation_config(is_json: bool, timeout_seconds: int):
+    """Construit une requête Gemini bornée, sans appel de fonction distant."""
+    config = {
+        "temperature": 0.2,
+        "candidate_count": 1,
+        "max_output_tokens": 4096,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
+        "http_options": types.HttpOptions(
+            timeout=timeout_seconds * 1000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+        "safety_settings": [
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+            types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
+        ],
+    }
+    if is_json:
+        config["response_mime_type"] = "application/json"
+    return config
 
 # --- Initialisation multi-clés ---
 AI_AVAILABLE = False
@@ -74,6 +100,7 @@ def _call_ia(prompt, timeout=120, is_json=False):
         return None
 
     total_keys = len(_clients)
+    deadline = time.monotonic() + max(1, timeout)
     
     # Audit Trail
     logger.info(f"Initiation Audit Trail IA | Prompt Length: {len(prompt)}")
@@ -86,18 +113,12 @@ def _call_ia(prompt, timeout=120, is_json=False):
             key_suffix = GOOGLE_API_KEYS[_current_key_index][-6:]
 
             try:
-                gen_config = {
-                    "temperature": 0.2,
-                    "candidate_count": 1,
-                    "safety_settings": [
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE)
-                    ]
-                }
-                if is_json:
-                    gen_config["response_mime_type"] = "application/json"
+                remaining_seconds = int(deadline - time.monotonic())
+                if remaining_seconds <= 0:
+                    logger.warning("AI global timeout reached before another attempt.")
+                    return None
+                attempt_timeout = min(AI_ATTEMPT_TIMEOUT_SECONDS, remaining_seconds)
+                gen_config = _generation_config(is_json, attempt_timeout)
 
                 executor = ThreadPoolExecutor(max_workers=1)
                 try:
@@ -107,7 +128,7 @@ def _call_ia(prompt, timeout=120, is_json=False):
                         contents=prompt,
                         config=gen_config
                     )
-                    resp = future.result(timeout=timeout)
+                    resp = future.result(timeout=attempt_timeout + 2)
                 finally:
                     try: executor.shutdown(wait=False, cancel_futures=True)
                     except TypeError: executor.shutdown(wait=False)
@@ -123,7 +144,7 @@ def _call_ia(prompt, timeout=120, is_json=False):
             except Exception as e:
                 last_error = e
                 err_str = str(e).lower()
-                if "429" in err_str or "resource_exhausted" in err_str or "503" in err_str:
+                if any(marker in err_str for marker in ("429", "resource_exhausted", "503", "404", "not_found", "timeout", "timed out", "connection")):
                     logger.warning(f"⚠️ Audit Trail: Quota atteint pour {model_name} (Clé ...{key_suffix}). Bascule auto.")
                     _current_key_index = (_current_key_index + 1) % total_keys
                     keys_tried += 1
@@ -161,13 +182,19 @@ def _call_ia_fast(prompt, timeout=20):
             key_suffix = GOOGLE_API_KEYS[_current_key_index][-6:]
 
             try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
+                attempt_timeout = min(AI_ATTEMPT_TIMEOUT_SECONDS, timeout)
+                executor = ThreadPoolExecutor(max_workers=1)
+                try:
                     future = executor.submit(
                         current_client.models.generate_content,
                         model=model_name,
                         contents=prompt,
+                        config=_generation_config(False, attempt_timeout),
                     )
-                    resp = future.result(timeout=timeout)
+                    resp = future.result(timeout=attempt_timeout + 2)
+                finally:
+                    try: executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError: executor.shutdown(wait=False)
                 logger.info(f"✅ IA Fast OK ({model_name}, clé ...{key_suffix})")
                 return resp.text
             except FuturesTimeoutError:
@@ -372,18 +399,7 @@ Réponds en JSON strict uniquement :
         if raw_response:
             result = clean_json_response(raw_response)
             if result:
-                # Récupérer le score de confiance
                 confidence = int(result.get("Confidence_Score", 0))
-                import hashlib
-                prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-                
-                # Loguer l'inférence (Audit Trail)
-                try:
-                    from db_engine import log_ai_inference
-                    log_ai_inference(MODELS[0], prompt_hash, confidence, "Success")
-                except Exception as e:
-                    logger.error(f"Erreur lors du logging de l'inférence: {e}")
-
                 logger.info(f"IA diagnostic OK (confiance: {confidence}%), keys: {list(result.keys())}")
                 return result
             else:
@@ -457,24 +473,9 @@ Si aucune erreur trouvée, réponds : []
 Texte :
 {texte_page[:4000]}
 """
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        result = clean_json_response(resp.text)
+        response = _call_ia(prompt, timeout=AI_ATTEMPT_TIMEOUT_SECONDS, is_json=True)
+        result = clean_json_response(response)
         
-        # Logging inference for Audit Trail
-        try:
-            from db_engine import log_ai_inference
-            import hashlib
-            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-            confidence = 100
-            if isinstance(result, list) and len(result) > 0:
-                confidence = int(result[0].get("Confidence_Score", 90))
-            log_ai_inference("gemini-2.5-flash", prompt_hash, confidence, "Success")
-        except Exception as e:
-            logger.error(f"Inference log failed: {e}")
-
         return result if isinstance(result, list) else []
 
     except Exception as e:
@@ -498,11 +499,8 @@ Réponds UNIQUEMENT en JSON strict, un tableau :
 
 Si rien trouvé, réponds : []
 """
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[prompt, image_part],
-        )
-        result = clean_json_response(resp.text)
+        response = _call_ia([prompt, image_part], timeout=AI_ATTEMPT_TIMEOUT_SECONDS, is_json=True)
+        result = clean_json_response(response)
         return result if isinstance(result, list) else []
 
     except Exception as e:

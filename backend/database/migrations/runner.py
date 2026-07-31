@@ -117,9 +117,87 @@ def _migration_002_private_file_metadata(conn) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_techniques_storage_key ON documents_techniques(storage_key) WHERE storage_key IS NOT NULL")
 
 
+def _migration_003_ai_governance(conn) -> None:
+    """Add consent, per-user plans, monthly limits, and content-free AI audit."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ai_offers (
+               code TEXT PRIMARY KEY,
+               label TEXT NOT NULL,
+               monthly_quota INTEGER NULL CHECK (monthly_quota IS NULL OR monthly_quota >= 0),
+               sort_order INTEGER NOT NULL DEFAULT 0,
+               active BOOLEAN NOT NULL DEFAULT TRUE,
+               updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    for code, label, quota, sort_order in (
+        ("starter", "Starter", 30, 1),
+        ("business", "Business", 300, 2),
+        ("enterprise", "Entreprise", None, 3),
+    ):
+        conn.execute(
+            """INSERT INTO ai_offers(code, label, monthly_quota, sort_order)
+               VALUES (%s, %s, %s, %s) ON CONFLICT (code) DO NOTHING""",
+            (code, label, quota, sort_order),
+        )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ai_user_entitlements (
+               user_id INTEGER PRIMARY KEY REFERENCES utilisateurs(id) ON DELETE CASCADE,
+               offer_code TEXT NOT NULL DEFAULT 'starter' REFERENCES ai_offers(code),
+               quota_override INTEGER NULL CHECK (quota_override IS NULL OR quota_override >= 0),
+               ai_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+               consent_version TEXT NOT NULL DEFAULT '',
+               consented_at TIMESTAMP NULL,
+               consent_revoked_at TIMESTAMP NULL,
+               updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ai_monthly_usage (
+               user_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+               period_start DATE NOT NULL,
+               request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+               updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY (user_id, period_start)
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ai_usage_audit (
+               id BIGSERIAL PRIMARY KEY,
+               occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               user_id INTEGER NULL REFERENCES utilisateurs(id) ON DELETE SET NULL,
+               username TEXT NOT NULL,
+               client TEXT DEFAULT '',
+               feature TEXT NOT NULL,
+               provider TEXT NOT NULL DEFAULT 'Google Gemini',
+               model TEXT NOT NULL DEFAULT 'gemini-auto',
+               offer_code TEXT DEFAULT '',
+               outcome TEXT NOT NULL,
+               error_code TEXT DEFAULT ''
+           )"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_audit_occurred_at ON ai_usage_audit(occurred_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_audit_user_date ON ai_usage_audit(user_id, occurred_at DESC)")
+    conn.execute(
+        """INSERT INTO config_client(cle, valeur) VALUES
+               ('ai_data_location', 'À confirmer dans le contrat Google applicable'),
+               ('ai_active_offer_code', 'starter')
+           ON CONFLICT (cle) DO NOTHING"""
+    )
+
+
+def _migration_004_global_ai_offer(conn) -> None:
+    """One commercial AI offer applies to the whole customer deployment."""
+    conn.execute(
+        """INSERT INTO config_client(cle, valeur) VALUES ('ai_active_offer_code', 'starter')
+           ON CONFLICT (cle) DO NOTHING"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
+    ("003", "AI consent, quotas, and content-free usage audit", _migration_003_ai_governance),
+    ("004", "one active AI offer per deployment", _migration_004_global_ai_offer),
 )
 
 

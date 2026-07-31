@@ -9,7 +9,7 @@ import {
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
-  ChevronDown,
+  ChevronDown, Brain,
 } from 'lucide-react';
 import { admin, techniciens, clients } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -187,7 +187,7 @@ export default function AdminPage() {
   const { user: currentUser } = useAuth();
   // Les non-admins commencent directement sur l'onglet Paramètres
   const defaultTab = currentUser?.role === 'Admin' ? 'users' : 'settings';
-  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs'>(defaultTab as any);
+  const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs' | 'ai'>(defaultTab as any);
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>(DEFAULT_PROFILES);
@@ -226,6 +226,46 @@ export default function AdminPage() {
   const [profilesSaving, setProfilesSaving] = useState(false);
   const [profilesSaved,  setProfilesSaved]  = useState(false);
   const [profilesErr,    setProfilesErr]    = useState('');
+  const [aiGovernance, setAiGovernance] = useState<any>(null);
+  const [aiSaving, setAiSaving] = useState('');
+  const [aiMessage, setAiMessage] = useState('');
+
+  const loadAiGovernance = useCallback(async () => {
+    if (currentUser?.role !== 'Admin') return;
+    try { setAiGovernance(await admin.aiGovernance()); }
+    catch (err) { console.error('AI governance load error:', err); }
+  }, [currentUser?.role]);
+
+  useEffect(() => { if (tab === 'ai') loadAiGovernance(); }, [tab, loadAiGovernance]);
+
+  const saveAiOffer = async (offer: any) => {
+    setAiSaving(`offer-${offer.code}`); setAiMessage('');
+    try { await admin.updateAiOffer(offer.code, { label: offer.label, monthly_quota: offer.monthly_quota === '' || offer.monthly_quota === null ? null : Number(offer.monthly_quota), active: offer.active }); setAiMessage(`Offre ${offer.label} sauvegardée.`); await loadAiGovernance(); }
+    catch (err: any) { setAiMessage(err?.message || 'Erreur de sauvegarde IA'); }
+    finally { setAiSaving(''); }
+  };
+
+  const saveAiUser = async (entry: any) => {
+    setAiSaving(`user-${entry.id}`); setAiMessage('');
+    try { await admin.updateAiUser(entry.id, { ai_enabled: entry.ai_enabled }); setAiMessage(`Droits IA de ${entry.username} sauvegardés.`); await loadAiGovernance(); }
+    catch (err: any) { setAiMessage(err?.message || 'Erreur de sauvegarde IA'); }
+    finally { setAiSaving(''); }
+  };
+
+  const saveActiveAiOffer = async (offerCode: string) => {
+    setAiSaving('active-offer'); setAiMessage('');
+    try { await admin.updateActiveAiOffer(offerCode); setAiMessage('Offre IA de cette application sauvegardée.'); await loadAiGovernance(); }
+    catch (err: any) { setAiMessage(err?.message || 'Erreur de sauvegarde IA'); }
+    finally { setAiSaving(''); }
+  };
+
+  const saveAiLocation = async () => {
+    if (!aiGovernance) return;
+    setAiSaving('location'); setAiMessage('');
+    try { await admin.updateAiDataLocation(aiGovernance.data_location); setAiMessage('Localisation contractuelle sauvegardée.'); await loadAiGovernance(); }
+    catch (err: any) { setAiMessage(err?.message || 'Erreur de sauvegarde IA'); }
+    finally { setAiSaving(''); }
+  };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -612,9 +652,10 @@ export default function AdminPage() {
           { id: 'profiles', label: 'Profils & Permissions', icon: <Shield className="w-4 h-4" />, adminOnly: true },
           { id: 'techs',    label: 'Techniciens',         icon: <Wrench className="w-4 h-4" />, adminOnly: false },
           { id: 'logs',     label: 'Audit Logs',          icon: <Shield className="w-4 h-4" />, adminOnly: true },
+          { id: 'ai',       label: 'IA & conformité',     icon: <Brain className="w-4 h-4" />, adminOnly: true },
           { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" />, adminOnly: false },
         ]
-          .filter(t => !t.adminOnly || currentUser?.username === 'admin')
+          .filter(t => !t.adminOnly || currentUser?.role === 'Admin')
           .map(t => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer border-b-2 ${tab === t.id ? 'border-savia-accent text-savia-accent bg-savia-accent/5' : 'border-transparent text-savia-text-muted hover:text-savia-text'}`}>
@@ -802,6 +843,51 @@ export default function AdminPage() {
       {/* ─── TAB: LOGS ──────────────────────────────────────── */}
       {tab === 'logs' && (
         <LogsTab />
+      )}
+
+      {/* ─── TAB: AI GOVERNANCE ─────────────────────────────── */}
+      {tab === 'ai' && (
+        <div className="space-y-5">
+          <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-purple-400" /> Gemini — quotas et contrôle humain</span>}>
+            <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-4 text-sm text-savia-text-muted space-y-1">
+              <p className="font-bold text-savia-text">Recommandations uniquement — validation humaine obligatoire.</p>
+              <p>SAVIA ne conserve ni prompts ni réponses IA ; le journal contient seulement l’utilisateur, la date, la fonctionnalité, le statut et le compteur.</p>
+            </div>
+          </SectionCard>
+
+          {aiGovernance && <>
+            <SectionCard title="Offre IA de cette application">
+              <p className="text-xs text-savia-text-muted mb-4">Sélectionnez une seule offre pour ce client. Elle définit le quota mensuel de tous les utilisateurs ; laisser le quota vide signifie <strong>illimité</strong>.</p>
+              <div className="grid gap-4 md:grid-cols-3">
+                {aiGovernance.offers.map((offer: any) => (
+                  <div key={offer.code} className={`rounded-xl border p-4 space-y-3 ${aiGovernance.active_offer_code === offer.code ? 'border-savia-accent bg-savia-accent/10' : 'border-savia-border bg-savia-bg/30'}`}>
+                    <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-savia-text"><input type="radio" name="active-ai-offer" checked={aiGovernance.active_offer_code === offer.code} onChange={() => saveActiveAiOffer(offer.code)} /> Offre active pour cette application</label>
+                    <input className={INPUT} value={offer.label} onChange={e => setAiGovernance((s: any) => ({ ...s, offers: s.offers.map((x: any) => x.code === offer.code ? { ...x, label: e.target.value } : x) }))} />
+                    <div><label className={LABEL}>Requêtes / mois</label><input type="number" min={0} className={INPUT} placeholder="Illimité" value={offer.monthly_quota ?? ''} onChange={e => setAiGovernance((s: any) => ({ ...s, offers: s.offers.map((x: any) => x.code === offer.code ? { ...x, monthly_quota: e.target.value } : x) }))} /></div>
+                    <button onClick={() => saveAiOffer(offer)} disabled={aiSaving === `offer-${offer.code}`} className="w-full rounded-lg bg-savia-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-60">{aiSaving === `offer-${offer.code}` ? 'Sauvegarde...' : 'Sauvegarder'}</button>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Localisation et transparence">
+              <label className={LABEL}>Localisation contractuelle des données IA</label>
+              <div className="flex gap-3"><input className={INPUT} value={aiGovernance.data_location || ''} onChange={e => setAiGovernance((s: any) => ({ ...s, data_location: e.target.value }))} placeholder="Ex. selon contrat Google applicable" /><button onClick={saveAiLocation} disabled={aiSaving === 'location'} className="rounded-lg bg-savia-accent px-4 text-sm font-bold text-white disabled:opacity-60">Sauvegarder</button></div>
+              <p className="mt-2 text-xs text-savia-text-muted">Cette valeur doit correspondre au contrat/DPA conclu avec le fournisseur IA ; elle n’est pas une garantie technique automatique.</p>
+            </SectionCard>
+
+            <SectionCard title="Droits IA par utilisateur">
+              <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-savia-border"><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-left">Utilisé ce mois</th><th className="p-2 text-left">Consentement</th><th className="p-2 text-left">Accès IA</th><th className="p-2" /></tr></thead><tbody>
+                {aiGovernance.users.map((entry: any) => <tr key={entry.id} className="border-b border-savia-border/50"><td className="p-2"><strong>{entry.username}</strong><span className="block text-xs text-savia-text-muted">{entry.role}</span></td><td className="p-2">{entry.used_this_month}</td><td className="p-2 text-xs">{entry.consented_at && !entry.consent_revoked_at ? 'Accepté' : 'Non accepté'}</td><td className="p-2"><input type="checkbox" checked={entry.ai_enabled} onChange={e => setAiGovernance((s: any) => ({ ...s, users: s.users.map((x: any) => x.id === entry.id ? { ...x, ai_enabled: e.target.checked } : x) }))} /></td><td className="p-2"><button onClick={() => saveAiUser(entry)} disabled={aiSaving === `user-${entry.id}`} className="rounded-lg border border-savia-accent px-3 py-1.5 text-xs font-bold text-savia-accent disabled:opacity-60">Sauver</button></td></tr>)}
+              </tbody></table></div>
+            </SectionCard>
+
+            <SectionCard title="Journal d’usage IA (sans contenu)">
+              <div className="max-h-64 overflow-auto text-xs"><table className="w-full"><thead><tr className="border-b border-savia-border"><th className="p-2 text-left">Date</th><th className="p-2 text-left">Utilisateur</th><th className="p-2 text-left">Fonction</th><th className="p-2 text-left">Statut</th></tr></thead><tbody>{aiGovernance.usage.map((entry: any, index: number) => <tr key={index} className="border-b border-savia-border/40"><td className="p-2">{String(entry.occurred_at).replace('T', ' ').slice(0, 16)}</td><td className="p-2">{entry.username}</td><td className="p-2">{entry.feature}</td><td className="p-2">{entry.outcome}</td></tr>)}</tbody></table></div>
+            </SectionCard>
+          </>}
+          {aiMessage && <p className="rounded-lg border border-savia-accent/30 bg-savia-accent/10 p-3 text-sm text-savia-accent">{aiMessage}</p>}
+        </div>
       )}
 
       {/* ─── TAB: SETTINGS ───────────────────────────────────── */}

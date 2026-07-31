@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import Sidebar from '@/components/layout/sidebar';
+import AiConsentDialog from '@/components/ai/ai-consent-dialog';
 import { clsx } from 'clsx';
 
 const SIDEBAR_COLLAPSED_KEY = 'savia_sidebar_collapsed';
@@ -65,6 +66,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <Sidebar isCollapsed={isCollapsed} onToggle={handleToggle} />
+      <AiConsentDialog />
       <main
         className={clsx(
           'flex-1 p-6 overflow-auto transition-all duration-300 ease-in-out',
