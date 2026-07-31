@@ -8,6 +8,7 @@ from api.runtime import (
     JWT_ISSUER,
     JWT_SECRET,
     Optional,
+    Request,
     _tech_name_or_username_matches,
     bcrypt,
     get_db,
@@ -174,7 +175,7 @@ def _authenticated_user(credentials: Optional[HTTPAuthorizationCredentials]) -> 
     return payload
 
 
-def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+def _verify_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
     """Require a valid Bearer JWT for every protected business route."""
     payload = _authenticated_user(credentials)
     if payload["password_change_required"]:
@@ -186,12 +187,17 @@ def _verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
     # client assignment. This applies to every business route using this
     # dependency, including routes added in the future.
     get_client_scope(payload)
+    request.state.access_username = payload.get("sub", "")
+    request.state.access_role = payload.get("role", "")
     return payload
 
 
-def _verify_password_change_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+def _verify_password_change_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
     """Allow only the password-change flow for a session requiring rotation."""
-    return _authenticated_user(credentials)
+    payload = _authenticated_user(credentials)
+    request.state.access_username = payload.get("sub", "")
+    request.state.access_role = payload.get("role", "")
+    return payload
 
 
 def validate_password_policy(password: str, username: str = "") -> None:

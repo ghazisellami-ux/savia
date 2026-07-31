@@ -15,6 +15,7 @@ import unicodedata
 import jwt
 import bcrypt
 import logging
+import time
 import auth
 import pandas as pd
 from datetime import datetime, timedelta
@@ -32,6 +33,14 @@ from repositories.technician_names import DatabaseTechnicianNameRepository
 from services.knowledge_import import detect_and_fix_encoding, parse_text_to_rows as _parse_text_to_rows
 from services.localization import LocalizationService
 from services.technician_identity import TechnicianIdentityService
+from services.observability import (
+    configure_logging,
+    current_request_id,
+    metrics,
+    request_id_from_header,
+    reset_request_id,
+    set_request_id,
+)
 
 from db_engine import (
     init_db, get_db, read_sql, _trigger_backup,
@@ -376,7 +385,7 @@ def _ensure_fa_font():
 
 _ensure_fa_font()
 # ─────────────────────────────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 
 
 def _cors_origins():
@@ -444,6 +453,55 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Attach a correlation id and emit one safe, structured access event."""
+    request_id = request_id_from_header(request.headers.get("X-Request-ID"))
+    request.state.request_id = request_id
+    context_token = set_request_id(request_id)
+    started_at = time.perf_counter()
+    client_ip = request.client.host if request.client else ""
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        metrics.record(500, duration_ms / 1000)
+        logger.exception(
+            "HTTP request failed",
+            extra={
+                "event": "http_access",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 500,
+                "duration_ms": duration_ms,
+                "client_ip": client_ip,
+                "username": getattr(request.state, "access_username", ""),
+                "role": getattr(request.state, "access_role", ""),
+            },
+        )
+        raise
+    else:
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        metrics.record(response.status_code, duration_ms / 1000)
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "HTTP request completed",
+            extra={
+                "event": "http_access",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "client_ip": client_ip,
+                "username": getattr(request.state, "access_username", ""),
+                "role": getattr(request.state, "access_role", ""),
+            },
+        )
+        return response
+    finally:
+        reset_request_id(context_token)
+
+
+@app.middleware("http")
 async def savia_language_context(request: Request, call_next):
     token = _LANG_CONTEXT.set(_get_app_language(request.headers.get("x-savia-lang")))
     try:
@@ -470,7 +528,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled API error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"error": "Erreur interne du serveur"},
+        content={"error": "Erreur interne du serveur", "request_id": current_request_id()},
     )
 
 __all__ = [name for name in globals() if not name.startswith("__")]

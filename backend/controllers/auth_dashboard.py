@@ -141,6 +141,8 @@ def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
     user_data = dict(row)
+    request.state.access_username = user_data.get("username", "")
+    request.state.access_role = user_data.get("role", "")
     rotation_due = _password_rotation_due(user_data.get("password_changed_at"))
     if rotation_due:
         user_data["must_change_password"] = True
