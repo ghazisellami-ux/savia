@@ -69,6 +69,31 @@ services:
     networks:
       - savia_dev_network
 
+  # Exécuteur privé des rappels quotidiens. Le backend API ne lance plus de thread.
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: savia_dev_scheduler
+    command: [ "python", "-m", "workers.scheduler" ]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+      PASSWORD_ROTATION_DAYS: ${PASSWORD_ROTATION_DAYS:-90}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-30}
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - savia_dev_network
+
   minio:
     image: minio/minio:latest
     container_name: savia_dev_minio

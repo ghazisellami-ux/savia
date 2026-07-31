@@ -10,9 +10,6 @@ from api.runtime import (
     logger,
     migrer_clients_depuis_equipements,
 )
-from services.scheduled_jobs import (
-    _start_garantie_daemon,
-)
 from database.migrations import run_migrations
 
 @app.on_event("startup")
@@ -53,7 +50,6 @@ def startup():
         logger.info("✅ Migration planning_id + facture: colonnes OK")
     except Exception as e:
         logger.info(f"Migration planning_id/facture (déjà faite ou erreur): {e}")
-    _start_garantie_daemon()
     # Auto-migrate existing clients from equipements table
     try:
         migrer_clients_depuis_equipements()

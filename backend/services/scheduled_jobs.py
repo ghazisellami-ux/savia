@@ -1,4 +1,13 @@
-"""Scheduled maintenance, notification, stock, and Telegram jobs."""
+"""Scheduled maintenance, notification, stock, and Telegram jobs.
+
+The HTTP API imports individual functions for user-triggered actions.  The
+daily batch is run only by :mod:`workers.scheduler`, never by an API replica.
+"""
+
+import os
+import time
+from contextlib import contextmanager
+from datetime import datetime
 
 from api.runtime import (
     get_db,
@@ -638,6 +647,135 @@ def check_planning_retard():
         logger.error(f"check_planning_retard error: {e}")
 
 
+SCHEDULER_LOCK_KEY = 7_241_990_154
+SCHEDULER_LAST_RUN_KEY = "scheduled_jobs_last_run"
+
+
+def _tunis_now() -> datetime:
+    """Return the business clock, with a safe fallback if tzdata is absent."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Africa/Tunis"))
+    except Exception:
+        from datetime import timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=1)))
+
+
+def _get_scheduler_schedule(bot_key: str = "telegram") -> dict:
+    """Read the configurable daily schedule, retaining the historical default."""
+    try:
+        for schedule in lire_notification_schedules():
+            if schedule.get("bot_key") == bot_key:
+                return schedule
+    except Exception as exc:
+        logger.warning("Scheduler could not read notification schedule: %s", exc)
+    return {"bot_key": bot_key, "enabled": 1, "hour": 8, "minute": 30, "days_of_week": "1,2,3,4,5,6,7"}
+
+
+def _is_scheduler_due(schedule: dict, now: datetime) -> bool:
+    if int(schedule.get("enabled", 1) or 0) != 1:
+        return False
+    days = {
+        int(day.strip())
+        for day in str(schedule.get("days_of_week", "1,2,3,4,5,6,7")).split(",")
+        if day.strip().isdigit()
+    }
+    return (
+        now.isoweekday() in days
+        and now.hour == int(schedule.get("hour", 8) or 8)
+        and now.minute == int(schedule.get("minute", 30) or 30)
+    )
+
+
+def _scheduler_already_ran(run_date: str) -> bool:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT valeur FROM config_client WHERE cle = %s", (SCHEDULER_LAST_RUN_KEY,)
+        ).fetchone()
+        return bool(row and dict(row).get("valeur") == run_date)
+
+
+def _mark_scheduler_ran(run_date: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO config_client (cle, valeur) VALUES (%s, %s)
+               ON CONFLICT (cle) DO UPDATE SET valeur = EXCLUDED.valeur""",
+            (SCHEDULER_LAST_RUN_KEY, run_date),
+        )
+
+
+@contextmanager
+def scheduler_leader_lock():
+    """Hold a PostgreSQL session lock while a scheduled batch is running."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT pg_try_advisory_lock(%s) AS acquired", (SCHEDULER_LOCK_KEY,)
+        ).fetchone()
+        acquired = bool(row and dict(row).get("acquired"))
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (SCHEDULER_LOCK_KEY,))
+
+
+def run_scheduled_cycle() -> None:
+    """Run every daily task once; one failed task must not block the others."""
+    jobs = (
+        ("planning sync", sync_planning_to_interventions),
+        ("garantie", check_garantie_expiry),
+        ("contrat", check_contrat_expiry),
+        ("planning reminder", check_planning_reminder),
+        ("stock alerts", check_stock_alerts),
+        ("piece parameters", update_piece_parameters_batch),
+        ("facturation reminders", check_facturation_reminders),
+        ("SLA alerts", check_sla_alerts),
+        ("planning retard", check_planning_retard),
+    )
+    for name, job in jobs:
+        try:
+            result = job()
+            if name == "piece parameters" and isinstance(result, dict) and not result.get("success", False):
+                logger.error("Scheduled piece parameters error: %s", result.get("error"))
+        except Exception:
+            logger.exception("Scheduled job failed: %s", name)
+
+
+def run_scheduler_once(now: datetime | None = None) -> str:
+    """Evaluate and execute one polling iteration; kept separate for testing."""
+    now = now or _tunis_now()
+    schedule = _get_scheduler_schedule()
+    if not _is_scheduler_due(schedule, now):
+        return "not_due"
+
+    run_date = now.date().isoformat()
+    with scheduler_leader_lock() as is_leader:
+        if not is_leader:
+            logger.info("Scheduler standby: another executor owns the PostgreSQL lock")
+            return "standby"
+        if _scheduler_already_ran(run_date):
+            logger.info("Scheduler cycle already completed for %s", run_date)
+            return "already_completed"
+        logger.info("Scheduler cycle starting for %s", run_date)
+        run_scheduled_cycle()
+        _mark_scheduler_ran(run_date)
+        logger.info("Scheduler cycle completed for %s", run_date)
+        return "completed"
+
+
+def run_scheduler_forever(*, poll_seconds: int | None = None) -> None:
+    """Polling loop for the dedicated worker process, not for API replicas."""
+    poll_seconds = poll_seconds or int(os.getenv("SCHEDULER_POLL_SECONDS", "30"))
+    poll_seconds = max(5, poll_seconds)
+    logger.info("Scheduler worker started; poll interval=%ss", poll_seconds)
+    while True:
+        try:
+            run_scheduler_once()
+        except Exception:
+            logger.exception("Scheduler loop error")
+        time.sleep(poll_seconds)
+
+
 def _start_garantie_daemon():
     """Lance un thread démon qui vérifie garanties + contrats + rappels planning + sync + facturation toutes les 24h."""
     import threading, time
@@ -918,8 +1056,11 @@ __all__ = [
     "check_facturation_reminders",
     "check_sla_alerts",
     "check_planning_retard",
-    "_start_garantie_daemon",
     "check_contrat_expiry",
+    "run_scheduled_cycle",
+    "run_scheduler_once",
+    "run_scheduler_forever",
+    "scheduler_leader_lock",
     "_df_to_records",
     "_send_telegram_bot",
     "_send_telegram",
