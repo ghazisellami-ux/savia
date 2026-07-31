@@ -22,6 +22,7 @@ from controllers.ai import *
 from controllers.admin import *
 from controllers.clients_dashboard import *
 from controllers.storage import *
+from controllers.observability import *
 from controllers.report_helpers import *
 from controllers.pdf_reports import *
 from controllers.pdf_intervention import *
