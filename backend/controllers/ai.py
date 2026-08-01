@@ -1,5 +1,8 @@
 """AI analysis and chat routes."""
 
+import re
+import unicodedata
+
 from api.runtime import (
     Depends,
     HTTPException,
@@ -26,6 +29,237 @@ from api.security import (
     require_roles,
 )
 from services.ai_governance import governed_ai_endpoint
+
+
+def _cost_number(value):
+    """Return a finite numeric value, or None for missing/invalid AI output."""
+    try:
+        if isinstance(value, str):
+            text = value.strip().replace("\u00a0", "").replace(" ", "")
+            text = re.sub(r"[^0-9,.-]", "", text)
+            if "," in text and "." in text:
+                text = text.replace(".", "") if text.rfind(",") > text.rfind(".") else text.replace(",", "")
+            text = text.replace(",", ".")
+            value = text
+        number = float(value)
+        return number if number >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_normalize(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _same_equipment_family(part_type, equipment_type):
+    part_norm = _cost_normalize(part_type)
+    equipment_norm = _cost_normalize(equipment_type)
+    if not part_norm or not equipment_norm:
+        return True
+    if part_norm in equipment_norm or equipment_norm in part_norm:
+        return True
+    families = (
+        ("mammo", "mammographe", "mammographie"),
+        ("scanner", "ct"),
+        ("irm", "resonance", "magnetique"),
+        ("echo", "echographe", "echographie"),
+        ("radio", "radiographie", "rayon"),
+    )
+    return any(any(token in part_norm for token in family) and any(token in equipment_norm for token in family) for family in families)
+
+
+def _find_catalog_part(text, parts_catalog, equipment_type=None):
+    """Match an AI action to a catalogue reference/designation without guessing."""
+    normalized_text = _cost_normalize(text)
+    if not normalized_text:
+        return None
+
+    # References are the strongest match (for example: "Ref: TUBE RX MAMMO").
+    compatible_parts = [part for part in parts_catalog if _same_equipment_family(part.get("equipement_type"), equipment_type)]
+    for part in compatible_parts:
+        reference = _cost_normalize(part.get("reference"))
+        if reference and reference in normalized_text:
+            return part
+
+    # Only accept a full designation match; partial names are too ambiguous.
+    for part in compatible_parts:
+        designation = _cost_normalize(part.get("designation"))
+        if designation and len(designation) >= 6 and designation in normalized_text:
+            return part
+    return None
+
+
+def _machine_key(value):
+    """Normalize a machine label, ignoring the client suffix when present."""
+    base = re.sub(r"\s*\([^)]*\)\s*$", "", str(value or ""))
+    return _cost_normalize(base)
+
+
+def _contract_for_machine(machine, contracts):
+    client_match = re.search(r"\(([^()]*)\)\s*$", str(machine or ""))
+    client_key = _cost_normalize(client_match.group(1) if client_match else "")
+    machine_key = _machine_key(machine)
+    for contract in contracts:
+        if client_key and client_key != _cost_normalize(contract.get("client")):
+            continue
+        linked_equipment = _machine_key(contract.get("equipement"))
+        if linked_equipment and linked_equipment not in machine_key and machine_key not in linked_equipment:
+            continue
+        return contract
+    return None
+
+
+def _contract_coverage(contract):
+    """Return only coverage that can be inferred explicitly from the contract."""
+    if not contract:
+        return {"parts": None, "labor": None, "label": "Contrat introuvable"}
+    contract_type = str(contract.get("type_contrat") or "").lower()
+    has_parts = bool(contract.get("avec_pieces")) or bool(str(contract.get("pieces_incluses") or "").strip())
+    if "full service" in contract_type:
+        has_parts = True
+        has_labor = True
+    elif "main" in contract_type and "oeuvre" in contract_type:
+        has_labor = True
+    else:
+        has_labor = None
+    return {"parts": has_parts, "labor": has_labor, "label": contract.get("type_contrat") or "Contrat actif"}
+
+
+def _apply_verified_costs(result, parts_catalog, historical_corrective_costs, cost_context, sym):
+    """Replace unsupported AI cost claims with auditable catalogue/history values."""
+    if not isinstance(result, dict):
+        return result
+
+    recommendations = result.get("recommandations_prioritaires") or []
+    alerts = result.get("alertes_critiques") or []
+    all_actions = [(item, "recommandation") for item in recommendations if isinstance(item, dict)]
+    all_actions += [(item, "action_immediate") for item in alerts if isinstance(item, dict)]
+
+    hourly_rate = _cost_number(cost_context.get("hourly_rate"))
+    machine_mttr_minutes = cost_context.get("machine_mttr_minutes") or {}
+    equipment_types = cost_context.get("equipment_types") or {}
+    historical_component_costs = cost_context.get("historical_component_costs") or {}
+    protected_components_by_machine = cost_context.get("protected_components_by_machine") or {}
+    contracts = cost_context.get("contracts") or []
+    for item, action_key in all_actions:
+        action_text = " ".join(str(item.get(key) or "") for key in (action_key, "cause", "facteurs", "recommandations"))
+        machine_key = _machine_key(item.get("machine"))
+        protected_components = protected_components_by_machine.get(machine_key) or []
+        action_norm = _cost_normalize(action_text)
+        replacement_request = "remplac" in action_norm or "chang" in action_norm
+        protected_match = any(
+            _cost_normalize(component) in action_norm
+            or any(token in action_norm for token in ("tube", "rayon", "rx") if token in _cost_normalize(component))
+            for component in protected_components
+        )
+        if protected_match and replacement_request:
+            item[action_key] = "Inspection du composant remplacé récemment, vérification de l'alimentation et recherche de cause racine; aucun nouveau remplacement sans diagnostic postérieur confirmant la défaillance."
+            action_text = item[action_key]
+        part = None if protected_match and replacement_request else _find_catalog_part(action_text, parts_catalog, equipment_types.get(machine_key))
+        if part:
+            component_history = None
+            for component_label in (part.get("reference"), part.get("designation")):
+                candidate = historical_component_costs.get((machine_key, _cost_normalize(component_label)))
+                if candidate is not None:
+                    component_history = candidate
+                    break
+            machine_cost = component_history
+        if not part:
+            machine_cost = historical_corrective_costs.get(machine_key)
+        contract = _contract_for_machine(item.get("machine"), contracts)
+        coverage = _contract_coverage(contract)
+        duration_minutes = _cost_number(machine_mttr_minutes.get(machine_key))
+        quantity_match = re.search(r"(?:qty|quantit[eé]|x)\s*[:=]?\s*(\d+)", action_text, re.IGNORECASE)
+        quantity = int(quantity_match.group(1)) if quantity_match else 1
+        unit_price = _cost_number(part.get("prix_unitaire")) if part else None
+        part_cost = round(unit_price * quantity, 2) if unit_price is not None and unit_price > 0 else None
+        labor_cost = round((duration_minutes / 60.0) * hourly_rate, 2) if duration_minutes is not None and hourly_rate is not None else None
+        internal_total = round(part_cost + labor_cost, 2) if part_cost is not None and labor_cost is not None else None
+        billable_total = None
+        if internal_total is not None and contract:
+            covered_parts = coverage["parts"] is True
+            covered_labor = coverage["labor"] is True
+            billable_total = round((0 if covered_parts else part_cost) + (0 if covered_labor else labor_cost), 2)
+
+        if part_cost is not None:
+            item["cout_piece_reel"] = part_cost
+            item["prix_verifie"] = True
+            item["source_prix"] = f"Catalogue pièces : {part.get('reference') or part.get('designation')}"
+            item["quantite_piece"] = quantity
+            item["cout_action_minimum"] = part_cost
+        else:
+            item["prix_verifie"] = False
+            item["source_prix"] = "Prix catalogue introuvable : validation requise"
+            item["cout_piece_reel"] = None
+            item["cout_action_minimum"] = None
+
+        item["cout_main_oeuvre"] = labor_cost
+        item["taux_horaire"] = hourly_rate
+        item["duree_estimee_minutes"] = duration_minutes
+        item["cout_action_total"] = internal_total
+        item["cout_total_action"] = internal_total
+        item["cout_estime"] = internal_total
+        item["cout_facturable_contrat"] = billable_total
+        item["contrat_type"] = coverage["label"]
+        item["source_cout"] = "Catalogue pièce + MTTR correctif + taux horaire configuré" if internal_total is not None else "Montant incomplet : prix pièce, durée MTTR ou taux horaire manquant"
+
+        # A gain is only calculable from an actual corrective-cost history and a complete action cost.
+        if machine_cost is not None and machine_cost > 0 and internal_total is not None:
+            avoided = round(machine_cost, 2)
+            net_gain = round(avoided - internal_total, 2)
+            item["cout_panne_evite"] = avoided
+            item["gain_brut"] = avoided
+            item["gain_net"] = net_gain
+            item["gain_estime"] = net_gain
+            item["gain_potentiel"] = net_gain
+            item["source_gain"] = "Coût correctif moyen historique de cette machine"
+        else:
+            item["cout_panne_evite"] = None
+            item["gain_brut"] = None
+            item["gain_net"] = None
+            item["gain_estime"] = None
+            item["gain_potentiel"] = None
+            item["source_gain"] = "Non calculable : coût correctif historique absent"
+
+    estimation = result.get("estimation_couts")
+    if isinstance(estimation, dict):
+        action_items = [item for item, _ in all_actions]
+        totals = [float(item["cout_total_action"]) for item in action_items if item.get("cout_total_action") is not None]
+        avoided_totals = [float(item["cout_panne_evite"]) for item in action_items if item.get("cout_panne_evite") is not None]
+        priced_parts = sum(1 for part in parts_catalog if (_cost_number(part.get("prix_unitaire")) or 0) > 0)
+        matched_parts = sum(1 for item in action_items if item.get("prix_verifie") is True)
+        estimation["cout_preventif_propose"] = round(sum(totals), 2) if totals else None
+        estimation["cout_pannes_evitees"] = round(sum(avoided_totals), 2) if avoided_totals else None
+        estimation["gain_potentiel"] = round(sum(avoided_totals) - sum(totals), 2) if totals and avoided_totals else None
+        estimation["gain_net"] = estimation["gain_potentiel"]
+        estimation["source_prix"] = f"Catalogue : {priced_parts} piece(s) avec prix; {matched_parts} action(s) rattachee(s) a une reference. Taux horaire : {hourly_rate if hourly_rate is not None else 'non configure'} {sym}/h."
+        missing = []
+        if hourly_rate is None:
+            missing.append("taux horaire")
+        if priced_parts == 0:
+            missing.append("prix unitaires du catalogue")
+        if not matched_parts and action_items:
+            missing.append("reference de piece correspondant a l'action")
+        if missing:
+            estimation["detail_preventif"] = "Calcul partiel uniquement : " + ", ".join(missing) + "."
+            estimation["hypotheses"] = "Donnees manquantes : " + ", ".join(missing) + ". Les montants doivent etre confirmes avant decision."
+            estimation["ratio"] = f"Ratio non calculable : {', '.join(missing)}."
+        elif not totals:
+            estimation["detail_preventif"] = "Prix et taux disponibles, mais aucune duree MTTR corrective exploitable pour calculer un total."
+            estimation["hypotheses"] = "Le cout total sera calcule apres rattachement de l'action a une machine et a son MTTR correctif historique."
+            estimation["ratio"] = "Ratio non calculable : duree corrective historique manquante."
+        else:
+            estimation["detail_preventif"] = "Cout technique calcule avec prix catalogue, MTTR correctif historique et taux horaire configure."
+            estimation["hypotheses"] = "Le montant exclut les frais de deplacement non configures et distingue la couverture contractuelle du cout technique interne."
+            estimation["ratio"] = "Ratio calcule uniquement lorsque le cout correctif historique et le cout d'action sont disponibles."
+        estimation["hypotheses"] = f"{estimation.get('hypotheses', '')} Sources lues par le serveur : {priced_parts} piece(s) avec prix, taux horaire={'oui' if hourly_rate is not None else 'non'}, {matched_parts} action(s) rattachee(s) a une reference."
+        estimation["source_prix"] = "Catalogue pièces vérifié; main-d'œuvre/déplacement inclus seulement s'ils sont documentés"
+        if False and not totals:
+            estimation["hypotheses"] = "Prix de pièce non trouvé dans le catalogue : coût et gain à confirmer avant décision."
+        estimation["source_prix"] = f"Catalogue : {priced_parts} piece(s) avec prix; {matched_parts} action(s) rattachee(s) a une reference. Taux horaire : {hourly_rate if hourly_rate is not None else 'non configure'} {sym}/h."
+    return result
 
 @app.post("/api/ai/analyze-diagnostic")
 @governed_ai_endpoint("diagnostic", ("Admin", "Manager", "Responsable Technique", "Technicien"))
@@ -91,6 +325,13 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
     # --- Fetch real per-machine data from DB ---
     machine_details = ""
     equip_detail = ""
+    parts_catalog = []
+    historical_corrective_costs = {}
+    historical_component_costs = {}
+    machine_mttr_minutes = {}
+    hourly_rate = None
+    contracts_detail = []
+    equipment_types = {}
     try:
         with get_db() as conn:
             rows = conn.execute(
@@ -98,20 +339,150 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
                 "SUM(CASE WHEN type_intervention='Corrective' THEN 1 ELSE 0 END) as corr, "
                 "SUM(CASE WHEN type_intervention ILIKE '%%r\u00e9ventive%%' THEN 1 ELSE 0 END) as prev, "
                 "ROUND(AVG(duree_minutes)::numeric,1) as mttr_m, "
-                "ROUND(SUM(cout)::numeric,0) as cout "
+                "ROUND(SUM(cout)::numeric,0) as cout, "
+                "ROUND(SUM(cout_pieces)::numeric,0) as cout_pieces, "
+                "ROUND(AVG(CASE WHEN type_intervention='Corrective' THEN (COALESCE(cout,0)+COALESCE(cout_pieces,0)) END)::numeric,2) as cout_correctif_moyen, "
+                "ROUND(AVG(CASE WHEN type_intervention='Corrective' THEN duree_minutes END)::numeric,1) as mttr_correctif_m "
                 "FROM interventions GROUP BY machine ORDER BY nb DESC LIMIT 20"
             ).fetchall()
             for r in rows:
-                machine_details += f"  - {r['machine']}: {r['nb']} int ({r['corr']} corr, {r['prev']} prev), MTTR={r['mttr_m']}min, co\u00fbt={r['cout']} {sym}\n"
+                machine = r['machine']
+                machine_key = _machine_key(machine)
+                corrective_cost = _cost_number(r.get('cout_correctif_moyen'))
+                corrective_mttr = _cost_number(r.get('mttr_correctif_m'))
+                if corrective_cost is not None:
+                    historical_corrective_costs[machine_key] = corrective_cost
+                if corrective_mttr is not None:
+                    machine_mttr_minutes[machine_key] = corrective_mttr
+                machine_details += f"  - {machine}: {r['nb']} int ({r['corr']} corr, {r['prev']} prev), MTTR={r['mttr_m']}min, MTTR correctif={r.get('mttr_correctif_m','?')}min, co\u00fbt MO={r['cout']} {sym}, co\u00fbt pi\u00e8ces={r.get('cout_pieces',0)} {sym}, co\u00fbt correctif moyen={r.get('cout_correctif_moyen','?')} {sym}\n"
+            component_rows = conn.execute(
+                "SELECT machine, pieces_utilisees, cout, cout_pieces FROM interventions "
+                "WHERE type_intervention = 'Corrective'"
+            ).fetchall()
+            component_samples = {}
+            for row in component_rows:
+                row_total = (_cost_number(row.get('cout')) or 0) + (_cost_number(row.get('cout_pieces')) or 0)
+                for component_name in re.split(r"[,;]", str(row.get('pieces_utilisees') or "")):
+                    component_key = _cost_normalize(component_name)
+                    if component_key:
+                        component_samples.setdefault((_machine_key(row.get('machine')), component_key), []).append(row_total)
+            historical_component_costs = {
+                key: round(sum(values) / len(values), 2)
+                for key, values in component_samples.items()
+                if values
+            }
             eqs = conn.execute('SELECT "Nom","Client","Type","Statut","DateInstallation" FROM equipements ORDER BY "Nom" LIMIT 25').fetchall()
             for eq in eqs:
+                equipment_types[_machine_key(eq.get('Nom'))] = eq.get('Type') or ''
                 equip_detail += f"  - {eq['Nom']} ({eq.get('Type','?')}) — {eq.get('Client','?')}, install\u00e9: {eq.get('DateInstallation','?')}, statut: {eq.get('Statut','?')}\n"
+            part_rows = conn.execute(
+                "SELECT reference, designation, equipement_type, prix_unitaire, fournisseur, stock_actuel "
+                "FROM pieces_rechange ORDER BY designation LIMIT 500"
+            ).fetchall()
+            parts_catalog = [dict(part) for part in part_rows]
+            rate_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
+            if rate_row:
+                hourly_rate = _cost_number(rate_row.get('valeur'))
+            contract_rows = conn.execute(
+                "SELECT client, equipement, type_contrat, avec_pieces, pieces_incluses, "
+                "interventions_incluses, montant, statut, date_fin "
+                "FROM contrats WHERE statut = 'Actif' ORDER BY date_fin DESC"
+            ).fetchall()
+            contracts_detail = [dict(contract) for contract in contract_rows]
     except Exception as db_err:
         logger.warning(f"DB fetch for AI failed: {db_err}")
 
+    # Les donnees financieres ne doivent pas disparaitre parce qu'une requete
+    # d'historique ou de contrat a echoue (schema ancien, colonne optionnelle...).
+    # On les relit independamment afin que Gemini ne conclue pas a tort qu'elles
+    # ne sont pas configurees.
+    if hourly_rate is None or not parts_catalog or not contracts_detail:
+        try:
+            with get_db() as conn:
+                # Load the essential financial sources first. Optional historical
+                # component analysis below must not mask these values.
+                if hourly_rate is None:
+                    rate_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
+                    if rate_row:
+                        hourly_rate = _cost_number(rate_row.get('valeur'))
+                if not parts_catalog:
+                    part_rows = conn.execute(
+                        "SELECT reference, designation, equipement_type, prix_unitaire, fournisseur, stock_actuel "
+                        "FROM pieces_rechange ORDER BY designation LIMIT 500"
+                    ).fetchall()
+                    parts_catalog = [dict(part) for part in part_rows]
+                if not contracts_detail:
+                    contract_rows = conn.execute(
+                        "SELECT client, equipement, type_contrat, avec_pieces, pieces_incluses, "
+                        "interventions_incluses, montant, statut, date_fin "
+                        "FROM contrats WHERE statut = 'Actif' ORDER BY date_fin DESC"
+                    ).fetchall()
+                    contracts_detail = [dict(contract) for contract in contract_rows]
+                if not equipment_types:
+                    eq_rows = conn.execute('SELECT "Nom","Type" FROM equipements ORDER BY "Nom" LIMIT 500').fetchall()
+                    equipment_types = {_machine_key(eq.get('Nom')): eq.get('Type') or '' for eq in eq_rows}
+                if not historical_component_costs:
+                    component_rows = conn.execute(
+                        "SELECT machine, pieces_utilisees, cout, cout_pieces FROM interventions "
+                        "WHERE type_intervention = 'Corrective'"
+                    ).fetchall()
+                    component_samples = {}
+                    for row in component_rows:
+                        row_total = (_cost_number(row.get('cout')) or 0) + (_cost_number(row.get('cout_pieces')) or 0)
+                        for component_name in re.split(r"[,;]", str(row.get('pieces_utilisees') or "")):
+                            component_key = _cost_normalize(component_name)
+                            if component_key:
+                                component_samples.setdefault((_machine_key(row.get('machine')), component_key), []).append(row_total)
+                    historical_component_costs = {
+                        key: round(sum(values) / len(values), 2)
+                        for key, values in component_samples.items()
+                        if values
+                    }
+                if hourly_rate is None:
+                    rate_row = conn.execute("SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'").fetchone()
+                    if rate_row:
+                        hourly_rate = _cost_number(rate_row.get('valeur'))
+                if not parts_catalog:
+                    part_rows = conn.execute(
+                        "SELECT reference, designation, equipement_type, prix_unitaire, fournisseur, stock_actuel "
+                        "FROM pieces_rechange ORDER BY designation LIMIT 500"
+                    ).fetchall()
+                    parts_catalog = [dict(part) for part in part_rows]
+                if not contracts_detail:
+                    contract_rows = conn.execute(
+                        "SELECT client, equipement, type_contrat, avec_pieces, pieces_incluses, "
+                        "interventions_incluses, montant, statut, date_fin "
+                        "FROM contrats WHERE statut = 'Actif' ORDER BY date_fin DESC"
+                    ).fetchall()
+                    contracts_detail = [dict(contract) for contract in contract_rows]
+        except Exception as financial_db_err:
+            logger.warning(f"Financial data fetch for AI failed: {financial_db_err}")
+
+    parts_detail = ""
+    for part in parts_catalog:
+        parts_detail += (
+            f"  - Ref={part.get('reference','?')} | {part.get('designation','?')} | "
+            f"type={part.get('equipement_type','?')} | prix unitaire={part.get('prix_unitaire','?')} {sym} | "
+            f"fournisseur={part.get('fournisseur','?')} | stock={part.get('stock_actuel','?')}\n"
+        )
+    contracts_detail_text = ""
+    for contract in contracts_detail:
+        contracts_detail_text += (
+            f"  - client={contract.get('client','?')} | equipement={contract.get('equipement','tous')} | "
+            f"type={contract.get('type_contrat','?')} | pieces_incluses={contract.get('avec_pieces',0)} | "
+            f"references_incluses={contract.get('pieces_incluses','')} | "
+            f"interventions_incluses={contract.get('interventions_incluses','?')} | "
+            f"statut={contract.get('statut','?')} | fin={contract.get('date_fin','?')}\n"
+        )
+
     risk_detail = ""
     for r in kpis.get("top_risques", []):
-        risk_detail += f"  - {r.get('machine','?')}: risque={r.get('risque_panne_pct',0)}%, pi\u00e8ce={r.get('composant_a_risque','?')}, panne_dans={r.get('jours_avant_panne','?')}j, sant\u00e9={r.get('score_sante',0)}%\n"
+        risk_detail += f"  - {r.get('machine','?')}: risque={r.get('risque_panne_pct',0)}%, horizon={r.get('horizon_jours', r.get('jours_avant_panne','?'))}j, pi\u00e8ce={r.get('composant_a_risque','?')}, fiabilit\u00e9_donn\u00e9es={r.get('fiabilite_donnees_pct', r.get('confiance_ia_pct',0))}%, sant\u00e9={r.get('score_sante',0)}%, facteurs={r.get('facteurs','')}, diagnostics={r.get('diagnostics','')}\n"
+
+    for r in kpis.get("top_risques", []):
+        protected = r.get("composants_proteges") or []
+        if protected:
+            risk_detail += f"    PROTECTION OBLIGATOIRE : composant(s) remplacé(s) récemment, ne pas recommander un remplacement sans nouveau diagnostic : {protected}\n"
 
     import datetime
     today = datetime.date.today()
@@ -135,16 +506,41 @@ Analyse ces donn\u00e9es R\u00c9ELLES et produis un rapport pr\u00e9dictif d\u00
 === \u00c9QUIPEMENTS ===
 {equip_detail if equip_detail else 'Non disponible'}
 
+=== SOURCES FINANCIERES VERIFIEES ===
+- Taux horaire technicien configure : {hourly_rate if hourly_rate is not None else 'NON CONFIGURE'} {sym}/h
+- Catalogue des pieces (prix unitaires reels) :
+{parts_detail if parts_detail else '  - Aucun prix de piece disponible'}
+- Contrats actifs et couverture :
+{contracts_detail_text if contracts_detail_text else '  - Aucun contrat actif disponible'}
+
 PRODUIS un rapport JSON STRICT :
+Le rapport doit expliquer les causes et facteurs disponibles dans les diagnostics techniciens (probleme, cause, solution, code erreur, piece et priorite), puis proposer des actions concretes avec cout estime, cout de panne evite et gain potentiel. Toute economie est une estimation a valider, jamais une garantie. Utilise les chiffres reels; indique explicitement les donnees manquantes.
+RÈGLES DE COHÉRENCE OBLIGATOIRES :
+- Les équipements des alertes critiques doivent être choisis uniquement dans PRÉDICTIONS IA.
+- Recopie exactement le libellé fourni dans PRÉDICTIONS IA (Nom (Client)); n'invente aucun équipement.
+- Tout champ qui nomme un équipement doit toujours conserver le client entre parenthèses.
+- Ne fabrique jamais un prix, un taux horaire, une duree ou un gain. Si une donnee manque, retourne null et ecris "A confirmer" dans les hypotheses.
+- Si PRÉDICTIONS IA indique qu'un composant a été remplacé récemment, ne recommande pas son remplacement sous 7 jours. Recommande d'abord une vérification, une recherche de cause racine et une surveillance; ne propose un nouveau remplacement que si un diagnostic postérieur confirme sa défaillance.
+- La pièce doit être compatible avec le type exact de l'équipement. Ne choisis jamais le prix d'une pièce de scanner pour un mammographe, même si les désignations se ressemblent; utilise la référence liée à l'équipement ou retourne "prix à confirmer".
+- Le cout technique total est calcule ainsi : (prix unitaire catalogue x quantite) + (MTTR correctif historique en heures x taux horaire configure). N'utilise pas un montant inferieur au prix de la piece.
+- Distingue toujours cout_piece_reel, cout_main_oeuvre, cout_action_total, cout_facturable_contrat et gain_net.
+- Pour une pièce, le gain net n'est calculable qu'avec le coût historique de cette même pièce sur cette même machine. N'utilise jamais la moyenne de toutes les pannes de la machine pour justifier le remplacement d'une pièce; sinon gain_net=null.
+- Le contrat actif determine la partie facturable : "Full Service" couvre pieces et main-d'oeuvre; "Pieces incluses"/avec_pieces couvre les pieces; "Main d'oeuvre uniquement" couvre la main-d'oeuvre. Si la couverture n'est pas explicite, cout_facturable_contrat=null.
+- Le gain net est calculable seulement si le cout correctif moyen historique de la machine et le cout action complet sont disponibles : cout correctif moyen historique - cout action total. Sinon gain_net=null.
 {{{{
   "alertes_critiques": [
     {{{{
       "machine": "Nom (Client)",
       "score_sante": 41,
-      "jours_avant_panne": 2,
+      "horizon_jours": 30,
       "nb_interventions": 19,
       "risque": "Risque concret",
-      "action_immediate": "Action + pi\u00e8ces"
+      "action_immediate": "Action + pi\u00e8ces",
+      "cause": "Cause issue des diagnostics techniciens",
+      "facteurs": ["Facteur historique 1", "Facteur historique 2"],
+      "recommandations": ["Recommandation ciblée"],
+      "gain_potentiel": 0,
+      "cout_panne_evite": 0
     }}}}
   ],
   "machines_stables": [
@@ -152,6 +548,24 @@ PRODUIS un rapport JSON STRICT :
       "machine": "Nom (Client)",
       "score_sante": 84,
       "commentaire": "Pourquoi fiable"
+    }}}}
+  ],
+  "recommandations_prioritaires": [
+    {{{{
+      "priorite": 1,
+      "machine": "Nom (Client)",
+      "cause": "Cause racine",
+      "recommandation": "Action préventive détaillée",
+      "cout_estime": 0,
+      "cout_piece_reel": null,
+      "cout_main_oeuvre": null,
+      "cout_action_total": null,
+      "cout_facturable_contrat": null,
+      "prix_verifie": false,
+      "contrat_type": "A confirmer",
+      "gain_estime": null,
+      "delai": "Sous 7 jours",
+      "impact": "Réduction du risque et maintien de la disponibilité"
     }}}}
   ],
   "plan_maintenance": [
@@ -173,9 +587,13 @@ PRODUIS un rapport JSON STRICT :
   ],
   "estimation_couts": {{{{
     "cout_curatif_historique": {int(kpis.get('cout_total', 0))},
-    "cout_preventif_propose": 0,
+    "cout_preventif_propose": null,
+    "cout_pannes_evitees": null,
     "detail_preventif": "D\u00e9tail calcul",
-    "gain_potentiel": 0,
+    "gain_potentiel": null,
+    "gain_net": null,
+    "source_prix": "Catalogue et configuration serveur",
+    "hypotheses": "Hypothèses et méthode d'estimation",
     "ratio": "Pour 1 {sym} investi, X {sym} \u00e9conomis\u00e9s"
   }}}},
   "tendances": ["Tendance 1", "Tendance 2", "Tendance 3"],
@@ -187,6 +605,23 @@ PRODUIS un rapport JSON STRICT :
         raise HTTPException(status_code=500, detail="L'IA n'a pas r\u00e9pondu.")
     result = clean_json_response(raw)
     result = _force_ai_payload_language(result, lang, _call_ia, clean_json_response)
+    result = _apply_verified_costs(
+        result,
+        parts_catalog,
+        historical_corrective_costs,
+        {
+            "hourly_rate": hourly_rate,
+            "machine_mttr_minutes": machine_mttr_minutes,
+            "equipment_types": equipment_types,
+            "historical_component_costs": historical_component_costs,
+            "protected_components_by_machine": {
+                _machine_key(r.get("machine")): r.get("composants_proteges", [])
+                for r in kpis.get("top_risques", [])
+            },
+            "contracts": contracts_detail,
+        },
+        sym,
+    )
     return {"ok": True, "result": result}
 
 

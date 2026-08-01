@@ -98,13 +98,36 @@ def log_ai_inference(model_version, prompt_hash, confidence_score, outcome):
 # FONCTIONS — PREDICTION FEEDBACK (HITL)
 # ==========================================
 
-def save_prediction_feedback(machine, date_predite, resultat, date_reelle="", note="", username="system"):
+def save_prediction_feedback(
+    machine,
+    date_predite,
+    resultat,
+    date_reelle="",
+    note="",
+    username="system",
+    *,
+    equipment_id=None,
+    client="",
+    horizon_jours=30,
+    risque_pct=None,
+    modele_version="",
+    date_calcul="",
+    features_json=None,
+):
     """Enregistre le feedback d'un technicien sur une prédiction."""
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO prediction_feedback (machine, date_predite, resultat, date_reelle, note_technicien, username)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (machine, date_predite, resultat, date_reelle, note, username))
+            INSERT INTO prediction_feedback (
+                machine, date_predite, resultat, date_reelle, note_technicien, username,
+                equipment_id, client, horizon_jours, risque_pct, modele_version,
+                date_calcul, features_json
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            machine, date_predite, resultat, date_reelle, note, username,
+            equipment_id, client, horizon_jours, risque_pct, modele_version,
+            date_calcul, features_json,
+        ))
 
 
 def lire_prediction_feedback(machine=None, limit=50):
