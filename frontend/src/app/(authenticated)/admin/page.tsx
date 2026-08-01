@@ -185,6 +185,7 @@ const formatCompetences = (specialiteStr: string): string => {
 
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
+  const canManageUsers = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
   // Les non-admins commencent directement sur l'onglet Paramètres
   const defaultTab = currentUser?.role === 'Admin' ? 'users' : 'settings';
   const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs' | 'ai'>(defaultTab as any);
@@ -617,7 +618,7 @@ export default function AdminPage() {
           <p className="text-savia-text-muted text-sm mt-1">Gestion des utilisateurs, profils et permissions</p>
         </div>
         <div className="flex gap-2">
-          {tab === 'users' && (
+          {tab === 'users' && canManageUsers && (
             <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
               <Plus className="w-4 h-4" /> Nouvel utilisateur
             </button>
@@ -692,12 +693,12 @@ export default function AdminPage() {
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-1">
-                        {(u.username !== 'admin' || currentUser?.username === 'admin') && (
+                        {canManageUsers && (u.username !== 'admin' || currentUser?.username === 'admin') && (
                           <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all" title="Modifier">
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        {u.username !== 'admin' && (
+                        {canManageUsers && u.username !== 'admin' && (
                           <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-all" title="Supprimer">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
