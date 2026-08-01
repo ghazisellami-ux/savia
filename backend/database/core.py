@@ -884,6 +884,34 @@ def init_db():
             "ON prediction_feedback(equipment_id, timestamp DESC)",
             "index feedback prédictions par équipement",
         )
+        # Feedback dédié aux prévisions de réapprovisionnement des pièces.
+        # Les valeurs calculées sont conservées pour mesurer la qualité du moteur.
+        _run_migration(
+            """
+            CREATE TABLE IF NOT EXISTS spare_parts_prediction_feedback (
+                id SERIAL PRIMARY KEY,
+                reference TEXT NOT NULL,
+                designation TEXT DEFAULT '',
+                resultat TEXT NOT NULL CHECK(resultat IN ('correct', 'faux_positif', 'decale')),
+                date_calcul TEXT DEFAULT '',
+                date_predite TEXT DEFAULT '',
+                date_reelle TEXT DEFAULT '',
+                quantite INTEGER NULL,
+                risque_rupture_pct REAL NULL,
+                modele_version TEXT DEFAULT '',
+                features_json TEXT NULL,
+                username TEXT DEFAULT 'system',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "feedback previsions pieces",
+        )
+        _run_migration(
+            "CREATE INDEX IF NOT EXISTS idx_spare_parts_feedback_reference "
+            "ON spare_parts_prediction_feedback(reference, timestamp DESC)",
+            "index feedback previsions pieces",
+        )
+
         # Geographic coordinates for map feature
         _safe_add_column("equipements", "latitude", "REAL", "NULL")
         _safe_add_column("equipements", "longitude", "REAL", "NULL")

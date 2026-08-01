@@ -261,6 +261,130 @@ def _apply_verified_costs(result, parts_catalog, historical_corrective_costs, co
         estimation["source_prix"] = f"Catalogue : {priced_parts} piece(s) avec prix; {matched_parts} action(s) rattachee(s) a une reference. Taux horaire : {hourly_rate if hourly_rate is not None else 'non configure'} {sym}/h."
     return result
 
+
+def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
+    """Keep AI purchase recommendations aligned with deterministic forecasts."""
+    if not isinstance(result, dict):
+        return result
+    by_reference = {_cost_normalize(item.get("reference")): item for item in forecasts if item.get("reference")}
+    by_designation = {_cost_normalize(item.get("designation")): item for item in forecasts if item.get("designation")}
+    verified = []
+    for recommendation in result.get("recommandations") or []:
+        if not isinstance(recommendation, dict):
+            continue
+        forecast = by_reference.get(_cost_normalize(recommendation.get("reference")))
+        if not forecast:
+            forecast = by_designation.get(_cost_normalize(recommendation.get("piece")))
+        if not forecast or not (forecast.get("prediction_available") or forecast.get("recommandation_actionnable")):
+            continue
+        recommendation["piece"] = forecast.get("designation")
+        recommendation["reference"] = forecast.get("reference")
+        recommendation["quantite"] = forecast.get("quantite_recommandee")
+        recommendation["date_achat"] = forecast.get("date_commande")
+        recommendation["urgence"] = str(forecast.get("urgence") or "UNKNOWN").lower()
+        recommendation["cout_estime"] = forecast.get("cout_estime")
+        recommendation["delai_fournisseur"] = forecast.get("delai_fournisseur_jours")
+        recommendation["action"] = "Commander immédiatement" if recommendation["urgence"] == "critique" else "Planifier la commande selon la date calculée"
+        recommendation["source_calcul"] = "Prévision serveur : consommation réelle, stock, délai fournisseur et prix catalogue"
+        recommendation["fiabilite_donnees_pct"] = forecast.get("fiabilite_donnees_pct")
+        recommendation["raison"] = forecast.get("raison")
+        recommendation["prediction_available"] = forecast.get("prediction_available")
+        recommendation["recommandation_actionnable"] = forecast.get("recommandation_actionnable")
+        recommendation["consommation_mensuelle"] = forecast.get("consommation_mensuelle")
+        recommendation["risque_rupture_30j_pct"] = forecast.get("risque_rupture_30j_pct")
+        recommendation["clients_utilisateurs"] = forecast.get("clients_utilisateurs") or []
+        recommendation["contrats"] = forecast.get("contrats") or []
+        recommendation["diagnostics"] = forecast.get("diagnostics") or []
+        verified.append(recommendation)
+    # Une rupture effective ne doit pas disparaître parce que le modèle IA
+    # n'a pas repris la ligne dans sa réponse JSON.
+    represented = {_cost_normalize(item.get("reference")) for item in verified}
+    for forecast in forecasts:
+        reference_key = _cost_normalize(forecast.get("reference"))
+        if not reference_key or reference_key in represented or forecast.get("stock_actuel") != 0:
+            continue
+        verified.append({
+            "piece": forecast.get("designation"),
+            "reference": forecast.get("reference"),
+            "raison": forecast.get("raison"),
+            "action": "Commander immédiatement",
+            "quantite": forecast.get("quantite_recommandee"),
+            "date_achat": forecast.get("date_commande"),
+            "urgence": "critique",
+            "cout_estime": forecast.get("cout_estime"),
+            "delai_fournisseur": forecast.get("delai_fournisseur_jours"),
+            "source_calcul": "Rupture effective et stock minimum configuré",
+            "fiabilite_donnees_pct": forecast.get("fiabilite_donnees_pct"),
+            "prediction_available": forecast.get("prediction_available"),
+            "recommandation_actionnable": True,
+            "consommation_mensuelle": forecast.get("consommation_mensuelle"),
+            "risque_rupture_30j_pct": forecast.get("risque_rupture_30j_pct"),
+            "clients_utilisateurs": forecast.get("clients_utilisateurs") or [],
+            "contrats": forecast.get("contrats") or [],
+            "diagnostics": forecast.get("diagnostics") or [],
+        })
+    result["recommandations"] = verified
+    # Expose deterministic calculation data independently of generated prose.
+    result["previsions_detaillees"] = [
+        {
+            "piece": forecast.get("designation"),
+            "reference": forecast.get("reference"),
+            "clients": forecast.get("clients_utilisateurs") or [],
+            "stock_actuel": forecast.get("stock_actuel"),
+            "stock_minimum": forecast.get("stock_minimum"),
+            "consommation_mensuelle": forecast.get("consommation_mensuelle"),
+            "risque_rupture_30j_pct": forecast.get("risque_rupture_30j_pct"),
+            "date_commande": forecast.get("date_commande"),
+            "date_rupture_prevue": forecast.get("date_rupture_prevue"),
+            "quantite_recommandee": forecast.get("quantite_recommandee"),
+            "cout_estime": forecast.get("cout_estime"),
+            "fiabilite_donnees_pct": forecast.get("fiabilite_donnees_pct"),
+            "urgence": forecast.get("urgence"),
+            "prediction_available": forecast.get("prediction_available"),
+            "raison": forecast.get("raison"),
+            "diagnostics": forecast.get("diagnostics") or [],
+            "contrats": forecast.get("contrats") or [],
+        }
+        for forecast in forecasts
+    ]
+    # Le plan et le budget sont reconstruits depuis les prévisions serveur.
+    # Un budget partiel est volontairement affiché comme non calculable.
+    plan_by_date = {}
+    for item in verified:
+        forecast_date = item.get("date_achat")
+        if not forecast_date:
+            continue
+        bucket = plan_by_date.setdefault(forecast_date, {"pieces": [], "budget_values": [], "priorite": item.get("urgence")})
+        bucket["pieces"].append(item.get("reference"))
+        if item.get("cout_estime") is not None:
+            bucket["budget_values"].append(float(item["cout_estime"]))
+    result["plan_achat"] = [
+        {
+            "semaine": f"Commande prévue le {forecast_date}",
+            "pieces": bucket["pieces"],
+            "budget": round(sum(bucket["budget_values"]), 2) if len(bucket["budget_values"]) == len(bucket["pieces"]) else None,
+            "priorite": bucket["priorite"],
+            "raison": "Date et quantité issues du moteur déterministe de stock",
+        }
+        for forecast_date, bucket in sorted(plan_by_date.items())
+    ]
+    priced_items = [item for item in verified if item.get("cout_estime") is not None]
+    total_cost = sum(float(item.get("cout_estime")) for item in priced_items)
+    complete_costs = bool(verified) and len(priced_items) == len(verified)
+    missing_price_count = len(verified) - len(priced_items)
+    result["impact_budget"] = {
+        "cout_total_commande": round(total_cost, 2) if priced_items else None,
+        "cout_total_commande_complet": round(total_cost, 2) if complete_costs else None,
+        "calcul_complet": complete_costs,
+        "articles_sans_prix": missing_price_count,
+        "gain_potentiel": None,
+        "ratio": "Non calculable : coût d'indisponibilité et économies contractuelles non configurés",
+        "cout_indisponibilite_estime": None,
+        "calcul_methode": "Quantités et dates reprises des prévisions serveur; aucun montant inventé",
+        "source_prix": "Prix unitaires du catalogue pièces",
+    }
+    return result
+
 @app.post("/api/ai/analyze-diagnostic")
 @governed_ai_endpoint("diagnostic", ("Admin", "Manager", "Responsable Technique", "Technicien"))
 def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
@@ -637,6 +761,7 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
     try:
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
         from db_engine import get_ai_pieces_context
+        from services.spare_parts_prediction_engine import predict_spare_parts
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     if not AI_AVAILABLE:
@@ -652,6 +777,13 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
     context = get_ai_pieces_context(domaine, equipment_type)
     pieces_data = context.get('pieces', [])
     stats = context.get('statistics', {})
+    try:
+        with get_db() as conn:
+            forecasts = predict_spare_parts(conn)
+    except Exception as forecast_error:
+        logger.warning(f"Spare-parts forecast unavailable for AI: {forecast_error}")
+        forecasts = []
+    forecast_by_ref = {_cost_normalize(item.get('reference')): item for item in forecasts}
     
     if not pieces_data:
         raise HTTPException(status_code=400, detail="No spare parts data available for analysis.")
@@ -675,6 +807,19 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
         urgency = p['urgency']
         jours_rupture = p['days_until_rupture']
         recent_use = p['recent_usage_30d']
+        forecast = forecast_by_ref.get(_cost_normalize(ref), {})
+        consomm = forecast.get('consommation_mensuelle', consomm)
+        confiance = forecast.get('fiabilite_donnees_pct', confiance)
+        urgency = forecast.get('urgence', urgency)
+        jours_rupture = forecast.get('jours_avant_rupture')
+        recent_use = forecast.get('consommation_30j', recent_use)
+        prediction_available = bool(forecast.get('prediction_available'))
+        date_commande = forecast.get('date_commande') or 'NON CALCULABLE'
+        quantite_recommandee = forecast.get('quantite_recommandee')
+        cout_estime = forecast.get('cout_estime')
+        risque_30j = forecast.get('risque_rupture_30j_pct')
+        clients = ', '.join(forecast.get('clients_utilisateurs') or []) or 'Non documenté'
+        diagnostic = (forecast.get('diagnostics') or [{}])[0]
         
         # Format stock status with prediction (in French)
         if stock == 0:
@@ -691,9 +836,20 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
         
         line = f"  • {nom} ({ref}) | Équip: {p['equipment_type']} | Stock: {stock}/{mini} [{status}] | {consump_info} | Fournisseur: {four} | Prix: {prix:.2f} {sym}\n"
         inventory_lines += line
+        inventory_lines += (
+            f"    DONNEES_DETERMINISTES: disponible={prediction_available}; commande={date_commande}; "
+            f"quantite={quantite_recommandee if quantite_recommandee is not None else 'NON CALCULABLE'}; "
+            f"cout_catalogue={cout_estime if cout_estime is not None else 'NON CALCULABLE'} {sym}; "
+            f"risque_rupture_30j={risque_30j if risque_30j is not None else 'NON CALCULABLE'}%; "
+            f"delai_fournisseur={forecast.get('delai_fournisseur_jours') if forecast.get('delai_fournisseur_jours') is not None else 'NON RENSEIGNE'} jours; "
+            f"clients={clients}; diagnostic_cause={diagnostic.get('cause') or 'NON RENSEIGNE'}; "
+            f"diagnostic_type={diagnostic.get('type') or 'NON RENSEIGNE'}; "
+            f"diagnostic_probleme={diagnostic.get('probleme') or 'NON RENSEIGNE'}; "
+            f"diagnostic_solution={diagnostic.get('solution') or 'NON RENSEIGNE'}\n"
+        )
         
         # Track critical items
-        if 'CRITICAL' in urgency:
+        if str(urgency).upper() in ('CRITIQUE', 'CRITICAL'):
             critical_pieces.append((ref, nom, urgency))
     
     # Timeline weeks
@@ -734,6 +890,12 @@ Articles urgence HAUTE: {stats['high_urgency_count']}
 5. Générer quantités commandées basées sur consommation + délai fournisseur
 6. Prioriser urgence CRITIQUE + haute confiance données
 
+RÈGLES FINANCIÈRES ET DE COHÉRENCE :
+- Utilise uniquement les quantités, dates, urgences et coûts présents dans INVENTAIRE PIÈCES AVEC PRÉDICTIONS.
+- N'invente jamais une quantité, une date de commande, un prix ou un gain. Si prediction_available=false et que le stock est supérieur à zéro, ne recommande pas l'achat. Une rupture effective peut toutefois générer une commande immédiate basée uniquement sur le stock minimum configuré; la prévision de consommation doit alors rester explicitement indisponible.
+- Le gain potentiel et le coût d'indisponibilité doivent être null tant qu'un coût documenté d'indisponibilité ou une économie contractuelle n'est pas fourni.
+- Ne mélange jamais deux références, même si leurs désignations sont proches.
+
 === FORMAT RÉPONSE ===
 RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
 {{
@@ -762,6 +924,7 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
         raise HTTPException(status_code=500, detail="AI did not respond.")
     result = clean_json_response(raw)
     result = _force_ai_payload_language(result, lang, _call_ia, clean_json_response)
+    result = _apply_spare_parts_ai_guardrails(result, forecasts, sym)
     
     # Log the analysis
     username = user.get("sub", "unknown")

@@ -50,6 +50,7 @@ export default function PiecesPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedPiece, setSelectedPiece] = useState<Piece | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   // Feedback
@@ -181,18 +182,57 @@ export default function PiecesPage() {
     }
   }, [activeTab, notifData, loadNotifs]);
 
-  // Load feedback from localStorage
+  // Le feedback est partagé et conservé côté serveur; localStorage reste un
+  // fallback pour ne pas perdre l'affichage si l'API est momentanément indisponible.
   useEffect(() => {
-    const saved = localStorage.getItem('savia_pieces_feedback');
-    if (saved) setFeedbackHistory(JSON.parse(saved));
+    pieces.predictionFeedbackList(100)
+      .then((items: any[]) => setFeedbackHistory(items.map(item => ({
+        ...item,
+        piece: item.designation || item.reference,
+        type: item.resultat,
+        vraiDate: item.date_reelle,
+        timestamp: item.timestamp || item.date_calcul,
+      }))))
+      .catch(() => {
+        const saved = localStorage.getItem('savia_pieces_feedback');
+        if (saved) setFeedbackHistory(JSON.parse(saved));
+      });
   }, []);
 
-  const submitFeedback = (type: 'correct' | 'faux_positif' | 'decale', vraiDate?: string) => {
+  const submitFeedback = async (type: 'correct' | 'faux_positif' | 'decale', vraiDate?: string) => {
     if (!selectedFeedbackPiece) return;
-    const entry = { piece: selectedFeedbackPiece, type, vraiDate, timestamp: new Date().toISOString() };
-    const updated = [entry, ...feedbackHistory];
-    setFeedbackHistory(updated);
-    localStorage.setItem('savia_pieces_feedback', JSON.stringify(updated));
+    const piece = data.find(item => item.reference === selectedFeedbackPiece);
+    if (!piece) return;
+    const forecast = predictions[piece.id] || {};
+    const entry = {
+      piece: piece.designation,
+      reference: piece.reference,
+      designation: piece.designation,
+      type,
+      resultat: type,
+      vraiDate,
+      timestamp: new Date().toISOString(),
+    };
+    try {
+      await pieces.predictionFeedback({
+        reference: piece.reference,
+        designation: piece.designation,
+        resultat: type,
+        date_calcul: new Date().toISOString().slice(0, 10),
+        date_predite: forecast.date_rupture_prevue || forecast.date_commande || '',
+        date_reelle: vraiDate || '',
+        quantite: forecast.quantite_recommandee ?? null,
+        risque_rupture_pct: forecast.risque_rupture_30j_pct ?? null,
+        modele_version: forecast.modele || '',
+        features: forecast,
+      });
+      setFeedbackHistory(prev => [entry, ...prev]);
+    } catch (error) {
+      console.error('Erreur enregistrement feedback pièce:', error);
+      const updated = [entry, ...feedbackHistory];
+      setFeedbackHistory(updated);
+      localStorage.setItem('savia_pieces_feedback', JSON.stringify(updated));
+    }
     setFeedbackSuccess(
       type === 'correct' ? 'Prédiction confirmée' :
       type === 'faux_positif' ? 'Faux positif signalé' :
@@ -202,8 +242,26 @@ export default function PiecesPage() {
     setTimeout(() => setFeedbackSuccess(''), 4000);
   };
 
+  const validatePieceForm = () => {
+    if (!form.reference.trim() || !form.designation.trim() || !form.domaine.trim() || !form.equipement_type.trim() || !form.fournisseur.trim()) {
+      return 'Référence, désignation, domaine, type d’équipement et fournisseur sont obligatoires.';
+    }
+    const stock = Number(form.stock_actuel);
+    const minimum = Number(form.stock_minimum);
+    const price = Number(form.prix_unitaire);
+    if (!Number.isInteger(stock) || stock < 0 || !Number.isInteger(minimum) || minimum < 0) {
+      return 'Le stock actuel et le stock minimum doivent être des nombres entiers positifs ou nuls.';
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      return 'Le prix unitaire est obligatoire et doit être supérieur à zéro.';
+    }
+    return '';
+  };
+
   const handleSave = async () => {
-    if (!form.designation.trim()) return;
+    const validationError = validatePieceForm();
+    if (validationError) { setFormError(validationError); return; }
+    setFormError('');
     setIsSaving(true);
     try {
       await pieces.create({
@@ -235,6 +293,9 @@ export default function PiecesPage() {
 
   const handleEdit = async () => {
     if (!selectedPiece) return;
+    const validationError = validatePieceForm();
+    if (validationError) { setFormError(validationError); return; }
+    setFormError('');
     setIsSaving(true);
     try {
       await pieces.update(selectedPiece.id, {
@@ -295,16 +356,39 @@ export default function PiecesPage() {
     }
   }, [activeTab, predictions, loadPredictions]);
 
-  // Helper: display prediction date or insufficient data message
+  const formatForecastNumber = (value: unknown, suffix = '') => {
+    if (value === null || value === undefined || value === '') return 'Non calculable';
+    return `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}${suffix}`;
+  };
+
+  // Display deterministic values from the replenishment engine.
   const getPredictionDisplay = (p: Piece): JSX.Element => {
     const pred = predictions[p.id];
     if (!pred) {
       return <span className="text-savia-text-muted text-xs">Chargement...</span>;
     }
-    if (pred.error || !pred.date_commande) {
+    if (pred.error) {
       return <span className="text-orange-400 text-xs font-semibold">⚠️ Données insuffisantes</span>;
     }
-    return <span className="text-xs font-semibold">{pred.date_commande}</span>;
+    if (pred.stock_actuel === 0 && pred.recommandation_actionnable) {
+      return (
+        <div className="text-xs space-y-0.5">
+          <div className="font-bold text-red-400">Rupture immédiate — commander maintenant</div>
+          <div>Qté minimale : {pred.quantite_recommandee ?? 'Non calculable'}</div>
+          <div>Coût : {pred.cout_estime != null ? `${Number(pred.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'}</div>
+        </div>
+      );
+    }
+    if (!pred.prediction_available) {
+      return <span className="text-orange-400 text-xs font-semibold">Prévision non calculable : {pred.raison || 'historique ou délai fournisseur manquant'}</span>;
+    }
+    return (
+      <div className="text-xs space-y-0.5">
+        <div className="font-semibold">Commande : {pred.date_commande || 'Non calculable'}</div>
+        <div className="text-savia-text-muted">Rupture : {pred.date_rupture_prevue || 'Non calculable'}</div>
+        <div className="text-savia-text-dim">Qté : {formatForecastNumber(pred.quantite_recommandee)} · Risque 30 j : {formatForecastNumber(pred.risque_rupture_30j_pct, '%')}</div>
+      </div>
+    );
   };
 
   const handleAiAnalyze = async () => {
@@ -419,7 +503,7 @@ export default function PiecesPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion du stock, traçabilité et prédictions IA</p>
         </div>
-        <button onClick={() => { setForm(emptyForm); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <button onClick={() => { setForm(emptyForm); setFormError(''); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> Nouvelle Pièce
         </button>
       </div>
@@ -502,6 +586,7 @@ export default function PiecesPage() {
                 <button
                   onClick={() => {
                     setLinkedDemandeId(d.id);
+                    setFormError('');
                     // Matcher le nom machine vers un type d'équipement connu
                     const machineStr = (d.equipement || '').toLowerCase();
                     const matchedType = TYPES_EQUIPEMENTS.find(t => {
@@ -697,6 +782,7 @@ export default function PiecesPage() {
                   <div className="flex gap-2">
                     <button onClick={() => {
                       setSelectedPiece(p);
+                      setFormError('');
                       setForm({
                         reference: p.reference, designation: p.designation,
                         domaine: p.domaine || 'Radiologie',
@@ -732,7 +818,7 @@ export default function PiecesPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-savia-surface z-10">
                     <tr className="border-b border-savia-border">
-                      {['Pièce', 'Type', 'Stock actuel', 'Min', 'Fournisseur', 'Prix unit.', 'Date prévision', 'Urgence'].map(h => (
+                      {['Pièce', 'Type', 'Client(s) utilisateur(s)', 'Stock actuel', 'Min', 'Fournisseur', 'Prix unit.', 'Date prévision', 'Urgence'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -741,15 +827,18 @@ export default function PiecesPage() {
                     {data
                       .slice()
                       .sort((a, b) => {
-                        // Trier par urgence : rupture > bas > OK
-                        const urgA = a.stock_actuel === 0 ? 0 : a.stock_actuel <= a.stock_minimum ? 1 : 2;
-                        const urgB = b.stock_actuel === 0 ? 0 : b.stock_actuel <= b.stock_minimum ? 1 : 2;
+                        // Le classement reprend la priorité du moteur serveur.
+                        const priority: Record<string, number> = { CRITIQUE: 0, HAUTE: 1, NORMALE: 2, BASSE: 3, UNKNOWN: 4 };
+                        const fallback = (piece: Piece) => piece.stock_actuel === 0 ? 0 : piece.stock_actuel <= piece.stock_minimum ? 1 : 3;
+                        const urgA = priority[predictions[a.id]?.urgence] ?? fallback(a);
+                        const urgB = priority[predictions[b.id]?.urgence] ?? fallback(b);
                         return urgA - urgB;
                       })
                       .map(p => {
-                        const isRupture = p.stock_actuel === 0;
-                        const isBas = !isRupture && p.stock_actuel <= p.stock_minimum;
-                        const manquant = Math.max(0, p.stock_minimum - p.stock_actuel + 1);
+                        const forecast = predictions[p.id] || {};
+                        const isRupture = forecast.urgence === 'CRITIQUE' || p.stock_actuel === 0;
+                        const isBas = !isRupture && (forecast.urgence === 'HAUTE' || p.stock_actuel <= p.stock_minimum);
+                        const manquant = forecast.quantite_recommandee ?? Math.max(0, p.stock_minimum - p.stock_actuel + 1);
                         return (
                           <tr key={p.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${
                             isRupture ? 'bg-red-500/5' : isBas ? 'bg-yellow-500/5' : ''
@@ -759,6 +848,11 @@ export default function PiecesPage() {
                               <div className="text-xs text-savia-text-muted font-mono">{p.reference}</div>
                             </td>
                             <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
+                            <td className="py-2.5 px-3 text-xs min-w-[150px]">
+                              {forecast.clients_utilisateurs?.length > 0
+                                ? forecast.clients_utilisateurs.join(', ')
+                                : <span className="text-savia-text-dim">Non documenté</span>}
+                            </td>
                             <td className="py-2.5 px-3 text-center">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
                                 isRupture ? 'bg-red-500/15 text-red-400' :
@@ -783,14 +877,14 @@ export default function PiecesPage() {
                                   <span className="flex items-center gap-1 text-xs font-bold text-red-400">
                                     <XCircle className="w-3 h-3" /> Commander immédiatement
                                   </span>
-                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s)</span>
+                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s) · Coût: {forecast.cout_estime != null ? `${Number(forecast.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</span>
                                 </div>
                               ) : isBas ? (
                                 <div className="space-y-0.5">
                                   <span className="flex items-center gap-1 text-xs font-bold text-yellow-400">
                                     <AlertTriangle className="w-3 h-3" /> Commander bientôt
                                   </span>
-                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s)</span>
+                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s) · Date: {forecast.date_commande || 'non calculable'} · Coût: {forecast.cout_estime != null ? `${Number(forecast.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</span>
                                 </div>
                               ) : (
                                 <span className="flex items-center gap-1 text-xs text-green-400">
@@ -843,6 +937,26 @@ export default function PiecesPage() {
                     <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse_risque}</p>
                   </div>
                 )}
+                {aiResult.previsions_detaillees?.length > 0 && (
+                  <div className="p-4 rounded-lg bg-savia-surface-hover/50 border-l-4 border-cyan-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-cyan-400 mb-3 uppercase tracking-wider">
+                      <Boxes className="w-4 h-4" /> Données déterministes utilisées
+                    </div>
+                    <div className="space-y-2">
+                      {aiResult.previsions_detaillees.map((d: any, i: number) => (
+                        <div key={i} className="p-3 rounded-lg bg-savia-bg/40 border border-savia-border/50 text-xs space-y-1">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="font-bold">{d.piece} <span className="font-mono text-savia-text-muted">({d.reference})</span></span>
+                            <span className={d.urgence === 'CRITIQUE' ? 'text-red-400 font-bold' : d.urgence === 'HAUTE' ? 'text-yellow-400 font-bold' : 'text-savia-text-muted'}>{d.urgence || 'UNKNOWN'}</span>
+                          </div>
+                          <div className="text-savia-text-muted">Client(s) : {d.clients?.length ? d.clients.join(', ') : 'Non documenté'} · Stock : {d.stock_actuel ?? '—'} / {d.stock_minimum ?? '—'} · Consommation : {d.consommation_mensuelle ?? 'Non calculable'} unité(s)/mois</div>
+                          <div className="text-savia-text-muted">Commande : {d.date_commande || 'Non calculable'} · Rupture : {d.date_rupture_prevue || 'Non calculable'} · Quantité : {d.quantite_recommandee ?? 'Non calculable'} · Coût : {d.cout_estime != null ? `${Number(d.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'} · Risque 30 j : {d.risque_rupture_30j_pct != null ? `${d.risque_rupture_30j_pct}%` : 'Non calculable'} · Fiabilité : {d.fiabilite_donnees_pct ?? 0}%</div>
+                          {d.diagnostics?.[0] && <div className="text-savia-text-muted">Diagnostic : {d.diagnostics[0].type || '—'} · {d.diagnostics[0].probleme || 'Problème non renseigné'} · Cause : {d.diagnostics[0].cause || 'non renseignée'} · Solution : {d.diagnostics[0].solution || 'non renseignée'}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {aiResult.recommandations?.length > 0 && (
                   <div className="p-4 rounded-lg bg-yellow-500/10 border-l-4 border-yellow-500">
                     <div className="flex items-center gap-2 font-bold text-sm text-yellow-400 mb-3 uppercase tracking-wider">
@@ -863,10 +977,17 @@ export default function PiecesPage() {
                               {r.raison}
                             </div>
                           )}
+                          {(r.clients_utilisateurs?.length > 0 || r.diagnostics?.length > 0) && (
+                            <div className="text-xs text-savia-text-muted bg-savia-surface/50 rounded px-3 py-2 mb-2 space-y-1">
+                              {r.clients_utilisateurs?.length > 0 && <div><span className="font-semibold">Clients concernés :</span> {r.clients_utilisateurs.join(', ')}</div>}
+                              {r.contrats?.length > 0 && <div><span className="font-semibold">Contrat :</span> {r.contrats.map((c: any) => `${c.type || 'Actif'} (${c.pieces_couvertes ? 'pièces couvertes' : 'pièces non couvertes'})`).join(', ')}</div>}
+                              {r.diagnostics?.[0] && <div><span className="font-semibold">Diagnostic récent :</span> {r.diagnostics[0].type || '—'} · {r.diagnostics[0].probleme || 'Problème non renseigné'} · Cause : {r.diagnostics[0].cause || 'non renseignée'} · Solution : {r.diagnostics[0].solution || 'non renseignée'}</div>}
+                            </div>
+                          )}
                           <div className="flex items-center gap-3 text-xs flex-wrap">
-                            <span className="flex items-center gap-1"><Boxes className="w-3 h-3" /> {r.quantite} unité(s)</span>
-                            <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-blue-400" /><span className="text-blue-400 font-semibold">{r.date_achat}</span></span>
-                            <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime?.toLocaleString('fr')} TND</span>
+                            <span className="flex items-center gap-1"><Boxes className="w-3 h-3" /> {r.quantite ?? 'Non calculable'} unité(s)</span>
+                            <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-blue-400" /><span className="text-blue-400 font-semibold">{r.date_achat || 'Non calculable'}</span></span>
+                            <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime != null ? `${Number(r.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'}</span>
                           </div>
                         </div>
                       ))}
@@ -892,8 +1013,8 @@ export default function PiecesPage() {
                   <div className="p-4 rounded-lg bg-blue-500/10 border-l-4 border-blue-500">
                     <div className="flex items-center gap-2 font-bold text-sm text-blue-400 mb-3 uppercase tracking-wider"><DollarSign className="w-4 h-4" /> Impact Budget</div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiResult.impact_budget.cout_total_commande?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Coût total commande</div></div>
-                      <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiResult.impact_budget.gain_potentiel?.toLocaleString('fr')} TND</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
+                      <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiResult.impact_budget.cout_total_commande != null ? `${Number(aiResult.impact_budget.cout_total_commande).toLocaleString('fr')} TND` : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">{aiResult.impact_budget.calcul_complet ? 'Coût total commande' : 'Coût connu (partiel)'}</div>{!aiResult.impact_budget.calcul_complet && aiResult.impact_budget.articles_sans_prix > 0 && <div className="text-[10px] text-yellow-400 mt-1">{aiResult.impact_budget.articles_sans_prix} pièce(s) sans prix</div>}</div>
+                      <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiResult.impact_budget.gain_potentiel != null ? `${Number(aiResult.impact_budget.gain_potentiel).toLocaleString('fr')} TND` : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
                       <div className="text-center p-3 rounded-lg bg-purple-500/10"><div className="text-sm font-bold text-purple-400 leading-tight">{aiResult.impact_budget.ratio}</div><div className="text-xs text-savia-text-muted mt-1">Ratio ROI</div></div>
                     </div>
                   </div>
@@ -917,7 +1038,7 @@ export default function PiecesPage() {
               <select value={selectedFeedbackPiece} onChange={e => setSelectedFeedbackPiece(e.target.value)}
                 className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
                 <option value="">— Sélectionner une pièce —</option>
-                {data.map(p => <option key={p.id} value={p.designation}>{p.designation} ({p.reference})</option>)}
+                {data.filter(p => predictions[p.id]?.prediction_available).map(p => <option key={p.id} value={p.reference}>{p.designation} ({p.reference})</option>)}
               </select>
               {selectedFeedbackPiece && (
                 <div className="space-y-4">
@@ -1069,9 +1190,10 @@ export default function PiecesPage() {
       {/* Add Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="➕ Nouvelle Pièce" size="lg">
         <div className="space-y-4">
+          {formError && <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-semibold">{formError}</div>}
           {/* Domaine médical - unique source of truth from equipment */}
           <div>
-            <label className="block text-xs font-semibold text-savia-text-muted mb-2 uppercase tracking-wider">Domaine médical</label>
+            <label className="block text-xs font-semibold text-savia-text-muted mb-2 uppercase tracking-wider">Domaine médical *</label>
             <div className="flex flex-wrap gap-2">
               {customDomaines.length > 0 ? (
                 // Use equipment-defined domains (dynamic)
@@ -1104,8 +1226,8 @@ export default function PiecesPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement</label>
-              <select className={INPUT_CLS} 
+              <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement *</label>
+              <select required className={INPUT_CLS}
                 value={form.equipement_type || getAvailableTypes()[0]}
                 onChange={e => setForm({...form, equipement_type: e.target.value})}>
                 {getAvailableTypes().map(t => <option key={t} value={t}>{t}</option>)}
@@ -1127,12 +1249,12 @@ export default function PiecesPage() {
                 </label>
               </div>
             )}
-            <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte)</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur</label><input className={INPUT_CLS} placeholder="Siemens" value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Référence *</label><input required className={INPUT_CLS} placeholder="TUBE-RX-001" value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label><input required className={INPUT_CLS} placeholder="Siemens" value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
             <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           </div>
         </div>
@@ -1147,9 +1269,10 @@ export default function PiecesPage() {
       {/* Edit Modal */}
       <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title={`✏️ Modifier — ${selectedPiece?.designation || ''}`} size="lg">
         <div className="space-y-4">
+          {formError && <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm font-semibold">{formError}</div>}
           {/* Domaine médical - unique source of truth from equipment */}
           <div>
-            <label className="block text-xs font-semibold text-savia-text-muted mb-2 uppercase tracking-wider">Domaine médical</label>
+            <label className="block text-xs font-semibold text-savia-text-muted mb-2 uppercase tracking-wider">Domaine médical *</label>
             <div className="flex flex-wrap gap-2">
               {customDomaines.length > 0 ? (
                 // Use equipment-defined domains (dynamic)
@@ -1182,8 +1305,8 @@ export default function PiecesPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement</label>
-              <select className={INPUT_CLS} 
+              <label className="block text-sm text-savia-text-muted mb-1">Type d&apos;équipement *</label>
+              <select required className={INPUT_CLS}
                 value={form.equipement_type || getAvailableTypes()[0]}
                 onChange={e => setForm({...form, equipement_type: e.target.value})}>
                 {getAvailableTypes().map(t => <option key={t} value={t}>{t}</option>)}
@@ -1205,12 +1328,12 @@ export default function PiecesPage() {
                 </label>
               </div>
             )}
-            <div><label className="block text-sm text-savia-text-muted mb-1">Référence</label><input className={INPUT_CLS} value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Désignation</label><input className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel</label><input type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte)</label><input type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND)</label><input type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur</label><input className={INPUT_CLS} value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Référence *</label><input required className={INPUT_CLS} value={form.reference} onChange={e => setForm({...form, reference: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label><input required className={INPUT_CLS} value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
             <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           </div>
         </div>
