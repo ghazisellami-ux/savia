@@ -11,6 +11,7 @@ from api.lifecycle import *
 from api.security import *
 
 from controllers.auth_dashboard import *
+from controllers.predictions import *
 from controllers.equipment import *
 from controllers.interventions import *
 from controllers.requests import *

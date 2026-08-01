@@ -870,6 +870,20 @@ def init_db():
         _safe_add_column("contrats", "equipement")
         _safe_add_column("contrats", "fichier_contrat")
         _safe_add_column("equipements", "document_technique")
+        # Prediction feedback needs the equipment identity and forecast context
+        # to support honest temporal validation and post-deployment calibration.
+        _safe_add_column("prediction_feedback", "equipment_id", "INTEGER", "NULL")
+        _safe_add_column("prediction_feedback", "client", "TEXT", "''")
+        _safe_add_column("prediction_feedback", "horizon_jours", "INTEGER", "30")
+        _safe_add_column("prediction_feedback", "risque_pct", "REAL", "NULL")
+        _safe_add_column("prediction_feedback", "modele_version", "TEXT", "''")
+        _safe_add_column("prediction_feedback", "date_calcul", "TEXT", "''")
+        _safe_add_column("prediction_feedback", "features_json", "TEXT", "NULL")
+        _run_migration(
+            "CREATE INDEX IF NOT EXISTS idx_prediction_feedback_equipment "
+            "ON prediction_feedback(equipment_id, timestamp DESC)",
+            "index feedback prédictions par équipement",
+        )
         # Geographic coordinates for map feature
         _safe_add_column("equipements", "latitude", "REAL", "NULL")
         _safe_add_column("equipements", "longitude", "REAL", "NULL")

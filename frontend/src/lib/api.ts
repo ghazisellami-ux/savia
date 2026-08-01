@@ -127,6 +127,24 @@ export const dashboard = {
       `/api/dashboard/health-scores${qs ? '?' + qs : ''}`
     );
   },
+  predictions: (params?: { client?: string; equipment_type?: string; horizon_days?: number }) => {
+    const p = new URLSearchParams();
+    if (params?.client) p.set('client', params.client);
+    if (params?.equipment_type) p.set('equipment_type', params.equipment_type);
+    if (params?.horizon_days) p.set('horizon_days', String(params.horizon_days));
+    const qs = p.toString();
+    return request<{
+      items: Array<Record<string, unknown>>;
+      meta: Record<string, unknown>;
+    }>(`/api/dashboard/predictions${qs ? '?' + qs : ''}`);
+  },
+};
+
+export const predictionFeedback = {
+  create: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/predictions/feedback', { method: 'POST', body: data }),
+  list: (limit = 100) =>
+    request<Array<Record<string, unknown>>>(`/api/predictions/feedback?limit=${limit}`),
 };
 
 // --- Interventions ---
