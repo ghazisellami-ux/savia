@@ -234,6 +234,10 @@ export const pieces = {
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
   prediction: (id: number) => request<Record<string, unknown>>(`/api/pieces/${id}/prediction`, { method: 'POST' }),
+  predictionFeedback: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>('/api/pieces/prediction-feedback', { method: 'POST', body: data }),
+  predictionFeedbackList: (limit = 100) =>
+    request<Array<Record<string, unknown>>>(`/api/pieces/prediction-feedback?limit=${limit}`),
 };
 
 export const piecesDemandees = {

@@ -1,6 +1,7 @@
 """Spare-parts, stock-request, and prediction routes."""
 
 from api.runtime import (
+    Body,
     Depends,
     HTTPException,
     ajouter_notification_piece,
@@ -49,8 +50,41 @@ from controllers.auth_dashboard import (
     log_audit,
     logger,
 )
+from services.spare_parts_prediction_engine import predict_piece_order_date as predict_piece_order_date_v2, predict_spare_parts
 
 STOCK_READ_ROLES = ("Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire", "Gestionnaire de stock")
+
+
+def _validate_piece_payload(body: dict) -> None:
+    """Validate fields required to keep stock costs and forecasts reliable."""
+    required_text = {
+        "reference": "Référence",
+        "designation": "Désignation",
+        "domaine": "Domaine",
+        "equipement_type": "Type d'équipement",
+        "fournisseur": "Fournisseur",
+    }
+    missing = [label for field, label in required_text.items() if not str(body.get(field) or "").strip()]
+    required_numbers = ("stock_actuel", "stock_minimum", "prix_unitaire")
+    missing.extend(field for field in required_numbers if body.get(field) in (None, ""))
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Champs obligatoires manquants : {', '.join(missing)}")
+
+    import math
+    try:
+        stock = float(body["stock_actuel"])
+        minimum = float(body["stock_minimum"])
+        price = float(body["prix_unitaire"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Stock et prix doivent être des nombres valides")
+    if not all(math.isfinite(value) for value in (stock, minimum, price)):
+        raise HTTPException(status_code=422, detail="Stock et prix doivent être des nombres finis")
+    if not stock.is_integer() or not minimum.is_integer():
+        raise HTTPException(status_code=422, detail="Le stock doit être exprimé en unités entières")
+    if stock < 0 or minimum < 0:
+        raise HTTPException(status_code=422, detail="Le stock ne peut pas être négatif")
+    if price <= 0:
+        raise HTTPException(status_code=422, detail="Le prix unitaire doit être supérieur à zéro")
 
 @app.get("/api/pieces")
 def get_pieces(user: dict = Depends(_verify_token)):
@@ -72,7 +106,8 @@ def get_pieces_a_commander(limit: int = 10, user: dict = Depends(_verify_token))
         List of pieces ranked by urgence (CRITIQUE, HAUTE, NORMALE, BASSE)
     """
     try:
-        predictions = predict_pieces_a_commander(nb_to_return=limit)
+        with get_db() as conn:
+            predictions = predict_spare_parts(conn, limit=limit)
         return predictions
     except Exception as e:
         logger.error(f"Erreur prédiction pièces: {e}")
@@ -109,7 +144,10 @@ def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token))
         if not piece:
             raise HTTPException(status_code=404, detail="Pièce non trouvée")
         
-        prediction = predict_commande_date(dict(piece))
+        with get_db() as conn:
+            prediction = predict_piece_order_date_v2(conn, piece_id)
+        if prediction is None:
+            raise HTTPException(status_code=404, detail="Pièce non trouvée")
         return {
             'piece_id': piece_id,
             'reference': piece['reference'],
@@ -121,6 +159,73 @@ def predict_piece_order_date(piece_id: int, user: dict = Depends(_verify_token))
     except Exception as e:
         logger.error(f"Erreur prédiction pièce {piece_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pieces/prediction-feedback")
+def create_spare_part_prediction_feedback(body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Persist the real outcome of a spare-part replenishment forecast."""
+    require_roles(user, *STOCK_READ_ROLES)
+    resultat = str(body.get("resultat") or body.get("type") or "").strip().lower()
+    if resultat not in {"correct", "faux_positif", "decale"}:
+        raise HTTPException(status_code=422, detail="Résultat de feedback invalide")
+    reference = str(body.get("reference") or "").strip()
+    if not reference:
+        raise HTTPException(status_code=422, detail="Référence pièce obligatoire")
+    try:
+        quantite = int(body["quantite"]) if body.get("quantite") is not None else None
+        risque = float(body["risque_rupture_pct"]) if body.get("risque_rupture_pct") is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Valeur de prévision invalide")
+
+    import json
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO spare_parts_prediction_feedback (
+                reference, designation, resultat, date_calcul, date_predite,
+                date_reelle, quantite, risque_rupture_pct, modele_version,
+                features_json, username
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                reference,
+                str(body.get("designation") or ""),
+                resultat,
+                str(body.get("date_calcul") or ""),
+                str(body.get("date_predite") or ""),
+                str(body.get("date_reelle") or body.get("vraiDate") or ""),
+                quantite,
+                risque,
+                str(body.get("modele_version") or ""),
+                json.dumps(body.get("features") or {}, ensure_ascii=False),
+                str(user.get("sub") or "system"),
+            ),
+        )
+        log_audit(
+            str(user.get("sub") or "system"),
+            "SPARE_PART_PREDICTION_FEEDBACK",
+            f"{reference}: {resultat}",
+            "pieces",
+        )
+    return {"ok": True}
+
+
+@app.get("/api/pieces/prediction-feedback")
+def list_spare_part_prediction_feedback(limit: int = 100, user: dict = Depends(_verify_token)):
+    """Return the server-side history of spare-parts forecast feedback."""
+    require_roles(user, *STOCK_READ_ROLES)
+    limit = max(1, min(limit, 500))
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM spare_parts_prediction_feedback ORDER BY timestamp DESC LIMIT %s",
+            (limit,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        for key, value in list(item.items()):
+            if hasattr(value, "isoformat"):
+                item[key] = value.isoformat()
+        result.append(item)
+    return result
 
 
 def _normalize_ref(ref: str) -> str:
@@ -323,6 +428,7 @@ def create_piece(body: dict, user: dict = Depends(_verify_token)):
             detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins"
         )
     
+    _validate_piece_payload(body)
     ajouter_piece(body)
     
     # Log audit
@@ -354,6 +460,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
     if not _check_create_piece_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins")
     # Récupérer le stock AVANT modification pour détecter le réapprovisionnement
+    _validate_piece_payload(body)
     nouveau_stock = body.get("stock_actuel")
     try:
         with get_db() as conn:
@@ -588,6 +695,8 @@ __all__ = [
     "get_pieces",
     "get_pieces_a_commander",
     "predict_piece_order_date",
+    "create_spare_part_prediction_feedback",
+    "list_spare_part_prediction_feedback",
     "_normalize_ref",
     "_refs_match",
     "_check_pieces_demandees_disponibles",
