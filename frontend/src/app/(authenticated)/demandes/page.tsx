@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Search, Clock, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
-  Zap, FileText, Tag, Edit, Send, UserCheck, Lock, Users
+  Zap, FileText, Tag, Edit, Send, UserCheck, Lock, Users, Trash2
 } from 'lucide-react';
 import { demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -79,6 +79,7 @@ export default function DemandesPage() {
   const isLecteur = user?.role === 'Lecteur';
   const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique', 'Lecteur'].includes(user.role);
   const canAssignTech = user?.role === 'Manager' || user?.role === 'Responsable Technique' || user?.role === 'Admin';
+  const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
   const clientNom = user?.client || '';
   const demandeurNom = user?.nom || '';
 
@@ -110,6 +111,7 @@ export default function DemandesPage() {
 
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [selectedDemande, setSelectedDemande] = useState<Demande | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<Demande | null>(null);
   const [updateForm, setUpdateForm] = useState({ statut: '', technicien_assigne: '', notes_traitement: '' });
 
   const loadData = useCallback(async () => {
@@ -227,6 +229,21 @@ export default function DemandesPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!canDelete || !deleteCandidate) return;
+    setIsSaving(true);
+    try {
+      await demandes.delete(deleteCandidate.id);
+      setDeleteCandidate(null);
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      alert('Erreur lors de la suppression de la demande');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // KPI counters — 3 statuts seulement
   const nbAttente  = data.filter(d => d.statut === 'En attente').length;
   const nbAssignee = data.filter(d => d.statut === 'Assignée').length;
@@ -335,6 +352,12 @@ export default function DemandesPage() {
                 <button onClick={() => openUpdate(d)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-savia-accent/10 text-savia-accent hover:bg-savia-accent/20 transition-colors text-xs font-semibold cursor-pointer">
                   <Edit className="w-3.5 h-3.5" /> Mettre à jour
+                </button>
+              )}
+              {canDelete && (
+                <button onClick={() => setDeleteCandidate(d)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors text-xs font-semibold cursor-pointer">
+                  <Trash2 className="w-3.5 h-3.5" /> Supprimer
                 </button>
               )}
             </div>
@@ -599,6 +622,39 @@ export default function DemandesPage() {
                 className="flex items-center gap-2 px-6 py-2 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
                 Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== MODAL: Confirmation suppression ========== */}
+      {deleteCandidate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-savia-surface border border-red-500/30 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b border-savia-border">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-red-400">
+                <AlertTriangle className="w-5 h-5" /> Confirmer la suppression
+              </h2>
+              <button onClick={() => setDeleteCandidate(null)} className="p-2 rounded-lg hover:bg-savia-surface-hover cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-savia-text">
+                Voulez-vous vraiment supprimer la demande <strong className="text-red-400">#{deleteCandidate.id}</strong> ?
+              </p>
+              <p className="text-xs text-savia-text-muted">Cette action est irréversible.</p>
+            </div>
+            <div className="flex justify-end gap-3 p-5 border-t border-savia-border">
+              <button onClick={() => setDeleteCandidate(null)} disabled={isSaving}
+                className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors disabled:opacity-50">
+                Annuler
+              </button>
+              <button onClick={handleDelete} disabled={isSaving}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 cursor-pointer transition-colors">
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Supprimer
               </button>
             </div>
           </div>

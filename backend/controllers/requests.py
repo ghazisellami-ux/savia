@@ -216,6 +216,38 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     return {"success": True, "demande_id": demande_id, "intervention_id": intervention_id}
 
 
+@app.delete("/api/demandes/{demande_id}")
+def delete_demande(demande_id: int, user: dict = Depends(_verify_token)):
+    """Supprime une demande d'intervention (Admin et Manager uniquement)."""
+    if user.get("role") not in {"Admin", "Manager"}:
+        raise HTTPException(status_code=403, detail="Seuls les Admins et Managers peuvent supprimer une demande")
+
+    from db_engine import get_db
+    with get_db() as conn:
+        assert_resource_client_access(conn, "demande", demande_id, user)
+        row = conn.execute(
+            "SELECT id, client, equipement FROM demandes_intervention WHERE id = %s",
+            (demande_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Demande introuvable")
+        conn.execute("DELETE FROM demandes_intervention WHERE id = %s", (demande_id,))
+
+    _trigger_backup()
+    import json
+    log_audit(
+        user.get("sub", "unknown"),
+        "DELETE_DEMANDE",
+        json.dumps({
+            "demande_id": demande_id,
+            "client": row.get("client", ""),
+            "equipement": row.get("equipement", ""),
+        }, ensure_ascii=False),
+        "demandes",
+    )
+    return {"success": True}
+
+
 @app.put("/api/demandes/{demande_id}/statut")
 def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_verify_token)):
     # Check permission - only Admin, Manager, Responsable Technique can update status
