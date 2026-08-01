@@ -263,6 +263,8 @@ export const demandes = {
     request<{ success: boolean }>('/api/demandes', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
     request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body }),
+  delete: (id: number) =>
+    request<{ success: boolean }>(`/api/demandes/${id}`, { method: 'DELETE' }),
 };
 
 // --- Autres modules ---
