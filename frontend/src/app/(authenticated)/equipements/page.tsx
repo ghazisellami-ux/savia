@@ -269,7 +269,7 @@ export default function EquipementsPage() {
   }, [data, filterDomaine]);
 
   // Fixed status options (matching form options)
-  const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'Hors Service', 'En atelier'], []);
+  const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'En maintenance', 'Hors Service', 'En atelier'], []);
   const dynamicServices = useMemo(
     () => ['Tous', ...Array.from(new Set(data.map(equipment => equipment.service).filter(Boolean))).sort()],
     [data],

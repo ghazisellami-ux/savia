@@ -3,6 +3,7 @@ import { useRouter } from 'next/navigation';
 import { Building2, User, Wrench, AlertOctagon, Calendar, ChevronRight } from 'lucide-react';
 
 const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
+  'En maintenance':     { bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
   'En cours':           { bg: 'rgba(86,124,141,0.12)',  color: 'var(--teal)'    },
   'En attente de piece':{ bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
   'Cloturee':           { bg: 'rgba(34,197,94,0.12)',   color: '#15803D'        },

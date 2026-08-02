@@ -498,7 +498,6 @@ export default function InterventionDetailPage() {
         description: form.description,
         notes: form.notes,
         type_erreur: form.type_erreur,
-        priorite: form.priorite,
         duree_minutes: durationMinutes,
         start_time: form.start_time,  // Send HH:MM directly
         end_time: form.end_time,      // Send HH:MM directly
@@ -1464,15 +1463,12 @@ export default function InterventionDetailPage() {
             </div>
           </div>
 
-          {/* ④ Priorité */}
+          {/* ④ Priorité héritée de la demande — lecture seule */}
           <div style={SECTION}>
-            <label style={LABEL}><AlertOctagon style={ICON_INLINE} /> Priorité</label>
-            <select style={INPUT} value={form.priorite} onChange={e => set('priorite', e.target.value)}>
-              <option value="">— Aucune —</option>
-              <option>Haute</option>
-              <option>Moyenne</option>
-              <option>Basse</option>
-            </select>
+            <label style={LABEL}><AlertOctagon style={ICON_INLINE} /> Priorité de la demande</label>
+            <div style={{ ...INPUT, background: '#f8fafc', color: form.priorite ? 'var(--navy)' : 'var(--text-muted)', fontWeight: 700 }}>
+              {form.priorite || 'Non définie'}
+            </div>
           </div>
 
           {/* ⑤ Statut — EN BAS */}

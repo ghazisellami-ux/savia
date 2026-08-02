@@ -5,6 +5,7 @@ from datetime import datetime
 
 from database.core import _trigger_backup, get_db, logger, read_sql
 from repositories.knowledge import _fix_df_text
+from repositories.equipment_status import synchroniser_statut_equipement
 
 __all__ = [
     "get_or_create_interventions_techniciens",
@@ -710,6 +711,8 @@ def finalize_intervention_from_techniciens(intervention_id):
                 cout_pieces = {ph}
             WHERE id = {ph}
         """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, cout_main_oeuvre, total_cout_pieces, intervention_id))
+
+        synchroniser_statut_equipement(conn, intervention_id, "Cloturee")
         
         # Update related planning to "Cloturee" if it exists
         if planning_id:

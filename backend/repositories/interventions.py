@@ -9,6 +9,7 @@ from database.core import (
     read_sql,
 )
 from repositories.knowledge import _fix_df_text
+from repositories.equipment_status import synchroniser_statut_equipement
 
 __all__ = [
     "lire_interventions",
@@ -146,6 +147,15 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("fiche_validation", "En attente"),
             intervention_dict.get("client") or "",
         ))
+        new_intervention = conn.execute(
+            "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if new_intervention:
+            synchroniser_statut_equipement(
+                conn,
+                new_intervention["id"],
+                intervention_dict.get("statut", "Assignée"),
+            )
     _trigger_backup()
     return True
 

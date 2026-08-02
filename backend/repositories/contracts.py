@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from database.core import _trigger_backup, get_db, read_sql
+from repositories.equipment_status import synchroniser_statut_equipement
 
 logger = logging.getLogger("db_engine")
 
@@ -564,6 +565,7 @@ def update_intervention_statut(intervention_id, nouveau_statut):
         else:
             conn.execute("UPDATE interventions SET statut=%s WHERE id=%s",
                          (nouveau_statut, intervention_id))
+        synchroniser_statut_equipement(conn, intervention_id, nouveau_statut)
         if nouveau_statut in ("Cloturee", "Clôturée"):
             _mark_linked_planning_closed(conn, intervention_id, now[:10])
     _trigger_backup()
@@ -690,6 +692,8 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             WHERE id={ph}
         """
         conn.execute(sql, update_values)
+
+        synchroniser_statut_equipement(conn, intervention_id, "Cloturee")
 
         _mark_linked_planning_closed(conn, intervention_id, date_cloture[:10])
 

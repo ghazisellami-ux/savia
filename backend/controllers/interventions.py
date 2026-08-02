@@ -798,6 +798,10 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
     }
     
     for body_field, db_column in field_mapping.items():
+        if user.get("role") == "Technicien" and body_field == "priorite":
+            # Priority belongs to the intervention request and is read-only
+            # for technicians in the PWA.
+            continue
         if body_field in body:
             value = body[body_field]
             fields.append(f"{db_column} = %s")
