@@ -44,6 +44,22 @@ from controllers.auth_dashboard import (
     logger,
 )
 
+
+def _synchroniser_statut_parent_multi_tech(intervention_id, statut_technicien, update_status):
+    """Synchronise le statut parent lorsqu'un technicien change son statut partagé.
+
+    Cette fonction est dédiée au flux multi-techniciens. La clôture reste gérée
+    plus bas par la consolidation lorsque tous les techniciens ont terminé.
+    """
+    if statut_technicien == "En cours":
+        parent_status = "En cours"
+    elif statut_technicien in ("En attente de piece", "En attente de pièce"):
+        parent_status = "En attente de piece"
+    else:
+        return None
+    update_status(intervention_id, parent_status)
+    return parent_status
+
 @app.get("/api/demandes")
 def get_demandes(
     statuts: Optional[str] = None,
@@ -422,6 +438,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         machine = None
         client = None
         technicien = None
+        current_tech_status = None
         
         with get_db() as conn:
             intervention = conn.execute(
@@ -458,7 +475,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 # Cas 1: Vérifier d'abord dans interventions_techniciens (priorité multi-tech)
                 logger.info(f"🔐 Permission check: checking interventions_techniciens table first (multi-tech priority)")
                 tech_rows = conn.execute(
-                    "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
+                    "SELECT technicien_nom, statut FROM interventions_techniciens WHERE intervention_id = %s",
                     (intervention_id,)
                 ).fetchall()
                 
@@ -470,6 +487,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                             (_tech_name_or_username_matches(user_nom_complet, stored_tech_nom) or
                              _tech_name_or_username_matches(user_username, stored_tech_nom))):
                             is_assigned = True
+                            current_tech_status = row_tech.get("statut")
                             logger.info(f"🔐 Technicien '{user_nom_complet}' (username={user_username}) found in interventions_techniciens")
                             break
                 
@@ -488,6 +506,16 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         status_code=403,
                         detail="Vous ne pouvez éditer que vos propres interventions"
                     )
+
+                # A technician cannot reopen or move a completed assignment
+                # from the PWA. Other technicians in a multi-tech intervention
+                # keep their own status workflow unchanged.
+                requested_status = body.get("statut")
+                if current_tech_status == "Cloturee" and requested_status:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Cette affectation est déjà clôturée. Aucune nouvelle mise à jour de statut n'est autorisée depuis le PWA."
+                    )
         
         # Get or create entry for this technician
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
@@ -502,10 +530,13 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
         
-        if body.get("statut") == "En cours":
-            # Starting any technician's work starts the shared intervention
-            # and synchronises the equipment to "En maintenance".
-            update_intervention_statut(intervention_id, "En cours")
+        # Keep the shared parent intervention aligned with the technician's
+        # active status. This is intentionally limited to the multi-tech flow.
+        _synchroniser_statut_parent_multi_tech(
+            intervention_id,
+            body.get("statut"),
+            update_intervention_statut,
+        )
 
         # Deduct stock if technician marked as Cloturee and pieces are provided
         if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):

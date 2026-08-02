@@ -124,6 +124,8 @@ export default function InterventionDetailPage() {
     duree_minutes: 0, deplacement: 0, fiche_validation: 'En attente',
     start_time: '08:00', end_time: '09:00',  // HH:MM format
   });
+  const [initialFicheValidation, setInitialFicheValidation] = useState('En attente');
+  const [initialFormStatut, setInitialFormStatut] = useState('');
 
   // Per-technician form
   const [techForm, setTechForm] = useState({
@@ -138,6 +140,7 @@ export default function InterventionDetailPage() {
     statut: 'En cours',
     type_erreur_tech: '',
   });
+  const [initialTechnicianStatus, setInitialTechnicianStatus] = useState('En cours');
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
@@ -252,6 +255,8 @@ export default function InterventionDetailPage() {
         start_time:       startTime,
         end_time:         endTime,
       });
+      setInitialFicheValidation(found.fiche_validation || 'En attente');
+      setInitialFormStatut(found.statut || 'En cours');
 
       // Load previously used parts from intervention data
       if (found.pieces_utilisees) {
@@ -300,6 +305,7 @@ export default function InterventionDetailPage() {
           
           // Find current user's tech record and store the ID
           const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          setInitialTechnicianStatus(currentUserRec?.statut || 'En cours');
           if (currentUserRec?.id) {
             setCurrentUserTechId(currentUserRec.id);
             console.log('✅ Stored current user tech ID:', currentUserRec.id);
@@ -307,7 +313,7 @@ export default function InterventionDetailPage() {
           
           // Pre-populate techForm with technician-specific data if available
           // Otherwise use shared intervention data as fallback
-          if (currentUserRec && currentUserRec.probleme_tech) {
+          if (currentUserRec) {
             // Use technician-specific data (already saved)
             setTechForm({
               probleme_tech: currentUserRec.probleme_tech || '',
@@ -321,6 +327,7 @@ export default function InterventionDetailPage() {
               statut: currentUserRec.statut || 'En cours',
               type_erreur_tech: currentUserRec.type_erreur_tech || '',
             });
+            setInitialTechnicianStatus(currentUserRec.statut || 'En cours');
             console.log('📋 Pre-populated tech form from saved technician data:', {
               probleme_tech: currentUserRec.probleme_tech,
               cause_tech: currentUserRec.cause_tech,
@@ -446,6 +453,12 @@ export default function InterventionDetailPage() {
     e.preventDefault();
     setError(''); setSuccess('');
 
+    const hasClosedFollowUp = Boolean(photoFile) || form.fiche_validation !== initialFicheValidation;
+    if (initialFormStatut === 'Cloturee' && !hasClosedFollowUp) {
+      setError('Cette intervention est déjà clôturée. Aucune nouvelle mise à jour de statut n’est autorisée depuis le PWA.');
+      return;
+    }
+
     // Validation frontend : solution obligatoire pour clôturer
     if (form.statut === 'Cloturee' && !form.solution.trim()) {
       setError('La "Solution appliquée" est obligatoire pour clôturer l\'intervention.');
@@ -496,7 +509,7 @@ export default function InterventionDetailPage() {
       const durationMinutes = calculateDuration(form.start_time, form.end_time);
       
       const updatePayload = { 
-        statut: form.statut,
+        ...(form.statut !== 'Cloturee' ? { statut: form.statut } : {}),
         probleme: form.probleme,
         cause: form.cause,
         solution: form.solution,
@@ -520,6 +533,8 @@ export default function InterventionDetailPage() {
       console.log('  deplacement:', updatePayload.deplacement, 'minutes');
       
       await api.interventions.update(id, updatePayload);
+      setInitialFicheValidation(form.fiche_validation);
+      setInitialFormStatut(form.statut);
       if (photoFile) {
         try {
           await api.interventions.uploadPhoto(id, photoFile);
@@ -543,6 +558,11 @@ export default function InterventionDetailPage() {
   const handleSaveTechnicianData = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess('');
+
+    if (initialTechnicianStatus === 'Cloturee') {
+      setError('Cette affectation est déjà clôturée. Aucune nouvelle mise à jour de statut n’est autorisée depuis le PWA.');
+      return;
+    }
 
     // Validation: solution_tech required when marking as Cloturee
     if (techForm.statut === 'Cloturee' && !techForm.solution_tech.trim()) {
@@ -670,6 +690,7 @@ export default function InterventionDetailPage() {
               statut: currentUserRec.statut || 'En cours',
               type_erreur_tech: currentUserRec.type_erreur_tech || '',
             });
+            setInitialTechnicianStatus(currentUserRec.statut || 'En cours');
             console.log('✅ Updated tech form with fresh data');
           }
         } catch (e) {
@@ -688,6 +709,10 @@ export default function InterventionDetailPage() {
   const isClotured    = form.statut === 'Cloturee';
   const isAttenteP    = form.statut === 'En attente de piece';
   const isAssignee    = form.statut === 'Assignée';
+  const isTechnicianStatusLocked = initialTechnicianStatus === 'Cloturee';
+  const hasClosedFollowUp = Boolean(photoFile) || form.fiche_validation !== initialFicheValidation;
+  const isSingleStatusLocked = initialFormStatut === 'Cloturee';
+  const isSingleUpdateLocked = isSingleStatusLocked && !hasClosedFollowUp;
 
   // Get current technician's data from records (using robust name matching)
   const getCurrentTechData = (): any => {
@@ -1036,11 +1061,21 @@ export default function InterventionDetailPage() {
             {/* Status */}
             <div style={SECTION}>
               <label style={LABEL}>Mon Statut</label>
-              <select style={INPUT} value={techForm.statut} onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}>
+              <select
+                style={{ ...INPUT, ...(isTechnicianStatusLocked ? { background: '#f1f5f9', color: 'var(--text-muted)', cursor: 'not-allowed' } : {}) }}
+                value={techForm.statut}
+                disabled={isTechnicianStatusLocked}
+                onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}
+              >
                 <option value="En cours">En cours</option>
                 <option value="En attente de piece">En attente de pièce</option>
                 <option value="Cloturee">Intervention terminée</option>
               </select>
+              {isTechnicianStatusLocked && (
+                <p style={{ margin: '6px 0 0', color: '#15803D', fontSize: '0.75rem', fontWeight: 600 }}>
+                  Cette affectation est clôturée. Le statut ne peut plus être modifié depuis le PWA.
+                </p>
+              )}
             </div>
 
             {/* Pièces requises — visible uniquement quand statut = En attente de piece (multi-tech) */}
@@ -1169,8 +1204,8 @@ export default function InterventionDetailPage() {
             {/* Submit */}
             <button
               type="submit"
-              disabled={saving}
-              style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              disabled={saving || isTechnicianStatusLocked}
+              style={{ width: '100%', padding: '16px', background: isTechnicianStatusLocked ? '#cbd5e1' : 'linear-gradient(135deg, var(--teal), var(--navy))', color: isTechnicianStatusLocked ? '#64748b' : '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving || isTechnicianStatusLocked ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
               {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer Mes Données</>}
             </button>
           </form>
@@ -1486,19 +1521,25 @@ export default function InterventionDetailPage() {
               {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
                 const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
                 return (
-                  <button key={s} type="button" onClick={() => set('statut', s)}
+                  <button key={s} type="button" disabled={isSingleStatusLocked} onClick={() => set('statut', s)}
                     style={{
                       padding: '10px 4px', border: `2px solid ${form.statut === s ? st.color : 'var(--border)'}`,
                       borderRadius: '10px', background: form.statut === s ? st.bg : '#fff',
                       color: form.statut === s ? st.color : 'var(--text-muted)',
                       fontWeight: form.statut === s ? 800 : 500, fontSize: '0.72rem',
-                      cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center',
+                      cursor: isSingleStatusLocked ? 'not-allowed' : 'pointer', opacity: isSingleStatusLocked && form.statut !== s ? 0.55 : 1,
+                      transition: 'all 0.2s', textAlign: 'center',
                     }}>
                     {s}
                   </button>
                 );
               })}
             </div>
+            {isSingleStatusLocked && (
+              <p style={{ margin: '8px 0 0', color: '#15803D', fontSize: '0.75rem', fontWeight: 600 }}>
+                L&apos;intervention est clôturée. Le statut ne peut plus être modifié depuis le PWA.
+              </p>
+            )}
           </div>
 
           {/* □ Pièces requises — visible uniquement quand statut = En attente de piece */}
@@ -1695,8 +1736,8 @@ export default function InterventionDetailPage() {
           {error && !isAssignee && <p style={{ color: 'var(--danger)', textAlign: 'center', marginBottom: '12px' }}>{error}</p>}
 
           {/* ⑦ Bouton mise à jour */}
-          <button type="submit" disabled={saving}
-            style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <button type="submit" disabled={saving || isSingleUpdateLocked}
+            style={{ width: '100%', padding: '16px', background: isSingleUpdateLocked ? '#cbd5e1' : 'linear-gradient(135deg, var(--teal), var(--navy))', color: isSingleUpdateLocked ? '#64748b' : '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving || isSingleUpdateLocked ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
             {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Mettre à jour{selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}</>}
           </button>
         </form>}
