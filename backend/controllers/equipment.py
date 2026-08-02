@@ -68,6 +68,181 @@ def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_t
     return _df_to_records(df)
 
 
+@app.post("/api/equipements/export-pdf")
+def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_verify_token)):
+    """Exporte les clients ou les equipements selon les filtres selectionnes."""
+    from fastapi.responses import Response
+    from controllers.report_helpers import SaviaPDF, _sanitize
+    from datetime import datetime
+    from io import BytesIO
+    import base64 as _b64
+
+    try:
+        def value(row, *keys):
+            for key in keys:
+                item = row.get(key)
+                if item is not None and str(item).strip():
+                    return str(item).strip()
+            return ""
+
+        export_type = str(body.get("export_type") or "equipements").lower()
+        if export_type == "clients":
+            client_scope = resolve_client_scope(user, None)
+            clients_df = db_lire_clients()
+            equipment_df = lire_equipements()
+            equipment_counts = {}
+            for _, equipment in equipment_df.iterrows():
+                client = value(equipment, "Client", "client").casefold()
+                if client:
+                    equipment_counts[client] = equipment_counts.get(client, 0) + 1
+
+            rows = []
+            for _, row in clients_df.iterrows():
+                international = str(row.get("international") or "").lower() in ("true", "1", "yes")
+                item = {
+                    "client": value(row, "nom", "Nom"),
+                    "code": value(row, "code_client", "CodeClient"),
+                    "type": value(row, "type_client", "TypeClient"),
+                    "region": "International" if international else value(row, "region", "Region"),
+                    "ville": value(row, "ville", "Ville"),
+                    "equipements": str(equipment_counts.get(value(row, "nom", "Nom").casefold(), 0)),
+                    "contact": value(row, "contact", "Contact"),
+                    "telephone": value(row, "telephone", "Telephone"),
+                }
+                if not item["client"]:
+                    continue
+                if client_scope and item["client"].casefold() != client_scope.casefold():
+                    continue
+                search = str(body.get("client_search") or "").strip().casefold()
+                if search and search not in item["client"].casefold():
+                    continue
+                if body.get("client_type") and item["type"] != body.get("client_type"):
+                    continue
+                if body.get("client_region"):
+                    if body.get("client_region") == "International" and item["region"] != "International":
+                        continue
+                    if body.get("client_region") != "International" and item["region"] != body.get("client_region"):
+                        continue
+                if body.get("client_ville") and item["ville"] != body.get("client_ville"):
+                    continue
+                rows.append(item)
+            headers = ["Client", "Code", "Type", "Region", "Ville", "Equipements", "Contact", "Telephone"]
+            col_widths = [50, 26, 30, 30, 30, 28, 45, 38]
+            keys = ("client", "code", "type", "region", "ville", "equipements", "contact", "telephone")
+            max_chars = [29, 15, 18, 18, 18, 12, 25, 20]
+            title = "LISTE DES CLIENTS"
+            filter_pairs = (("Recherche", "client_search"), ("Type", "client_type"), ("Region", "client_region"), ("Ville", "client_ville"))
+            report_filename = "clients"
+        else:
+            df = lire_equipements()
+            requested_client = body.get("client") if body.get("client") not in (None, "", "Tous") else None
+            client_scope = resolve_client_scope(user, requested_client)
+            rows = []
+            for _, row in df.iterrows():
+                item = {
+                    "client": value(row, "Client", "client") or "Centre Principal",
+                    "equipement": value(row, "Nom", "nom"),
+                    "type": value(row, "Type", "type"),
+                    "domaine": value(row, "Domaine", "domaine"),
+                    "modele": " - ".join(filter(None, [value(row, "Fabricant", "fabricant"), value(row, "Modele", "modele")])),
+                    "statut": value(row, "Statut", "statut"),
+                    "service": value(row, "Service", "service"),
+                }
+                if client_scope and item["client"].casefold() != client_scope.casefold():
+                    continue
+                for field in ("type", "domaine", "statut", "service", "client"):
+                    selected = body.get(field)
+                    if selected not in (None, "", "Tous") and item[field] != selected:
+                        break
+                else:
+                    search = str(body.get("search") or "").strip().casefold()
+                    serial = value(row, "NumSerie", "num_serie").casefold()
+                    if not search or search in item["equipement"].casefold() or search in serial:
+                        rows.append(item)
+            headers = ["Client", "Equipement", "Type", "Domaine", "Fabricant / modele", "Statut", "Service"]
+            col_widths = [48, 54, 40, 40, 40, 30, 25]
+            keys = ("client", "equipement", "type", "domaine", "modele", "statut", "service")
+            max_chars = [28, 30, 23, 23, 24, 18, 15]
+            title = "LISTE DES EQUIPEMENTS"
+            filter_pairs = (("Recherche", "search"), ("Domaine", "domaine"), ("Type", "type"), ("Statut", "statut"), ("Service", "service"), ("Client", "client"))
+            report_filename = "equipements"
+
+        if not rows:
+            label = "client" if export_type == "clients" else "equipement"
+            raise HTTPException(status_code=400, detail=f"Aucun {label} ne correspond aux filtres selectionnes")
+
+        company_name = str(body.get("company_name") or "SAVIA")
+        company_logo = str(body.get("company_logo") or "").strip()
+        client_logo_io = None
+        if company_logo.startswith("data:") and "," in company_logo:
+            try:
+                client_logo_io = BytesIO(_b64.b64decode(company_logo.split(",", 1)[1]))
+            except Exception as logo_error:
+                logger.warning(f"Logo societe invalide pour export {export_type}: {logo_error}")
+
+        pdf = SaviaPDF(orientation="L", unit="mm", format="A4")
+        pdf.set_header_data("/app/logo-savia.png", client_logo_io, company_name if company_name != "SAVIA" else "", "", report_title=title)
+        pdf.set_auto_page_break(auto=True, margin=12)
+        pdf.set_top_margin(pdf.HEADER_H + 8)
+        pdf.add_page()
+
+        def draw_table_header():
+            pdf.set_font("Helvetica", "B", size=8)
+            pdf.set_fill_color(1, 180, 188)
+            pdf.set_text_color(255, 255, 255)
+            for width, label in zip(col_widths, headers):
+                pdf.cell(width, 8, _sanitize(label), border=1, align="C", fill=True)
+            pdf.ln()
+
+        pdf.set_text_color(30, 40, 55)
+        pdf.set_font("Helvetica", "B", size=11)
+        pdf.cell(0, 7, _sanitize(title), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", size=8)
+        pdf.set_text_color(100, 110, 120)
+        pdf.cell(0, 5, _sanitize(f"Genere le {datetime.now().strftime('%d/%m/%Y %H:%M')}"), align="R", new_x="LMARGIN", new_y="NEXT")
+        filter_labels = []
+        for label, key in filter_pairs:
+            selected = body.get(key)
+            if selected not in (None, "", "Tous"):
+                filter_labels.append(f"{label}: {selected}")
+        pdf.set_font("Helvetica", "I", size=8)
+        pdf.cell(0, 5, _sanitize("Filtres: " + (" | ".join(filter_labels) if filter_labels else "Aucun")), new_x="LMARGIN", new_y="NEXT")
+        count_label = f"{len(rows)} client(s)" if export_type == "clients" else f"{len({row['client'] for row in rows})} client(s) - {len(rows)} equipement(s)"
+        pdf.set_font("Helvetica", "B", size=9)
+        pdf.set_text_color(1, 140, 150)
+        pdf.cell(0, 7, _sanitize(count_label), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+        draw_table_header()
+
+        pdf.set_font("Helvetica", size=7.5)
+        pdf.set_text_color(30, 30, 30)
+        for item in rows:
+            if pdf.get_y() > 185:
+                pdf.add_page()
+                draw_table_header()
+                pdf.set_font("Helvetica", size=7.5)
+                pdf.set_text_color(30, 30, 30)
+            for width, key, limit in zip(col_widths, keys, max_chars):
+                text = _sanitize(item[key])
+                if len(text) > limit:
+                    text = text[:limit - 1] + "..."
+                pdf.cell(width, 6.5, text, border=1)
+            pdf.ln()
+
+        pdf_bytes = pdf.output(dest="S")
+        if isinstance(pdf_bytes, str):
+            pdf_bytes = pdf_bytes.encode("latin-1")
+        elif isinstance(pdf_bytes, bytearray):
+            pdf_bytes = bytes(pdf_bytes)
+        filename = f"{report_filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Erreur export PDF equipements: {exc}")
+        raise HTTPException(status_code=500, detail="Impossible de generer le PDF des equipements")
+
+
 @app.post("/api/equipements")
 def create_equipement(body: dict, user: dict = Depends(_verify_token)):
     # Check permission
@@ -445,6 +620,7 @@ def delete_document(doc_id: int, user: dict = Depends(_verify_token)):
 
 __all__ = [
     "get_equipements",
+    "export_equipements_pdf",
     "create_equipement",
     "update_equipement",
     "get_historique_statuts_equipement",

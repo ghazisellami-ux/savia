@@ -179,6 +179,7 @@ export default function EquipementsPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [data, setData] = useState<Equipment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Equipment | null>(null);
@@ -784,6 +785,46 @@ export default function EquipementsPage() {
       downloadBlob(blob, `attestation_bon_fonctionnement_${eq.id}.pdf`);
     } catch(e: any) { alert('Erreur: ' + (e.message || 'Inconnue')); }
   };
+
+  const handleExportPdf = async (exportType: 'clients' | 'equipements', filters: Record<string, string>, filename: string) => {
+    setIsExportingPdf(true);
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const companyName = localStorage.getItem('savia_company') || 'SAVIA';
+      const companyLogo = localStorage.getItem('savia_logo') || '';
+      const response = await fetch('/api/equipements/export-pdf', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ export_type: exportType, company_name: companyName, company_logo: companyLogo, ...filters }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || 'Impossible de generer le PDF');
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, `${filename}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (error: any) {
+      alert(`Erreur export PDF : ${error.message || 'Inconnue'}`);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportEquipementsPdf = () => handleExportPdf('equipements', {
+    search,
+    type: filterType,
+    client: filterClient,
+    domaine: filterDomaine,
+    statut: filterStatut,
+    service: filterService,
+  }, 'equipements');
+
+  const handleExportClientsPdf = () => handleExportPdf('clients', {
+    client_search: clientSearch,
+    client_type: clientTypeFilter,
+    client_region: clientRegionFilter,
+    client_ville: clientVilleFilter,
+  }, 'clients');
 
   const filtered = useMemo(() => data.filter(eq => {
     // Lecteur: show only their own client's equipment
@@ -1433,6 +1474,14 @@ export default function EquipementsPage() {
                 {dynamicClients.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
               </select>
             )}
+            <button
+              onClick={handleExportEquipementsPdf}
+              disabled={isExportingPdf || filtered.length === 0}
+              className="flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-semibold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {isExportingPdf ? 'Generation...' : 'Exporter equipements'}
+            </button>
           </div>
 
           {/* Equipment Cards */}
@@ -1807,6 +1856,14 @@ export default function EquipementsPage() {
                 <option key={v} value={v}>📍 {v}</option>
               )}
             </select>
+            <button
+              onClick={handleExportClientsPdf}
+              disabled={isExportingPdf || clientsLoading}
+              className="flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-semibold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
+            >
+              {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {isExportingPdf ? 'Generation...' : 'Exporter clients'}
+            </button>
           </div>
 
           {/* Client Cards */}

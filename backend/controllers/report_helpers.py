@@ -121,7 +121,8 @@ class SaviaPDF(FPDF):
         if self._client_logo:
             try:
                 self._client_logo.seek(0)
-                self.image(self._client_logo, x=self.w - 8 - 28, y=y0, h=H - 4)
+                # Constrain both dimensions so wide company logos stay fully visible.
+                self.image(self._client_logo, x=self.w - 8 - 28, y=y0, w=28, h=H - 4)
                 client_w = 30
             except Exception:
                 client_w = 0
@@ -188,4 +189,3 @@ __all__ = [
     "SaviaPDF",
     "PdfRequest",
 ]
-
