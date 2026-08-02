@@ -44,7 +44,8 @@ def _ensure_demandes_table():
                 notes_traitement TEXT DEFAULT '',
                 date_traitement TIMESTAMP,
                 date_planifiee DATE,
-                intervention_id INTEGER
+                intervention_id INTEGER,
+                priorite TEXT DEFAULT 'Moyenne'
             )
         """)
         conn.commit()
@@ -52,6 +53,19 @@ def _ensure_demandes_table():
         # Migration: ajouter date_planifiee si absente
         try:
             cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS date_planifiee DATE")
+            cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS priorite TEXT DEFAULT 'Moyenne'")
+            cur.execute(
+                """UPDATE demandes_intervention
+                   SET priorite = CASE
+                       WHEN NULLIF(BTRIM(urgence), '') IS NOT NULL
+                            AND (NULLIF(BTRIM(priorite), '') IS NULL OR BTRIM(priorite) = 'Moyenne')
+                         THEN BTRIM(urgence)
+                       ELSE COALESCE(NULLIF(BTRIM(priorite), ''), 'Moyenne')
+                   END
+                   WHERE NULLIF(BTRIM(priorite), '') IS NULL
+                      OR (BTRIM(priorite) = 'Moyenne' AND NULLIF(BTRIM(urgence), '') IS NOT NULL
+                          AND BTRIM(urgence) <> 'Moyenne')"""
+            )
             conn.commit()
         except Exception:
             pass
@@ -78,18 +92,20 @@ def lire_demandes_intervention(demandeur=None, client=None):
 def ajouter_demande_intervention(demande_dict):
     """Ajoute une demande d'intervention."""
     _ensure_demandes_table()
+    priorite = demande_dict.get("priorite") or demande_dict.get("urgence") or "Moyenne"
     with get_db() as conn:
         conn.execute("""
             INSERT INTO demandes_intervention
-                (date_demande, demandeur, client, equipement, urgence,
+                (date_demande, demandeur, client, equipement, urgence, priorite,
                  description, code_erreur, contact_nom, contact_tel, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             demande_dict.get("date_demande", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             demande_dict.get("demandeur", ""),
             demande_dict.get("client", ""),
             demande_dict.get("equipement", ""),
-            demande_dict.get("urgence", "Moyenne"),
+            priorite,
+            priorite,
             demande_dict.get("description", ""),
             demande_dict.get("code_erreur", ""),
             demande_dict.get("contact_nom", ""),
@@ -118,16 +134,18 @@ def traiter_demande_intervention(demande_id, statut, technicien="", notes="", da
 
 def modifier_demande_intervention(demande_id, demande_dict):
     """Modifie une demande d'intervention existante."""
+    priorite = demande_dict.get("priorite") or demande_dict.get("urgence") or "Moyenne"
     with get_db() as conn:
         conn.execute("""
             UPDATE demandes_intervention
-            SET client = %s, equipement = %s, urgence = %s, description = %s,
+            SET client = %s, equipement = %s, urgence = %s, priorite = %s, description = %s,
                 code_erreur = %s, contact_nom = %s, contact_tel = %s
             WHERE id = %s
         """, (
             demande_dict.get("client", ""),
             demande_dict.get("equipement", ""),
-            demande_dict.get("urgence", "Moyenne"),
+            priorite,
+            priorite,
             demande_dict.get("description", ""),
             demande_dict.get("code_erreur", ""),
             demande_dict.get("contact_nom", ""),
@@ -265,4 +283,3 @@ def sauvegarder_notification_schedules_batch(schedules):
     
     _trigger_backup()
     return True
-

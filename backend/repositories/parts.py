@@ -1,5 +1,7 @@
 """Spare-parts, stock-request, and stock-notification persistence."""
 
+import pandas as pd
+
 from database.core import _trigger_backup, get_db, logger, read_sql
 
 __all__ = [
@@ -160,7 +162,8 @@ def lire_notifications_pieces(destination=None, statut=None, technicien=None):
         params.append(f"%{technicien}%")
     query += " ORDER BY date_creation DESC LIMIT 200"
     with get_db() as conn:
-        return read_sql(query, conn, params=params)
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 def _ensure_notifications_pieces_exists():
@@ -236,10 +239,11 @@ def marquer_notification_traitee(notif_id):
 def notifications_rupture_pour_piece(piece_reference):
     """Retourne les notifications de rupture non traitées pour une pièce donnée."""
     with get_db() as conn:
-        return read_sql(
+        rows = conn.execute(
             "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = %s AND statut != 'traite'",
-            conn, params=(piece_reference,)
-        )
+            (piece_reference,),
+        ).fetchall()
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 # ==========================================
@@ -274,7 +278,8 @@ def lire_pieces_demandees_en_attente(reference=None):
         params.append(reference)
     query += " ORDER BY date_creation DESC"
     with get_db() as conn:
-        return read_sql(query, conn, params=params)
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 def resoudre_piece_demandee(demande_id):
@@ -296,4 +301,5 @@ def lire_toutes_pieces_demandees(statut=None):
         params.append(statut)
     query += " ORDER BY date_creation DESC"
     with get_db() as conn:
-        return read_sql(query, conn, params=params)
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return pd.DataFrame([dict(row) for row in rows])

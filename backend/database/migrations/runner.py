@@ -193,11 +193,59 @@ def _migration_004_global_ai_offer(conn) -> None:
     )
 
 
+def _migration_005_equipment_lifecycle_and_request_priority(conn) -> None:
+    """Normalize request priority and keep an auditable equipment lifecycle."""
+    conn.execute(
+        "ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS priorite TEXT DEFAULT 'Moyenne'"
+    )
+    conn.execute(
+        """UPDATE demandes_intervention
+           SET priorite = CASE
+               WHEN NULLIF(BTRIM(urgence), '') IS NOT NULL
+                    AND (NULLIF(BTRIM(priorite), '') IS NULL OR BTRIM(priorite) = 'Moyenne')
+                 THEN BTRIM(urgence)
+               ELSE COALESCE(NULLIF(BTRIM(priorite), ''), 'Moyenne')
+           END
+           WHERE NULLIF(BTRIM(priorite), '') IS NULL
+              OR (BTRIM(priorite) = 'Moyenne' AND NULLIF(BTRIM(urgence), '') IS NOT NULL
+                  AND BTRIM(urgence) <> 'Moyenne')"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS equipement_statut_historique (
+               id BIGSERIAL PRIMARY KEY,
+               equipement_id INTEGER NOT NULL REFERENCES equipements(id) ON DELETE CASCADE,
+               ancien_statut TEXT NOT NULL DEFAULT '',
+               nouveau_statut TEXT NOT NULL,
+               source TEXT NOT NULL DEFAULT 'systeme',
+               intervention_id INTEGER NULL REFERENCES interventions(id) ON DELETE SET NULL,
+               raison TEXT NOT NULL DEFAULT '',
+               change_par TEXT NOT NULL DEFAULT '',
+               change_le TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_equipement_statut_historique_equipement "
+        "ON equipement_statut_historique(equipement_id, change_le DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_demandes_priorite ON demandes_intervention(priorite)"
+    )
+    # Legacy installations used Actif. Convert only this legacy operational
+    # value; manually declared statuses remain untouched.
+    conn.execute(
+        "UPDATE equipements SET statut = 'Op' || chr(195) || chr(169) || 'rationnel' WHERE statut = 'Actif'"
+    )
+    conn.execute(
+        "UPDATE equipements SET statut = 'OpÃ©rationnel' WHERE statut = 'Actif'"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
     ("003", "AI consent, quotas, and content-free usage audit", _migration_003_ai_governance),
     ("004", "one active AI offer per deployment", _migration_004_global_ai_offer),
+    ("005", "equipment lifecycle and request priority", _migration_005_equipment_lifecycle_and_request_priority),
 )
 
 

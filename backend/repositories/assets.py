@@ -4,6 +4,12 @@ import pandas as pd
 
 from database.core import _trigger_backup, get_db, logger, read_sql
 from repositories.knowledge import _fix_df_text
+from repositories.equipment_status import (
+    EQUIPMENT_OPERATIONAL,
+    ACTIVE_INTERVENTION_STATUSES,
+    _is_out_of_service,
+    enregistrer_historique_statut_equipement,
+)
 
 __all__ = [
     "lire_clients",
@@ -29,6 +35,8 @@ __all__ = [
     "_ensure_domaines_custom_table",
     "supprimer_domaine_custom",
     "lire_equipement_par_id",
+    "lire_historique_statut_equipement",
+    "remettre_equipement_en_service",
     "ajouter_document_technique",
     "lire_documents_techniques",
     "lire_document_technique_contenu",
@@ -240,7 +248,7 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("NumSerie", ""),
             equipement_dict.get("DateInstallation", ""),
             equipement_dict.get("DernieresMaintenance", ""),
-            equipement_dict.get("Statut", "Actif"),
+            equipement_dict.get("Statut", EQUIPMENT_OPERATIONAL),
             equipement_dict.get("Notes", ""),
             equipement_dict.get("Client", "Centre Principal"),
             equipement_dict.get("MatriculeFiscale", ""),
@@ -265,9 +273,78 @@ def supprimer_equipement(equip_id):
     return True
 
 
-def modifier_equipement(equip_id, equipement_dict):
+def lire_historique_statut_equipement(equip_id, limit=100):
+    """Return the most recent auditable status transitions for an equipment."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT h.id, h.equipement_id, h.ancien_statut, h.nouveau_statut,
+                      h.source, h.intervention_id, h.raison, h.change_par, h.change_le,
+                      e.nom AS equipement, e.client
+               FROM equipement_statut_historique h
+               JOIN equipements e ON e.id = h.equipement_id
+               WHERE h.equipement_id = %s
+               ORDER BY h.change_le DESC, h.id DESC
+               LIMIT %s""",
+            (equip_id, max(1, min(int(limit or 100), 500))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def remettre_equipement_en_service(equip_id, change_par="", raison="Remise en service manuelle"):
+    """Manually return an equipment to operational status."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, nom, client, statut FROM equipements WHERE id = %s FOR UPDATE",
+            (equip_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Équipement introuvable")
+
+        active_placeholders = ", ".join(["%s"] * len(ACTIVE_INTERVENTION_STATUSES))
+        active = conn.execute(
+            f"""SELECT 1
+                FROM interventions i
+                LEFT JOIN equipements e ON e.id = %s
+                WHERE LOWER(i.machine) = LOWER(%s)
+                  AND LOWER(COALESCE(NULLIF(i.client, ''), e.client, '')) =
+                      LOWER(COALESCE(%s, ''))
+                  AND i.statut IN ({active_placeholders})
+                LIMIT 1""",
+            (equip_id, row["nom"], row.get("client") or "", *ACTIVE_INTERVENTION_STATUSES),
+        ).fetchone()
+        if active:
+            raise ValueError("Impossible de remettre l'équipement en service : une intervention est encore active")
+
+        old_status = row.get("statut") or ""
+        if old_status != EQUIPMENT_OPERATIONAL:
+            conn.execute(
+                "UPDATE equipements SET statut = %s WHERE id = %s",
+                (EQUIPMENT_OPERATIONAL, equip_id),
+            )
+            enregistrer_historique_statut_equipement(
+                conn,
+                equip_id,
+                old_status,
+                EQUIPMENT_OPERATIONAL,
+                source="manuel",
+                raison=raison,
+                change_par=change_par,
+            )
+    _trigger_backup()
+    return True
+
+
+def modifier_equipement(equip_id, equipement_dict, change_par=""):
     """Modifie un équipement existant par son ID."""
     with get_db() as conn:
+        previous = conn.execute(
+            "SELECT statut FROM equipements WHERE id = %s FOR UPDATE",
+            (equip_id,),
+        ).fetchone()
+        previous_status = previous.get("statut") if previous else ""
+        next_status = equipement_dict.get("Statut", EQUIPMENT_OPERATIONAL)
+        if previous and _is_out_of_service(previous_status) and not _is_out_of_service(next_status):
+            raise ValueError("Utilisez l'action Remettre en service pour réactiver manuellement cet équipement")
         conn.execute("""
             UPDATE equipements SET
                 nom = %s, type = %s, fabricant = %s, modele = %s, num_serie = %s,
@@ -284,7 +361,7 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("NumSerie", ""),
             equipement_dict.get("DateInstallation", ""),
             equipement_dict.get("DernieresMaintenance", ""),
-            equipement_dict.get("Statut", "Actif"),
+            next_status,
             equipement_dict.get("Notes", ""),
             equipement_dict.get("Client", "Centre Principal"),
             equipement_dict.get("MatriculeFiscale", ""),
@@ -298,6 +375,16 @@ def modifier_equipement(equip_id, equipement_dict):
             equipement_dict.get("Service", ""),
             equip_id,
         ))
+        if previous and previous_status != next_status:
+            enregistrer_historique_statut_equipement(
+                conn,
+                equip_id,
+                previous_status or "",
+                next_status,
+                source="manuel",
+                raison=equipement_dict.get("RaisonStatut", ""),
+                change_par=change_par,
+            )
     _trigger_backup()
     return True
 

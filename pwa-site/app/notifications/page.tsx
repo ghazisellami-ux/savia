@@ -27,6 +27,12 @@ export default function NotificationsPage() {
 
   const isRupture = (n: any) => n.type === 'piece_rupture';
   const isDispo = (n: any) => n.type === 'piece_dispo';
+  const getInterventionId = (n: any) => {
+    if (n.intervention_id) return n.intervention_id;
+    if (n.intervention_ref) return String(n.intervention_ref).replace(/^#/, '');
+    const match = String(n.message || '').match(/#(\d+)/);
+    return match?.[1] || '';
+  };
 
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)' }}>
@@ -47,6 +53,7 @@ export default function NotificationsPage() {
           {notifs.map(n => {
             const rupture = isRupture(n);
             const dispo = isDispo(n);
+            const interventionId = getInterventionId(n);
             const accentColor = rupture ? '#e67e22' : dispo ? '#27ae60' : 'var(--teal)';
             const bgColor = rupture ? 'rgba(230,126,34,0.06)' : dispo ? 'rgba(39,174,96,0.06)' : '#fff';
 
@@ -88,11 +95,11 @@ export default function NotificationsPage() {
 
                 {/* Detail grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.78rem', color: 'var(--navy)' }}>
-                  {n.intervention_id && (
+                  {interventionId && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                       <Hash style={{ width: 12, height: 12, color: 'var(--teal)' }} />
                       <span style={{ color: 'var(--text-dim)' }}>Intervention</span>
-                      <span style={{ fontWeight: 600 }}>#{n.intervention_id}</span>
+                      <span style={{ fontWeight: 600 }}>#{interventionId}</span>
                     </div>
                   )}
                   {n.equipement && (

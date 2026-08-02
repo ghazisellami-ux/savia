@@ -573,12 +573,20 @@ def finalize_intervention_from_techniciens(intervention_id):
     with get_db() as conn:
         # Use correct SQL placeholder based on database type
         ph = "%s"
+
+        # Serialize finalization for a shared intervention. Two technicians
+        # may submit their closure at nearly the same time.
+        conn.execute(
+            "SELECT id FROM interventions WHERE id = %s FOR UPDATE",
+            (intervention_id,),
+        ).fetchone()
         
         # Get ALL technician records (only aggregate Cloturee ones)
         rows = conn.execute(f"""
             SELECT * FROM interventions_techniciens 
             WHERE intervention_id = {ph}
             ORDER BY technicien_nom
+            FOR UPDATE
         """, (intervention_id,)).fetchall()
         
         if not rows:

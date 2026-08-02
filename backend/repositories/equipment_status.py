@@ -18,6 +18,15 @@ ACTIVE_INTERVENTION_STATUSES = (
 )
 
 
+CLOSED_INTERVENTION_STATUSES = (
+    "Cloturee",
+    "ClÃ´turÃ©e",
+    "ClÃƒÂ´turÃƒÂ©e",
+    "TerminÃ©e",
+    "TerminÃƒÂ©e",
+)
+
+
 def _is_out_of_service(status: Any) -> bool:
     """Return True for all historical spellings of the manual status."""
     value = str(status or "").strip().casefold()
@@ -39,6 +48,7 @@ def _equipment_rows(conn, machine: str, client: str):
         WHERE LOWER(nom) = LOWER(%s)
           AND (%s = '' OR LOWER(COALESCE(client, '')) = LOWER(%s))
         ORDER BY id
+        FOR UPDATE
         """,
         (machine, client, client),
     ).fetchall()
@@ -67,6 +77,43 @@ def _has_other_active_intervention(conn, intervention_id: int, machine: str, equ
         (equipment_id, intervention_id, machine, *ACTIVE_INTERVENTION_STATUSES, client, client, client),
     ).fetchone()
     return bool(row)
+
+
+def calculer_nouveau_statut_equipement(
+    current_status: Any,
+    intervention_status: str,
+    has_other_active_intervention: bool = False,
+) -> str:
+    """Pure transition rule used by the database synchronizer and tests."""
+    if _is_out_of_service(current_status):
+        return str(current_status or EQUIPMENT_OUT_OF_SERVICE)
+    if intervention_status in ACTIVE_INTERVENTION_STATUSES:
+        return EQUIPMENT_MAINTENANCE
+    if intervention_status in CLOSED_INTERVENTION_STATUSES:
+        return EQUIPMENT_MAINTENANCE if has_other_active_intervention else EQUIPMENT_OPERATIONAL
+    return str(current_status or EQUIPMENT_OPERATIONAL)
+
+
+def enregistrer_historique_statut_equipement(
+    conn,
+    equipment_id: int,
+    ancien_statut: str,
+    nouveau_statut: str,
+    *,
+    source: str,
+    intervention_id: int | None = None,
+    raison: str = "",
+    change_par: str = "",
+) -> None:
+    """Persist one auditable equipment status transition."""
+    conn.execute(
+        """INSERT INTO equipement_statut_historique
+           (equipement_id, ancien_statut, nouveau_statut, source,
+            intervention_id, raison, change_par)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (equipment_id, ancien_statut or "", nouveau_statut, source,
+         intervention_id, raison or "", change_par or ""),
+    )
 
 
 def synchroniser_statut_equipement(conn, intervention_id: int, intervention_status: str) -> None:
@@ -102,7 +149,7 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
         if _is_out_of_service(current_status):
             continue
 
-        if status == "En cours":
+        if status in ACTIVE_INTERVENTION_STATUSES:
             next_status = EQUIPMENT_MAINTENANCE
         elif status in {"Cloturee", "Clôturée", "ClÃ´turÃ©e", "Terminée", "TerminÃ©e"}:
             effective_client = client or str(equipment.get("client") or "").strip()
@@ -120,11 +167,21 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
                 "UPDATE equipements SET statut = %s WHERE id = %s",
                 (next_status, equipment_id),
             )
+            enregistrer_historique_statut_equipement(
+                conn,
+                equipment_id,
+                current_status,
+                next_status,
+                source="intervention",
+                intervention_id=intervention_id,
+            )
 
 
 __all__ = [
     "EQUIPMENT_OPERATIONAL",
     "EQUIPMENT_MAINTENANCE",
     "EQUIPMENT_OUT_OF_SERVICE",
+    "calculer_nouveau_statut_equipement",
+    "enregistrer_historique_statut_equipement",
     "synchroniser_statut_equipement",
 ]

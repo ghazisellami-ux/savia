@@ -2,15 +2,30 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: /backend
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
+    groups:
+      backend-dependencies:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /frontend
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /pwa-site
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
+    groups:
+      pwa-dependencies:
+        patterns:
+          - "*"

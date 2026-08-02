@@ -8,7 +8,7 @@ import {
   FileText, Hash, Calendar, Settings, ClipboardList, StickyNote, Factory,
   Microscope, Activity, CheckCircle2, AlertTriangle, Upload, BadgeCheck,
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
-  MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal,
+  MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal, History,
 } from 'lucide-react';
 import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
@@ -182,6 +182,9 @@ export default function EquipementsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Equipment | null>(null);
+  const [historyEquip, setHistoryEquip] = useState<Equipment | null>(null);
+  const [statusHistory, setStatusHistory] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [editingEquip, setEditingEquip] = useState<Equipment | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
@@ -582,6 +585,29 @@ export default function EquipementsPage() {
     setConfirmDeleteClient(null);
     try { await clientsApi.delete(c.id); await loadClients(); }
     catch (err) { console.error('Delete client failed', err); }
+  };
+
+  const openStatusHistory = async (eq: Equipment) => {
+    setHistoryEquip(eq);
+    setHistoryLoading(true);
+    try {
+      setStatusHistory(await equipements.history(Number(eq.id)));
+    } catch (err) {
+      console.error('Impossible de charger l’historique du statut', err);
+      setStatusHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const reactivateEquipment = async (eq: Equipment) => {
+    try {
+      await equipements.reactivate(Number(eq.id), 'Remise en service manuelle depuis le parc équipements');
+      await loadData();
+    } catch (err: any) {
+      console.error('Remise en service impossible', err);
+      window.alert(err?.message || 'Remise en service impossible.');
+    }
   };
 
   const startEdit = (eq: Equipment) => {
@@ -1264,7 +1290,8 @@ export default function EquipementsPage() {
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Activity className="w-3.5 h-3.5" /> Statut *
                         </label>
-                        <select className={INPUT_CLS} value={form.Statut} onChange={e => setForm({ ...form, Statut: e.target.value })}>
+                        <select className={INPUT_CLS} value={form.Statut} onChange={e => setForm({ ...form, Statut: e.target.value })}
+                          disabled={editingEquip?.statut?.toLowerCase().includes('hors service')}>
                           {['Opérationnel', 'Hors Service', 'En atelier'].map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </div>
@@ -1456,6 +1483,10 @@ export default function EquipementsPage() {
                     <span className={`text-sm font-bold ${eq.healthScore >= 85 ? 'text-green-400' : eq.healthScore >= 65 ? 'text-yellow-400' : 'text-red-400'}`}>{eq.healthScore}%</span>
                   </div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => openStatusHistory(eq)} className="p-1.5 rounded-lg bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 cursor-pointer" title="Historique du statut"><History className="w-3.5 h-3.5" /></button>
+                    {!isLecteur && eq.statut.toLowerCase().includes('hors service') && (
+                      <button onClick={() => reactivateEquipment(eq)} className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 cursor-pointer" title="Remettre en service"><CheckCircle2 className="w-3.5 h-3.5" /></button>
+                    )}
                     {(eq.statut.toLowerCase().includes('opérationnel') || eq.statut.toLowerCase().includes('actif')) && (
                       <button onClick={() => handleDownloadAttestation(eq)} className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 cursor-pointer" title="Attestation de bon fonctionnement"><Download className="w-3.5 h-3.5" /></button>
                     )}
@@ -1478,6 +1509,42 @@ export default function EquipementsPage() {
             </div>
           )}
         </>
+      )}
+
+      {historyEquip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setHistoryEquip(null)}>
+          <div className="glass w-full max-w-2xl rounded-2xl p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-bold">Historique du statut</h2>
+                <p className="text-sm text-savia-text-muted">{historyEquip.nom} · {historyEquip.client}</p>
+              </div>
+              <button onClick={() => setHistoryEquip(null)} className="text-savia-text-muted hover:text-savia-text cursor-pointer">✕</button>
+            </div>
+            {historyLoading ? (
+              <div className="py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-savia-accent" /></div>
+            ) : statusHistory.length === 0 ? (
+              <p className="py-8 text-center text-savia-text-muted">Aucun changement enregistré.</p>
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto space-y-2">
+                {statusHistory.map((entry: any) => (
+                  <div key={entry.id} className="rounded-lg border border-savia-border/60 p-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">{entry.ancien_statut || '—'}</span>
+                      <span className="text-savia-text-dim">→</span>
+                      <span className="font-semibold text-savia-accent">{entry.nouveau_statut}</span>
+                      <span className="ml-auto text-xs text-savia-text-dim">{String(entry.change_le || '').replace('T', ' ').slice(0, 16)}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-savia-text-muted">
+                      Source : {entry.source}{entry.intervention_id ? ' · Intervention #' + entry.intervention_id : ''}{entry.change_par ? ' · ' + entry.change_par : ''}
+                    </div>
+                    {entry.raison && <div className="mt-1 text-xs text-savia-text-muted">{entry.raison}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ========== TAB: CLIENTS ========== */}

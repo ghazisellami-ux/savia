@@ -651,7 +651,10 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
             raise HTTPException(status_code=500, detail=f"Erreur lors de la clôture: {str(e)}")
     if new_statut and "attente" in new_statut.lower() and "pi" in new_statut.lower():
         # Statut = "En attente de pièce" → notification rupture pour gestionnaires
-        pieces_attente = body.get("pieces_rupture") or []
+        # The PWA may send the selected stock parts as pieces_a_deduire when
+        # the technician does not explicitly reselect them in the rupture
+        # section. Reuse that list so the notification is never empty.
+        pieces_attente = body.get("pieces_rupture") or body.get("pieces_a_deduire") or []
         try:
             with get_db() as conn:
                 row = conn.execute(
@@ -680,8 +683,24 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     except Exception:
                         pass
                 for piece in pieces_attente:
+                    if not isinstance(piece, dict):
+                        continue
                     ref = piece.get("reference") or piece.get("ref") or ""
+                    if not ref and piece.get("id"):
+                        try:
+                            with get_db() as conn_piece:
+                                piece_row = conn_piece.execute(
+                                    "SELECT reference, designation FROM pieces_rechange WHERE id = %s",
+                                    (piece.get("id"),),
+                                ).fetchone()
+                            if piece_row:
+                                ref = piece_row.get("reference") or ""
+                                piece = {**piece, "designation": piece.get("designation") or piece_row.get("designation")}
+                        except Exception:
+                            pass
                     nom = piece.get("designation") or piece.get("nom") or ref
+                    if not ref:
+                        continue
                     ajouter_notification_piece({
                         "type": "piece_rupture",
                         "intervention_id": intervention_id,

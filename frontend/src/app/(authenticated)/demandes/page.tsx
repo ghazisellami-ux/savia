@@ -14,7 +14,7 @@ interface Demande {
   machine: string;
   client: string;
   demandeur: string;
-  urgence: string;
+  priorite: string;
   statut: string;
   description: string;
   code_erreur: string;
@@ -87,7 +87,7 @@ export default function DemandesPage() {
     demandeur: demandeurNom, // Pré-rempli avec le nom de l'utilisateur connecté
     client: isLecteur ? clientNom : '',
     equipement: '',
-    urgence: 'Moyenne',
+    priorite: 'Moyenne',
     description: '',
     code_erreur: '',
     contact_nom: isLecteur ? demandeurNom : '',
@@ -128,7 +128,7 @@ export default function DemandesPage() {
         machine: item.equipement || item.machine || '',
         client: item.client || '',
         demandeur: item.demandeur || '',
-        urgence: item.urgence || 'Moyenne',
+        priorite: item.priorite || item.urgence || 'Moyenne',
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         code_erreur: item.code_erreur || '',
@@ -341,8 +341,8 @@ export default function DemandesPage() {
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <span className="font-mono text-savia-accent font-bold text-sm">#{d.id}</span>
-                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${URGENCE_COLORS[d.urgence] || 'bg-gray-500/10 text-gray-400'}`}>
-                  <Zap className="w-3 h-3 inline mr-1" />{d.urgence}
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${URGENCE_COLORS[d.priorite] || 'bg-gray-500/10 text-gray-400'}`}>
+                  <Zap className="w-3 h-3 inline mr-1" />{d.priorite}
                 </span>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${STATUT_COLORS[d.statut] || 'bg-gray-500/10 text-gray-400'}`}>
                   {STATUT_ICONS[d.statut]}{d.statut}
@@ -400,12 +400,12 @@ export default function DemandesPage() {
               {/* Urgence */}
               <div>
                 <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Zap className="w-3.5 h-3.5 text-yellow-400" /> Niveau d&apos;urgence *
+                  <Zap className="w-3.5 h-3.5 text-yellow-400" /> Priorité de la demande *
                 </label>
                 <div className="flex gap-2 flex-wrap">
                   {['Basse', 'Moyenne', 'Haute', 'Critique'].map(u => (
-                    <button key={u} onClick={() => setForm({...form, urgence: u})}
-                      className={`px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer transition-all ${form.urgence === u ? 'ring-2 ring-savia-accent bg-savia-accent/10' : 'bg-savia-bg/50 border border-savia-border hover:bg-savia-surface-hover'}`}>
+                    <button key={u} onClick={() => setForm({...form, priorite: u})}
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold cursor-pointer transition-all ${form.priorite === u ? 'ring-2 ring-savia-accent bg-savia-accent/10' : 'bg-savia-bg/50 border border-savia-border hover:bg-savia-surface-hover'}`}>
                       {u}
                     </button>
                   ))}

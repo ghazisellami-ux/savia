@@ -79,7 +79,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     demandeur          = body.get("demandeur") or user.get("username", "")
     client             = resolve_client_scope(user, body.get("client") or "") or ""
     equipement         = body.get("equipement") or ""
-    urgence            = body.get("urgence") or "Moyenne"
+    priorite           = body.get("priorite") or body.get("urgence") or "Moyenne"
+    urgence            = priorite
     description        = body.get("description") or ""
     code_erreur        = body.get("code_erreur") or ""
     contact_nom        = body.get("contact_nom") or ""
@@ -112,13 +113,13 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         # Create the DEMAND
         conn.execute(f"""
             INSERT INTO demandes_intervention
-              (date_demande, demandeur, client, equipement, urgence,
+              (date_demande, demandeur, client, equipement, urgence, priorite,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             body.get("date_demande") or now_str,
-            demandeur, client, equipement, urgence,
+            demandeur, client, equipement, urgence, priorite,
             description, code_erreur, contact_nom, contact_tel,
             statut, ", ".join(techniciens_fullnames),  # All techs in the demand
         ))
@@ -196,7 +197,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
         f"\U0001f3e5 Équipement : <b>{equipement}</b>\n"
-        f"{urg_icon} Urgence : <b>{urgence}</b>\n"
+        f"{urg_icon} Priorité : <b>{priorite}</b>\n"
         f"\U0001f4dd Problème : {description[:300]}"
         f"{code_line}"
         f"{contact_line}"
@@ -271,7 +272,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     demande_info = {}
     with get_db() as conn:
         row = conn.execute(
-            "SELECT client, equipement, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
+            "SELECT client, equipement, priorite, urgence, description, demandeur, contact_nom, contact_tel FROM demandes_intervention WHERE id = %s",
             (demande_id,)
         ).fetchone()
         if row:
@@ -298,13 +299,13 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
     icon = statut_icons.get(nouveau_statut, "\U0001f4cb")
     client     = demande_info.get("client", "")
     equipement = demande_info.get("equipement", "")
-    urgence    = demande_info.get("urgence", "")
+    priorite   = demande_info.get("priorite") or demande_info.get("urgence", "")
     description = str(demande_info.get("description", ""))[:300]
     demandeur  = demande_info.get("demandeur", "")
     contact_nom = demande_info.get("contact_nom", "")
     contact_tel = demande_info.get("contact_tel", "")
 
-    urg_icon     = "\U0001f534" if urgence in ("Haute", "Critique") else "\U0001f7e1" if urgence == "Moyenne" else "\U0001f7e2"
+    urg_icon     = "\U0001f534" if priorite in ("Haute", "Critique") else "\U0001f7e1" if priorite == "Moyenne" else "\U0001f7e2"
     tech_line    = f"\n\U0001f477 Technicien : <b>{technicien_assigne}</b>" if technicien_assigne else ""
     notes_line   = f"\n\U0001f4cc Notes : {notes_traitement}" if notes_traitement else ""
     contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
@@ -314,7 +315,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
         f"{icon} <b>DEMANDE #{demande_id} \u2014 MISE \u00c0 JOUR STATUT</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
         f"\U0001f3e5 \u00c9quipement : <b>{equipement}</b>\n"
-        f"{urg_icon} Urgence : <b>{urgence}</b>\n"
+        f"{urg_icon} Priorité : <b>{priorite}</b>\n"
         f"\U0001f4ca Statut : <b>{nouveau_statut}</b>\n"
         f"\U0001f4dd Probl\u00e8me : {description}"
         f"{tech_line}"
@@ -356,7 +357,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         description[:500],
                         demande_info.get("code_erreur", "") or "",
                         "Assignée",
-                        urgence,
+                        priorite,
                         notes_interv,
                     ))
                     # Récupérer l'id de l'intervention créée
@@ -533,24 +534,42 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 # Don't fail the whole request if stock deduction fails
 
         # Handle pieces_rupture if technician marked as "En attente de piece"
-        if body.get("statut") == "En attente de piece" and body.get("pieces_rupture"):
+        if body.get("statut") == "En attente de piece" and (body.get("pieces_rupture") or body.get("pieces_a_deduire")):
             try:
-                pieces_rupture_list = body.get("pieces_rupture", [])
+                pieces_rupture_list = body.get("pieces_rupture") or body.get("pieces_a_deduire") or []
                 logger.info(f"   🔴 Creating rupture badges for {len(pieces_rupture_list)} pieces...")
                 
                 with get_db() as conn:
                     for piece in pieces_rupture_list:
                         if not isinstance(piece, dict):
                             continue
-                        ref = piece.get('reference', '')
-                        designation = piece.get('designation', '')
+                        ref = piece.get('reference') or piece.get('ref') or ''
+                        designation = piece.get('designation') or piece.get('nom') or ''
+                        if not ref and piece.get('id'):
+                            piece_row = conn.execute(
+                                "SELECT reference, designation FROM pieces_rechange WHERE id = %s",
+                                (piece.get('id'),),
+                            ).fetchone()
+                            if piece_row:
+                                ref = piece_row.get('reference') or ''
+                                designation = designation or piece_row.get('designation') or ''
                         
                         if ref:
-                            # Create rupture notification (same as mode single tech)
-                            conn.execute("""
-                                INSERT INTO notif_rupture (intervention_id, reference, designation, created_at)
-                                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-                            """, (intervention_id, ref, designation))
+                            # Create the same notification record consumed by
+                            # the web application and the PWA.
+                            ajouter_notification_piece({
+                                "type": "piece_rupture",
+                                "intervention_id": intervention_id,
+                                "piece_reference": ref,
+                                "piece_nom": designation or ref,
+                                "intervention_ref": f"#{intervention_id}",
+                                "equipement": machine or "",
+                                "client": client or "",
+                                "technicien": tech_nom,
+                                "message": f"⚠️ Intervention #{intervention_id} en attente de la pièce {ref} ({designation or ref}) — rupture de stock",
+                                "source": "sav",
+                                "destination": "gestionnaire",
+                            })
                             logger.info(f"      Created rupture badge: {ref} - {designation}")
                 
                 logger.info(f"   ✅ Rupture badges created successfully")
