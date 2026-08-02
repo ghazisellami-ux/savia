@@ -22,6 +22,8 @@ from api.runtime import (
     log_audit,
     logger,
     modifier_equipement,
+    lire_historique_statut_equipement,
+    remettre_equipement_en_service,
     supprimer_equipement,
 )
 from api.security import (
@@ -99,7 +101,10 @@ def create_equipement(body: dict, user: dict = Depends(_verify_token)):
 def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
-    modifier_equipement(equip_id, body)
+    try:
+        modifier_equipement(equip_id, body, change_par=user.get("sub", "unknown"))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     
     # Log audit
     username = user.get("sub", "unknown")
@@ -108,6 +113,44 @@ def update_equipement(equip_id: int, body: dict, user: dict = Depends(_verify_to
     log_audit(username, "UPDATE_EQUIPEMENT", details, "equipements")
     
     return {"ok": True}
+
+
+@app.get("/api/equipements/{equip_id}/historique-statuts")
+def get_historique_statuts_equipement(
+    equip_id: int,
+    user: dict = Depends(_verify_token),
+):
+    with get_db() as conn:
+        assert_resource_client_access(conn, "equipement", equip_id, user)
+    return lire_historique_statut_equipement(equip_id)
+
+
+@app.put("/api/equipements/{equip_id}/remise-en-service")
+def reactivate_equipement(equip_id: int, body: dict = Body(default={}), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins",
+        )
+    with get_db() as conn:
+        assert_resource_client_access(conn, "equipement", equip_id, user)
+    try:
+        remettre_equipement_en_service(
+            equip_id,
+            change_par=user.get("sub", "unknown"),
+            raison=body.get("raison") or "Remise en service manuelle",
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 409 if "active" in message.lower() else 404
+        raise HTTPException(status_code=status_code, detail=message)
+    log_audit(
+        user.get("sub", "unknown"),
+        "REACTIVATE_EQUIPEMENT",
+        f'{{"equipement_id": {equip_id}}}',
+        "equipements",
+    )
+    return {"ok": True, "statut": "Opérationnel"}
 
 
 @app.delete("/api/equipements/{equip_id}")
@@ -404,6 +447,8 @@ __all__ = [
     "get_equipements",
     "create_equipement",
     "update_equipement",
+    "get_historique_statuts_equipement",
+    "reactivate_equipement",
     "delete_equipement",
     "sync_region_ville",
     "get_fabricants",

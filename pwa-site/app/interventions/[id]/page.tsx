@@ -468,7 +468,12 @@ export default function InterventionDetailPage() {
           fournisseur: p?.fournisseur || '',
         };
       });
-      const pieces_rupture = piecesRupture.map(p => ({
+      // Reuse parts selected in the stock section when the technician did
+      // not repeat the selection in the dedicated rupture section.
+      const ruptureSource = piecesRupture.length > 0
+        ? piecesRupture
+        : Object.entries(piecesQty).map(([pieceId]) => allPieces.find(p => p.id === Number(pieceId))).filter(Boolean);
+      const pieces_rupture = ruptureSource.map(p => ({
         id: p.id,
         reference: p.reference || '',
         designation: p.designation || p.nom || '',
@@ -579,8 +584,11 @@ export default function InterventionDetailPage() {
       });
 
       // Collect pieces rupture if status = "En attente de piece"
+      const ruptureSourceMultiTech = piecesRuptureMultiTech.length > 0
+        ? piecesRuptureMultiTech
+        : Object.entries(piecesQty).map(([pieceId]) => allPieces.find(p => p.id === Number(pieceId))).filter(Boolean);
       const pieces_rupture_tech = techForm.statut === 'En attente de piece' 
-        ? piecesRuptureMultiTech.map(p => ({
+        ? ruptureSourceMultiTech.map(p => ({
           id: p.id,
           reference: p.reference || '',
           designation: p.designation || p.nom || '',

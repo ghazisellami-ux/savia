@@ -66,6 +66,7 @@ export default function PiecesPage() {
   const [editTypeFilter, setEditTypeFilter] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
+  const [equipmentCatalog, setEquipmentCatalog] = useState<Array<{ nom: string; type: string; domaine: string }>>([]);
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
 
@@ -113,6 +114,11 @@ export default function PiecesPage() {
     try {
       const eqRes = await equipements.list().catch(() => []);
       const eqs = (eqRes as any[]);
+      setEquipmentCatalog(eqs.map((eq: any) => ({
+        nom: String(eq.nom || eq.Nom || '').trim(),
+        type: String(eq.type || eq.Type || '').trim(),
+        domaine: String(eq.domaine || eq.Domaine || '').trim(),
+      })).filter(eq => eq.nom));
       
       // Extraire les domaines uniques
       const uniqueDomaines = [...new Set(eqs.map((eq: any) => eq.domaine || eq.Domaine).filter(Boolean))];
@@ -147,17 +153,24 @@ export default function PiecesPage() {
 
   // Obtenir les types d'équipement disponibles pour le domaine sélectionné
   const getAvailableTypes = useCallback(() => {
-    // First check custom domains (equipment-based)
-    if (customTypesForDomain[form.domaine] && customTypesForDomain[form.domaine].length > 0) {
-      return customTypesForDomain[form.domaine];
-    }
-    // Fallback to hardcoded domains
-    if (DOMAINES_TYPES[form.domaine]) {
-      return DOMAINES_TYPES[form.domaine];
-    }
-    // Default
-    return ['Autre'];
-  }, [form.domaine, customTypesForDomain]);
+    const baseTypes = customTypesForDomain[form.domaine]?.length
+      ? customTypesForDomain[form.domaine]
+      : DOMAINES_TYPES[form.domaine] || ['Autre'];
+    return form.equipement_type && !baseTypes.includes(form.equipement_type)
+      ? [form.equipement_type, ...baseTypes]
+      : baseTypes;
+  }, [form.domaine, form.equipement_type, customTypesForDomain]);
+
+  const getEquipmentContext = useCallback((machine: string) => {
+    const normalizedMachine = String(machine || '').trim().toLowerCase();
+    if (!normalizedMachine) return undefined;
+    const exact = equipmentCatalog.find(eq => eq.nom.toLowerCase() === normalizedMachine);
+    if (exact) return exact;
+    return equipmentCatalog.find(eq => {
+      const name = eq.nom.toLowerCase();
+      return name.includes(normalizedMachine) || normalizedMachine.includes(name);
+    });
+  }, [equipmentCatalog]);
 
   // Charger les notifications + count
   const loadNotifs = useCallback(async () => {
@@ -278,9 +291,8 @@ export default function PiecesPage() {
       });
       // Si liée à une demande, résoudre la demande + notifier le technicien
       if (linkedDemandeId) {
-        try {
-          await piecesDemandees.resoudre(linkedDemandeId);
-        } catch { }
+        // La création du stock résout déjà la demande et envoie la notification Telegram complète.
+        // Ne pas rappeler l'API de résolution : cela provoquerait un second message.
         setLinkedDemandeId(null);
         await loadDemandes();
       }
@@ -361,6 +373,21 @@ export default function PiecesPage() {
     return `${Number(value).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}${suffix}`;
   };
 
+  const getForecastCost = (piece: Piece, forecast: any): number | null => {
+    if (forecast?.cout_estime !== null && forecast?.cout_estime !== undefined) {
+      const serverCost = Number(forecast.cout_estime);
+      if (Number.isFinite(serverCost)) return serverCost;
+    }
+    const quantity = Number(
+      forecast?.quantite_recommandee ?? Math.max(0, piece.stock_minimum - piece.stock_actuel + 1)
+    );
+    const unitPrice = Number(piece.prix_unitaire);
+    if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+      return null;
+    }
+    return Math.round(quantity * unitPrice * 100) / 100;
+  };
+
   // Display deterministic values from the replenishment engine.
   const getPredictionDisplay = (p: Piece): JSX.Element => {
     const pred = predictions[p.id];
@@ -370,12 +397,13 @@ export default function PiecesPage() {
     if (pred.error) {
       return <span className="text-orange-400 text-xs font-semibold">⚠️ Données insuffisantes</span>;
     }
+    const forecastCost = getForecastCost(p, pred);
     if (pred.stock_actuel === 0 && pred.recommandation_actionnable) {
       return (
         <div className="text-xs space-y-0.5">
           <div className="font-bold text-red-400">Rupture immédiate — commander maintenant</div>
           <div>Qté minimale : {pred.quantite_recommandee ?? 'Non calculable'}</div>
-          <div>Coût : {pred.cout_estime != null ? `${Number(pred.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'}</div>
+          <div>Coût : {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'Non calculable'}</div>
         </div>
       );
     }
@@ -593,11 +621,13 @@ export default function PiecesPage() {
                       const keywords = t.toLowerCase().split(/[\s/]+/);
                       return keywords.some(kw => kw.length >= 3 && machineStr.includes(kw));
                     });
+                    const equipmentContext = getEquipmentContext(d.equipement);
                     setForm({
                       ...emptyForm,
                       reference: d.reference || '',
                       designation: d.designation || '',
-                      equipement_type: matchedType || emptyForm.equipement_type,
+                      domaine: equipmentContext?.domaine || emptyForm.domaine,
+                      equipement_type: equipmentContext?.type || matchedType || emptyForm.equipement_type,
                       notes: d.equipement ? `Équipement: ${d.equipement}` : '',
                     });
                     setShowAddModal(true);
@@ -839,6 +869,7 @@ export default function PiecesPage() {
                         const isRupture = forecast.urgence === 'CRITIQUE' || p.stock_actuel === 0;
                         const isBas = !isRupture && (forecast.urgence === 'HAUTE' || p.stock_actuel <= p.stock_minimum);
                         const manquant = forecast.quantite_recommandee ?? Math.max(0, p.stock_minimum - p.stock_actuel + 1);
+                        const forecastCost = getForecastCost(p, forecast);
                         return (
                           <tr key={p.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${
                             isRupture ? 'bg-red-500/5' : isBas ? 'bg-yellow-500/5' : ''
@@ -877,14 +908,14 @@ export default function PiecesPage() {
                                   <span className="flex items-center gap-1 text-xs font-bold text-red-400">
                                     <XCircle className="w-3 h-3" /> Commander immédiatement
                                   </span>
-                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s) · Coût: {forecast.cout_estime != null ? `${Number(forecast.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</span>
+                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s) · Coût: {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'non calculable'}</span>
                                 </div>
                               ) : isBas ? (
                                 <div className="space-y-0.5">
                                   <span className="flex items-center gap-1 text-xs font-bold text-yellow-400">
                                     <AlertTriangle className="w-3 h-3" /> Commander bientôt
                                   </span>
-                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s) · Date: {forecast.date_commande || 'non calculable'} · Coût: {forecast.cout_estime != null ? `${Number(forecast.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</span>
+                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s) · Date: {forecast.date_commande || 'non calculable'} · Coût: {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'non calculable'}</span>
                                 </div>
                               ) : (
                                 <span className="flex items-center gap-1 text-xs text-green-400">

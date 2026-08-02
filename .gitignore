@@ -49,6 +49,7 @@ data/
 
 # ---- Rapports générés ----
 reports/
+deliverables/
 
 # ---- Fichiers binaires ----
 *.zip

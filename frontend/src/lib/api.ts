@@ -203,6 +203,8 @@ export const equipements = {
   },
   create: (data: Record<string, unknown>) => request<{ok: boolean; id: number | null}>('/api/equipements', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'PUT', body: data }),
+  history: (id: number) => request<Array<Record<string, unknown>>>(`/api/equipements/${id}/historique-statuts`),
+  reactivate: (id: number, raison?: string) => request<{ok: boolean; statut: string}>(`/api/equipements/${id}/remise-en-service`, { method: 'PUT', body: { raison } }),
   delete: (id: number) => request<{ok: boolean}>(`/api/equipements/${id}`, { method: 'DELETE' }),
 };
 

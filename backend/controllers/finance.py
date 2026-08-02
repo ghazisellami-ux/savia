@@ -540,7 +540,7 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                     "remaining_h": max(0, remaining_h),
                     "pct_used": pct,
                     "breached": breached,
-                    "priorite": dem.get("urgence", ""),
+                    "priorite": dem.get("priorite") or dem.get("urgence", ""),
                 })
 
         # Sort by remaining time (most urgent first)

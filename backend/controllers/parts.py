@@ -291,6 +291,11 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
         # Notification PWA → technicien
         ajouter_notification_piece({
             "type": "piece_dispo",
+            "intervention_id": demandes[0].get("intervention_id") or None,
+            "intervention_ref": (
+                f"#{demandes[0].get('intervention_id')}"
+                if demandes[0].get("intervention_id") else ""
+            ),
             "piece_reference": reference,
             "piece_nom": nom_piece,
             "technicien": tech,
@@ -376,6 +381,10 @@ def resolve_piece_demandee(demande_id: int, user: dict = Depends(_verify_token))
         
         # Envoyer notification au technicien si on a les infos
         if demande is not None:
+            # L'ajout au stock peut avoir déjà résolu la demande et envoyé la notification.
+            # L'endpoint doit rester idempotent pour éviter un second message Telegram.
+            if str(demande.get("statut") or "").lower() != "en_attente":
+                return {"ok": True, "already_resolved": True}
             tech = demande.get("technicien") or ""
             ref = demande.get("reference") or ""
             designation = demande.get("designation") or ref
