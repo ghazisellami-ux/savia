@@ -431,7 +431,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
     if user.get("role") == "Technicien":
         with get_db() as conn:
             row = conn.execute(
-                "SELECT technicien FROM interventions WHERE id = %s",
+                "SELECT technicien, statut FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             if not row:
@@ -475,6 +475,14 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                 raise HTTPException(
                     status_code=403,
                     detail="Vous ne pouvez éditer que vos propres interventions"
+                )
+
+            requested_status = body.get("statut")
+            current_status = str(row.get("statut") or "").strip()
+            if current_status == "Cloturee" and requested_status:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cette intervention est déjà clôturée. Aucune nouvelle mise à jour de statut n'est autorisée depuis le PWA."
                 )
     
     new_statut = body.get("statut")
