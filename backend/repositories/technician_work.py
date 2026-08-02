@@ -720,6 +720,18 @@ def finalize_intervention_from_techniciens(intervention_id):
             WHERE id = {ph}
         """, ('Cloturee', total_duree, total_deplacement, combined_solution, first_error_type, date_cloture, pieces_utilisees_str, cout_main_oeuvre, total_cout_pieces, intervention_id))
 
+        # Synchronise la demande d'intervention liée avec la clôture du parent
+        # multi-techniciens. Le flux single effectue déjà cette mise à jour,
+        # mais la finalisation multi passait auparavant directement par ici.
+        conn.execute(f"""
+            UPDATE demandes_intervention
+            SET statut = {ph},
+                date_traitement = {ph}
+            WHERE intervention_id = {ph}
+              AND statut != {ph}
+        """, ('Résolue', date_cloture, intervention_id, 'Résolue'))
+        logger.info(f"✅ Demande liée à l'intervention #{intervention_id} marquée Résolue")
+
         synchroniser_statut_equipement(conn, intervention_id, "Cloturee")
         
         # Update related planning to "Cloturee" if it exists
