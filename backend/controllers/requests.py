@@ -408,7 +408,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
     from db_engine import (
         get_db, update_interventions_techniciens, 
         get_or_create_interventions_techniciens, get_techniciens_status,
-        finalize_intervention_from_techniciens, consolidate_technician_duplicates
+        finalize_intervention_from_techniciens, consolidate_technician_duplicates,
+        update_intervention_statut,
     )
     
     logger.info(f"🔵 PUT /api/interventions/{intervention_id}/technicien-data CALLED")
@@ -500,6 +501,11 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
         
+        if body.get("statut") == "En cours":
+            # Starting any technician's work starts the shared intervention
+            # and synchronises the equipment to "En maintenance".
+            update_intervention_statut(intervention_id, "En cours")
+
         # Deduct stock if technician marked as Cloturee and pieces are provided
         if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):
             try:
@@ -911,7 +917,7 @@ def get_intervention_techniciens_aggregated(intervention_id: int, user: dict = D
 
 @app.put("/api/interventions/{intervention_id}/accept")
 def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
-    from db_engine import get_db
+    from db_engine import get_db, update_intervention_statut
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
@@ -920,10 +926,7 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
 
-        conn.execute(
-            "UPDATE interventions SET statut = %s WHERE id = %s",
-            ("En cours", intervention_id)
-        )
+    update_intervention_statut(intervention_id, "En cours")
 
     tech_name = user.get("nom") or user.get("username") or "?"
     machine = row["machine"] if row else ""

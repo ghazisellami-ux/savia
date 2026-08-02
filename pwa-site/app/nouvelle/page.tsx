@@ -48,7 +48,7 @@ export default function NouvelleInterventionPage() {
   const [form, setForm] = useState({
     client: '', machine: '', technicien_assigne: '', type_intervention: 'Corrective',
     statut: 'Assignée', description: '', probleme: '', cause: '', solution: '',
-    duree: 0, deplacement: 0, code_erreur: '', type_erreur: '', priorite: '',
+    duree: 0, deplacement: 0, code_erreur: '', type_erreur: '',
     pieces_utilisees: [] as number[], notes: '', validation_client: 'En attente',
   });
 
@@ -172,15 +172,6 @@ export default function NouvelleInterventionPage() {
                   <option>Cloturee</option>
                 </select>
               </div>
-            </div>
-            <div style={{ marginTop: '12px' }}>
-              <label style={LABEL}>Priorité</label>
-              <select style={INPUT} value={form.priorite} onChange={e => set('priorite', e.target.value)}>
-                <option value="">— Aucune —</option>
-                <option>Haute</option>
-                <option>Moyenne</option>
-                <option>Basse</option>
-              </select>
             </div>
           </div>
 

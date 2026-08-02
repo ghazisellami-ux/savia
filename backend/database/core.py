@@ -538,7 +538,7 @@ def init_db():
             num_serie TEXT DEFAULT '',
             date_installation TEXT DEFAULT '',
             derniere_maintenance TEXT DEFAULT '',
-            statut TEXT DEFAULT 'Actif',
+            statut TEXT DEFAULT 'Opérationnel',
             notes TEXT DEFAULT '',
             client TEXT DEFAULT 'Centre Principal',
             UNIQUE(nom, client)

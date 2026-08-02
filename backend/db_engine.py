@@ -18,6 +18,7 @@ from database.core import (
 from repositories.assets import *
 from repositories.audit import *
 from repositories.contracts import *
+from repositories.equipment_status import *
 from repositories.interventions import *
 from repositories.knowledge import *
 from repositories.parts import *

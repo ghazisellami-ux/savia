@@ -187,6 +187,10 @@ def lire_equipements():
             df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
             if "Client" in df.columns:
                 df["Client"] = df["Client"].fillna("Centre Principal")
+            if "Statut" in df.columns:
+                # Keep the legacy value readable while exposing the new
+                # business vocabulary to the web clients.
+                df["Statut"] = df["Statut"].replace({"Actif": "Opérationnel"})
             # Only fix text on columns that are likely to have encoding issues
             text_columns = ["Nom", "Type", "Fabricant", "Modele", "Notes", "Client"]
             df = _fix_df_text(df, columns=text_columns)
