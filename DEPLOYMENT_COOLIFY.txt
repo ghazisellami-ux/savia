@@ -23,3 +23,22 @@ Pour ce deploiement, configurer :
 Ne jamais utiliser * dans CORS_ORIGINS. Ajouter un enregistrement DNS A pour
 chaque sous-domaine public, vers le VPS. Coolify obtient et renouvelle alors les
 certificats TLS. Les ports 80 et 443 doivent etre accessibles depuis Internet.
+
+MODE HORS LIGNE DU PWA
+
+Le PWA utilise /sw.js, IndexedDB et le meme domaine public que site.client.tn.
+Il ne faut pas exposer un domaine public pour le backend : les synchronisations
+offline continuent de passer par /api/* et le proxy interne Coolify.
+
+Le premier chargement du PWA et de chaque intervention doit etre fait avec une
+connexion. Ensuite, les interventions deja chargees, les pieces et les
+equipements sont disponibles hors ligne. Les mises a jour, clotures et fiches
+signees sont placees dans une file locale puis synchronisees au retour du
+reseau. Le serveur deduplique les retries avec la migration 006 et conserve
+les messages Telegram non envoyes dans une file retry geree par le scheduler
+(migration 007).
+
+Pour valider apres un deploy : ouvrir https://site.client.tn, se connecter,
+ouvrir une intervention, couper le reseau du telephone, modifier puis cloturer,
+verifier le bandeau "Hors connexion", remettre le reseau et confirmer la
+synchronisation, l'historique et un seul message Telegram.

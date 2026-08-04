@@ -240,12 +240,53 @@ def _migration_005_equipment_lifecycle_and_request_priority(conn) -> None:
     )
 
 
+def _migration_006_offline_idempotency(conn) -> None:
+    """Store successful mutation responses so offline retries are harmless."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS api_idempotency_keys (
+               operation_id TEXT NOT NULL,
+               username TEXT NOT NULL,
+               endpoint TEXT NOT NULL,
+               response_body JSONB NOT NULL,
+               created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY (operation_id, endpoint)
+           )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_api_idempotency_created_at
+           ON api_idempotency_keys(created_at)"""
+    )
+
+
+def _migration_007_telegram_outbox(conn) -> None:
+    """Retry Telegram notifications without replaying intervention mutations."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS telegram_outbox (
+               id BIGSERIAL PRIMARY KEY,
+               dedupe_key TEXT NOT NULL,
+               bot_key TEXT NOT NULL,
+               message TEXT NOT NULL,
+               attempts INTEGER NOT NULL DEFAULT 0,
+               last_error TEXT NOT NULL DEFAULT '',
+               created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               sent_at TIMESTAMP NULL,
+               UNIQUE (dedupe_key, bot_key)
+           )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_telegram_outbox_pending
+           ON telegram_outbox(sent_at, created_at)"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
     ("003", "AI consent, quotas, and content-free usage audit", _migration_003_ai_governance),
     ("004", "one active AI offer per deployment", _migration_004_global_ai_offer),
     ("005", "equipment lifecycle and request priority", _migration_005_equipment_lifecycle_and_request_priority),
+    ("006", "offline mutation idempotency", _migration_006_offline_idempotency),
+    ("007", "reliable Telegram notification outbox", _migration_007_telegram_outbox),
 )
 
 

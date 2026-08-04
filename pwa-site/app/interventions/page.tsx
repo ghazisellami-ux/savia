@@ -129,6 +129,7 @@ export default function InterventionsPage() {
               date={i.date || i.date_intervention || i.created_at || ''}
               technicien={i.technicien || i.technicien_assigne || ''}
               priorite={i.priorite || ''}
+              offline={Boolean(i.offline_pending)}
             />
           ))}
         </div>

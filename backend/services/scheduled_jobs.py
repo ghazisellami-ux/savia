@@ -840,6 +840,7 @@ def run_scheduler_forever(*, poll_seconds: int | None = None) -> None:
     logger.info("Scheduler worker started; poll interval=%ss", poll_seconds)
     while True:
         try:
+            process_telegram_outbox()
             run_scheduler_once()
         except Exception:
             logger.exception("Scheduler loop error")
@@ -1118,6 +1119,69 @@ def _send_telegram(message: str) -> bool:
     """Rétrocompatibilité — envoie via le bot technicien."""
     return _send_telegram_bot("telegram", message)
 
+
+def send_telegram_reliably(bot_key: str, message: str, dedupe_key: str = "") -> bool:
+    """Send now and queue a retry when the caller supplied an operation key.
+
+    The intervention mutation is not retried when Telegram is temporarily
+    unavailable. Only the notification is persisted and retried by the
+    scheduler, preventing duplicate status/history/stock side effects.
+    """
+    delivered = _send_telegram_bot(bot_key, message)
+    if delivered or not dedupe_key:
+        return delivered
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO telegram_outbox(dedupe_key, bot_key, message)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (dedupe_key, bot_key) DO NOTHING""",
+                (dedupe_key, bot_key, message),
+            )
+        logger.warning("Telegram queued for retry: bot=%s key=%s", bot_key, dedupe_key)
+    except Exception:
+        logger.exception("Unable to queue Telegram notification: bot=%s key=%s", bot_key, dedupe_key)
+    return False
+
+
+def process_telegram_outbox(limit: int = 50) -> int:
+    """Retry pending messages once per scheduler poll and mark successes."""
+    sent = 0
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                """SELECT id, bot_key, message
+                   FROM telegram_outbox
+                   WHERE sent_at IS NULL
+                   ORDER BY created_at
+                   LIMIT %s""",
+                (limit,),
+            ).fetchall()
+        for row in rows:
+            ok = _send_telegram_bot(row["bot_key"], row["message"])
+            with get_db() as conn:
+                if ok:
+                    conn.execute(
+                        """UPDATE telegram_outbox
+                           SET sent_at = CURRENT_TIMESTAMP,
+                               attempts = attempts + 1,
+                               last_error = ''
+                           WHERE id = %s""",
+                        (row["id"],),
+                    )
+                    sent += 1
+                else:
+                    conn.execute(
+                        """UPDATE telegram_outbox
+                           SET attempts = attempts + 1,
+                               last_error = %s
+                           WHERE id = %s""",
+                        ("Telegram indisponible", row["id"]),
+                    )
+    except Exception:
+        logger.exception("Telegram outbox processing failed")
+    return sent
+
 __all__ = [
     "check_garantie_expiry",
     "check_planning_reminder",
@@ -1134,4 +1198,6 @@ __all__ = [
     "_df_to_records",
     "_send_telegram_bot",
     "_send_telegram",
+    "send_telegram_reliably",
+    "process_telegram_outbox",
 ]

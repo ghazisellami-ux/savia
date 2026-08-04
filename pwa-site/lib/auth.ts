@@ -1,6 +1,8 @@
 // ==========================================
 // 🔐 Auth — SAVIA Site
 // ==========================================
+import { syncOfflineSession } from './offline-db';
+
 export interface SaviaUser {
   id: number;
   nom: string;
@@ -31,12 +33,15 @@ export function saveSession(token: string, user: SaviaUser) {
     nom: (user as any).nom_complet || user.nom || user.username,
   };
   localStorage.setItem(USER_KEY, JSON.stringify(normalizedUser));
+  void syncOfflineSession();
   window.dispatchEvent(new Event('savia_site_session_changed'));
 }
 
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  void syncOfflineSession();
+  window.dispatchEvent(new Event('savia_site_session_changed'));
 }
 
 export function isLoggedIn(): boolean {

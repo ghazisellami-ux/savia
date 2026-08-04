@@ -2,32 +2,71 @@
 // 🔌 API Client — SAVIA Site
 // All /api/* calls go through Next.js proxy → backend
 // ==========================================
+import { cacheResponse, readCachedResponse } from './offline-db';
+import { isTransientNetworkError, newOperationId, queueJsonMutation, queuePhoto, reportOfflineState } from './offline-sync';
+
 const API_BASE = ''; // PWA has its own domain, no basePath needed
+const NETWORK_TIMEOUT_MS = 12000;
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('savia_site_token') : null;
   const lang = typeof window !== 'undefined'
     ? (localStorage.getItem('savia_site_lang') || localStorage.getItem('savia_lang') || 'fr')
     : 'fr';
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-SAVIA-Lang': lang,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...opts.headers,
-    },
-  });
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = body.detail;
-    } catch {}
-    throw new Error(detail);
-  }
+  const method = (opts.method || 'GET').toUpperCase();
+  const queueable = ['PUT', 'PATCH', 'DELETE'].includes(method);
+  const operationId = queueable ? newOperationId() : '';
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-SAVIA-Lang': lang,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(operationId ? { 'X-SAVIA-Operation-Id': operationId } : {}),
+    ...opts.headers,
+  };
 
-  return res.json();
+  try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS);
+    const res = await fetch(`${API_BASE}${path}`, { ...opts, headers, signal: controller.signal });
+    window.clearTimeout(timeout);
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) detail = body.detail;
+      } catch {}
+      const apiError = new Error(detail) as Error & { status?: number };
+      apiError.status = res.status;
+      throw apiError;
+    }
+
+    const data = await res.json();
+    if (method === 'GET') await cacheResponse(path, data).catch(() => undefined);
+    return data;
+  } catch (error) {
+    const networkError = typeof window !== 'undefined' && isTransientNetworkError(error);
+    if (!networkError) throw error;
+    reportOfflineState(true);
+
+    if (method === 'GET') {
+      const cached = await readCachedResponse(path).catch(() => null);
+      if (cached !== null) return cached as T;
+      throw new Error('Données indisponibles hors connexion. Ouvrez cette page une première fois avec une connexion.');
+    }
+
+    // A new intervention needs a server-generated ID for its detail page and
+    // its signed fiche. Keep creation explicit until a full draft workflow is
+    // introduced; updates and closures remain safely queueable.
+    if (!queueable) throw new Error('Cette action nécessite une connexion internet.');
+
+    const body = typeof opts.body === 'string' ? opts.body : '{}';
+    let parsedBody: any = {};
+    try { parsedBody = JSON.parse(body); } catch { /* keep empty patch */ }
+    const patch: Record<string, unknown> = {};
+    if (typeof parsedBody?.statut === 'string') patch.statut = parsedBody.statut;
+    const queued = await queueJsonMutation(path, method, body, patch, operationId);
+    return queued as T;
+  }
 }
 
 export const api = {
@@ -61,16 +100,33 @@ export const api = {
       // Upload directly to backend — Next.js rewrites don't reliably proxy
       // multipart/form-data in standalone mode. Use relative /api/ path which
       // Nginx reverse-proxies directly to the backend container.
-      const res = await fetch(`/api/interventions/${id}/photo`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'X-SAVIA-Lang': lang },
-        body: fd,
-      });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`Upload photo failed: ${res.status} ${detail}`);
+      const operationId = newOperationId();
+      try {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS);
+        const res = await fetch(`/api/interventions/${id}/photo`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'X-SAVIA-Lang': lang,
+            'X-SAVIA-Operation-Id': operationId,
+          },
+          body: fd,
+          signal: controller.signal,
+        });
+        window.clearTimeout(timeout);
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          const uploadError = new Error(`Upload photo failed: ${res.status} ${detail}`) as Error & { status?: number };
+          uploadError.status = res.status;
+          throw uploadError;
+        }
+        return res.json();
+      } catch (error) {
+        const networkError = isTransientNetworkError(error);
+        if (!networkError) throw error;
+        return queuePhoto(`/api/interventions/${id}/photo`, file, operationId);
       }
-      return res.json();
     },
   },
 

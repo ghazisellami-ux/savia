@@ -5,6 +5,7 @@ from api.runtime import (
     Depends,
     HTTPException,
     Optional,
+    Request,
     _get_technician_fullname,
     _tech_name_or_username_matches,
     _trigger_backup,
@@ -24,12 +25,14 @@ from api.security import (
     _check_create_permission,
     _verify_token,
     assert_resource_client_access,
+    assert_intervention_write_access,
     resolve_client_scope,
 )
 from services.scheduled_jobs import (
     _df_to_records,
     _send_telegram,
     _send_telegram_bot,
+    send_telegram_reliably,
     logger,
 )
 from controllers.auth_dashboard import (
@@ -42,6 +45,12 @@ from controllers.auth_dashboard import (
     datetime,
     log_audit,
     logger,
+)
+from db_engine import get_db
+from services.idempotency import (
+    get_idempotent_response,
+    operation_id_from_request,
+    save_idempotent_response,
 )
 
 
@@ -403,7 +412,7 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
 # ------ Technicien Update Per-Technician Data ------
 
 @app.put("/api/interventions/{intervention_id}/technicien-data")
-def update_technicien_data(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+def update_technicien_data(intervention_id: int, request: Request, body: dict = Body(...), user: dict = Depends(_verify_token)):
     """
     Updates per-technician data in interventions_techniciens table.
     When technician marks their work as Cloturee, check if all are complete.
@@ -422,6 +431,14 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         "statut": "Cloturee" (marks this tech as done)
     }
     """
+    endpoint = f"/api/interventions/{intervention_id}/technicien-data"
+    operation_id = operation_id_from_request(request)
+    with get_db() as conn:
+        assert_intervention_write_access(conn, intervention_id, user)
+        cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
+        if cached_response is not None:
+            return cached_response
+
     from db_engine import (
         get_db, update_interventions_techniciens, 
         get_or_create_interventions_techniciens, get_techniciens_status,
@@ -639,8 +656,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                             f"⚠️ Pièces manquantes :\n{pieces_txt}\n\n"
                             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                         )
-                        _send_telegram_bot("telegram_stock", msg_tg)
-                        _send_telegram("📬 " + msg_tg)
+                        send_telegram_reliably("telegram_stock", msg_tg, f"{operation_id}:stock")
+                        send_telegram_reliably("telegram", "📬 " + msg_tg, f"{operation_id}:tech")
                         logger.info(f"📬 Rupture notification sent")
                 except Exception as tg_err:
                     logger.warning(f"   ⚠️ Telegram rupture notification failed: {tg_err}")
@@ -706,8 +723,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                         )
                         # Send to both stock bot and tech bot (same as single-tech mode)
-                        _send_telegram_bot("telegram_stock", msg_tg_m)
-                        _send_telegram_bot("telegram", msg_tg_m)
+                        send_telegram_reliably("telegram_stock", msg_tg_m, f"{operation_id}:manual-stock")
+                        send_telegram_reliably("telegram", msg_tg_m, f"{operation_id}:manual-tech")
                         logger.info(f"📋 Manual piece notifications sent to both bots")
                 except Exception as tg_err:
                     logger.warning(f"   ⚠️ Telegram manual piece notification failed: {tg_err}")
@@ -770,7 +787,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram_bot("telegram_sav", msg_sav)
+                    send_telegram_reliably("telegram_sav", msg_sav, operation_id)
                     logger.info(f"✅ Telegram SAV message sent: Intervention #{intervention_id} à facturer")
                     
                     # Message for technicians: INTERVENTION CLÔTURÉE
@@ -786,12 +803,12 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         f"✅ Intervention fermée automatiquement\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram(msg_tech)
+                    send_telegram_reliably("telegram", msg_tech, operation_id)
                     logger.info(f"✅ Telegram TECH message sent: Intervention #{intervention_id} clôturée")
                 except Exception as te:
                     logger.warning(f"⚠️ Closing telegram notifications failed: {te}")
                 
-                return {
+                response = {
                     "success": True,
                     "message": f"✅ Tous les techniciens ont complété! Intervention #{intervention_id} clôturée automatiquement.",
                     "intervention_finalized": True,
@@ -799,6 +816,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                     "completed": status_info['completed'],
                     "total": status_info['total']
                 }
+                save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+                return response
             else:
                 logger.error(f"❌ Finalization failed: {finalize_result}")
                 return HTTPException(status_code=500, detail="Erreur lors de la finalisation")
@@ -823,7 +842,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         msg_tg += f"  • {pending_tech}\n"
                     
                     msg_tg += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                    _send_telegram(msg_tg)
+                    send_telegram_reliably("telegram", msg_tg, operation_id)
                     logger.info(f"✅ Partial closure telegram sent: Intervention #{intervention_id} ({status_info['completed']}/{status_info['total']} completed)")
                 except Exception as te:
                     logger.warning(f"⚠️ Partial closure telegram notification failed (will retry later): {te}")
@@ -831,7 +850,7 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 logger.info(f"   ✓ Technician marked as '{body.get('statut')}' - no partial closure telegram sent")
             
             logger.info(f"   ✓ Returning PARTIAL response with {len(status_info['pending_names'])} pending: {status_info['pending_names']}")
-            return {
+            response = {
                 "success": True,
                 "message": f"Données sauvegardées ({status_info['completed']}/{status_info['total']} techniciens complétés)",
                 "intervention_finalized": False,
@@ -840,6 +859,8 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                 "total": status_info['total'],
                 "pending_technicians": status_info['pending_names']
             }
+            save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+            return response
         
     except HTTPException:
         logger.error(f"❌ HTTPException in update_technicien_data")
@@ -988,8 +1009,10 @@ def get_intervention_techniciens_aggregated(intervention_id: int, user: dict = D
 # ------ Technicien Accept / Refuse intervention ------
 
 @app.put("/api/interventions/{intervention_id}/accept")
-def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token)):
+def accept_intervention(intervention_id: int, request: Request, user: dict = Depends(_verify_token)):
     from db_engine import get_db, update_intervention_statut
+    endpoint = f"/api/interventions/{intervention_id}/accept"
+    operation_id = operation_id_from_request(request)
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
@@ -997,6 +1020,9 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
+        cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
+        if cached_response is not None:
+            return cached_response
 
     update_intervention_statut(intervention_id, "En cours")
 
@@ -1011,12 +1037,16 @@ def accept_intervention(intervention_id: int, user: dict = Depends(_verify_token
     )
     _send_telegram(msg)
 
-    return {"success": True, "statut": "En cours"}
+    response = {"success": True, "statut": "En cours"}
+    save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+    return response
 
 
 @app.put("/api/interventions/{intervention_id}/refuse")
-def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_verify_token)):
+def refuse_intervention(intervention_id: int, request: Request, body: dict, user: dict = Depends(_verify_token)):
     from db_engine import get_db
+    endpoint = f"/api/interventions/{intervention_id}/refuse"
+    operation_id = operation_id_from_request(request)
     raison = body.get("raison", "").strip()
     if not raison:
         raise HTTPException(status_code=400, detail="La raison du refus est obligatoire")
@@ -1030,6 +1060,9 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Intervention introuvable")
+        cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
+        if cached_response is not None:
+            return cached_response
 
         tech_name = user.get("nom") or user.get("username") or row.get("technicien", "?")
         machine = row["machine"] if row else ""
@@ -1061,7 +1094,9 @@ def refuse_intervention(intervention_id: int, body: dict, user: dict = Depends(_
     )
     _send_telegram(msg)
 
-    return {"success": True, "statut": "En attente"}
+    response = {"success": True, "statut": "En attente"}
+    save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+    return response
 
 
 # ==========================================
