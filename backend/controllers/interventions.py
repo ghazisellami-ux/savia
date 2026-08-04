@@ -8,6 +8,7 @@ from api.runtime import (
     JWT_SECRET,
     Optional,
     Query,
+    Request,
     UploadFile,
     _get_technician_fullname,
     _tech_name_or_username_matches,
@@ -43,6 +44,7 @@ from services.scheduled_jobs import (
     _df_to_records,
     _send_telegram,
     _send_telegram_bot,
+    send_telegram_reliably,
     get_db,
     lire_equipements,
     lire_interventions,
@@ -66,6 +68,11 @@ from controllers.auth_dashboard import (
     logger,
 )
 from services.file_security import read_validated_upload
+from services.idempotency import (
+    get_idempotent_response,
+    operation_id_from_request,
+    save_idempotent_response,
+)
 
 
 async def _store_fiche(upload: UploadFile, intervention_id: int, username: str) -> dict:
@@ -429,10 +436,15 @@ def get_facturation_tracking(user: dict = Depends(_verify_token)):
 
 
 @app.put("/api/interventions/{intervention_id}")
-def update_intervention(intervention_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+def update_intervention(intervention_id: int, request: Request, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    endpoint = f"/api/interventions/{intervention_id}"
+    operation_id = operation_id_from_request(request)
     with get_db() as conn:
         require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
         assert_intervention_write_access(conn, intervention_id, user)
+        cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
+        if cached_response is not None:
+            return cached_response
         intervention_state = conn.execute(
             "SELECT statut FROM interventions WHERE id = %s",
             (intervention_id,),
@@ -620,7 +632,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         f"{notes_line}\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram(msg_tg)
+                    send_telegram_reliably("telegram", msg_tg, operation_id)
                     # Notification SAV : intervention clôturée → à facturer
                     msg_sav = (
                         f"📋 <b>Intervention Clôturée — À facturer</b>\n\n"
@@ -634,7 +646,7 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram_bot("telegram_sav", msg_sav)
+                    send_telegram_reliably("telegram_sav", msg_sav, operation_id)
             except Exception as te:
                 logger.error(f"Telegram clôture erreur: {te}")
 
@@ -686,7 +698,9 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         (fiche_validation, intervention_id),
                     )
 
-            return {"ok": True, "message": msg}
+            response = {"ok": True, "message": msg}
+            save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+            return response
         except HTTPException:
             raise
         except Exception as e:
@@ -774,8 +788,8 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                     f"{pieces_txt}\n\n"
                     f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
-                _send_telegram_bot("telegram_stock", msg_tg)
-                _send_telegram_bot("telegram", msg_tg)
+                send_telegram_reliably("telegram_stock", msg_tg, f"{operation_id}:stock")
+                send_telegram_reliably("telegram", msg_tg, f"{operation_id}:tech")
         except Exception as ne:
             logger.error(f"Erreur création notif rupture: {ne}")
 
@@ -828,8 +842,8 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                         f"⚠️ Ces pièces ne sont pas dans le stock — à commander\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    _send_telegram_bot("telegram_stock", msg_tg_m)
-                    _send_telegram_bot("telegram", msg_tg_m)
+                    send_telegram_reliably("telegram_stock", msg_tg_m, f"{operation_id}:manual-stock")
+                    send_telegram_reliably("telegram", msg_tg_m, f"{operation_id}:manual-tech")
             except Exception as pe:
                 logger.error(f"Erreur pièces manuelles: {pe}")
 
@@ -914,7 +928,9 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
         except Exception as e:
             logger.error(f"❌ update_intervention #{intervention_id} FAILED: {e}")
             raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
-    return {"ok": True}
+    response = {"ok": True}
+    save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+    return response
 
 
 @app.delete("/api/interventions/{intervention_id}")
@@ -971,19 +987,27 @@ async def upload_fiche(intervention_id: int, file: UploadFile = File(...), user:
 
 @app.post("/api/interventions/{intervention_id}/photo")
 async def upload_photo_alias(intervention_id: int,
+                             request: Request,
                              photo: UploadFile = File(None),
                              file: UploadFile = File(None),
                              user: dict = Depends(_verify_token)):
+    endpoint = f"/api/interventions/{intervention_id}/photo"
+    operation_id = operation_id_from_request(request)
     require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
     with get_db() as conn:
         assert_intervention_write_access(conn, intervention_id, user)
+        cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
+        if cached_response is not None:
+            return cached_response
     """Alias /photo → /fiche pour compatibilité avec l'ancien api_server.py (Streamlit).
     Accepte le champ 'photo' ou 'file'."""
     upload = photo or file
     if not upload:
         raise HTTPException(status_code=400, detail="Aucun fichier fourni")
     result = await _store_fiche(upload, intervention_id, user.get("sub", "unknown"))
-    return {**result, "message": "Photo enregistrée"}
+    response = {**result, "message": "Photo enregistrée"}
+    save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
+    return response
 
 
 @app.get("/api/interventions/{intervention_id}/fiche")

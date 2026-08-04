@@ -31,7 +31,11 @@ export default function TimeScrollPicker({ label, value, onChange }: TimeScrollP
     if (hoursRef.current) {
       const item = hoursRef.current.querySelector(`[data-hour="${selectedHour}"]`);
       if (item) {
-        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const element = item as HTMLElement;
+        hoursRef.current.scrollTo({
+          top: Math.max(0, element.offsetTop - (hoursRef.current.clientHeight - element.offsetHeight) / 2),
+          behavior: 'auto',
+        });
       }
     }
   }, [selectedHour]);
@@ -41,7 +45,11 @@ export default function TimeScrollPicker({ label, value, onChange }: TimeScrollP
     if (minutesRef.current) {
       const item = minutesRef.current.querySelector(`[data-minute="${selectedMinute}"]`);
       if (item) {
-        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const element = item as HTMLElement;
+        minutesRef.current.scrollTo({
+          top: Math.max(0, element.offsetTop - (minutesRef.current.clientHeight - element.offsetHeight) / 2),
+          behavior: 'auto',
+        });
       }
     }
   }, [selectedMinute]);

@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { isLoggedIn, getUser } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import OfflineInterventionBanner from '@/components/OfflineInterventionBanner';
 import TimeScrollPicker from '@/components/TimeScrollPicker';
 import {
   Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
@@ -150,6 +151,22 @@ export default function InterventionDetailPage() {
     setCurrentUserName(userName);
     console.log('📝 Current user from auth:', { userName, user });
   }, []);
+
+  // Next.js may restore the previous scroll position when navigating from the
+  // intervention list. Always start an intervention detail at its header.
+  useEffect(() => {
+    const scrollToTop = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    };
+    const frame = window.requestAnimationFrame(scrollToTop);
+    const timer = window.setTimeout(scrollToTop, 80);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [id]);
 
   // Separate effect for loading data - waits for currentUserName to be set
   useEffect(() => {
@@ -866,6 +883,7 @@ export default function InterventionDetailPage() {
     <div style={{ minHeight: '100dvh', background: 'var(--beige)' }}>
       <Header />
       <main style={{ padding: 'calc(var(--header-h) + 16px) 16px calc(var(--nav-h) + 24px)' }}>
+        <OfflineInterventionBanner interventionId={id} />
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>

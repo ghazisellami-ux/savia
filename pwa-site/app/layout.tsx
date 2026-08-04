@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import I18nRuntime from '@/components/I18nRuntime';
+import OfflineStatus from '@/components/OfflineStatus';
 
 export const metadata: Metadata = {
   title: 'SAVIA Site',
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <I18nRuntime />
+        <OfflineStatus />
         {children}
       </body>
     </html>
