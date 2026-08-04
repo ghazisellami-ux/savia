@@ -276,7 +276,7 @@ export default function DashboardPage() {
         const disponibilite = Math.min(statusAvailability, activityAvailability);
         const nb_interventions = dateFilteredInterv.length;
         const nb_cloturees = dateFilteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
-        const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 100) : 0;
+        const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 1000) / 10 : 0;
 
         // Calculate MTBF and MTTR from filtered interventions
         let mtbf = 0, mttr = 0;
