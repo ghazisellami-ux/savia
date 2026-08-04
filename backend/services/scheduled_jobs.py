@@ -217,6 +217,9 @@ def sync_planning_to_interventions(*, notify=True):
             machine = pm.get('machine', '')
             client = pm.get('client', '')
             planned_date = str(pm.get('date_prevue') or today_str)[:10]
+            type_maintenance = pm.get('type_maintenance', 'Préventive') or 'Préventive'
+            is_preventive = 'preventive' in normalized_status(type_maintenance)
+            probleme = 'Maintenance préventive' if is_preventive else ''
             description = pm.get('description', '') or f"Maintenance préventive — {machine}"
             notes = (
                 f"[{client}] Maintenance préventive planifiée #{pm_id}"
@@ -225,7 +228,7 @@ def sync_planning_to_interventions(*, notify=True):
 
             with get_db() as conn:
                 linked = conn.execute(
-                    """SELECT id, statut, technicien
+                    """SELECT id, statut, technicien, probleme
                        FROM interventions
                        WHERE planning_id = %s
                        ORDER BY id DESC LIMIT 1""",
@@ -235,14 +238,14 @@ def sync_planning_to_interventions(*, notify=True):
                 if is_new:
                     conn.execute(
                         """INSERT INTO interventions
-                           (date, machine, technicien, type_intervention, description,
+                           (date, machine, technicien, type_intervention, description, probleme,
                             statut, priorite, notes, planning_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (planned_date, machine, technicien, 'Préventive', description,
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (planned_date, machine, technicien, type_maintenance, description, probleme,
                          'En cours', 'Moyenne', notes, pm_id)
                     )
                     linked = conn.execute(
-                        "SELECT id, statut, technicien FROM interventions "
+                        "SELECT id, statut, technicien, probleme FROM interventions "
                         "WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
                         (pm_id,)
                     ).fetchone()
@@ -253,6 +256,11 @@ def sync_planning_to_interventions(*, notify=True):
 
                 intervention_id = linked['id']
                 current_status = normalized_status(linked.get('statut'))
+                if is_preventive and not str(linked.get('probleme') or '').strip():
+                    conn.execute(
+                        "UPDATE interventions SET probleme = %s WHERE id = %s",
+                        (probleme, intervention_id)
+                    )
                 if current_status in startable_statuses:
                     conn.execute(
                         """UPDATE interventions

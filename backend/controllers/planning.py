@@ -704,6 +704,18 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
         )
     
     ph = "%s"  # PostgreSQL placeholder
+
+    def date_only(value):
+        """Normalise une date SQL ou une date ISO pour comparer uniquement le jour."""
+        if value is None:
+            return ""
+        if hasattr(value, "isoformat"):
+            return value.isoformat()[:10]
+        return str(value).strip()[:10]
+
+    def is_true(value):
+        """Accepte les booléens PostgreSQL et leurs éventuelles formes texte."""
+        return value is True or str(value).strip().lower() in {"1", "true", "t", "yes"}
     
     new_date = body.get("date_planifiee")
     new_technicians = body.get("technicien_assigne")
@@ -784,7 +796,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     )
             
             old_date = current.get("date_prevue")
-            target_date = str(new_date or old_date or "")[:10]
+            old_date_iso = date_only(old_date)
+            target_date = date_only(new_date or old_date)
             today_iso = datetime.now().date().isoformat()
             
             # Update the main planning entry
@@ -815,10 +828,10 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             # Create a greyed-out "Décalé" entry at the old date AFTER updating (separate transaction)
             # BUT: Only if the DATE ACTUALLY CHANGED (not if only technicien changed)
             # AND only if this is NOT already a ghost entry
-            is_current_ghost = current.get("is_ghost", False)
+            is_current_ghost = is_true(current.get("is_ghost", False))
             
             # Check if date actually changed (compare as strings for consistency)
-            date_has_changed = new_date and str(new_date) != str(old_date)
+            date_has_changed = bool(new_date) and date_only(new_date) != old_date_iso
             
             if date_has_changed and not is_current_ghost:
                 try:
@@ -845,7 +858,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"""
                         conn.execute(
                             insert_sql,
-                            (old_machine, old_client, old_date, "", old_type, 
+                            (old_machine, old_client, old_date_iso, "", old_type,
                              "Aucune", "Décalé", f"[DÉCALÉ] {old_description}", old_notes, True, planning_id)
                         )
                         conn.commit()

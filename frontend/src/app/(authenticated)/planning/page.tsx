@@ -647,6 +647,9 @@ export default function PlanningPage() {
             return automaticStatus === filterStatut;
           })
           .filter(d => {
+            // Un ghost est une trace d'audit du décalage : il doit rester
+            // visible même si sa date originale est hors de la période active.
+            if (d.is_ghost) return true;
             const dateStr = (d.date_planifiee || '').substring(0, 10);
             if (!dateStr) return false;
             return dateStr >= pdfDateFrom && dateStr <= pdfDateTo;
