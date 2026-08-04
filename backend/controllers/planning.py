@@ -59,6 +59,13 @@ def get_planning(
     statut: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
+    # Garantit que le planning et les listes d'interventions sont cohérents
+    # même si le worker quotidien a été indisponible le jour J.
+    try:
+        sync_planning_to_interventions(notify=False)
+    except Exception as exc:
+        logger.warning("Planning sync before planning listing failed: %s", exc)
+
     df = lire_planning(machine=machine, statut=statut)
     
     # Si le user est un Technicien → filtrer automatiquement ses plannings

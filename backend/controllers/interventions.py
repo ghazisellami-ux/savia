@@ -47,6 +47,7 @@ from services.scheduled_jobs import (
     lire_equipements,
     lire_interventions,
     logger,
+    sync_planning_to_interventions,
 )
 from controllers.auth_dashboard import (
     Depends,
@@ -122,6 +123,13 @@ def get_interventions(
     user: dict = Depends(_verify_token),
 ):
     from db_engine import lire_child_interventions_for_technician, get_db
+
+    # Filet de sécurité : si le worker n'a pas tourné à l'heure prévue,
+    # rattraper les maintenances échues avant de construire les listes web/PWA.
+    try:
+        sync_planning_to_interventions(notify=False)
+    except Exception as exc:
+        logger.warning("Planning sync before intervention listing failed: %s", exc)
     
     df = lire_interventions(machine=machine)
     
