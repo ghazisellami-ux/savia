@@ -15,7 +15,7 @@ pydantic_core==2.41.5
 # Authentication
 PyJWT==2.13.0
 bcrypt==5.0.0
-cryptography==49.0.0
+cryptography==50.0.0
 
 # Database (PostgreSQL only)
 psycopg2-binary==2.9.11
