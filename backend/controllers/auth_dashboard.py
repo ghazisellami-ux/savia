@@ -227,6 +227,34 @@ def get_dashboard_kpis(
         df_eq = lire_equipements()
         df_int = lire_interventions()
         df_clients = db_lire_clients()  # Get ALL clients from clients table
+
+        # Align the dashboard with the interventions list: a future planned
+        # maintenance is not yet an active intervention and must not lower the
+        # resolution rate denominator.
+        if not df_int.empty and "planning_id" in df_int.columns:
+            try:
+                with get_db() as conn:
+                    future_planning_rows = conn.execute(
+                        """SELECT id
+                           FROM planning_maintenance
+                           WHERE date_prevue > CURRENT_DATE
+                             AND statut NOT IN ('Cloturee', 'Réalisée', 'Terminée', 'Annulée')"""
+                    ).fetchall()
+                future_planning_ids = {
+                    int(row.get("id"))
+                    for row in future_planning_rows
+                    if row.get("id") is not None
+                }
+                if future_planning_ids:
+                    def is_future_planned(value):
+                        try:
+                            return int(value) in future_planning_ids
+                        except (TypeError, ValueError):
+                            return False
+
+                    df_int = df_int[~df_int["planning_id"].apply(is_future_planned)]
+            except Exception as exc:
+                logger.warning("Unable to filter future planned interventions for dashboard: %s", exc)
         
         # Debug logging
         logger.info(f"KPI filters: client={client}, region={region}, ville={ville}, equipment_type={equipment_type}")

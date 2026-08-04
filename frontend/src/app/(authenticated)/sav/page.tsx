@@ -699,7 +699,7 @@ export default function SavPage() {
   const coutMainOeuvre = filtered.reduce((a, b) => a + getInterventionLaborCost(b), 0);
   const totalCout = coutMainOeuvre + totalCoutPieces;
   const totalDureeH = Math.round(totalDureeMin / 60);
-  const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 100) : 0;
+  const tauxResolution = totalInterv > 0 ? Math.round((terminees / totalInterv) * 1000) / 10 : 0;
   const mttr = terminees > 0 ? Math.round(filtered.filter(i => i.statut.toLowerCase().includes('tur')).reduce((a, b) => a + toNumber(b.duree_minutes), 0) / terminees / 60 * 10) / 10 : 0;
   const correctifs = filtered.filter(i => i.type.toLowerCase().includes('correct')).length;
   const preventifs = filtered.filter(i => i.type.toLowerCase().includes('ventive') || i.type.toLowerCase().includes('préventive')).length;
