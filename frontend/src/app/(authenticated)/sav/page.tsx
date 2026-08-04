@@ -358,6 +358,13 @@ export default function SavPage() {
     return () => timers.forEach(t => clearTimeout(t));
   }, []);
 
+  // La fiche peut être envoyée depuis le PWA pendant que cette page est déjà
+  // ouverte : recharger la liste à chaque ouverture de l'onglet.
+  useEffect(() => {
+    if (activeTab !== 5) return;
+    interventions.listFiches().then(setFiches).catch(() => {});
+  }, [activeTab]);
+
 
   // Calculate duration from start_time and end_time
   const calculateDurationFromTimes = (startTime: string, endTime: string): number => {

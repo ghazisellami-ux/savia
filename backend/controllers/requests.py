@@ -516,6 +516,21 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
                         status_code=409,
                         detail="Cette affectation est déjà clôturée. Aucune nouvelle mise à jour de statut n'est autorisée depuis le PWA."
                     )
+
+                requested_fiche_validation = body.get("fiche_validation")
+                if requested_fiche_validation:
+                    if requested_fiche_validation not in {"En attente", "Validée"}:
+                        raise HTTPException(status_code=400, detail="Statut de fiche invalide")
+                    fiche_row = conn.execute(
+                        "SELECT fiche_validation FROM interventions WHERE id = %s",
+                        (intervention_id,),
+                    ).fetchone()
+                    current_fiche_validation = (fiche_row.get("fiche_validation") or "En attente").strip() if fiche_row else "En attente"
+                    if current_fiche_validation == "Validée" and requested_fiche_validation != current_fiche_validation:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Fiche déjà validée — aucune modification possible"
+                        )
         
         # Get or create entry for this technician
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
@@ -529,6 +544,13 @@ def update_technicien_data(intervention_id: int, body: dict = Body(...), user: d
         
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
+
+        if body.get("fiche_validation"):
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE interventions SET fiche_validation = %s WHERE id = %s",
+                    (body["fiche_validation"], intervention_id),
+                )
         
         # Keep the shared parent intervention aligned with the technician's
         # active status. This is intentionally limited to the multi-tech flow.

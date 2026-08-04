@@ -170,92 +170,147 @@ def check_planning_reminder():
         return []
 
 
-def sync_planning_to_interventions():
+def sync_planning_to_interventions(*, notify=True):
     """
-    Auto-crée des interventions pour les maintenances planifiées dont la date_prevue est aujourd'hui.
-    Envoie une notification au Bot Technicien pour chaque intervention créée.
+    Synchronise les maintenances arrivées à échéance avec les interventions.
+
+    La synchronisation est rattrapable : une maintenance du jour ou d'une date
+    passée, assignée à au moins un technicien, doit être créée ou remise à
+    ``En cours`` même si le worker n'a pas tourné le jour prévu.
     """
     from datetime import date
+    import unicodedata
+
+    def normalized_status(value):
+        return unicodedata.normalize("NFKD", str(value or "")).encode(
+            "ascii", "ignore"
+        ).decode().lower().replace(" ", "").strip()
+
     try:
         today = date.today()
         today_str = today.isoformat()
         with get_db() as conn:
-            # Trouver les maintenances planifiées pour aujourd'hui sans intervention déjà créée
             planned = conn.execute(
-                """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne, pm.description,
-                          pm.type_maintenance
+                """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne,
+                          pm.description, pm.type_maintenance, pm.date_prevue,
+                          pm.statut, pm.is_ghost
                    FROM planning_maintenance pm
-                   WHERE pm.date_prevue = %s
-                     AND pm.statut = 'Planifiée'
-                     AND NOT EXISTS (
-                         SELECT 1 FROM interventions i
-                         WHERE i.planning_id = pm.id
-                     )""",
+                   WHERE pm.date_prevue <= %s
+                     AND COALESCE(pm.is_ghost, FALSE) = FALSE""",
                 (today_str,)
             ).fetchall()
 
         created = []
+        synced = []
+        closed_statuses = {"cloturee", "terminee", "realisee", "annulee", "decale"}
+        startable_statuses = {"planifiee", "assignee", "enretard"}
+
         for row in planned:
             pm = dict(row)
             pm_id = pm['id']
+            technicien = str(pm.get('technicien_assigne') or '').strip()
+            if not technicien or normalized_status(pm.get('statut')) in closed_statuses:
+                # Une maintenance échue sans technicien reste visible comme
+                # retardée dans le planning, sans créer une intervention vide.
+                continue
+
             machine = pm.get('machine', '')
             client = pm.get('client', '')
-            technicien = pm.get('technicien_assigne', '')
+            planned_date = str(pm.get('date_prevue') or today_str)[:10]
+            type_maintenance = pm.get('type_maintenance', 'Préventive') or 'Préventive'
+            is_preventive = 'preventive' in normalized_status(type_maintenance)
+            probleme = 'Maintenance préventive' if is_preventive else ''
             description = pm.get('description', '') or f"Maintenance préventive — {machine}"
-            notes = f"[{client}] Maintenance préventive planifiée #{pm_id}" if client else f"Maintenance préventive planifiée #{pm_id}"
+            notes = (
+                f"[{client}] Maintenance préventive planifiée #{pm_id}"
+                if client else f"Maintenance préventive planifiée #{pm_id}"
+            )
 
             with get_db() as conn:
-                conn.execute(
-                    """INSERT INTO interventions
-                       (date, machine, technicien, type_intervention, description,
-                        statut, priorite, notes, planning_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (today_str, machine, technicien, 'Préventive', description,
-                     'En cours', 'Moyenne', notes, pm_id)
-                )
-                # Récupérer l'ID de l'intervention créée
-                new_id_row = conn.execute(
-                    "SELECT id FROM interventions WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                linked = conn.execute(
+                    """SELECT id, statut, technicien, probleme
+                       FROM interventions
+                       WHERE planning_id = %s
+                       ORDER BY id DESC LIMIT 1""",
                     (pm_id,)
                 ).fetchone()
-                new_id = new_id_row['id'] if new_id_row else '?'
+                is_new = not linked
+                if is_new:
+                    conn.execute(
+                        """INSERT INTO interventions
+                           (date, machine, technicien, type_intervention, description, probleme,
+                            statut, priorite, notes, planning_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (planned_date, machine, technicien, type_maintenance, description, probleme,
+                         'En cours', 'Moyenne', notes, pm_id)
+                    )
+                    linked = conn.execute(
+                        "SELECT id, statut, technicien, probleme FROM interventions "
+                        "WHERE planning_id = %s ORDER BY id DESC LIMIT 1",
+                        (pm_id,)
+                    ).fetchone()
 
-                # Mettre à jour le statut du planning
-                conn.execute(
-                    "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
-                    (pm_id,)
-                )
+                if not linked:
+                    logger.warning("Planning #%s: intervention introuvable après création", pm_id)
+                    continue
 
-                # Preserve multi-technician permissions when the intervention
-                # is created on its planned day rather than during rescheduling.
+                intervention_id = linked['id']
+                current_status = normalized_status(linked.get('statut'))
+                if is_preventive and not str(linked.get('probleme') or '').strip():
+                    conn.execute(
+                        "UPDATE interventions SET probleme = %s WHERE id = %s",
+                        (probleme, intervention_id)
+                    )
+                if current_status in startable_statuses:
+                    conn.execute(
+                        """UPDATE interventions
+                           SET statut = 'En cours',
+                               date_debut_intervention = COALESCE(date_debut_intervention, CURRENT_TIMESTAMP)
+                           WHERE id = %s""",
+                        (intervention_id,)
+                    )
+                    current_status = 'encours'
+
+                # Le planning suit l'état réel de l'intervention. Une fiche
+                # déjà en attente de pièce ou clôturée n'est pas écrasée.
+                if current_status == 'encours':
+                    conn.execute(
+                        "UPDATE planning_maintenance SET statut = 'En cours' WHERE id = %s",
+                        (pm_id,)
+                    )
+
+                # Toujours conserver les affectations multi-techniciens, y
+                # compris lors d'un rattrapage effectué après le jour J.
                 for tech_name in [t.strip() for t in technicien.split(',') if t.strip()]:
                     existing_tech = conn.execute(
                         """SELECT id FROM interventions_techniciens
                            WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
-                        (new_id, f"%{tech_name}%")
+                        (intervention_id, f"%{tech_name}%")
                     ).fetchone()
                     if not existing_tech:
                         conn.execute(
                             """INSERT INTO interventions_techniciens
                                (intervention_id, technicien_nom, statut)
                                VALUES (%s, %s, %s)""",
-                            (new_id, tech_name, 'Assigné')
+                            (intervention_id, tech_name, 'Assigné')
                         )
 
-            created.append({
-                'intervention_id': new_id,
-                'planning_id': pm_id,
-                'machine': machine,
-                'technicien': technicien,
-                'client': client,
-            })
+            synced.append(intervention_id)
+            if is_new:
+                created.append({
+                    'intervention_id': intervention_id,
+                    'planning_id': pm_id,
+                    'machine': machine,
+                    'technicien': technicien,
+                    'client': client,
+                    'date': planned_date,
+                })
 
-        # Envoyer notification groupée au bot Technicien
         if created:
             lines = '\n'.join(
                 f"  • <b>#{c['intervention_id']}</b> — {c['machine']}"
                 + (f" ({c['client']})" if c['client'] else "")
-                + (f"\n    👨‍🔧 {c['technicien']}" if c['technicien'] else "")
+                + f"\n    👨‍🔧 {c['technicien']}"
                 for c in created
             )
             msg = (
@@ -264,9 +319,14 @@ def sync_planning_to_interventions():
                 f"{lines}\n\n"
                 f"📅 {today.strftime('%d/%m/%Y')}"
             )
-            _send_telegram_bot("telegram", msg)
-            logger.info(f"Planning sync: {len(created)} intervention(s) créées pour {today_str}")
+            if notify:
+                _send_telegram_bot("telegram", msg)
 
+        if synced:
+            logger.info(
+                "Planning sync: %s intervention(s) synchronisée(s), %s créée(s)",
+                len(synced), len(created)
+            )
         return created
     except Exception as e:
         logger.error(f"sync_planning_to_interventions error: {e}")
@@ -335,6 +395,7 @@ def check_facturation_reminders():
     - Bot Manager : alerte quand la facturation n'a pas eu lieu après 10 jours
     """
     from datetime import date, timedelta
+    import unicodedata
     try:
         today = date.today()
         sav_alerts = []
@@ -343,7 +404,8 @@ def check_facturation_reminders():
         with get_db() as conn:
             # Interventions clôturées avec date_cloture, non encore facturées
             rows = conn.execute(
-                """SELECT id, machine, technicien, date_cloture, notes,
+                """SELECT id, machine, technicien, type_intervention,
+                          date_cloture, notes,
                           COALESCE(facture_envoyee, FALSE) as facture_envoyee,
                           COALESCE(rappel_facture_envoye, 0) as rappel_facture_envoye
                    FROM interventions
@@ -355,6 +417,14 @@ def check_facturation_reminders():
 
         for row in rows:
             d = dict(row)
+            type_intervention = unicodedata.normalize(
+                "NFKD", str(d.get('type_intervention') or '')
+            ).encode("ascii", "ignore").decode().lower().strip()
+            if type_intervention == "preventive":
+                # Les maintenances préventives ne génèrent pas de rappel de
+                # facturation Telegram après leur clôture.
+                continue
+
             try:
                 dc = d['date_cloture']
                 if isinstance(dc, str):

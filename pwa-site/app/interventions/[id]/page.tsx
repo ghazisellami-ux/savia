@@ -572,6 +572,17 @@ export default function InterventionDetailPage() {
 
     setSaving(true);
     try {
+      // Upload the signed fiche before closing the technician assignment so a
+      // failed upload never leaves a closure without its supporting document.
+      if (techForm.statut === 'Cloturee' && photoFile) {
+        try {
+          await api.interventions.uploadPhoto(id, photoFile);
+        } catch (error) {
+          console.error('Multi-tech photo upload failed:', error);
+          throw new Error("La fiche signée n'a pas pu être envoyée. L'intervention n'a pas été clôturée.");
+        }
+      }
+
       // Calculate duration from times
       const calculateDuration = (startTime: string, endTime: string): number => {
         try {
@@ -630,6 +641,7 @@ export default function InterventionDetailPage() {
         type_erreur_tech: techForm.type_erreur_tech,
         pieces_a_deduire,  // Include pieces (deducted when tech closes)
         pieces_rupture: pieces_rupture_tech,  // Include rupture pieces if waiting
+        ...(techForm.statut === 'Cloturee' ? { fiche_validation: form.fiche_validation } : {}),
         ...(manualPiecesMultiTech.length > 0 ? { pieces_manuelles: manualPiecesMultiTech } : {}) // Include manual pieces
       };
 
@@ -1077,6 +1089,80 @@ export default function InterventionDetailPage() {
                 </p>
               )}
             </div>
+
+            {/* Fiche d'intervention signée — disponible lors de la clôture multi-tech */}
+            {techForm.statut === 'Cloturee' && !isTechnicianStatusLocked && (
+              <div style={{ ...SECTION, border: '2px dashed var(--teal)' }}>
+                <label style={{ ...LABEL, color: 'var(--teal)' }}>
+                  <Camera style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} />
+                  Fiche d&apos;intervention signée
+                </label>
+                <input
+                  type="file"
+                  id="photo-input-multi"
+                  accept="image/*"
+                  capture="environment"
+                  style={{ display: 'none' }}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setPhotoFile(file);
+                    setPhotoPreview(URL.createObjectURL(file));
+                  }}
+                />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => document.getElementById('photo-input-multi')?.click()}
+                    style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}
+                  >
+                    <Camera style={{ width: 16, height: 16, display: 'inline-block', verticalAlign: '-3px', marginRight: '6px' }} />
+                    {photoFile ? 'Changer la photo' : 'Prendre / Importer la photo'}
+                  </button>
+                  {photoFile && (
+                    <button
+                      type="button"
+                      onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
+                      style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '12px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center' }}
+                    >
+                      <Trash2 style={{ width: 18, height: 18 }} />
+                    </button>
+                  )}
+                </div>
+                {photoPreview && (
+                  <img src={photoPreview} alt="Aperçu de la fiche signée" style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginTop: '12px', display: 'block' }} />
+                )}
+                <div style={{ marginTop: '14px' }}>
+                  <label style={LABEL}>Statut de la fiche signée</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                    {[
+                      { val: 'En attente', icon: <Clock style={{ width: 14, height: 14 }} />, bg: 'rgba(245,158,11,0.1)', color: '#B45309' },
+                      { val: 'Validée', icon: <CheckCircle style={{ width: 14, height: 14 }} />, bg: 'rgba(34,197,94,0.1)', color: '#15803D' },
+                    ].map(({ val, icon, bg, color }) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => set('fiche_validation', val)}
+                        style={{
+                          padding: '12px 8px',
+                          border: `2px solid ${form.fiche_validation === val ? color : 'var(--border)'}`,
+                          borderRadius: '10px',
+                          background: form.fiche_validation === val ? bg : '#fff',
+                          color: form.fiche_validation === val ? color : 'var(--text-muted)',
+                          fontWeight: form.fiche_validation === val ? 800 : 500,
+                          fontSize: '0.82rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          textAlign: 'center',
+                        }}
+                      >
+                        {icon} {val}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Pièces requises — visible uniquement quand statut = En attente de piece (multi-tech) */}
             {techForm.statut === 'En attente de piece' && (
