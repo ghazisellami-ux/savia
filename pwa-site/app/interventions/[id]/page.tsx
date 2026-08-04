@@ -509,7 +509,7 @@ export default function InterventionDetailPage() {
       const durationMinutes = calculateDuration(form.start_time, form.end_time);
       
       const updatePayload = { 
-        ...(form.statut !== 'Cloturee' ? { statut: form.statut } : {}),
+        ...(initialFormStatut !== 'Cloturee' ? { statut: form.statut } : {}),
         probleme: form.probleme,
         cause: form.cause,
         solution: form.solution,

@@ -425,6 +425,11 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
     with get_db() as conn:
         require_roles(user, "Admin", "Manager", "Responsable Technique", "Technicien")
         assert_intervention_write_access(conn, intervention_id, user)
+        intervention_state = conn.execute(
+            "SELECT statut FROM interventions WHERE id = %s",
+            (intervention_id,),
+        ).fetchone()
+        previous_status = str(intervention_state.get("statut") or "").strip() if intervention_state else ""
     logger.info(f"📥 update_intervention #{intervention_id} received: {body}")
     
     # Vérifier les permissions : un technicien ne peut éditer que ses interventions
@@ -486,6 +491,28 @@ def update_intervention(intervention_id: int, body: dict = Body(...), user: dict
                 )
     
     new_statut = body.get("statut")
+
+    # A manager/admin reopening a multi-tech parent must also reopen each
+    # technician assignment. Otherwise the PWA correctly keeps the assignment
+    # locked at Cloturee even though the parent displays En cours.
+    if (
+        user.get("role") in {"Admin", "Manager", "Responsable Technique"}
+        and previous_status == "Cloturee"
+        and new_statut
+        and "tur" not in str(new_statut).lower()
+        and ("cours" in str(new_statut).lower() or "attente" in str(new_statut).lower())
+    ):
+        reopened_tech_status = "En attente de piece" if "attente" in str(new_statut).lower() else "En cours"
+        with get_db() as conn:
+            result = conn.execute(
+                "UPDATE interventions_techniciens SET statut = %s, updated_at = CURRENT_TIMESTAMP WHERE intervention_id = %s AND statut = 'Cloturee'",
+                (reopened_tech_status, intervention_id),
+            )
+            logger.info(
+                f"🔓 Intervention #{intervention_id} rouverte par {user.get('nom') or user.get('sub')}: "
+                f"affectations techniciens synchronisées vers {reopened_tech_status}"
+            )
+
     if new_statut and "tur" in new_statut.lower():
         # Normaliser pieces_a_deduire : s'assurer que c'est une liste de dicts avec clé 'ref' ou 'reference'
         raw_pieces = body.get("pieces_a_deduire") or []

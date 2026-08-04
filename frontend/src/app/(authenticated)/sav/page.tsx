@@ -1666,13 +1666,13 @@ export default function SavPage() {
               setRupturePieces([]); // reset pièces sélectionnées si on change de statut
               setManualPieces([]); setManualPieceForm({reference: '', designation: ''});
             }}>
-              <option>En cours</option>
-              <option>En attente de pièce</option>
-              <option>Clôturée</option>
-              <option>Planifiée</option>
+              <option value="En cours">En cours</option>
+              <option value="En attente de piece">En attente de pièce</option>
+              <option value="Cloturee">Clôturée</option>
+              <option value="Planifiee">Planifiée</option>
             </select></div>
           {/* Sélecteur pièces en rupture si statut = En attente de pièce */}
-          {statusForm.statut === 'En attente de pièce' && (() => {
+          {statusForm.statut === 'En attente de piece' && (() => {
             const piecesRupture = allPieces.filter((p: any) => Number(p.stock_actuel ?? 0) <= 0);
             return (
               <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-3">
@@ -1719,7 +1719,7 @@ export default function SavPage() {
               </div>
             );
           })()}
-          {statusForm.statut === 'En attente de pièce' && (
+          {statusForm.statut === 'En attente de piece' && (
               <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
                 <label className="block text-sm font-semibold text-blue-400 mb-2 flex items-center gap-1.5">
                   <span>🆕</span> Demander une pièce non référencée
