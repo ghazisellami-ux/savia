@@ -1,8 +1,10 @@
 """AI analysis and chat routes."""
 
 import json
+import math
 import re
 import unicodedata
+from datetime import date
 
 from api.runtime import (
     Depends,
@@ -126,6 +128,162 @@ def _contract_coverage(contract):
     else:
         has_labor = None
     return {"parts": has_parts, "labor": has_labor, "label": contract.get("type_contrat") or "Contrat actif"}
+
+
+def _ai_json_safe(value):
+    """Convert database/DataFrame values to JSON-safe values for the AI prompt."""
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            return _ai_json_safe(value.item())
+        except Exception:
+            pass
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if str(value) in {"<NA>", "NaT", "nan", "NaN"}:
+        return None
+    if isinstance(value, dict):
+        return {str(key): _ai_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_ai_json_safe(item) for item in value]
+    return value
+
+
+def _ai_records(df, fields, client_scope=None, client_field=None, machine_clients=None):
+    """Return relevant, non-binary database rows while preserving real values."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    available = [field for field in fields if field in df.columns]
+    rows = []
+    for raw in df.to_dict(orient="records"):
+        client = raw.get(client_field) if client_field else None
+        if not client and machine_clients and raw.get("machine"):
+            client = machine_clients.get(str(raw.get("machine")).strip().lower(), "")
+        if client_scope and str(client or "") not in client_scope:
+            continue
+        row = {field: _ai_json_safe(raw.get(field)) for field in available}
+        if client_field and client_field not in row:
+            row[client_field] = _ai_json_safe(client)
+        elif client_field and not row.get(client_field) and client:
+            row[client_field] = _ai_json_safe(client)
+        rows.append(row)
+    return rows
+
+
+def _build_financial_ai_context(clients_data, tco_data):
+    """Build the complete financial context from authoritative server data."""
+    df_contracts = lire_contrats()
+    df_interv = lire_interventions()
+    df_equip = lire_equipements()
+    df_planning = lire_planning()
+    df_pieces = lire_pieces()
+
+    client_scope = {
+        str(row.get("client") or "").strip()
+        for row in clients_data
+        if str(row.get("client") or "").strip()
+    }
+    equipment_clients = {}
+    if df_equip is not None and not df_equip.empty:
+        for row in df_equip.to_dict(orient="records"):
+            machine = str(row.get("Nom") or row.get("nom") or "").strip().lower()
+            if machine:
+                equipment_clients[machine] = str(row.get("Client") or row.get("client") or "").strip()
+
+    # The dashboard payload is enriched with counts calculated from the real
+    # intervention rows, instead of relying on fields supplied by the browser.
+    client_rows = []
+    for client_row in clients_data:
+        enriched = dict(client_row)
+        name = str(enriched.get("client") or "").strip()
+        rows = []
+        if df_interv is not None and not df_interv.empty:
+            for raw in df_interv.to_dict(orient="records"):
+                raw_client = str(raw.get("client") or "").strip()
+                machine_client = equipment_clients.get(str(raw.get("machine") or "").strip().lower(), "")
+                if name and (raw_client == name or (not raw_client and machine_client == name)):
+                    rows.append(raw)
+        types = [str(row.get("type_intervention") or "").lower() for row in rows]
+        enriched["nb_correctives"] = sum("correct" in value for value in types)
+        enriched["nb_preventives"] = sum("correct" not in value for value in types)
+        enriched["interventions_avec_cause_confirmee"] = sum(bool(str(row.get("cause") or "").strip()) for row in rows)
+        enriched["interventions_avec_solution_confirmee"] = sum(bool(str(row.get("solution") or "").strip()) for row in rows)
+        client_rows.append(_ai_json_safe(enriched))
+
+    contract_fields = [
+        "id", "client", "type_contrat", "montant", "date_debut", "date_fin",
+        "equipement", "equipement_id", "pieces_incluses", "avec_pieces", "rappel_avant_jours",
+    ]
+    equipment_fields = [
+        "id", "Nom", "Client", "Type", "Fabricant", "Modele", "DateInstallation",
+        "DernieresMaintenance", "Statut", "Domaine", "Ville", "Region", "service",
+        "garantie_debut", "garantie_duree", "Notes",
+    ]
+    intervention_fields = [
+        "id", "date", "client", "machine", "technicien", "type_intervention", "statut",
+        "description", "probleme", "cause", "solution", "code_erreur", "type_erreur", "priorite",
+        "cout", "cout_pieces", "duree_minutes", "duree_deplacement", "pieces_utilisees",
+        "date_debut_intervention", "date_cloture", "fiche_validation", "planning_id", "notes",
+    ]
+    planning_fields = [
+        "id", "client", "machine", "type_maintenance", "date_prevue", "date_realisee",
+        "statut", "technicien_assigne", "description", "notes", "priorite",
+    ]
+    piece_fields = [
+        "id", "reference", "designation", "domaine", "equipement_type", "stock_actuel",
+        "stock_minimum", "fournisseur", "prix_unitaire", "consommation_moyenne_mois",
+        "delai_fournisseur_jours", "criticite", "nombre_equipements_relies", "utilisation_recente_30j",
+        "data_confidence", "notes",
+    ]
+
+    contracts = _ai_records(df_contracts, contract_fields, client_scope, "client")
+    equipment = _ai_records(df_equip, equipment_fields, client_scope, "Client")
+    interventions = _ai_records(
+        df_interv,
+        intervention_fields,
+        client_scope,
+        "client",
+        machine_clients=equipment_clients,
+    )
+    planning = _ai_records(
+        df_planning,
+        planning_fields,
+        client_scope,
+        "client",
+        machine_clients=equipment_clients,
+    )
+    # Stock has no client foreign key. It is still relevant to profitability
+    # because parts costs and shortages affect service margin globally.
+    pieces = _ai_records(df_pieces, piece_fields)
+
+    scoped_tco = [
+        row for row in (tco_data or [])
+        if not client_scope or str(row.get("client") or "").strip() in client_scope
+    ]
+    coverage = {
+        "clients": len(client_rows),
+        "contrats": len(contracts),
+        "equipements": len(equipment),
+        "interventions": len(interventions),
+        "maintenances_planifiees": len(planning),
+        "pieces_stock": len(pieces),
+        "equipements_tco_transmis": len(scoped_tco),
+        "tco_complet": True,
+        "detail_interventions_transmis": True,
+    }
+    return {
+        "couverture": coverage,
+        "clients": client_rows,
+        "contrats": contracts,
+        "equipements": equipment,
+        "interventions": interventions,
+        "maintenances_planifiees": planning,
+        "pieces_stock": pieces,
+        "tco_equipements": _ai_json_safe(scoped_tco),
+    }
 
 
 def _apply_verified_costs(result, parts_catalog, historical_corrective_costs, cost_context, sym):
@@ -1352,7 +1510,14 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token), x_savia_la
     except Exception:
         pass
 
-    # Build compact summary
+    # Rebuild the context from authoritative server-side tables. The browser
+    # only provides the current view; it must not be the source of truth for
+    # a financial analysis.
+    financial_context = _build_financial_ai_context(clients_data, tco_data)
+    clients_data = financial_context["clients"]
+    tco_data = financial_context["tco_equipements"]
+
+    # Build compact summary from the enriched real data.
     avg_cout = sum(c.get('cout_total', 0) for c in clients_data) / max(len(clients_data), 1)
     client_lines = []
     for c in clients_data:
@@ -1369,6 +1534,8 @@ def ai_analyze_costs(body: dict, user: dict = Depends(_verify_token), x_savia_la
             f"coût_main_oeuvre={c.get('cout_main_oeuvre',0)} {sym}, "
             f"marge={c.get('marge_pct',0)}%, "
             f"interventions={nb_interv} (correctives={c.get('nb_correctives',0)}, préventives={c.get('nb_preventives',0)}), "
+            f"causes_confirmees={c.get('interventions_avec_cause_confirmee',0)}, "
+            f"solutions_confirmees={c.get('interventions_avec_solution_confirmee',0)}, "
             f"equipements={nb_equip}, "
             f"ratio_interv/equip={ratio_interv}, "
             f"ratio_préventif={round(c.get('nb_preventives',0)/nb_interv*100) if nb_interv>0 else 0}%, "
@@ -1421,6 +1588,9 @@ Tu es un expert en gestion financière de maintenance biomédicale (GMAO). Analy
 ═══ DONNÉES DÉTAILLÉES PAR CLIENT ═══
 {summary}
 {tco_summary}
+â•â•â• CONTEXTE COMPLET ISSU DES DONNÃ‰ES RÃ‰ELLES DU SERVEUR â•â•â•
+Le JSON ci-dessous contient toutes les lignes exploitables disponibles pour le pÃ©rimÃ¨tre analysÃ© : contrats, parc, interventions dÃ©taillÃ©es, maintenances planifiÃ©es, stock de piÃ¨ces et TCO. Utilise ces lignes comme source de vÃ©ritÃ©. Ne crÃ©e aucun montant, diagnostic, contrat ou Ã©quipement absent des donnÃ©es.
+{json.dumps(financial_context, ensure_ascii=False, separators=(',', ':'), default=str)}
 {output_guidance}
 
 ═══ CONSIGNES D'ANALYSE ═══

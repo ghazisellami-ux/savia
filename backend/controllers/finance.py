@@ -83,6 +83,8 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
             cout_interv = 0
             cout_pieces = 0
             nb_interv = 0
+            nb_correctives = 0
+            nb_preventives = 0
             duree_totale = 0
             cl_machines = df_equip[df_equip["Client"] == cl]["Nom"].tolist() if "Nom" in df_equip.columns else []
             if not df_interv.empty and "machine" in df_interv.columns and cl_machines:
@@ -91,6 +93,10 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 cout_interv = cl_interventions["cout"].sum() if "cout" in cl_interventions.columns else 0
                 cout_pieces = cl_interventions["cout_pieces"].sum() if "cout_pieces" in cl_interventions.columns else 0
                 duree_totale = cl_interventions["duree_minutes"].sum() if "duree_minutes" in cl_interventions.columns else 0
+                if "type_intervention" in cl_interventions.columns:
+                    is_corrective = cl_interventions["type_intervention"].fillna("").astype(str).str.lower().str.contains("correct")
+                    nb_correctives = int(is_corrective.sum())
+                    nb_preventives = int(nb_interv - nb_correctives)
 
             # Get taux horaire from config (required, no default)
             try:
@@ -119,12 +125,15 @@ def finances_dashboard(client: Optional[str] = None, user: dict = Depends(_verif
                 "nb_equipements": int(nb_equip),
                 "revenu_contrats": round(float(revenu), 0),
                 "cout_interventions": round(float(cout_service), 0),
+                "cout_interventions_brut": round(float(cout_interv), 0),
                 "cout_pieces": round(float(cout_pieces), 0),
                 "cout_main_oeuvre": round(float(cout_mo_recalculated), 0),
                 "cout_total": round(float(cout_total_final), 0),
                 "marge": round(float(marge), 0),
                 "marge_pct": float(marge_pct),
                 "nb_interventions": int(nb_interv),
+                "nb_correctives": int(nb_correctives),
+                "nb_preventives": int(nb_preventives),
                 "duree_totale_h": round(float(duree_totale) / 60.0, 1),
                 "rentable": bool(marge >= 0),
             })
