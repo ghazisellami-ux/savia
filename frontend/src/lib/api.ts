@@ -291,6 +291,26 @@ export const contrats = {
   },
   create: (data: Record<string, unknown>) =>
     request<{ ok: boolean; contrat_id?: number; nb_plannings?: number }>('/api/contrats', { method: 'POST', body: data }),
+  uploadFile: async (id: string | number, file: File) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
+    const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers: Record<string, string> = { 'X-SAVIA-Lang': lang };
+    if (token && token !== 'undefined' && token !== 'null') {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(`/api/contrats/${id}/fichier`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
+      throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<{ ok: boolean; filename: string; content_type: string; size_bytes: number }>;
+  },
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) =>

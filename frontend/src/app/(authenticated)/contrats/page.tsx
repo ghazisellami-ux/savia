@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { contrats, equipements, pieces as piecesApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -8,7 +8,7 @@ import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
   X, ChevronDown, Package, Bell, RefreshCcw, CheckSquare, StickyNote,
   Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Building2,
-  Eye, Download, Edit2
+  Eye, Download, Edit2, Camera, Paperclip
 } from 'lucide-react';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
@@ -36,6 +36,9 @@ interface Contrat {
   rappel_avant_jours?: number;
   recurrence_maintenance?: string;
   date_premiere_maintenance?: string;
+  fichier_contrat?: string;
+  fichier_content_type?: string;
+  has_fichier?: boolean;
 }
 
 const emptyForm = () => ({
@@ -84,6 +87,9 @@ export default function ContratsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
+  const [contractAttachment, setContractAttachment] = useState<File | null>(null);
+  const contractFileInputRef = useRef<HTMLInputElement>(null);
+  const contractCameraInputRef = useRef<HTMLInputElement>(null);
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ contratId: string; contratName: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -109,6 +115,9 @@ export default function ContratsPage() {
         rappel_avant_jours: item.rappel_avant_jours || 30,
         recurrence_maintenance: item.recurrence_maintenance || 'Semestrielle',
         date_premiere_maintenance: (item.date_premiere_maintenance || '').substring(0, 10),
+        fichier_contrat: item.fichier_contrat || '',
+        fichier_content_type: item.fichier_content_type || '',
+        has_fichier: Boolean(item.has_fichier),
       })));
       setEquips(eqs as any[]);
       setClients(cls as any[]);
@@ -200,18 +209,26 @@ export default function ContratsPage() {
         notes: form.notes,
         statut: form.statut,
       };
+      let savedContractId = editingContrat?.id;
       if (editingContrat) {
         await (contrats as any).update(editingContrat.id, payload);
         setSaveMsg('✅ Contrat mis à jour avec succès !');
       } else {
         const result = await (contrats as any).create(payload) as any;
+        savedContractId = result?.contrat_id ? String(result.contrat_id) : undefined;
         const nbPlannings = result?.nb_plannings || 0;
         const planningMsg = nbPlannings > 0
           ? `\n📅 ${nbPlannings} maintenance(s) préventive(s) planifiées automatiquement`
           : '';
         setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
       }
+      if (contractAttachment && savedContractId) {
+        await contrats.uploadFile(savedContractId, contractAttachment);
+      }
       setForm(emptyForm());
+      setContractAttachment(null);
+      if (contractFileInputRef.current) contractFileInputRef.current.value = '';
+      if (contractCameraInputRef.current) contractCameraInputRef.current.value = '';
       setEditingContrat(null);
       await load();
       setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 4000);
@@ -222,6 +239,7 @@ export default function ContratsPage() {
 
   const openEdit = (c: Contrat) => {
     setEditingContrat(c);
+    setContractAttachment(null);
     
     // Parse pieces_incluses from JSON if it exists
     let pieces_selectionnees: { ref: string; designation: string; quota: number }[] = [];
@@ -265,6 +283,23 @@ export default function ContratsPage() {
   };
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+
+  const chooseContractAttachment = (file?: File) => {
+    if (!file) return;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowed.includes(file.type)) {
+      setSaveMsg('❌ Format refusé. Choisissez une image JPG, PNG, WEBP ou un PDF.');
+      return;
+    }
+    setSaveMsg('');
+    setContractAttachment(file);
+  };
+
+  const clearContractAttachment = () => {
+    setContractAttachment(null);
+    if (contractFileInputRef.current) contractFileInputRef.current.value = '';
+    if (contractCameraInputRef.current) contractCameraInputRef.current.value = '';
+  };
 
   // Toggle a piece in/out of selection (identified by unique reference)
   const togglePiece = (ref: string, designation: string) => setForm(f => {
@@ -384,6 +419,20 @@ export default function ContratsPage() {
     finally { setIsPdfGen(false); }
   };
 
+  const handleContractAttachmentDownload = async (c: Contrat) => {
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const res = await fetch(`/api/contrats/${c.id}/fichier`, {
+        headers: token ? { Authorization: 'Bearer ' + token } : undefined,
+      });
+      if (!res.ok) throw new Error('Pièce jointe indisponible');
+      const blob = await res.blob();
+      downloadBlob(blob, c.fichier_contrat || `contrat_${c.id}`);
+    } catch (err: any) {
+      alert('Erreur pièce jointe : ' + (err?.message || err));
+    }
+  };
+
   const handleDeleteContrat = async () => {
     if (!deleteConfirm) return;
     setIsDeleting(true);
@@ -420,7 +469,7 @@ export default function ContratsPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion des contrats SAV et maintenance préventive</p>
         </div>
-        <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setSaveMsg(''); setShowModal(true); }}
+        <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setContractAttachment(null); setSaveMsg(''); setShowModal(true); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
           <Plus className="w-4 h-4" /> Nouveau contrat
         </button>
@@ -591,6 +640,14 @@ export default function ContratsPage() {
                 >
                   <Eye className="w-3.5 h-3.5" /> Voir les détails
                 </button>
+                {c.has_fichier && (
+                  <button
+                    onClick={() => handleContractAttachmentDownload(c)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" /> Pièce jointe
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     onClick={() => openEdit(c)}
@@ -602,7 +659,7 @@ export default function ContratsPage() {
                 <button
                   onClick={() => handleContratPdf(c)}
                   disabled={isPdfGen}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
+                  className="hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" /> {isPdfGen ? 'Génération...' : 'Télécharger PDF'}
                 </button>
@@ -660,7 +717,7 @@ export default function ContratsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button onClick={() => handleContratPdf(c)} disabled={isPdfGen}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                    className="hidden flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
                     <Download className="w-4 h-4" /> {isPdfGen ? 'Génération...' : 'Télécharger PDF'}
                   </button>
                   <button onClick={() => setSelectedContrat(null)} className="p-2 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted hover:text-savia-text transition-all cursor-pointer">
@@ -735,6 +792,21 @@ export default function ContratsPage() {
                   return null;
                 })()}
                 
+                {c.has_fichier && (
+                  <div className="bg-savia-surface-hover/40 rounded-xl p-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Paperclip className="w-4 h-4 text-purple-300 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-savia-text-muted font-semibold uppercase tracking-wider">Pièce jointe du contrat</p>
+                        <p className="text-sm font-semibold truncate">{c.fichier_contrat || 'Document joint'}</p>
+                      </div>
+                    </div>
+                    <button onClick={() => handleContractAttachmentDownload(c)} className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer">
+                      <Download className="w-3.5 h-3.5" /> Télécharger
+                    </button>
+                  </div>
+                )}
+
                 {/* Conditions */}
                 {c.conditions && (
                   <div className="bg-savia-surface-hover/40 rounded-xl p-4">
@@ -909,6 +981,53 @@ export default function ContratsPage() {
                     <input type="number" className={INPUT} value={form.montant} min={0}
                       onChange={e => set('montant', Number(e.target.value))} />
                   </div>
+                </div>
+              </div>
+
+              {/* === SECTION: Pièce jointe === */}
+              <div>
+                <div className={SECTION_TITLE}>
+                  <Paperclip className="w-4 h-4 text-savia-accent" /> Pièce jointe du contrat
+                </div>
+                <div className="rounded-xl border border-dashed border-savia-border bg-savia-surface-hover/30 p-4 space-y-3">
+                  <input
+                    ref={contractFileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+                    className="hidden"
+                    onChange={e => chooseContractAttachment(e.target.files?.[0])}
+                  />
+                  <input
+                    ref={contractCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={e => chooseContractAttachment(e.target.files?.[0])}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => contractCameraInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white bg-savia-accent hover:opacity-90 transition-all cursor-pointer">
+                      <Camera className="w-4 h-4" /> Prendre une photo
+                    </button>
+                    <button type="button" onClick={() => contractFileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-savia-text border border-savia-border hover:bg-savia-surface-hover transition-all cursor-pointer">
+                      <Paperclip className="w-4 h-4" /> Choisir une image ou un PDF
+                    </button>
+                  </div>
+                  {contractAttachment ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-savia-accent/10 border border-savia-accent/20 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold truncate">{contractAttachment.name}</p>
+                        <p className="text-xs text-savia-text-muted">{(contractAttachment.size / 1024 / 1024).toFixed(2)} Mo · sera enregistré avec le contrat</p>
+                      </div>
+                      <button type="button" onClick={clearContractAttachment} className="p-1.5 rounded-lg text-savia-text-muted hover:text-red-400 hover:bg-red-500/10 cursor-pointer" aria-label="Retirer la pièce jointe">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : editingContrat?.has_fichier ? (
+                    <p className="text-xs text-savia-text-muted">Fichier actuel : <span className="font-semibold text-savia-text">{editingContrat.fichier_contrat}</span>. Sélectionnez un nouveau fichier pour le remplacer.</p>
+                  ) : (
+                    <p className="text-xs text-savia-text-muted">Formats acceptés : JPG, PNG, WEBP ou PDF · taille maximale : 20 Mo.</p>
+                  )}
                 </div>
               </div>
 

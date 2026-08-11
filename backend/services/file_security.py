@@ -25,6 +25,7 @@ from fastapi import HTTPException, UploadFile
 _MIB = 1024 * 1024
 _EXTENSIONS = {
     "fiche": {"jpg", "jpeg", "png", "webp", "pdf"},
+    "contrat": {"jpg", "jpeg", "png", "webp", "pdf"},
     "document_technique": {"jpg", "jpeg", "png", "webp", "pdf", "docx", "xlsx"},
     "clients_import": {"csv", "xlsx"},
     "knowledge_import": {"csv", "xlsx", "xls", "pdf", "docx", "doc"},
@@ -55,6 +56,7 @@ class ValidatedFile:
 def _limit_for(category: str) -> int:
     defaults = {
         "fiche": 10,
+        "contrat": 20,
         "document_technique": 20,
         "clients_import": 10,
         "knowledge_import": 20,
