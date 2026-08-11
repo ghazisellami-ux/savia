@@ -43,7 +43,10 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
   }
 
   const isAiEndpoint = endpoint.includes('/ai/');
-  const timeoutMs = isAiEndpoint ? 180000 : 30000;
+  // Certaines analyses IA SAV prennent plus de 30 secondes (notamment avec
+  // un modèle de raisonnement). Le backend peut déjà avoir terminé avec 200
+  // alors qu'un ancien délai client provoque à tort une erreur réseau.
+  const timeoutMs = isAiEndpoint ? 300000 : 30000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;

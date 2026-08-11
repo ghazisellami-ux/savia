@@ -6,11 +6,25 @@ import json
 import time
 import logging
 import os
+import requests
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from google import genai
 from google.genai import types
-from config import GOOGLE_API_KEY, GOOGLE_API_KEYS
+from config import (
+    AI_PROVIDER,
+    FIREWORKS_API_KEY,
+    FIREWORKS_ATTEMPT_TIMEOUT_SECONDS,
+    FIREWORKS_BASE_URL,
+    FIREWORKS_MODEL,
+    GOOGLE_API_KEY,
+    GOOGLE_API_KEYS,
+)
 from log_preprocessor import clean_log
+
+try:
+    from db_engine import get_config
+except Exception:  # pragma: no cover - import fallback for isolated tooling
+    get_config = None
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +92,11 @@ else:
 # Compat : garder un `client` pour le code existant
 client = _clients[0] if _clients else None
 
+if FIREWORKS_API_KEY:
+    AI_AVAILABLE = True
 
-def _call_ia(prompt, timeout=120, is_json=False):
+
+def _call_google(prompt, timeout=120, is_json=False):
     """
     Appelle l'IA avec rotation automatique et audit trail.
     
@@ -158,12 +175,117 @@ def _call_ia(prompt, timeout=120, is_json=False):
     return f"Erreur de Quota IA : {last_error}" if 'last_error' in locals() else "Erreur IA inconnue"
 
 
+def _active_provider():
+    """Retourne le fournisseur choisi par l'admin, avec fallback environnement."""
+    try:
+        configured = get_config("ai_provider", "") if get_config else ""
+    except Exception:
+        configured = ""
+    provider = str(configured or AI_PROVIDER or "google").strip().lower()
+    return provider if provider in {"google", "fireworks"} else "google"
+
+
+def _call_fireworks(prompt, timeout=120, is_json=False):
+    """Appelle Fireworks via son endpoint OpenAI-compatible, côté backend uniquement."""
+    if not FIREWORKS_API_KEY:
+        logger.error("Fireworks sélectionné mais FIREWORKS_API_KEY est absent.")
+        return None
+    if not isinstance(prompt, str):
+        # Les prompts image actuels utilisent les types Google Gemini. Le modèle
+        # DeepSeek configuré ici est textuel : on garde Google pour ces appels.
+        if _clients:
+            logger.info("Prompt multimodal non supporté par Fireworks, fallback Google.")
+            return _call_google(prompt, timeout=timeout, is_json=is_json)
+        logger.warning("Prompt multimodal ignoré : Fireworks configuré sans fallback Google.")
+        return None
+
+    model = FIREWORKS_MODEL.strip()
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        # DeepSeek V4 raisonne en mode "high" par défaut. Pour les rapports
+        # applicatifs, cela peut consommer toute la sortie dans
+        # reasoning_content et laisser content vide. On demande donc une
+        # réponse finale directe et structurée.
+        "reasoning_effort": "none",
+        # Les rapports prédictifs contiennent plusieurs sections JSON. Une
+        # limite trop basse coupe la réponse avant la fin et rend le JSON
+        # impossible à parser côté backend.
+        "max_tokens": 8192,
+    }
+    if is_json:
+        # Fireworks expose le mode JSON de l'API Chat Completions.
+        payload["response_format"] = {"type": "json_object"}
+    request_timeout = min(max(5, timeout), FIREWORKS_ATTEMPT_TIMEOUT_SECONDS)
+
+    try:
+        response = requests.post(
+            f"{FIREWORKS_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {FIREWORKS_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=request_timeout,
+        )
+        # Certains modèles/versions du endpoint acceptent le JSON mais pas
+        # encore le paramètre response_format. On retente alors la même
+        # requête sans ce paramètre plutôt que de basculer directement vers
+        # le résumé minimal de l'interface.
+        if response.status_code == 400 and is_json and "response_format" in payload:
+            detail = response.text[:500].lower()
+            if "response_format" in detail or "json_object" in detail:
+                retry_payload = dict(payload)
+                retry_payload.pop("response_format", None)
+                response = requests.post(
+                    f"{FIREWORKS_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {FIREWORKS_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=retry_payload,
+                    timeout=request_timeout,
+                )
+        if response.status_code >= 400:
+            detail = response.text[:500]
+            lowered = detail.lower()
+            if response.status_code in {408, 429, 500, 502, 503, 504} or "capacity" in lowered:
+                logger.warning("Fireworks indisponible ou saturé (%s) pour %s.", response.status_code, model)
+            else:
+                logger.error("Erreur Fireworks (%s) pour %s : %s", response.status_code, model, detail)
+            return None
+        data = response.json()
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+        if not content:
+            logger.warning("Réponse Fireworks vide pour %s.", model)
+            return None
+        logger.info("✅ Décision IA OK | Fournisseur: Fireworks | Modèle: %s", model)
+        return content
+    except requests.RequestException as exc:
+        logger.warning("Erreur réseau Fireworks pour %s : %s", model, exc)
+        return None
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.error("Réponse Fireworks invalide pour %s : %s", model, exc)
+        return None
+
+
+def _call_ia(prompt, timeout=120, is_json=False):
+    """Point d'entrée commun, piloté par le choix admin Google/Fireworks."""
+    if _active_provider() == "fireworks":
+        return _call_fireworks(prompt, timeout=timeout, is_json=is_json)
+    return _call_google(prompt, timeout=timeout, is_json=is_json)
+
+
 def _call_ia_fast(prompt, timeout=20):
     """
     Version rapide de _call_ia : saute les modèles lents (2.5-flash = thinking model)
     et utilise un timeout court. Idéal pour les analyses légères.
     """
     global _current_key_index
+
+    if _active_provider() == "fireworks":
+        return _call_fireworks(prompt, timeout=timeout, is_json=False)
 
     if not _clients:
         return None
@@ -219,9 +341,11 @@ def _call_ia_fast(prompt, timeout=20):
 
 def verifier_ia():
     """Teste si l'IA est opérationnelle. Retourne (bool, str) : (ok, message)."""
-    if not GOOGLE_API_KEYS:
+    if _active_provider() == "fireworks" and not FIREWORKS_API_KEY:
+        return False, "Clé Fireworks non configurée"
+    if _active_provider() == "google" and not GOOGLE_API_KEYS:
         return False, "Clé API non configurée"
-    if not _clients:
+    if _active_provider() == "google" and not _clients:
         return False, "Client IA non initialisé"
 
     # Tester avec un appel léger
@@ -280,6 +404,43 @@ def clean_json_response(text_response):
     return None
 
 
+def _extract_causal_log_sequence(log_context, code, message, before=40, after=10):
+    """Conserve la chronologie utile autour de l'erreur analysée, sans changer son ordre."""
+    if not log_context:
+        return ""
+
+    try:
+        from log_preprocessor import clean_log
+        cleaned_lines = clean_log(log_context, max_lines=1000).splitlines()
+    except Exception as exc:
+        logger.warning("Impossible de nettoyer le log pour la chronologie: %s", exc)
+        cleaned_lines = log_context.splitlines()[-1000:]
+
+    if not cleaned_lines:
+        return ""
+
+    code_normalized = str(code or "").strip().lower()
+    message_terms = [
+        term.lower() for term in re.findall(r"[A-Za-z0-9_/-]{4,}", str(message or ""))[:5]
+    ]
+    matches = [
+        index for index, line in enumerate(cleaned_lines)
+        if (code_normalized and code_normalized in line.lower())
+        or (message_terms and sum(term in line.lower() for term in message_terms) >= 2)
+    ]
+
+    if matches:
+        anchor = matches[-1]
+        start = max(0, anchor - before)
+        end = min(len(cleaned_lines), anchor + after + 1)
+        selected = cleaned_lines[start:end]
+        return "\n".join(f"{start + offset + 1:04d} | {line}" for offset, line in enumerate(selected))
+
+    selected = cleaned_lines[-min(len(cleaned_lines), before + after + 1):]
+    start = len(cleaned_lines) - len(selected)
+    return "\n".join(f"{start + offset + 1:04d} | {line}" for offset, line in enumerate(selected))
+
+
 def get_ai_suggestion(code, msg, context, log_context="", equipment_type="", response_language="fr"):
     """
     Demande à l'IA un diagnostic précis.
@@ -315,7 +476,7 @@ def get_ai_suggestion(code, msg, context, log_context="", equipment_type="", res
             solutions_context = "\n\nSOLUTIONS VALIDÉES LOCALEMENT (base de connaissances terrain) :\n"
             for i, s in enumerate(similar, 1):
                 solutions_context += f"{i}. Cause: {s.get('Cause','')} → Solution: {s.get('Solution','')}\n"
-            solutions_context += "\nUtilise ces retours terrain pour affiner ton diagnostic.\n"
+            solutions_context += "\nCe sont des retours terrain confirmes : utilise-les comme evidence lorsque le code et le contexte correspondent.\n"
     except Exception:
         pass
 
@@ -325,30 +486,25 @@ def get_ai_suggestion(code, msg, context, log_context="", equipment_type="", res
         db_info_section = ""
         if solutions_context:
             db_info_section = f"""
-INFORMATION DÉJÀ CONNUE (base de données locale — NE PAS RÉPÉTER) :
+INFORMATION DEJA CONFIRMEE SUR LE TERRAIN (base de connaissances locale) :
 {solutions_context}
-⚠️ L'utilisateur a DÉJÀ ces informations affichées à l'écran.
-Tu dois aller PLUS LOIN que ces données basiques."""
+La cause et la solution confirmees sont prioritaires si le code et la sequence du log concordent.
+Ne les ecarte que si un indice explicite du log les contredit; explique alors cette difference.
+Ajoute la chaine causale, les controles et les criteres de validation au lieu de les repeter simplement."""
 
         # Construire la section contexte log
         log_section = ""
         if log_context:
-            try:
-                # Nettoyer et réduire le contexte log pour éviter les erreurs "prompt is too long"
-                from log_preprocessor import clean_log
-                clean_context = clean_log(log_context)
-            except Exception as e:
-                logger.error(f"Erreur lors du nettoyage des logs: {e}")
-                clean_context = log_context[-10000:] # fallback rudimentaire
+            clean_context = _extract_causal_log_sequence(log_context, code, msg)
                 
             log_section = f"""
 
-CONTEXTE LOG (événements AVANT l'erreur, du plus ancien au plus récent) :
+CONTEXTE LOG (chronologie reelle autour de l'erreur selectionnee; ordre du plus ancien au plus recent) :
 ```
 {clean_context}
 ```
-⚠️ Analyse cette séquence d'événements pour identifier la chaîne causale qui a mené à l'erreur.
-Les étapes précédentes peuvent révéler la vraie cause racine."""
+Chaque ligne est prefixee par son numero dans la sequence. Analyse la sequence, pas seulement la derniere erreur.
+Les etapes precedentes peuvent reveler la vraie cause racine; les lignes suivantes servent a verifier l'effet ou la recurrence."""
 
         language_instruction = (
             "IMPORTANT LANGUAGE RULE: Write every user-facing JSON value in English only. Keep JSON keys exactly as requested. If examples or known solutions are in French, translate the generated values to English."
@@ -375,13 +531,16 @@ CONTEXTE TECHNIQUE PAR TYPE D'ÉQUIPEMENT:
 - RX (Radiographie): Tube RX, haute tension, système de collimation, détecteur, refroidissement.
 
 RÈGLES :
-- Sois BREF et DIRECT (2-3 lignes max par champ)
+- Sois precis et actionnable : 3-5 lignes pour le diagnostic et la cause, puis une procedure numerotee complete.
 - Ne donne pas de réponses génériques. Identifie précisément la carte électronique, le composant mécanique (tube RX, inverter, détécteur...), ou la perturbation réseau en cause.
 - IMPORTANT: Assure-toi que ta réponse est appropriée au type d'équipement "{equipment_type or 'Unknown'}". Ne suggère pas de composants inexistants sur ce type (ex: pas de slipring sur une Mammographie).
 - Définis l'impact immédiat : Y a-t-il un risque d'émission de rayons X incontrôlée ? La machine est-elle immobilisée (Down) ?
 - Propose une procédure de dépannage avec les valeurs de test exactes (ex: vérification des tensions au multimètre, purge, etc).
-- Si la base contient déjà une solution, NE LA RÉPÈTE PAS — donne un complément utile de niveau 3.
+- Si la base contient déjà une solution confirmée, integre-la à la chaîne causale et ajoute les contrôles de niveau 3 nécessaires.
 - IMPORTANT: Fournis un Confidence_Score (entier de 0 à 100) représentant ta certitude sur ce diagnostic.
+- Construis la cause a partir de la chronologie : declencheur, premiers avertissements, erreur cible, puis consequence. N'affirme pas une cause racine sans indice dans le log ou dans une connaissance terrain confirme.
+- Distingue clairement les faits confirmes (log ou base terrain) des hypotheses a verifier. Si les donnees sont insuffisantes, dis-le et indique le controle qui levera le doute.
+- Si une cause et une solution sont confirmees dans la base pour le meme code, prends-les en compte dans la conclusion et indique les conditions qui permettent de les reutiliser en securite.
 
 Réponds en JSON strict uniquement :
 {{
@@ -392,14 +551,24 @@ Réponds en JSON strict uniquement :
     "Urgence": "Impact clinique : machine utilisable ou non ?",
     "Type": "Hardware|Software|Power|Calibration|Tube RX|Détecteur|Network|Thermal|Autre",
     "Priorite": "HAUTE|MOYENNE|BASSE",
-    "Confidence_Score": 95
+    "Confidence_Score": 95,
+    "Chronologie_Causale": ["1. Evenement declencheur constate dans le log -> effet observe", "2. Premier avertissement -> lien avec l'erreur cible", "3. Erreur cible -> consequence operationnelle"],
+    "Controles_Immediats": ["Controle 1 a effectuer avant remise sous tension", "Controle 2"],
+    "Risques_Securite": "Risques pour le patient, l'operateur ou l'equipement; ecrire Aucun risque identifie si aucun element ne le prouve",
+    "Pieces_Outils": ["Piece, carte ou outil a verifier; ecrire A confirmer si le log ne permet pas de l'identifier"],
+    "Criteres_Validation": ["Test de validation 1", "Test de validation 2 avant remise en service"],
+    "Escalade": "Condition precise de mise hors service ou d'escalade vers le support constructeur"
 }}"""
         # Appel IA avec rotation automatique des clés et contrainte JSON strict
         raw_response = _call_ia(prompt, timeout=120, is_json=True)
         if raw_response:
             result = clean_json_response(raw_response)
-            if result:
-                confidence = int(result.get("Confidence_Score", 0))
+            if isinstance(result, dict):
+                raw_confidence = result.get("Confidence_Score", result.get("confidence", 0))
+                try:
+                    confidence = int(float(str(raw_confidence).replace("%", "").strip()))
+                except (TypeError, ValueError):
+                    confidence = 0
                 logger.info(f"IA diagnostic OK (confiance: {confidence}%), keys: {list(result.keys())}")
                 return result
             else:
@@ -456,7 +625,7 @@ def _fallback_local(code, msg):
 
 def extraire_erreurs_texte(texte_page):
     """Demande à l'IA d'extraire les codes d'erreur d'un texte de page PDF."""
-    if not AI_AVAILABLE or not client:
+    if not AI_AVAILABLE:
         return []
 
     try:
@@ -485,7 +654,7 @@ Texte :
 
 def extraire_erreurs_image(image_bytes):
     """Demande à l'IA d'extraire les codes d'erreur d'une image de page PDF."""
-    if not AI_AVAILABLE or not client:
+    if not AI_AVAILABLE:
         return []
 
     try:

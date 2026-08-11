@@ -543,6 +543,8 @@ export default function SavPage() {
         duree_totale_h: Math.round(totalDureeMin / 60),
         nb_correctives, nb_preventives, nb_installations,
         ratio_correctif_pct: nb_total > 0 ? Math.round((nb_correctives / nb_total) * 100) : 0,
+        // Aucun coût de service additionnel distinct n'est suivi ici.
+        // Le coût total SAV est calculé sans double comptage : main-d'œuvre + pièces.
         cout_interventions: 0, cout_pieces: totalCoutPieces, cout_main_oeuvre: totalCoutMOLocal,
         cout_total: totalCoutTotal,
         cout_moyen: nb_total > 0 ? Math.round(totalCoutTotal / nb_total) : 0,
@@ -553,7 +555,11 @@ export default function SavPage() {
       const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
       const res = await ai.analyzeSav(sav_data, devise);
       if (res.ok && res.result) {
-        setAiResult(typeof res.result === 'string' ? JSON.parse(res.result) : res.result);
+        const parsedResult = typeof res.result === 'string' ? JSON.parse(res.result) : res.result;
+        if (!parsedResult || typeof parsedResult !== 'object') {
+          throw new Error("Réponse IA invalide : aucun rapport exploitable n'a été retourné.");
+        }
+        setAiResult(parsedResult);
       } else {
         setAiError("L'IA n'a pas pu générer d'analyse.");
       }
@@ -1313,7 +1319,7 @@ export default function SavPage() {
           <div className="glass rounded-xl p-6 text-center">
             <Brain className="w-10 h-10 text-purple-400 mx-auto mb-3" />
             <h3 className="text-lg font-bold text-savia-text mb-2">Analyse IA Complète — SAV</h3>
-            <p className="text-sm text-savia-text-muted mb-4">Gemini analysera l&apos;ensemble de vos données SAV : performance équipe, coûts, tendances, et recommandations</p>
+            <p className="text-sm text-savia-text-muted mb-4">L&apos;IA analysera l&apos;ensemble de vos données SAV : performance équipe, coûts, tendances, et recommandations</p>
             <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center justify-center gap-2 px-8 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto">
               {isAnalyzing ? <><Loader2 className="w-5 h-5 animate-spin" /> Analyse en cours...</> : <><Sparkles className="w-5 h-5" /> Lancer l&apos;analyse complète</>}
             </button>
@@ -1323,7 +1329,7 @@ export default function SavPage() {
           {isAnalyzing && (
             <div className="glass rounded-xl p-12 text-center">
               <div className="relative mx-auto w-16 h-16 mb-4"><Loader2 className="w-16 h-16 animate-spin text-purple-400" /><Sparkles className="w-6 h-6 text-pink-400 absolute -top-1 -right-1 animate-pulse" /></div>
-              <p className="text-savia-text font-semibold">Gemini analyse vos données SAV...</p>
+              <p className="text-savia-text font-semibold">L&apos;IA analyse vos données SAV...</p>
               <p className="text-xs text-savia-text-dim mt-1">Cela peut prendre jusqu&apos;à 30 secondes</p>
             </div>
           )}

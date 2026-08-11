@@ -968,24 +968,51 @@ export default function PiecesPage() {
                     <p className="text-sm text-savia-text leading-relaxed">{aiResult.analyse_risque}</p>
                   </div>
                 )}
+                {aiResult.couverture_donnees && (
+                  <div className="p-4 rounded-lg bg-indigo-500/10 border-l-4 border-indigo-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-indigo-300 mb-3 uppercase tracking-wider"><Brain className="w-4 h-4" /> Données réellement exploitées</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                      <div className="p-2 rounded bg-savia-bg/40"><div className="font-black text-indigo-300">{aiResult.couverture_donnees.references_analysees ?? 0}</div><div className="text-[11px] text-savia-text-muted">références</div></div>
+                      <div className="p-2 rounded bg-savia-bg/40"><div className="font-black text-red-400">{aiResult.couverture_donnees.ruptures_effectives ?? 0}</div><div className="text-[11px] text-savia-text-muted">ruptures réelles</div></div>
+                      <div className="p-2 rounded bg-savia-bg/40"><div className="font-black text-cyan-300">{aiResult.couverture_donnees.predictions_calculables ?? 0}</div><div className="text-[11px] text-savia-text-muted">prévisions calculées</div></div>
+                      <div className="p-2 rounded bg-savia-bg/40"><div className="font-black text-green-300">{aiResult.couverture_donnees.interventions_liees ?? 0}</div><div className="text-[11px] text-savia-text-muted">interventions liées</div></div>
+                    </div>
+                    <p className="text-xs text-savia-text-muted mt-3">Historique : {aiResult.couverture_donnees.avec_historique ?? 0}/{aiResult.couverture_donnees.references_analysees ?? 0} · Délais fournisseur : {aiResult.couverture_donnees.avec_delai_fournisseur ?? 0}/{aiResult.couverture_donnees.references_analysees ?? 0} · Prix catalogue : {aiResult.couverture_donnees.avec_prix ?? 0}/{aiResult.couverture_donnees.references_analysees ?? 0}</p>
+                  </div>
+                )}
                 {aiResult.previsions_detaillees?.length > 0 && (
                   <div className="p-4 rounded-lg bg-savia-surface-hover/50 border-l-4 border-cyan-500">
                     <div className="flex items-center gap-2 font-bold text-sm text-cyan-400 mb-3 uppercase tracking-wider">
-                      <Boxes className="w-4 h-4" /> Données déterministes utilisées
+                      <Boxes className="w-4 h-4" /> Analyse détaillée par référence
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {aiResult.previsions_detaillees.map((d: any, i: number) => (
-                        <div key={i} className="p-3 rounded-lg bg-savia-bg/40 border border-savia-border/50 text-xs space-y-1">
+                        <div key={i} className="p-3 rounded-lg bg-savia-bg/40 border border-savia-border/50 text-xs space-y-2">
                           <div className="flex items-center justify-between gap-2 flex-wrap">
                             <span className="font-bold">{d.piece} <span className="font-mono text-savia-text-muted">({d.reference})</span></span>
                             <span className={d.urgence === 'CRITIQUE' ? 'text-red-400 font-bold' : d.urgence === 'HAUTE' ? 'text-yellow-400 font-bold' : 'text-savia-text-muted'}>{d.urgence || 'UNKNOWN'}</span>
                           </div>
-                          <div className="text-savia-text-muted">Client(s) : {d.clients?.length ? d.clients.join(', ') : 'Non documenté'} · Stock : {d.stock_actuel ?? '—'} / {d.stock_minimum ?? '—'} · Consommation : {d.consommation_mensuelle ?? 'Non calculable'} unité(s)/mois</div>
-                          <div className="text-savia-text-muted">Commande : {d.date_commande || 'Non calculable'} · Rupture : {d.date_rupture_prevue || 'Non calculable'} · Quantité : {d.quantite_recommandee ?? 'Non calculable'} · Coût : {d.cout_estime != null ? `${Number(d.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'} · Risque 30 j : {d.risque_rupture_30j_pct != null ? `${d.risque_rupture_30j_pct}%` : 'Non calculable'} · Fiabilité : {d.fiabilite_donnees_pct ?? 0}%</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-1 text-savia-text-muted">
+                            <div>Équipement : {d.equipement_type || 'Non documenté'} · Client(s) : {d.clients?.length ? d.clients.join(', ') : 'Non documenté'}</div>
+                            <div>Fournisseur : {d.fournisseur || 'Non renseigné'} · Délai : {d.delai_fournisseur_jours != null ? `${d.delai_fournisseur_jours} jours` : 'non renseigné'}</div>
+                            <div>Stock : {d.stock_actuel ?? '—'} / seuil {d.stock_minimum ?? '—'} · Point de commande : {d.point_commande ?? 'non calculable'} · Stock sécurité : {d.stock_securite ?? 'non calculable'}</div>
+                            <div>Prix unitaire : {d.prix_unitaire != null ? `${Number(d.prix_unitaire).toLocaleString('fr')} TND` : 'non renseigné'} · Coût de commande : {d.cout_estime != null ? `${Number(d.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</div>
+                            <div>Usage : 30 j {d.consommation_30j ?? 0} · 90 j {d.consommation_90j ?? 0} · 12 mois {d.utilisations_total_365j ?? 0} · rythme {d.consommation_mensuelle ?? 0}/mois</div>
+                            <div>Commande : {d.date_commande || 'non calculable'} · Rupture : {d.date_rupture_prevue || 'non calculable'} · Risque 30 j : {d.risque_rupture_30j_pct != null ? `${d.risque_rupture_30j_pct}%` : 'non calculable'} · Fiabilité : {d.fiabilite_donnees_pct ?? 0}%</div>
+                          </div>
+                          <div className="text-savia-text-muted bg-savia-surface/50 rounded px-2.5 py-2"><span className="font-semibold text-savia-text">Décision calculée :</span> {d.recommandation_actionnable ? `commander ${d.quantite_recommandee ?? 'à confirmer'} unité(s)` : 'pas de commande automatique'} — {d.raison || 'raison non renseignée'}.</div>
+                          {d.contrats?.length > 0 && <div className="text-savia-text-muted">Contrat : {d.contrats.map((c: any) => `${c.client || 'Client'} — ${c.type || 'Actif'} (${c.pieces_couvertes ? 'pièce couverte' : 'pièce non couverte'})`).join(' · ')}</div>}
                           {d.diagnostics?.[0] && <div className="text-savia-text-muted">Diagnostic : {d.diagnostics[0].type || '—'} · {d.diagnostics[0].probleme || 'Problème non renseigné'} · Cause : {d.diagnostics[0].cause || 'non renseignée'} · Solution : {d.diagnostics[0].solution || 'non renseignée'}</div>}
+                          {d.donnees_manquantes?.length > 0 && <div className="text-yellow-300 bg-yellow-500/10 border border-yellow-500/20 rounded px-2.5 py-2">À compléter : {d.donnees_manquantes.join(' · ')}</div>}
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+                {aiResult.points_a_completer?.length > 0 && (
+                  <div className="p-4 rounded-lg bg-yellow-500/10 border-l-4 border-yellow-500">
+                    <div className="flex items-center gap-2 font-bold text-sm text-yellow-300 mb-2 uppercase tracking-wider"><AlertTriangle className="w-4 h-4" /> Données à compléter pour fiabiliser les achats</div>
+                    <div className="space-y-2 text-sm text-savia-text-muted">{aiResult.points_a_completer.map((item: any, index: number) => <div key={`${item.reference}-${index}`}><span className="font-semibold text-savia-text">{item.piece} ({item.reference}) :</span> {item.action}</div>)}</div>
                   </div>
                 )}
                 {aiResult.recommandations?.length > 0 && (

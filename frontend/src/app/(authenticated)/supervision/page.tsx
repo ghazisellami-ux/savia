@@ -49,6 +49,12 @@ interface AiDiagnostic {
   type: string;
   priorite: 'HAUTE' | 'MOYENNE' | 'BASSE';
   confidence: number;
+  chronologie?: string[];
+  controles?: string[];
+  securite?: string;
+  pieces_outils?: string[];
+  validation?: string[];
+  escalade?: string;
 }
 
 // --- AI Fallback ---
@@ -134,6 +140,12 @@ export default function SupervisionPage() {
   const [confirmDelete, setConfirmDelete] = useState<MachineFleet | null>(null);
   const [logHistory, setLogHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [confirmedCause, setConfirmedCause] = useState('');
+  const [appliedSolution, setAppliedSolution] = useState('');
+  const [knowledgeType, setKnowledgeType] = useState('Hardware');
+  const [knowledgePriority, setKnowledgePriority] = useState<'HAUTE' | 'MOYENNE' | 'BASSE'>('MOYENNE');
+  const [knowledgeSaving, setKnowledgeSaving] = useState(false);
+  const [knowledgeSaveMessage, setKnowledgeSaveMessage] = useState('');
 
   // Delete log handler — called after user confirms via modal
   const executeDeleteLog = async (machine: MachineFleet) => {
@@ -269,6 +281,23 @@ export default function SupervisionPage() {
   // Single source of truth: use real log errors if available, else simulated fleet errors
   const displayErrors = loadedErrors ?? (currentMachine?.errors ?? []);
 
+  useEffect(() => {
+    if (!aiResult) return;
+    setConfirmedCause(aiResult.cause || '');
+    setAppliedSolution(aiResult.solution || '');
+    setKnowledgeType(aiResult.type || 'Hardware');
+    setKnowledgePriority(aiResult.priorite || 'MOYENNE');
+    setKnowledgeSaveMessage('');
+  }, [aiResult]);
+
+  useEffect(() => {
+    setConfirmedCause('');
+    setAppliedSolution('');
+    setKnowledgeType('Hardware');
+    setKnowledgePriority('MOYENNE');
+    setKnowledgeSaveMessage('');
+  }, [selectedError]);
+
   const handleAnalyzeAI = async () => {
     setAiLoading(true);
     try {
@@ -285,7 +314,7 @@ export default function SupervisionPage() {
         currentMachine.machine, 
         err.code, 
         err.message, 
-        "Pas de logs supplementaires specifiés",
+        rawLogContent || "Pas de logs supplementaires spécifiés",
         equipmentType
       );
       
@@ -307,12 +336,13 @@ export default function SupervisionPage() {
     } catch (error) {
       console.error("AI Error", error);
       const err = displayErrors.find((e: any) => e.code === selectedError);
+      const aiErrorMessage = error instanceof Error ? error.message : 'Erreur inconnue';
       // Dynamic fallback on error — specific to this error code
       setAiResult({
         probleme: `Erreur ${err?.code || selectedError} — ${err?.message || 'Erreur inconnue'}`,
-        cause: `L'IA Gemini n'est pas disponible. Configurez GOOGLE_API_KEY dans le fichier .env du backend.`,
+        cause: `Échec de l'analyse IA : ${aiErrorMessage}`,
         solution: `1. Vérifier ${err?.code || selectedError} dans la documentation\n2. Consulter la base de connaissances locale\n3. Contacter le support technique si nécessaire`,
-        prevention: 'Configurer GOOGLE_API_KEY pour activer les diagnostics IA automatiques.',
+        prevention: 'Vérifier la configuration du fournisseur IA dans le fichier .env du backend.',
         urgence: `Fréquence: ${err?.frequence || '?'} occurrence(s)`,
         type: err?.type || '?',
         priorite: 'MOYENNE',
@@ -321,6 +351,42 @@ export default function SupervisionPage() {
     } finally {
       setAiLoading(false);
       setShowAiDiag(true);
+    }
+  };
+
+  const handleSaveConfirmedKnowledge = async () => {
+    const err = displayErrors.find((item: any) => item.code === selectedError);
+    if (!err || !confirmedCause.trim() || !appliedSolution.trim()) {
+      setKnowledgeSaveMessage('Renseignez la cause confirmée et la solution réellement appliquée.');
+      return;
+    }
+
+    setKnowledgeSaving(true);
+    setKnowledgeSaveMessage('');
+    try {
+      const token = localStorage.getItem('savia_token');
+      const response = await fetch('/api/knowledge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          code: err.code,
+          message: err.message,
+          cause: confirmedCause,
+          solution: appliedSolution,
+          type: knowledgeType,
+          priorite: knowledgePriority,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "Enregistrement impossible");
+      setKnowledgeSaveMessage(payload.message || 'Connaissance confirmée enregistrée.');
+    } catch (error) {
+      setKnowledgeSaveMessage(error instanceof Error ? error.message : "Enregistrement impossible");
+    } finally {
+      setKnowledgeSaving(false);
     }
   };
 
@@ -438,6 +504,8 @@ export default function SupervisionPage() {
       if (res.ok) {
         const data = await res.json();
         setLogLoadFailed(false); // reset before attempting
+        // Keep the real stored log available for the diagnostic request.
+        setRawLogContent(typeof data.content === 'string' ? data.content : '');
         // 1. Use stored parsed_errors from DB (most reliable)
         if (data.parsed_errors && Array.isArray(data.parsed_errors) && data.parsed_errors.length > 0) {
           setLoadedErrors(data.parsed_errors);
@@ -470,6 +538,7 @@ export default function SupervisionPage() {
   useEffect(() => {
     if (selectedEquip === 'Tous') {
       setLoadedErrors(null);
+      setRawLogContent('');
       setSelectedLogId(null);
       return;
     }
@@ -484,6 +553,7 @@ export default function SupervisionPage() {
       fetchLogErrors(matchingLogs[0].id);
     } else {
       setLoadedErrors(null);
+      setRawLogContent('');
       setSelectedLogId(null);
       setSelectedMachine(selectedEquip); // still point to the equip even without logs
     }
@@ -889,7 +959,7 @@ export default function SupervisionPage() {
                 ) : (
                   <>
                     <Brain className="w-5 h-5" />
-                    Analyser avec l&apos;IA (Gemini)
+                    Analyser avec l&apos;IA
                   </>
                 )}
               </button>
@@ -935,6 +1005,45 @@ export default function SupervisionPage() {
                         <div className="flex items-center gap-2 text-green-400 font-bold text-xs uppercase tracking-wider mb-2"><Settings className="w-4 h-4" /> Procédure d&apos;investigation</div>
                         <pre className="text-savia-text text-sm whitespace-pre-wrap font-sans">{result.solution}</pre>
                       </div>
+
+                      {result.chronologie && result.chronologie.length > 0 && (
+                        <div className="rounded-xl p-4 border border-savia-border bg-savia-surface/60">
+                          <div className="flex items-center gap-2 text-savia-accent font-bold text-xs uppercase tracking-wider mb-3"><History className="w-4 h-4" /> Chronologie et chaîne causale</div>
+                          <ol className="space-y-2 text-sm text-savia-text list-decimal list-inside marker:text-savia-accent">
+                            {result.chronologie.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
+                          </ol>
+                        </div>
+                      )}
+
+                      {((result.controles && result.controles.length > 0) || (result.pieces_outils && result.pieces_outils.length > 0) || (result.validation && result.validation.length > 0)) && (
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                          {result.controles && result.controles.length > 0 && (
+                            <div className="rounded-xl p-4 border border-cyan-500/25 bg-cyan-500/5">
+                              <div className="flex items-center gap-2 text-cyan-300 font-bold text-xs uppercase tracking-wider mb-2"><CheckCircle2 className="w-4 h-4" /> Contrôles immédiats</div>
+                              <ul className="space-y-2 text-sm text-savia-text">{result.controles.map((item, index) => <li key={`${item}-${index}`}>• {item}</li>)}</ul>
+                            </div>
+                          )}
+                          {result.pieces_outils && result.pieces_outils.length > 0 && (
+                            <div className="rounded-xl p-4 border border-orange-500/25 bg-orange-500/5">
+                              <div className="flex items-center gap-2 text-orange-300 font-bold text-xs uppercase tracking-wider mb-2"><Settings className="w-4 h-4" /> Pièces et outils</div>
+                              <ul className="space-y-2 text-sm text-savia-text">{result.pieces_outils.map((item, index) => <li key={`${item}-${index}`}>• {item}</li>)}</ul>
+                            </div>
+                          )}
+                          {result.validation && result.validation.length > 0 && (
+                            <div className="rounded-xl p-4 border border-green-500/25 bg-green-500/5">
+                              <div className="flex items-center gap-2 text-green-300 font-bold text-xs uppercase tracking-wider mb-2"><ShieldAlert className="w-4 h-4" /> Validation avant remise en service</div>
+                              <ul className="space-y-2 text-sm text-savia-text">{result.validation.map((item, index) => <li key={`${item}-${index}`}>• {item}</li>)}</ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {(result.securite || result.escalade) && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {result.securite && <div className="rounded-xl p-4 border border-red-500/25 bg-red-500/5"><div className="flex items-center gap-2 text-red-300 font-bold text-xs uppercase tracking-wider mb-2"><ShieldAlert className="w-4 h-4" /> Sécurité</div><p className="text-sm text-savia-text">{result.securite}</p></div>}
+                          {result.escalade && <div className="rounded-xl p-4 border border-purple-500/25 bg-purple-500/5"><div className="flex items-center gap-2 text-purple-300 font-bold text-xs uppercase tracking-wider mb-2"><Activity className="w-4 h-4" /> Escalade</div><p className="text-sm text-savia-text">{result.escalade}</p></div>}
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* Prévention */}
@@ -985,7 +1094,8 @@ export default function SupervisionPage() {
                   </label>
                   <input
                     type="text"
-                    defaultValue={aiResult?.cause || ''}
+                    value={confirmedCause}
+                    onChange={(event) => setConfirmedCause(event.target.value)}
                     placeholder="Décrivez la cause réelle du problème"
                     className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text
                                focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim"
@@ -997,7 +1107,8 @@ export default function SupervisionPage() {
                   </label>
                   <textarea
                     rows={3}
-                    defaultValue={aiResult?.solution || ''}
+                    value={appliedSolution}
+                    onChange={(event) => setAppliedSolution(event.target.value)}
                     placeholder="Décrivez les étapes de la solution qui a fonctionné"
                     className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text
                                focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim resize-none"
@@ -1006,7 +1117,7 @@ export default function SupervisionPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><Folder className="w-4 h-4" /> Type</label>
-                    <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+                    <select value={knowledgeType} onChange={(event) => setKnowledgeType(event.target.value)} className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
                       {['Hardware', 'Software', 'Calibration', 'Power', 'Network', 'Autre'].map(t => (
                         <option key={t} value={t}>{t}</option>
                       ))}
@@ -1014,15 +1125,16 @@ export default function SupervisionPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><Zap className="w-4 h-4" /> Priorité</label>
-                    <select className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+                    <select value={knowledgePriority} onChange={(event) => setKnowledgePriority(event.target.value as 'HAUTE' | 'MOYENNE' | 'BASSE')} className="w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
                       {['HAUTE', 'MOYENNE', 'BASSE'].map(p => (
                         <option key={p} value={p}>{p}</option>
                       ))}
                     </select>
                   </div>
                 </div>
-                <button className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer">
-                  <Save className="w-5 h-5 inline mr-2 -mt-1" /> Enregistrer dans la base
+                {knowledgeSaveMessage && <p className="text-sm text-savia-text-muted">{knowledgeSaveMessage}</p>}
+                <button onClick={handleSaveConfirmedKnowledge} disabled={knowledgeSaving} className="w-full py-3 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
+                  <Save className="w-5 h-5 inline mr-2 -mt-1" /> {knowledgeSaving ? 'Enregistrement...' : 'Enregistrer dans la base'}
                 </button>
               </div>
             </SectionCard>

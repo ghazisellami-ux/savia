@@ -41,7 +41,8 @@ PRIVATE_SETTING_KEYS = [
     "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
     "telegram_sav_token", "telegram_sav_chat_id", "telegram_manager_token",
     "telegram_manager_chat_id", "telegram_stock_token", "telegram_stock_chat_id",
-    "gemini_api_key",
+    "gemini_api_key",  # compatibilité avec les anciennes installations
+    "ai_provider",
 ]
 SETTING_KEYS = set(PUBLIC_SETTING_KEYS + PRIVATE_SETTING_KEYS)
 
@@ -445,6 +446,8 @@ def get_settings(user: dict = Depends(_verify_token)):
                 ).fetchone()
                 if row:
                     result[k] = row["valeur"] or ""
+            if not result.get("ai_provider"):
+                result["ai_provider"] = os.getenv("AI_PROVIDER", "google").strip().lower()
             return result
     except Exception as e:
         import traceback
@@ -460,6 +463,8 @@ def get_settings(user: dict = Depends(_verify_token)):
 def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token)):
     _require_admin(user)
     forbidden_keys = set(body) - SETTING_KEYS
+    if "ai_provider" in body and str(body["ai_provider"]).strip().lower() not in {"google", "fireworks"}:
+        raise HTTPException(status_code=400, detail="Fournisseur IA non autorisé")
     if forbidden_keys:
         raise HTTPException(status_code=400, detail="Clés de configuration non autorisées")
     try:

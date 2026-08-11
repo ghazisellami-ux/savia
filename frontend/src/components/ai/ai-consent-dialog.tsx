@@ -44,13 +44,13 @@ export default function AiConsentDialog() {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="w-full max-w-xl rounded-2xl border border-savia-border bg-savia-surface shadow-2xl">
         <div className="flex items-center justify-between border-b border-savia-border px-6 py-4">
-          <h2 className="flex items-center gap-2 text-lg font-black text-savia-text"><Brain className="h-5 w-5 text-purple-400" /> Utilisation de l’IA Gemini</h2>
+          <h2 className="flex items-center gap-2 text-lg font-black text-savia-text"><Brain className="h-5 w-5 text-purple-400" /> Utilisation de l’IA</h2>
           <button onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-savia-text-muted hover:bg-savia-surface-hover"><X className="h-5 w-5" /></button>
         </div>
         <div className="space-y-4 px-6 py-5 text-sm text-savia-text-muted">
-          <p>Gemini reçoit uniquement les données nécessaires à l’analyse demandée. Les recommandations sont indicatives : elles doivent toujours être validées par un professionnel avant toute décision.</p>
+          <p>L&apos;IA reçoit uniquement les données nécessaires à l’analyse demandée. Les recommandations sont indicatives : elles doivent toujours être validées par un professionnel avant toute décision.</p>
           <div className="rounded-xl border border-savia-border bg-savia-bg/40 p-4 space-y-2">
-            <p className="flex gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-green-400" /> SAVIA ne conserve ni votre question complète, ni la réponse complète de Gemini dans son journal d’usage.</p>
+            <p className="flex gap-2"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-green-400" /> SAVIA ne conserve ni votre question complète, ni la réponse complète de l&apos;IA dans son journal d’usage.</p>
             <p>Seuls l’utilisateur, la date, la fonctionnalité IA, le modèle, le statut et le compteur mensuel sont enregistrés.</p>
           </div>
           <p>Vous pouvez retirer ce consentement à tout moment depuis Paramètres.</p>

@@ -180,7 +180,10 @@ def _prediction_for_piece(
         event_date = _as_date(intervention.get("date"))
         quantity = _usage_quantity(intervention.get("pieces_utilisees"), reference)
         if event_date and quantity > 0 and event_date <= as_of:
-            events.append({"date": event_date, "quantity": quantity, **intervention})
+            # `intervention` contient une date datetime PostgreSQL. Elle ne doit
+            # pas écraser la date normalisée, sinon les comparaisons date/date
+            # échouent et toute la prévision devient indisponible.
+            events.append({**intervention, "date": event_date, "quantity": quantity})
 
     stock = max(0, int(_number(piece.get("stock_actuel"), 0) or 0))
     minimum = max(0, int(_number(piece.get("stock_minimum"), 0) or 0))

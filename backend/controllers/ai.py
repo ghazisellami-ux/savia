@@ -1,5 +1,6 @@
 """AI analysis and chat routes."""
 
+import json
 import re
 import unicodedata
 
@@ -325,14 +326,32 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
         })
     result["recommandations"] = verified
     # Expose deterministic calculation data independently of generated prose.
-    result["previsions_detaillees"] = [
-        {
+    detailed_forecasts = []
+    validation_alerts = []
+    for forecast in forecasts:
+        missing_data = []
+        if not forecast.get("historique", {}).get("evenements"):
+            missing_data.append("aucune consommation issue des interventions sur 12 mois")
+        if forecast.get("delai_fournisseur_jours") is None:
+            missing_data.append("délai fournisseur non renseigné")
+        if forecast.get("prix_unitaire") is None:
+            missing_data.append("prix unitaire non renseigné")
+        if not forecast.get("clients_utilisateurs"):
+            missing_data.append("équipement/client utilisateur non identifié")
+        detailed_forecasts.append({
             "piece": forecast.get("designation"),
             "reference": forecast.get("reference"),
+            "equipement_type": forecast.get("equipement_type"),
+            "domaine": forecast.get("domaine"),
+            "fournisseur": forecast.get("fournisseur"),
             "clients": forecast.get("clients_utilisateurs") or [],
             "stock_actuel": forecast.get("stock_actuel"),
             "stock_minimum": forecast.get("stock_minimum"),
+            "prix_unitaire": forecast.get("prix_unitaire"),
             "consommation_mensuelle": forecast.get("consommation_mensuelle"),
+            "consommation_30j": forecast.get("consommation_30j"),
+            "consommation_90j": forecast.get("consommation_90j"),
+            "utilisations_total_365j": forecast.get("utilisations_total_365j"),
             "risque_rupture_30j_pct": forecast.get("risque_rupture_30j_pct"),
             "date_commande": forecast.get("date_commande"),
             "date_rupture_prevue": forecast.get("date_rupture_prevue"),
@@ -341,12 +360,38 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
             "fiabilite_donnees_pct": forecast.get("fiabilite_donnees_pct"),
             "urgence": forecast.get("urgence"),
             "prediction_available": forecast.get("prediction_available"),
+            "recommandation_actionnable": forecast.get("recommandation_actionnable"),
             "raison": forecast.get("raison"),
+            "delai_fournisseur_jours": forecast.get("delai_fournisseur_jours"),
+            "point_commande": forecast.get("point_commande"),
+            "stock_securite": forecast.get("stock_securite"),
+            "historique": forecast.get("historique") or {},
             "diagnostics": forecast.get("diagnostics") or [],
             "contrats": forecast.get("contrats") or [],
-        }
-        for forecast in forecasts
-    ]
+            "donnees_manquantes": missing_data,
+        })
+        if (
+            forecast.get("stock_actuel", 0) <= forecast.get("stock_minimum", 0)
+            and not forecast.get("prediction_available")
+        ):
+            validation_alerts.append({
+                "reference": forecast.get("reference"),
+                "piece": forecast.get("designation"),
+                "raison": forecast.get("raison"),
+                "action": "Confirmer la consommation, le délai fournisseur et le prix avant de compléter la prévision.",
+            })
+    result["previsions_detaillees"] = detailed_forecasts
+    result["couverture_donnees"] = {
+        "references_analysees": len(forecasts),
+        "ruptures_effectives": sum(1 for item in forecasts if item.get("stock_actuel") == 0),
+        "stocks_sous_seuil": sum(1 for item in forecasts if item.get("stock_actuel", 0) <= item.get("stock_minimum", 0)),
+        "predictions_calculables": sum(1 for item in forecasts if item.get("prediction_available")),
+        "avec_historique": sum(1 for item in forecasts if item.get("historique", {}).get("evenements")),
+        "avec_delai_fournisseur": sum(1 for item in forecasts if item.get("delai_fournisseur_jours") is not None),
+        "avec_prix": sum(1 for item in forecasts if item.get("prix_unitaire") is not None),
+        "interventions_liees": sum(int(item.get("historique", {}).get("evenements") or 0) for item in forecasts),
+    }
+    result["points_a_completer"] = validation_alerts
     # Le plan et le budget sont reconstruits depuis les prévisions serveur.
     # Un budget partiel est volontairement affiché comme non calculable.
     plan_by_date = {}
@@ -385,6 +430,13 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
     }
     return result
 
+def _diagnostic_list(value):
+    """Normalise les listes retournées par le modèle sans perdre un texte unique."""
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if value and str(value).strip() else []
+
+
 @app.post("/api/ai/analyze-diagnostic")
 @governed_ai_endpoint("diagnostic", ("Admin", "Manager", "Responsable Technique", "Technicien"))
 def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
@@ -396,7 +448,7 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_
         raise HTTPException(status_code=500, detail=str(e))
 
     if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible. (Vérifiez GOOGLE_API_KEY).")
+        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible. Vérifiez la configuration du fournisseur IA.")
 
     machine = body.get("machine", "Équipement inconnu")
     code_erreur = body.get("code_erreur", "")
@@ -425,10 +477,142 @@ def analyze_diagnostic(body: dict, user: dict = Depends(_verify_token), x_savia_
                 "type": result.get("Type", result.get("type", "?")),
                 "priorite": result.get("Priorite", result.get("priorite", "MOYENNE")),
                 "confidence": result.get("Confidence_Score", result.get("confidence", 0)),
+                "chronologie": _diagnostic_list(result.get("Chronologie_Causale", result.get("chronologie"))),
+                "controles": _diagnostic_list(result.get("Controles_Immediats", result.get("controles"))),
+                "securite": result.get("Risques_Securite", result.get("securite", "")),
+                "pieces_outils": _diagnostic_list(result.get("Pieces_Outils", result.get("pieces_outils"))),
+                "validation": _diagnostic_list(result.get("Criteres_Validation", result.get("validation"))),
+                "escalade": result.get("Escalade", result.get("escalade", "")),
             }}
         return {"ok": True, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Diagnostic IA échoué: {e}")
+
+def _build_predictive_fallback(kpis, sym, reason):
+    """Construit un rapport détaillé auditable si l'IA ne renvoie pas son JSON."""
+    risks = kpis.get("top_risques") or []
+    alerts = []
+    recommendations = []
+    plans = []
+    trends = []
+    seen_trends = set()
+
+    def number(value, default=0):
+        parsed = _cost_number(value)
+        return parsed if parsed is not None else default
+
+    def text_list(value):
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        return [str(value)] if value else []
+
+    for item in risks[:8]:
+        machine = str(item.get("machine") or "Equipement non renseigne")
+        risk = number(item.get("risque_panne_pct"))
+        horizon = int(number(item.get("horizon_jours"), 30))
+        score = number(item.get("score_sante"))
+        factors = text_list(item.get("facteurs"))
+        diagnostics = item.get("diagnostics") or []
+        diagnostic_causes = []
+        for diagnostic in diagnostics[:3] if isinstance(diagnostics, list) else []:
+            if isinstance(diagnostic, dict):
+                for key in ("cause", "probleme", "description", "solution"):
+                    value = str(diagnostic.get(key) or "").strip()
+                    if value and value not in diagnostic_causes:
+                        diagnostic_causes.append(value)
+        cause = "; ".join(diagnostic_causes[:2]) if diagnostic_causes else (
+            " et ".join(factors[:2]) if factors else "Historique technique insuffisant pour préciser la cause"
+        )
+        preventive_late = any("retard" in factor.lower() for factor in factors)
+        action = (
+            "Réaliser immédiatement la maintenance préventive en retard et effectuer une inspection ciblée"
+            if preventive_late
+            else "Planifier une inspection préventive ciblée et confirmer la cause par un diagnostic technicien"
+        )
+        recommendations_for_machine = [
+            "Vérifier les diagnostics et les interventions récentes",
+            "Contrôler le composant identifié avant tout remplacement",
+        ]
+        if preventive_late:
+            recommendations_for_machine.insert(0, "Réaliser la maintenance préventive en retard")
+        alert = {
+            "machine": machine,
+            "score_sante": score,
+            "horizon_jours": horizon,
+            "nb_interventions": None,
+            "risque_panne_pct": risk,
+            "risque": f"{'Élevé' if risk >= 50 else 'Modéré'} ({risk:g}%)",
+            "action_immediate": action,
+            "cause": cause,
+            "facteurs": factors,
+            "recommandations": recommendations_for_machine,
+            "gain_potentiel": None,
+            "cout_panne_evite": None,
+        }
+        if risk >= 50:
+            alerts.append(alert)
+        recommendations.append({
+            "priorite": len(recommendations) + 1,
+            "machine": machine,
+            "cause": cause,
+            "recommandation": action,
+            "cout_estime": None,
+            "cout_piece_reel": None,
+            "cout_main_oeuvre": None,
+            "cout_action_total": None,
+            "cout_facturable_contrat": None,
+            "prix_verifie": False,
+            "contrat_type": "A confirmer",
+            "gain_estime": None,
+            "delai": f"Sous {7 if risk >= 50 else 30} jours",
+            "impact": "Réduction du risque sous réserve de validation technique",
+        })
+        plans.append({
+            "jour": ["Lundi", "Mardi", "Mercredi"][min(len(plans), 2)],
+            "cibles": machine,
+            "action": action,
+        })
+        for factor in factors:
+            if factor not in seen_trends:
+                seen_trends.add(factor)
+                trends.append(factor)
+
+    if not alerts and risks:
+        alerts = [
+            dict(
+                recommendations[0],
+                risque_panne_pct=number(risks[0].get("risque_panne_pct")),
+                horizon_jours=number(risks[0].get("horizon_jours"), 30),
+                score_sante=number(risks[0].get("score_sante")),
+                risque="À surveiller",
+                action_immediate="Planifier une vérification préventive",
+                facteurs=text_list(risks[0].get("facteurs")),
+            )
+        ]
+    trends = trends[:5] or ["Aucun facteur récurrent supplémentaire identifié"]
+    total_cost = number(kpis.get("cout_total"))
+    return {
+        "_fallback": True,
+        "_fallback_reason": reason,
+        "alertes_critiques": alerts[:5],
+        "machines_stables": [],
+        "recommandations_prioritaires": recommendations[:5],
+        "plan_maintenance": plans[:3],
+        "estimation_couts": {
+            "cout_curatif_historique": total_cost,
+            "cout_preventif_propose": None,
+            "cout_pannes_evitees": None,
+            "detail_preventif": "Coût préventif non calculable sans action et prix validés dans le catalogue.",
+            "gain_potentiel": None,
+            "gain_net": None,
+            "source_prix": "Catalogue serveur",
+            "hypotheses": "Aucun montant n'est inventé lorsque le prix de la pièce ou la durée d'intervention manque.",
+            "ratio": "Ratio non calculable avec les données disponibles.",
+        },
+        "tendances": trends,
+        "conclusion": "Priorité aux équipements présentant le risque le plus élevé et aux maintenances préventives en retard. Validation par un technicien requise.",
+    }
+
 
 @app.post("/api/ai/analyze-performance")
 @governed_ai_endpoint("performance", ("Admin", "Manager", "Responsable Technique"))
@@ -439,12 +623,19 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
         from ai_engine import _call_ia, clean_json_response, AI_AVAILABLE
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
-
     kpis = body.get("kpis", {})
     sym = body.get("sym", "TND")
     lang = _get_app_language(x_savia_lang, body)
+    if not AI_AVAILABLE:
+        # Le moteur prédictif a déjà calculé les risques et les facteurs. Même
+        # sans fournisseur IA disponible, renvoyer un rapport structuré évite
+        # que le frontend retombe sur une synthèse de quatre lignes.
+        fallback = _build_predictive_fallback(
+            kpis,
+            sym,
+            "Le fournisseur IA n'est pas disponible dans le backend.",
+        )
+        return {"ok": True, "result": fallback}
 
     # --- Fetch real per-machine data from DB ---
     machine_details = ""
@@ -495,9 +686,17 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
                 for key, values in component_samples.items()
                 if values
             }
-            eqs = conn.execute('SELECT "Nom","Client","Type","Statut","DateInstallation" FROM equipements ORDER BY "Nom" LIMIT 25').fetchall()
+            eqs = conn.execute("SELECT nom, client, type, statut, date_installation FROM equipements ORDER BY nom LIMIT 25").fetchall()
             for eq in eqs:
-                equipment_types[_machine_key(eq.get('Nom'))] = eq.get('Type') or ''
+                equipment_types[_machine_key(eq.get('nom'))] = eq.get('type') or ''
+                # La table PostgreSQL utilise des colonnes minuscules; les
+                # clés historiques sont conservées uniquement pour le texte
+                # de contexte déjà construit ci-dessous.
+                eq['Nom'] = eq.get('nom') or '?'
+                eq['Type'] = eq.get('type') or '?'
+                eq['Client'] = eq.get('client') or '?'
+                eq['DateInstallation'] = eq.get('date_installation') or '?'
+                eq['Statut'] = eq.get('statut') or '?'
                 equip_detail += f"  - {eq['Nom']} ({eq.get('Type','?')}) — {eq.get('Client','?')}, install\u00e9: {eq.get('DateInstallation','?')}, statut: {eq.get('Statut','?')}\n"
             part_rows = conn.execute(
                 "SELECT reference, designation, equipement_type, prix_unitaire, fournisseur, stock_actuel "
@@ -543,8 +742,8 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
                     ).fetchall()
                     contracts_detail = [dict(contract) for contract in contract_rows]
                 if not equipment_types:
-                    eq_rows = conn.execute('SELECT "Nom","Type" FROM equipements ORDER BY "Nom" LIMIT 500').fetchall()
-                    equipment_types = {_machine_key(eq.get('Nom')): eq.get('Type') or '' for eq in eq_rows}
+                    eq_rows = conn.execute('SELECT nom, type FROM equipements ORDER BY nom LIMIT 500').fetchall()
+                    equipment_types = {_machine_key(eq.get('nom')): eq.get('type') or '' for eq in eq_rows}
                 if not historical_component_costs:
                     component_rows = conn.execute(
                         "SELECT machine, pieces_utilisees, cout, cout_pieces FROM interventions "
@@ -651,9 +850,9 @@ RÈGLES DE COHÉRENCE OBLIGATOIRES :
 - Pour une pièce, le gain net n'est calculable qu'avec le coût historique de cette même pièce sur cette même machine. N'utilise jamais la moyenne de toutes les pannes de la machine pour justifier le remplacement d'une pièce; sinon gain_net=null.
 - Le contrat actif determine la partie facturable : "Full Service" couvre pieces et main-d'oeuvre; "Pieces incluses"/avec_pieces couvre les pieces; "Main d'oeuvre uniquement" couvre la main-d'oeuvre. Si la couverture n'est pas explicite, cout_facturable_contrat=null.
 - Le gain net est calculable seulement si le cout correctif moyen historique de la machine et le cout action complet sont disponibles : cout correctif moyen historique - cout action total. Sinon gain_net=null.
-{{{{
+{{
   "alertes_critiques": [
-    {{{{
+    {{
       "machine": "Nom (Client)",
       "score_sante": 41,
       "horizon_jours": 30,
@@ -665,17 +864,17 @@ RÈGLES DE COHÉRENCE OBLIGATOIRES :
       "recommandations": ["Recommandation ciblée"],
       "gain_potentiel": 0,
       "cout_panne_evite": 0
-    }}}}
+    }}
   ],
   "machines_stables": [
-    {{{{
+    {{
       "machine": "Nom (Client)",
       "score_sante": 84,
       "commentaire": "Pourquoi fiable"
-    }}}}
+    }}
   ],
   "recommandations_prioritaires": [
-    {{{{
+    {{
       "priorite": 1,
       "machine": "Nom (Client)",
       "cause": "Cause racine",
@@ -690,26 +889,26 @@ RÈGLES DE COHÉRENCE OBLIGATOIRES :
       "gain_estime": null,
       "delai": "Sous 7 jours",
       "impact": "Réduction du risque et maintien de la disponibilité"
-    }}}}
+    }}
   ],
   "plan_maintenance": [
-    {{{{
+    {{
       "jour": "Lundi {today.strftime('%d/%m')}",
       "cibles": "Machines",
       "action": "Action"
-    }}}},
-    {{{{
+    }},
+    {{
       "jour": "Mardi {(today + datetime.timedelta(days=1)).strftime('%d/%m')}",
       "cibles": "Machines",
       "action": "Action"
-    }}}},
-    {{{{
+    }},
+    {{
       "jour": "Mercredi {(today + datetime.timedelta(days=2)).strftime('%d/%m')}",
       "cibles": "Machines",
       "action": "Action"
-    }}}}
+    }}
   ],
-  "estimation_couts": {{{{
+  "estimation_couts": {{
     "cout_curatif_historique": {int(kpis.get('cout_total', 0))},
     "cout_preventif_propose": null,
     "cout_pannes_evitees": null,
@@ -719,16 +918,40 @@ RÈGLES DE COHÉRENCE OBLIGATOIRES :
     "source_prix": "Catalogue et configuration serveur",
     "hypotheses": "Hypothèses et méthode d'estimation",
     "ratio": "Pour 1 {sym} investi, X {sym} \u00e9conomis\u00e9s"
-  }}}},
+  }},
   "tendances": ["Tendance 1", "Tendance 2", "Tendance 3"],
   "conclusion": "Priorit\u00e9 absolue \u00e0..."
-}}}}"""
+}}"""
 
-    raw = _call_ia(prompt, timeout=90, is_json=True)
-    if not raw:
-        raise HTTPException(status_code=500, detail="L'IA n'a pas r\u00e9pondu.")
-    result = clean_json_response(raw)
+    raw = _call_ia(prompt, timeout=180, is_json=True)
+    result = clean_json_response(raw) if raw else None
+    if not isinstance(result, dict):
+        fallback = _build_predictive_fallback(
+            kpis,
+            sym,
+            "La réponse IA n'était pas disponible ou ne contenait pas un JSON exploitable.",
+        )
+        result = _apply_verified_costs(
+            fallback,
+            parts_catalog,
+            historical_corrective_costs,
+            {
+                "hourly_rate": hourly_rate,
+                "machine_mttr_minutes": machine_mttr_minutes,
+                "equipment_types": equipment_types,
+                "historical_component_costs": historical_component_costs,
+                "protected_components_by_machine": {
+                    _machine_key(r.get("machine")): r.get("composants_proteges", [])
+                    for r in kpis.get("top_risques", [])
+                },
+                "contracts": contracts_detail,
+            },
+            sym,
+        )
+        return {"ok": True, "result": result}
     result = _force_ai_payload_language(result, lang, _call_ia, clean_json_response)
+    if not isinstance(result, dict):
+        result = _build_predictive_fallback(kpis, sym, "La traduction du rapport IA a échoué.")
     result = _apply_verified_costs(
         result,
         parts_catalog,
@@ -883,12 +1106,12 @@ Articles urgence HAUTE: {stats['high_urgency_count']}
 {inventory_lines}
 
 === DIRECTIVES D'ANALYSE ===
-1. Utiliser les données de consommation mensuelle et usage récent pour générer des prédictions fiables
-2. Data_confidence indique la fiabilité (INSUFFICIENT/LOW/MEDIUM/HIGH) - prioriser MEDIUM+
-3. days_until_rupture = jours avant rupture de stock
-4. Patterns usage 30j = indicatif de la tendance réelle
-5. Générer quantités commandées basées sur consommation + délai fournisseur
-6. Prioriser urgence CRITIQUE + haute confiance données
+1. Exploiter toutes les valeurs déterministes disponibles pour chaque référence : stock, seuil, prix, consommation 30/90/365 jours, historique d'interventions, diagnostics, clients, contrats, fournisseur, délai, point de commande et stock de sécurité.
+2. L'analyse_risque doit être détaillée (6-8 phrases) et citer les références concernées, leur stock, leur coût connu et le motif calculé. Ne conclus jamais qu'une donnée est absente si elle apparaît dans INVENTAIRE.
+3. Data_confidence / fiabilite_donnees_pct indique la fiabilité : distingue données calculées, données de stock certaines et hypothèses à confirmer.
+4. days_until_rupture = jours avant rupture de stock; les usages 30/90/365 jours permettent de commenter la tendance réelle sans inventer une consommation.
+5. Les quantités, dates, coûts et priorités de recommandations seront corrigés par le serveur à partir des prévisions déterministes; explique donc leurs causes et impacts sans les modifier.
+6. Pour chaque rupture ou stock sous seuil, indique l'équipement/client concerné, la couverture contractuelle si présente, le dernier diagnostic lié et les données qui restent à compléter.
 
 RÈGLES FINANCIÈRES ET DE COHÉRENCE :
 - Utilise uniquement les quantités, dates, urgences et coûts présents dans INVENTAIRE PIÈCES AVEC PRÉDICTIONS.
@@ -899,7 +1122,7 @@ RÈGLES FINANCIÈRES ET DE COHÉRENCE :
 === FORMAT RÉPONSE ===
 RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
 {{
-  "analyse_risque": "Résumé exécutif (3-4 phrases): identifier pièces critiques, impact opérationnel, capital à risque",
+  "analyse_risque": "Résumé exécutif détaillé (6-8 phrases) fondé sur les références, stocks, coûts, historiques, équipements, clients, fournisseurs et délais réellement fournis",
   "recommandations": [
     {{"piece": "Nom pièce", "reference": "REF", "raison": "Impact opérationnel si non commandé (ex: arrêt équipement = X patients)", "action": "Commander immédiatement", "quantite": 2, "date_achat": "{d0}", "urgence": "critique", "cout_estime": 500, "delai_fournisseur": 14}},
     {{"piece": "Nom pièce 2", "reference": "REF2", "raison": "Raison opérationnelle basée pattern consommation", "action": "Commander rapidement", "quantite": 1, "date_achat": "{d7}", "urgence": "haute", "cout_estime": 300, "delai_fournisseur": 14}}
@@ -948,14 +1171,39 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
     sav_data = body.get("sav_data", {})
     sym = body.get("sym", "TND")
     lang = _get_app_language(x_savia_lang, body)
+    nb_total = sav_data.get("nb_total", sav_data.get("nb_interventions", 0))
+    nb_cloturees = sav_data.get("nb_cloturees", sav_data.get("nb_cloturees", 0))
+    cout_main_oeuvre = sav_data.get("cout_main_oeuvre", 0)
+    cout_pieces = sav_data.get("cout_pieces", 0)
+    cout_total = sav_data.get("cout_total", sav_data.get("cout_total_tnd", 0))
+    interventions_detail = sav_data.get("interventions_detail", [])
+    machines_detail = sav_data.get("machines_detail", [])
+    errors_detail = sav_data.get("erreurs_recurrentes", [])
+    causes_detail = sav_data.get("causes_recurrentes", [])
+    tech_detail = sav_data.get("tech_details", sav_data.get("performance_equipe", []))
+    equipment_detail = sav_data.get("equipements_detail", [])
+    contracts_detail = sav_data.get("contrats_detail", [])
+    stock_detail = sav_data.get("stock_detail", [])
+    try:
+        interventions_json = json.dumps(interventions_detail[:50], ensure_ascii=False, default=str)
+        machines_json = json.dumps(machines_detail[:30], ensure_ascii=False, default=str)
+        errors_json = json.dumps(errors_detail[:10], ensure_ascii=False, default=str)
+        causes_json = json.dumps(causes_detail[:10], ensure_ascii=False, default=str)
+        tech_json = json.dumps(tech_detail[:20] if isinstance(tech_detail, list) else tech_detail, ensure_ascii=False, default=str)
+        equipment_json = json.dumps(equipment_detail[:50], ensure_ascii=False, default=str)
+        contracts_json = json.dumps(contracts_detail[:30], ensure_ascii=False, default=str)
+        stock_json = json.dumps(stock_detail[:50], ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        interventions_json = machines_json = errors_json = causes_json = "[]"
+        tech_json = equipment_json = contracts_json = stock_json = "[]"
 
     prompt = f"""{_ai_language_instruction(lang)}
 Tu es un expert en gestion de maintenance SAV pour équipements d'imagerie médicale en Tunisie.
 Analyse ces données SAV RÉELLES et produis un rapport COMPLET et DÉTAILLÉ.
 
 === STATISTIQUES GLOBALES ===
-- Total interventions : {sav_data.get('nb_total', 0)}
-- Clôturées : {sav_data.get('nb_cloturees', 0)}
+- Total interventions : {nb_total}
+- Clôturées : {nb_cloturees}
 - En cours : {sav_data.get('nb_en_cours', 0)}
 - Taux résolution : {sav_data.get('taux_resolution', 0)}%
 - MTTR moyen : {sav_data.get('mttr_h', 0)}h
@@ -967,27 +1215,35 @@ Analyse ces données SAV RÉELLES et produis un rapport COMPLET et DÉTAILLÉ.
 - Installations : {sav_data.get('nb_installations', 0)}
 - Ratio correctif : {sav_data.get('ratio_correctif_pct', 0)}%
 
-=== COÛTS ===
-- Coût total interventions : {sav_data.get('cout_interventions', 0)} {sym}
-- Coût pièces : {sav_data.get('cout_pieces', 0)} {sym}
-- Coût total : {sav_data.get('cout_total', 0)} {sym}
+=== COÛTS (sans double comptage) ===
+- Coût de service additionnel, hors main-d'œuvre et pièces : {sav_data.get('cout_interventions', 0)} {sym}
+- Coût main-d'œuvre : {cout_main_oeuvre} {sym}
+- Coût pièces : {cout_pieces} {sym}
+- Coût total calculé (main-d'œuvre + pièces) : {cout_total} {sym}
 - Coût moyen/intervention : {sav_data.get('cout_moyen', 0)} {sym}
+Règle de lecture : un coût de service additionnel à 0 est normal lorsqu'aucune ligne distincte de service n'est suivie. Ne signale pas d'incohérence si le coût total correspond au coût main-d'œuvre + coût pièces.
 
 === PERFORMANCE ÉQUIPE (par technicien) ===
-{sav_data.get('tech_details', 'Non disponible')}
+{tech_json}
 
-=== DÉTAIL DES INTERVENTIONS RÉCENTES ===
-{sav_data.get('interventions_detail', 'Non disponible')}
+=== DÉTAIL DES INTERVENTIONS DE LA PÉRIODE ===
+{interventions_json}
 
-=== MACHINES LES PLUS INTERVENUES ===
-{sav_data.get('machines_detail', 'Non disponible')}
+=== MACHINES, SANTÉ ET COÛTS DE LA PÉRIODE ===
+{machines_json}
 
-=== CLIENTS ===
-{sav_data.get('clients_detail', 'Non disponible')}
+=== CODES ERREURS ET CAUSES RÉCURRENTES ===
+Codes : {errors_json}
+Causes : {causes_json}
+
+=== PARC, CONTRATS ET STOCK DISPONIBLE ===
+Équipements : {equipment_json}
+Contrats : {contracts_json}
+Stock : {stock_json}
 
 IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure exacte :
 {{{{
-  "analyse": "Résumé exécutif complet de la situation SAV (3-5 phrases détaillées)",
+  "analyse": "Résumé exécutif complet (6-8 phrases) citant uniquement les chiffres, machines, coûts et tendances réellement fournis",
   "score_global": 75,
   "points_forts": [
     "Point fort 1 détaillé avec chiffres",
@@ -1036,7 +1292,14 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
   "priorites_immediates": [
     "Action prioritaire 1",
     "Action prioritaire 2"
-  ]
+  ],
+  "analyse_parc": [
+    {{"machine": "Machine réellement fournie", "constat": "Interventions, santé, coûts ou diagnostic observé", "action": "Action fondée sur les données", "priorite": "HAUTE"}}
+  ],
+  "risques_stock": [
+    {{"reference": "Référence réelle", "constat": "Stock/seuil/prix observé", "action": "Action d'achat ou de vérification", "urgence": "HAUTE"}}
+  ],
+  "donnees_a_completer": ["Donnée absente qui empêcherait une conclusion précise"]
 }}}}"""
 
     raw = _call_ia(prompt, timeout=90, is_json=True)
@@ -1044,6 +1307,18 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
         raise HTTPException(status_code=500, detail="L'IA n'a pas répondu.")
     result = clean_json_response(raw)
     result = _force_ai_payload_language(result, lang, _call_ia, clean_json_response)
+    if isinstance(result, dict):
+        result["donnees_exploitees"] = {
+            "interventions": nb_total,
+            "equipements": sav_data.get("nb_equipements", len(equipment_detail)),
+            "interventions_detaillees": len(interventions_detail),
+            "machines_analysees": len(machines_detail),
+            "techniciens_analyses": len(tech_detail) if isinstance(tech_detail, list) else 0,
+            "codes_erreurs": len(errors_detail),
+            "causes_recurrentes": len(causes_detail),
+            "contrats": len(contracts_detail),
+            "references_stock": len(stock_detail),
+        }
     return {"ok": True, "result": result}
 
 
