@@ -8,10 +8,11 @@ import {
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
   ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3
 } from 'lucide-react';
-import { planning, equipements, clients as clientsApi, techniciens as techApi } from '@/lib/api';
+import { planning, equipements, clients as clientsApi, techniciens as techApi, typesIntervention } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { exportComparateurToCSV, exportComparateurToJSON, exportComparateurToPDF, getComparateurSummary } from '@/lib/export';
 import { useAuth } from '@/lib/auth-context';
+import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
 
 // Import domaines API
 import { domaines_custom } from '@/lib/api';
@@ -87,8 +88,6 @@ const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string
 };
 
 const RECURRENCES = ['Aucune', 'Hebdomadaire', 'Mensuelle', 'Trimestrielle', 'Semestrielle', 'Annuelle'];
-const TYPES_MAINTENANCE = ['Préventive', 'Corrective', 'Calibration', 'Inspection', 'Qualification', 'Mise à jour logiciel'];
-
 interface PlanItem {
   id: number;
   date_planifiee: string;
@@ -141,6 +140,9 @@ export default function PlanningPage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [customMaintenanceTypes, setCustomMaintenanceTypes] = useState<string[]>([]);
+  const [customTypeMode, setCustomTypeMode] = useState(false);
+  const [customTypeValue, setCustomTypeValue] = useState('');
   const [error, setError] = useState('');
   // Day-detail popup
   const [dayDetailDate, setDayDetailDate] = useState<string | null>(null);
@@ -154,6 +156,18 @@ export default function PlanningPage() {
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
+
+  const maintenanceTypes = useMemo(() => mergeInterventionTypes(
+    INTERVENTION_TYPES_BASE,
+    customMaintenanceTypes,
+    data.map(item => item.type_maintenance),
+  ), [customMaintenanceTypes, data]);
+
+  useEffect(() => {
+    typesIntervention.list()
+      .then(types => setCustomMaintenanceTypes(types.map(type => type.nom).filter(Boolean)))
+      .catch(() => {});
+  }, []);
 
   // Comparateur export modal
   const [showComparateurModal, setShowComparateurModal] = useState(false);
@@ -337,6 +351,8 @@ export default function PlanningPage() {
       } as any);
       setShowAddModal(false);
       setForm(emptyForm);
+      setCustomTypeMode(false);
+      setCustomTypeValue('');
       await loadData();
     } catch (err) {
       console.error(err);
@@ -890,10 +906,47 @@ export default function PlanningPage() {
               <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                 <Wrench className="w-3.5 h-3.5 text-savia-accent" /> Type de maintenance *
               </label>
-              <select className={INPUT_CLS} value={form.type_maintenance}
-                onChange={e => setForm({...form, type_maintenance: e.target.value})}>
-                {TYPES_MAINTENANCE.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+              {customTypeMode ? (
+                <div className="flex gap-2">
+                  <input
+                    className={INPUT_CLS}
+                    placeholder="Saisir le type..."
+                    value={customTypeValue}
+                    onChange={e => setCustomTypeValue(e.target.value)}
+                    autoFocus
+                  />
+                  <button type="button" onClick={async () => {
+                    const value = customTypeValue.trim();
+                    if (!value) return;
+                    try {
+                      await typesIntervention.create(value);
+                      setCustomMaintenanceTypes(prev => mergeInterventionTypes(prev, [value]));
+                      setForm(prev => ({ ...prev, type_maintenance: value }));
+                      setCustomTypeMode(false);
+                      setCustomTypeValue('');
+                    } catch {
+                      setError('Impossible d’enregistrer ce type.');
+                    }
+                  }} className="px-3 py-1 rounded-lg bg-savia-accent text-white font-bold text-sm hover:opacity-90 cursor-pointer">
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button type="button" onClick={() => { setCustomTypeMode(false); setCustomTypeValue(''); }} className="px-3 py-1 rounded-lg bg-savia-surface-hover text-savia-text-muted text-sm hover:opacity-90 cursor-pointer">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <select className={INPUT_CLS} value={form.type_maintenance}
+                  onChange={e => {
+                    if (e.target.value === '__autre__') {
+                      setCustomTypeMode(true);
+                      return;
+                    }
+                    setForm({...form, type_maintenance: e.target.value});
+                  }}>
+                  {maintenanceTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                  <option value="__autre__">✏️ Autre (saisie manuelle)</option>
+                </select>
+              )}
             </div>
           </div>
 

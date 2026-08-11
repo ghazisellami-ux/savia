@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getUser, isLoggedIn } from '@/lib/auth';
+import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import {
@@ -44,6 +45,9 @@ export default function NouvelleInterventionPage() {
   const [success, setSuccess]     = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState('');
+  const [interventionTypes, setInterventionTypes] = useState<string[]>([...INTERVENTION_TYPES_BASE]);
+  const [customTypeMode, setCustomTypeMode] = useState(false);
+  const [customTypeValue, setCustomTypeValue] = useState('');
 
   const [form, setForm] = useState({
     client: '', machine: '', technicien_assigne: '', type_intervention: 'Corrective',
@@ -64,11 +68,16 @@ export default function NouvelleInterventionPage() {
       api.equipements.list().catch(() => []),
       api.techniciens.list().catch(() => []),
       api.pieces.list().catch(() => []),
-    ]).then(([c, e, t, p]) => {
+      api.typesIntervention.list().catch(() => []),
+    ]).then(([c, e, t, p, types]) => {
       setClients(c as any[]);
       setEquips(e as any[]);
       setTechs(t as any[]);
       setPieces(p as any[]);
+      setInterventionTypes(mergeInterventionTypes(
+        INTERVENTION_TYPES_BASE,
+        (types as any[]).map((type: any) => type.nom).filter(Boolean),
+      ));
       // Pre-fill technician
       const me = (t as any[]).find((x: any) => x.nom?.toLowerCase().includes(user?.nom?.toLowerCase() || ''));
       if (me) setForm(f => ({ ...f, technicien_assigne: String(me.id || me.nom) }));
@@ -158,10 +167,31 @@ export default function NouvelleInterventionPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Type</label>
-                <select style={INPUT} value={form.type_intervention} onChange={e => set('type_intervention', e.target.value)}>
-                  <option>Corrective</option>
-                  <option>Préventive</option>
-                </select>
+                {customTypeMode ? (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input style={INPUT} autoFocus placeholder="Saisir le type..." value={customTypeValue} onChange={e => setCustomTypeValue(e.target.value)} />
+                    <button type="button" style={{ ...INPUT, width: 'auto', background: 'var(--teal)', color: '#fff', cursor: 'pointer' }} onClick={() => {
+                      const value = customTypeValue.trim();
+                      if (!value) return;
+                      setInterventionTypes(prev => mergeInterventionTypes(prev, [value]));
+                      set('type_intervention', value);
+                      setCustomTypeMode(false);
+                      setCustomTypeValue('');
+                    }}>✓</button>
+                    <button type="button" style={{ ...INPUT, width: 'auto', cursor: 'pointer' }} onClick={() => { setCustomTypeMode(false); setCustomTypeValue(''); }}>×</button>
+                  </div>
+                ) : (
+                  <select style={INPUT} value={form.type_intervention} onChange={e => {
+                    if (e.target.value === '__autre__') {
+                      setCustomTypeMode(true);
+                      return;
+                    }
+                    set('type_intervention', e.target.value);
+                  }}>
+                    {interventionTypes.map(type => <option key={type}>{type}</option>)}
+                    <option value="__autre__">✏️ Autre (saisie manuelle)</option>
+                  </select>
+                )}
               </div>
               <div>
                 <label style={LABEL}>Statut</label>
