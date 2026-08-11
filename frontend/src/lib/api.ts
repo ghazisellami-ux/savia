@@ -156,6 +156,17 @@ export const interventions = {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return request<Array<Record<string, unknown>>>(`/api/interventions?${qs}`);
   },
+  filterOptions: (params?: { year?: number; month?: number; client?: string }) => {
+    const qs = new URLSearchParams(
+      Object.entries(params || {}).reduce<Record<string, string>>((acc, [key, value]) => {
+        if (value !== undefined && value !== null && value !== '') acc[key] = String(value);
+        return acc;
+      }, {}),
+    ).toString();
+    return request<{ types: string[]; equipements: string[]; clients: string[]; statuts: string[]; annees: number[] }>(
+      `/api/interventions/filter-options${qs ? `?${qs}` : ''}`,
+    );
+  },
   create: (data: Record<string, unknown>) =>
     request<{ ok: boolean; message: string }>('/api/interventions', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) =>

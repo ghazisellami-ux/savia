@@ -17,6 +17,7 @@ import { interventions, ai, equipements, techniciens as techApi, contrats as con
 import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
+import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
 
 interface Intervention {
   id: number;
@@ -87,6 +88,14 @@ export default function SavPage() {
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [data, setData] = useState<Intervention[]>([]);
+  const [periodFilterOptions, setPeriodFilterOptions] = useState({
+    types: [] as string[],
+    equipements: [] as string[],
+    clients: [] as string[],
+    statuts: [] as string[],
+    annees: [] as number[],
+  });
+  const [periodFilterOptionsLoaded, setPeriodFilterOptionsLoaded] = useState(false);
   const [techniciens, setTechniciens] = useState<{nom: string, prenom: string}[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -118,7 +127,6 @@ export default function SavPage() {
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '', start_time: '08:00', end_time: '09:00' });
 
   // Custom intervention types ("Autre" pattern)
-  const TYPES_INTERVENTION_BASE = ['Corrective', 'Préventive', 'Installation', 'Formation', 'Démo'];
   const [customInterventionTypes, setCustomInterventionTypes] = useState<string[]>([]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
@@ -159,30 +167,51 @@ export default function SavPage() {
       });
   }, []);
 
-  const allInterventionTypes = useMemo(() => {
-    const merged = [...TYPES_INTERVENTION_BASE];
-    for (const ct of customInterventionTypes) {
-      if (!merged.includes(ct)) merged.push(ct);
-    }
-    return merged;
-  }, [customInterventionTypes]);
+  const interventionTypeOptions = useMemo(() => {
+    return mergeInterventionTypes(
+      INTERVENTION_TYPES_BASE,
+      customInterventionTypes,
+      data.map(intervention => intervention.type),
+    );
+  }, [customInterventionTypes, data]);
 
-  // Derived filter options
-  const dynamicClients = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.client).filter(Boolean)))], [data]);
-  const dynamicEquip = useMemo(() => {
-    // If a client is selected, show only equipment from that client with interventions
-    // Otherwise show all equipment with interventions
-    let filtered_data = data;
-    if (filterClient !== 'Tous') {
-      filtered_data = filtered_data.filter(d => d.client === filterClient);
+  // Filter options come from all interventions in the selected period.
+  const availableTypeFilters = useMemo(
+    () => periodFilterOptionsLoaded ? periodFilterOptions.types : [],
+    [periodFilterOptions, periodFilterOptionsLoaded],
+  );
+  const availableStatusFilters = useMemo(
+    () => periodFilterOptionsLoaded ? periodFilterOptions.statuts : [],
+    [periodFilterOptions, periodFilterOptionsLoaded],
+  );
+
+  useEffect(() => {
+    if (periodFilterOptionsLoaded && filterStatut !== 'Tous' && !availableStatusFilters.includes(filterStatut)) {
+      setFilterStatut('Tous');
     }
-    return ['Tous', ...Array.from(new Set(filtered_data.map(d => d.machine).filter(Boolean)))];
-  }, [data, filterClient]);
+  }, [availableStatusFilters, filterStatut, periodFilterOptionsLoaded]);
+
+  useEffect(() => {
+    if (!periodFilterOptionsLoaded) return;
+    if (filterType !== 'Tous' && !availableTypeFilters.includes(filterType)) setFilterType('Tous');
+    if (filterClient !== 'Tous' && !periodFilterOptions.clients.includes(filterClient)) setFilterClient('Tous');
+    if (filterEquip !== 'Tous' && !periodFilterOptions.equipements.includes(filterEquip)) setFilterEquip('Tous');
+  }, [availableTypeFilters, filterClient, filterEquip, filterType, periodFilterOptions, periodFilterOptionsLoaded]);
+
+  // Other derived filter options
+  const dynamicClients = useMemo(
+    () => ['Tous', ...(periodFilterOptionsLoaded ? periodFilterOptions.clients : [])],
+    [periodFilterOptions, periodFilterOptionsLoaded],
+  );
+  const dynamicEquip = useMemo(
+    () => ['Tous', ...(periodFilterOptionsLoaded ? periodFilterOptions.equipements : [])],
+    [periodFilterOptions, periodFilterOptionsLoaded],
+  );
   const availableYears = useMemo(() => {
-    const years = new Set(data.map(d => new Date(d.date).getFullYear()).filter(y => !isNaN(y)));
-    years.add(new Date().getFullYear());
+    const years = new Set(periodFilterOptions.annees);
+    if (years.size === 0) years.add(new Date().getFullYear());
     return Array.from(years).sort((a, b) => b - a);
-  }, [data]);
+  }, [periodFilterOptions]);
 
   const toNumber = useCallback((value: any): number => Number(value) || 0, []);
   const getInterventionLaborCost = useCallback((intervention: Pick<Intervention, 'duree_minutes' | 'cout'>): number => {
@@ -305,6 +334,25 @@ export default function SavPage() {
   }, []);
 
   useEffect(() => { loadData(0, false); }, [loadData]);
+
+  // These options are loaded from all database rows in the selected period,
+  // independently from the paginated rows currently rendered in the table.
+  useEffect(() => {
+    let cancelled = false;
+    setPeriodFilterOptionsLoaded(false);
+    interventions.filterOptions({
+      year: filterYear,
+      month: periodMode === 'mensuel' ? filterMonth + 1 : undefined,
+      client: filterClient !== 'Tous' ? filterClient : undefined,
+    }).then(options => {
+      if (!cancelled) setPeriodFilterOptions(options);
+    }).catch(() => {
+      if (!cancelled) setPeriodFilterOptions({ types: [], equipements: [], clients: [], statuts: [], annees: [] });
+    }).finally(() => {
+      if (!cancelled) setPeriodFilterOptionsLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [filterClient, filterMonth, filterYear, periodMode]);
 
   // Force tab 0 for clients (Lecteur role)
   useEffect(() => {
@@ -808,10 +856,10 @@ export default function SavPage() {
             </span>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => setFilterStatut('En cours')}
+            {availableStatusFilters.includes('En cours') && <button onClick={() => setFilterStatut('En cours')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
                 filterStatut === 'En cours' ? 'bg-savia-accent text-white' : 'bg-savia-surface border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
-              }`}>En cours</button>
+              }`}>En cours</button>}
             <button onClick={() => setFilterStatut('Tous')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
                 filterStatut === 'Tous' ? 'bg-savia-accent text-white' : 'bg-savia-surface border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover'
@@ -944,13 +992,12 @@ export default function SavPage() {
             </div>
             <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="Tous">Tous les statuts</option>
-              <option value="Cloturee">Cloturee</option>
-              <option value="En cours">En cours</option>
-              <option value="En attente de piece">En attente de pièce</option>
+              {availableStatusFilters.map(status => <option key={status} value={status}>{status}</option>)}
+
             </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="Tous">Tous les types</option>
-              {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
+              {availableTypeFilters.map(type => <option key={type} value={type}>{type}</option>)}
             </select>
             <select value={filterClient} onChange={e => {
               setFilterClient(e.target.value);
@@ -1572,7 +1619,7 @@ export default function SavPage() {
                   setForm({...form, type_intervention: e.target.value});
                 }
               }}>
-                {allInterventionTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                {interventionTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                 <option value="__autre__">✏️ Autre (saisie manuelle)</option>
               </select>
             )}

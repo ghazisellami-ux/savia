@@ -145,6 +145,10 @@ export const api = {
     list: () => req<any[]>('/api/techniciens'),
   },
 
+  typesIntervention: {
+    list: () => req<Array<{ id: number; nom: string }>>('/api/types-intervention-custom'),
+  },
+
   // Pièces
   pieces: {
     list: () => req<any[]>('/api/pieces'),

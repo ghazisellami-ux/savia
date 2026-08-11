@@ -277,6 +277,100 @@ def get_interventions(
     return records
 
 
+@app.get("/api/interventions/filter-options")
+def get_intervention_filter_options(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    client: Optional[str] = None,
+    user: dict = Depends(_verify_token),
+):
+    """Return filter values from all interventions in the selected period."""
+    import pandas as pd
+
+    try:
+        sync_planning_to_interventions(notify=False)
+    except Exception as exc:
+        logger.warning("Planning sync before intervention filter options failed: %s", exc)
+
+    df = lire_interventions()
+    if df is None or df.empty:
+        return {"types": [], "equipements": [], "clients": [], "statuts": [], "annees": []}
+
+    # Keep the options identical to the SAV table: future planned work is
+    # visible in Planning first, not in the intervention queue.
+    if "planning_id" in df.columns:
+        try:
+            with get_db() as conn:
+                future_planning_rows = conn.execute(
+                    """
+                    SELECT id
+                    FROM planning_maintenance
+                    WHERE date_prevue > CURRENT_DATE
+                      AND statut NOT IN ('Cloturee', 'Réalisée', 'Terminée', 'Annulée')
+                    """
+                ).fetchall()
+            future_planning_ids = {
+                row.get("id")
+                for row in future_planning_rows
+                if row.get("id") is not None
+            }
+            if future_planning_ids:
+                df = df[~df["planning_id"].apply(
+                    lambda value: _planning_id_in_set(value, future_planning_ids)
+                )]
+        except Exception as exc:
+            logger.warning("Future planning filter options check failed: %s", exc)
+
+    dates = pd.to_datetime(df.get("date"), errors="coerce")
+    all_years = sorted({int(value.year) for value in dates.dropna()}, reverse=True)
+    period_mask = dates.notna()
+    if year is not None:
+        period_mask &= dates.dt.year.eq(year)
+    if month is not None and 1 <= month <= 12:
+        period_mask &= dates.dt.month.eq(month)
+
+    client_filter = _get_client_filter(user)
+    if client_filter and "client" in df.columns:
+        period_mask &= df["client"].astype(str).str.casefold().eq(client_filter.casefold())
+
+    period_df = df.loc[period_mask].copy()
+    if client and "client" in period_df.columns:
+        equipment_df = period_df[period_df["client"].astype(str).str.casefold().eq(client.casefold())]
+    else:
+        equipment_df = period_df
+
+    def values(frame, column):
+        if frame.empty or column not in frame.columns:
+            return []
+        return sorted({str(value).strip() for value in frame[column].dropna() if str(value).strip()})
+
+    types = values(period_df, "type_intervention")
+    statuses = values(period_df, "statut")
+    if statuses:
+        normalized_statuses = set()
+        for status in statuses:
+            low = status.lower()
+            if "tur" in low or "termin" in low or "clotur" in low:
+                normalized_statuses.add("Cloturee")
+            elif "attente" in low and "pi" in low:
+                normalized_statuses.add("En attente de piece")
+            elif "cours" in low:
+                normalized_statuses.add("En cours")
+            elif "planif" in low:
+                normalized_statuses.add("Planifiee")
+            else:
+                normalized_statuses.add(status)
+        statuses = sorted(normalized_statuses)
+
+    return {
+        "types": types,
+        "equipements": values(equipment_df, "machine"),
+        "clients": values(period_df, "client"),
+        "statuts": statuses,
+        "annees": all_years,
+    }
+
+
 @app.get("/api/interventions/{parent_id}/children")
 def get_child_interventions_endpoint(
     parent_id: int,
