@@ -95,3 +95,14 @@ thead th {
     radial-gradient(ellipse 50% 60% at 80% 70%, rgba(47,  65,  86,  0.08), transparent),
     radial-gradient(ellipse 40% 40% at 50% 50%, rgba(250, 246, 237, 0.9),  transparent);
 }
+
+/* Les alertes de l'analyse ne doivent pas afficher du jaune sur jaune. */
+div[class~="bg-yellow-500/5"][class~="text-yellow-100"] {
+  background-color: rgba(47, 65, 86, 0.88) !important;
+  color: #fef3c7 !important;
+}
+
+/* Remplace l'ancien message de fallback par le message structuré ci-dessus. */
+div[class~="bg-yellow-500/5"][class~="text-yellow-100"][class~="text-xs"] {
+  display: none !important;
+}

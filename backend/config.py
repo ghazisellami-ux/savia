@@ -29,6 +29,22 @@ GOOGLE_API_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 if not GOOGLE_API_KEYS and GOOGLE_API_KEY:
     GOOGLE_API_KEYS = [GOOGLE_API_KEY]
 
+# Fournisseur IA par défaut et configuration Fireworks (clés côté serveur).
+AI_PROVIDER = _get_secret("AI_PROVIDER", "google").strip().lower()
+FIREWORKS_API_KEY = _get_secret("FIREWORKS_API_KEY")
+FIREWORKS_BASE_URL = _get_secret(
+    "FIREWORKS_BASE_URL",
+    "https://api.fireworks.ai/inference/v1",
+).rstrip("/")
+FIREWORKS_MODEL = _get_secret(
+    "FIREWORKS_MODEL",
+    "accounts/fireworks/models/deepseek-v4-flash-0731",
+)
+FIREWORKS_ATTEMPT_TIMEOUT_SECONDS = max(
+    5,
+    int(_get_secret("FIREWORKS_ATTEMPT_TIMEOUT_SECONDS", "120")),
+)
+
 _mk = _get_secret("MASTER_KEY")
 MASTER_KEY = _mk.encode() if _mk else b""
 ACCESS_CODE = _get_secret("ACCESS_CODE", "SIC2026")

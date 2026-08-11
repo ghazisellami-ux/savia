@@ -329,7 +329,7 @@ export default function FinancesPage() {
             style={{ background: 'linear-gradient(135deg, #567C8D, #2F4156)' }}
           >
             <Sparkles className="w-4 h-4" />
-            Analyser avec l&apos;IA (Gemini)
+            Analyser avec l&apos;IA
           </button>
         )}
 

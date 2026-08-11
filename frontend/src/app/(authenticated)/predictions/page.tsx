@@ -72,6 +72,7 @@ export default function PredictionsPage() {
   const avgFiabilite = riskPredictions.length ? Math.round(riskPredictions.reduce((sum, item) => sum + item.fiabilite, 0) / riskPredictions.length) : 0;
   const validation = (predictionMeta.validation || {}) as Record<string, unknown>;
   const selectedPrediction = riskPredictions.find(item => equipmentLabel(item) === selectedFeedbackMachine);
+  const priorityPrediction = riskPredictions[0];
 
   function equipmentLabel(item: PredictionItem): string { return `${item.machine}${item.client ? ` (${item.client})` : ''}`; }
   function labelEquipmentMentions(value: unknown): string {
@@ -87,6 +88,7 @@ export default function PredictionsPage() {
     return value ? [String(value)] : [];
   }
   function money(value: unknown): string { if (value === null || value === undefined || value === '') return 'Non calculable'; const amount = Number(value); return `${Number.isFinite(amount) ? amount.toLocaleString('fr-FR') : 'Non calculable'} TND`; }
+  function formatRisk(value: unknown): string { const text = String(value ?? '—'); return text.includes('%') || text === '—' ? text : `${text}%`; }
 
   const handleAiAnalysis = async () => {
     setAiLoading(true); setAiAnalysis(null);
@@ -103,8 +105,8 @@ export default function PredictionsPage() {
       };
       const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
       const response = await aiApi.analyzePerformance(kpis, devise);
-      setAiAnalysis(response?.ok && response.result ? response.result : { analyse: fallbackAnalysis() });
-    } catch { setAiAnalysis({ analyse: fallbackAnalysis() }); }
+      setAiAnalysis(response?.ok && response.result ? response.result : { _fallback: true });
+    } catch { setAiAnalysis({ _fallback: true }); }
     finally { setAiLoading(false); }
   };
 
@@ -142,10 +144,41 @@ export default function PredictionsPage() {
       </SectionCard>
 
       <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-savia-accent" /> Analyse IA prédictive</span>}>
-        <p className="text-savia-text-muted text-sm mb-4">Gemini explique les probabilités calculées, les causes issues des diagnostics techniciens, les actions préventives et l’économie potentielle. Les montants sont des estimations à valider par le responsable technique.</p>
-        <button onClick={handleAiAnalysis} disabled={aiLoading} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer mb-5">{aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{aiLoading ? 'Analyse en cours...' : 'Lancer l’analyse Gemini'}</button>
+        <p className="text-savia-text-muted text-sm mb-4">L&apos;IA explique les probabilités calculées, les causes issues des diagnostics techniciens, les actions préventives et l’économie potentielle. Les montants sont des estimations à valider par le responsable technique.</p>
+        <button onClick={handleAiAnalysis} disabled={aiLoading} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer mb-5">{aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{aiLoading ? 'Analyse en cours...' : 'Lancer l’analyse IA'}</button>
         {aiAnalysis && <div className="space-y-5">
+          {aiAnalysis._fallback && <div className="rounded-lg border border-yellow-500/30 bg-savia-surface p-3 text-xs text-yellow-200">Rapport detail genere a partir des donnees serveur; le fournisseur IA n&apos;a pas renvoye son rapport.</div>}
           <div className="flex items-center gap-2 text-purple-400 font-semibold text-sm"><ClipboardList className="w-4 h-4" /> Rapport détaillé de l’analyse</div>
+
+          {priorityPrediction && aiAnalysis._fallback && !aiAnalysis.alertes_critiques?.length && <div className="rounded-xl border border-purple-500/20 bg-gradient-to-br from-purple-500/10 via-savia-surface to-savia-bg p-5 space-y-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-savia-text-muted">Priorité actuelle</p>
+                <h3 className="mt-1 text-lg font-black text-savia-text">{equipmentLabel(priorityPrediction)}</h3>
+                <p className="mt-1 text-xs text-savia-text-muted">{priorityPrediction.type || priorityPrediction.modele || 'Type non renseigné'} · {priorityPrediction.statut || 'Statut non renseigné'}</p>
+              </div>
+              <span className={priorityPrediction.risque >= 50 ? 'rounded-full px-3 py-1 text-xs font-bold bg-red-500/15 text-red-300' : 'rounded-full px-3 py-1 text-xs font-bold bg-yellow-500/15 text-yellow-300'}>
+                {priorityPrediction.risque >= 50 ? 'Risque élevé' : 'À surveiller'}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-lg bg-savia-bg/60 p-3"><p className="text-xs text-savia-text-muted">Probabilité sur {priorityPrediction.horizonDays} jours</p><p className="mt-1 text-2xl font-black text-red-300">{priorityPrediction.risque}%</p><div className="mt-2 h-2 overflow-hidden rounded-full bg-savia-border/50"><div className="h-full rounded-full bg-red-400" style={{ width: String(Math.min(100, priorityPrediction.risque)) + '%' }} /></div></div>
+              <div className="rounded-lg bg-savia-bg/60 p-3"><p className="text-xs text-savia-text-muted">Fiabilité des données</p><p className="mt-1 text-2xl font-black text-blue-300">{priorityPrediction.fiabilite}%</p><p className="mt-1 text-[11px] text-savia-text-dim">Qualité de l’historique utilisé, pas une garantie de panne.</p></div>
+              <div className="rounded-lg bg-savia-bg/60 p-3"><p className="text-xs text-savia-text-muted">Score de santé</p><p className="mt-1 text-2xl font-black text-savia-accent">{priorityPrediction.score}%</p><p className="mt-1 text-[11px] text-savia-text-dim">Indicateur inverse du risque calculé.</p></div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-savia-text-muted">Facteurs observés</p>
+                <ul className="space-y-2 text-sm text-savia-text">{(priorityPrediction.facteurs.length ? priorityPrediction.facteurs : ['Aucun facteur dominant identifié']).map((factor, index) => <li key={factor + '-' + index} className="flex gap-2"><span className="text-purple-300">•</span><span>{factor}</span></li>)}</ul>
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-savia-text-muted">Lecture recommandée</p>
+                <p className="text-sm leading-relaxed text-savia-text-muted">Cette valeur estime la probabilité d’au moins une panne corrective dans l’horizon indiqué. Elle ne prédit ni la date exacte ni une panne certaine. Avec une fiabilité de {priorityPrediction.fiabilite}%, les résultats doivent être confirmés par l’historique terrain et une inspection technique.</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-sm text-yellow-100"><strong>Actions immédiates suggérées :</strong> vérifier les maintenances préventives en retard, consulter les diagnostics liés aux facteurs ci-dessus et planifier une inspection ciblée de {priorityPrediction.composant || 'la pièce à déterminer'}.</div>
+          </div>}
+          {aiAnalysis._fallback && <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-xs text-yellow-100">Résumé automatique du moteur prédictif : le rapport détaillé de l’IA n’a pas été retourné.</div>}
 
           {aiAnalysis.alertes_critiques?.length > 0 && <div className="bg-red-500/5 rounded-xl p-5 border border-red-500/20"><div className="flex items-center gap-2 mb-3 text-red-400 font-bold"><AlertTriangle className="w-4 h-4" /> Prédictions et causes prioritaires</div><div className="space-y-4">{aiAnalysis.alertes_critiques.map((alert: any, index: number) => <div key={index} className="bg-savia-bg/60 rounded-lg p-4 border-l-4 border-red-500"><div className="font-bold text-sm">{index + 1}. {labelEquipmentMentions(alert.machine)}</div><div className="flex flex-wrap gap-2 mt-2 text-xs"><span className="px-2 py-1 rounded bg-red-500/10 text-red-300">Risque : {alert.risque_panne_pct ?? alert.risque ?? '—'}%</span><span className="px-2 py-1 rounded bg-blue-500/10 text-blue-300">Horizon : {alert.horizon_jours ?? alert.jours_avant_panne ?? '—'} jours</span><span className="px-2 py-1 rounded bg-savia-surface text-savia-text-muted">Score santé : {alert.score_sante ?? '—'}%</span></div>{alert.cause && <p className="text-sm mt-3"><strong className="text-orange-300">Cause probable :</strong> {labelEquipmentMentions(alert.cause)}</p>}{alert.risque && typeof alert.risque === 'string' && <p className="text-sm mt-2"><strong className="text-red-300">Risque opérationnel :</strong> {labelEquipmentMentions(alert.risque)}</p>}{listValues(alert.facteurs || alert.facteurs_risque).length > 0 && <div className="mt-3"><strong className="text-xs text-savia-text-muted uppercase">Facteurs observés</strong><ul className="list-disc list-inside text-sm text-savia-text-muted mt-1">{listValues(alert.facteurs || alert.facteurs_risque).map((factor, factorIndex) => <li key={factorIndex}>{labelEquipmentMentions(factor)}</li>)}</ul></div>}{alert.action_immediate && <div className="mt-3 p-3 rounded bg-yellow-500/5 border border-yellow-500/20 text-sm"><Wrench className="w-4 h-4 inline mr-1 text-yellow-300" /><strong className="text-yellow-300">Action immédiate :</strong> {labelEquipmentMentions(alert.action_immediate)}</div>}{listValues(alert.recommandations).length > 0 && <div className="mt-3"><strong className="text-xs text-savia-text-muted uppercase">Recommandations pour cette machine</strong><ul className="list-disc list-inside text-sm text-savia-text-muted mt-1">{listValues(alert.recommandations).map((recommendation, recommendationIndex) => <li key={recommendationIndex}>{labelEquipmentMentions(recommendation)}</li>)}</ul></div>}{(alert.gain_potentiel || alert.cout_panne_evite) && <div className="mt-3 text-sm text-green-300"><DollarSign className="w-4 h-4 inline mr-1" />Gain estimé : {money(alert.gain_potentiel || alert.cout_panne_evite)}</div>}</div>)}</div></div>}
 

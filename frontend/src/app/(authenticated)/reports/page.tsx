@@ -6,7 +6,7 @@ import {
   AlertTriangle, Calendar, Wrench, TrendingUp, DollarSign, CheckCircle2,
   ClipboardList, Target, Activity, ShieldCheck, Bot, ChevronRight
 } from 'lucide-react';
-import { interventions, equipements, ai, finances, contrats, settings } from '@/lib/api';
+import { interventions, equipements, ai, finances, contrats, pieces, settings } from '@/lib/api';
 import { TrendingDown, PieChart as PieChartIcon } from 'lucide-react';
 
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
@@ -244,21 +244,71 @@ export default function ReportsPage() {
     try {
       let periodeData = iaPeriode === 'Mensuel' ? filterByPeriod(data, iaMois, iaAnnee) : filterByPeriod(data, null, iaAnnee);
       periodeData = filterByClient(periodeData, iaClient);
+      const [contractsData, partsData] = await Promise.all([
+        contrats.list(iaClient === 'Tous les clients' ? undefined : iaClient).catch(() => []),
+        pieces.list().catch(() => []),
+      ]);
+      const selectedEquipments = (equips as any[]).filter((equipment: any) =>
+        iaClient === 'Tous les clients' || equipment.Client === iaClient,
+      );
+      const selectedMachines = new Set(selectedEquipments.map((equipment: any) => equipment.Nom || equipment.nom).filter(Boolean));
+      const selectedEquipmentTypes = new Set(selectedEquipments.map((equipment: any) => equipment.Type || equipment.type).filter(Boolean));
       const nb = periodeData.length;
       const nbClot = periodeData.filter((i: any) => (i.statut || '').toLowerCase().includes('tur')).length;
       const types: Record<string, number> = {};
       const machinesTop: Record<string, number> = {};
+      const errorsByCode: Record<string, number> = {};
+      const causes: Record<string, number> = {};
+      const techniciens: Record<string, { interventions: number; minutes: number; cloturees: number; cout: number }> = {};
       periodeData.forEach((i: any) => {
         const t = i.type_intervention || 'Autre';
         types[t] = (types[t] || 0) + 1;
         const m = `${i.machine} (${machineToClient[i.machine] || '?'})`;
         machinesTop[m] = (machinesTop[m] || 0) + 1;
+        const code = String(i.code_erreur || i.code || '').trim();
+        if (code) errorsByCode[code] = (errorsByCode[code] || 0) + 1;
+        const cause = String(i.cause || '').trim();
+        if (cause) causes[cause] = (causes[cause] || 0) + 1;
+        const technician = String(i.technicien || 'Non renseigné');
+        const current = techniciens[technician] || { interventions: 0, minutes: 0, cloturees: 0, cout: 0 };
+        current.interventions += 1;
+        current.minutes += Number(i.duree_minutes) || 0;
+        current.cloturees += (i.statut || '').toLowerCase().includes('tur') ? 1 : 0;
+        current.cout += getClientLaborCost(i) + (Number(i.cout_pieces) || 0);
+        techniciens[technician] = current;
       });
       const dureeMoy = nb > 0 ? Math.round(periodeData.reduce((a: number, b: any) => a + (b.duree_minutes || 0), 0) / nb) : 0;
-      const coutTotal = periodeData.reduce((a: number, b: any) => a + (b.cout || 0), 0);
+      const coutMainOeuvre = periodeData.reduce((total: number, item: any) => total + getClientLaborCost(item), 0);
+      const coutPieces = periodeData.reduce((total: number, item: any) => total + (Number(item.cout_pieces) || 0), 0);
+      const coutTotal = coutMainOeuvre + coutPieces;
       const periodeLabel = iaPeriode === 'Mensuel' ? `${MOIS_LABELS[iaMois-1]} ${iaAnnee}` : `Année ${iaAnnee}`;
+      const machineDetails = Array.from(selectedMachines).map((machine) => {
+        const machineInterventions = periodeData.filter((item: any) => item.machine === machine);
+        const equipment = selectedEquipments.find((item: any) => (item.Nom || item.nom) === machine) || {};
+        return {
+          machine,
+          client: equipment.Client || equipment.client || machineToClient[machine] || '',
+          type: equipment.Type || equipment.type || '',
+          statut: equipment.Statut || equipment.statut || '',
+          score_sante: equipment.Score_Sante ?? equipment.score_sante ?? null,
+          interventions: machineInterventions.length,
+          correctives: machineInterventions.filter((item: any) => String(item.type_intervention || '').toLowerCase().includes('correct')).length,
+          cout_total: machineInterventions.reduce((total: number, item: any) => total + getClientLaborCost(item) + (Number(item.cout_pieces) || 0), 0),
+          dernier_diagnostic: machineInterventions.find((item: any) => item.probleme || item.cause || item.solution) || null,
+        };
+      }).filter((item) => item.interventions > 0 || item.statut);
+      const scopedParts = (partsData as any[]).filter((part: any) =>
+        iaClient === 'Tous les clients' || selectedEquipmentTypes.has(part.equipement_type || part.Equipement_Type),
+      ).map((part: any) => ({
+        reference: part.reference || part.Reference,
+        designation: part.designation || part.Designation,
+        equipement_type: part.equipement_type || part.Equipement_Type,
+        stock_actuel: Number(part.stock_actuel ?? part.Stock_Actuel ?? 0),
+        stock_minimum: Number(part.stock_minimum ?? part.Seuil_Critique ?? 0),
+        prix_unitaire: Number(part.prix_unitaire ?? part.Prix_Unitaire ?? 0),
+        fournisseur: part.fournisseur || part.Fournisseur || '',
+      }));
 
-      // Use analyzeSav which has its own prompt logic
       const res = await ai.analyzeSav({
         client: iaClient,
         periode: periodeLabel,
@@ -267,9 +317,24 @@ export default function ReportsPage() {
         types_interventions: types,
         top_machines: machinesTop,
         duree_moyenne_min: dureeMoy,
-        cout_total_tnd: coutTotal,
-        nb_equipements: equips.length,
+        cout_main_oeuvre: coutMainOeuvre,
+        cout_pieces: coutPieces,
+        cout_total: coutTotal,
+        nb_equipements: selectedEquipments.length,
         taux_cloture_pct: nb > 0 ? Math.round(nbClot / nb * 100) : 0,
+        interventions_detail: periodeData.slice(0, 100).map((item: any) => ({
+          date: item.date, machine: item.machine, client: machineToClient[item.machine] || '', type: item.type_intervention || '',
+          statut: item.statut || '', technicien: item.technicien || '', duree_minutes: Number(item.duree_minutes) || 0,
+          cout_main_oeuvre: getClientLaborCost(item), cout_pieces: Number(item.cout_pieces) || 0,
+          code_erreur: item.code_erreur || item.code || '', probleme: item.probleme || '', cause: item.cause || '', solution: item.solution || '',
+        })),
+        machines_detail: machineDetails,
+        erreurs_recurrentes: Object.entries(errorsByCode).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([code, occurrences]) => ({ code, occurrences })),
+        causes_recurrentes: Object.entries(causes).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([cause, occurrences]) => ({ cause, occurrences })),
+        tech_details: Object.entries(techniciens).map(([technicien, stats]) => ({ technicien, ...stats, taux_cloture_pct: stats.interventions ? Math.round(stats.cloturees / stats.interventions * 100) : 0 })),
+        equipements_detail: selectedEquipments.map((equipment: any) => ({ nom: equipment.Nom || equipment.nom, client: equipment.Client || equipment.client, type: equipment.Type || equipment.type, statut: equipment.Statut || equipment.statut, score_sante: equipment.Score_Sante ?? equipment.score_sante ?? null })),
+        contrats_detail: (contractsData as any[]).map((contract: any) => ({ client: contract.client || contract.Client, equipement: contract.equipement || contract.Equipement, type: contract.type_contrat || contract.Type_Contrat, statut: contract.statut || contract.Statut, avec_pieces: Boolean(contract.avec_pieces), date_fin: contract.date_fin || contract.Date_Fin })),
+        stock_detail: scopedParts,
       }, currencyCode);
 
       if (res.ok && res.result) {
@@ -547,8 +612,8 @@ export default function ReportsPage() {
       {/* TAB 2: RAPPORT IA */}
       {activeTab === 2 && (
         <div className="space-y-6">
-          <SectionCard title={<span className="flex items-center gap-2"><Bot className="w-4 h-4 text-purple-400" /> Rapport IA (Gemini)</span>}>
-            <p className="text-sm text-savia-text-muted mb-4">Gemini analyse vos données et génère un rapport avec tendances, risques et recommandations.</p>
+          <SectionCard title={<span className="flex items-center gap-2"><Bot className="w-4 h-4 text-purple-400" /> Rapport IA</span>}>
+            <p className="text-sm text-savia-text-muted mb-4">L&apos;IA analyse les interventions, le parc, les coûts, les contrats et le stock réellement disponibles pour générer un rapport détaillé.</p>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Période</label>
                 <select className={INPUT_CLS} value={iaPeriode} onChange={e => setIaPeriode(e.target.value)}>
@@ -579,12 +644,25 @@ export default function ReportsPage() {
             )}
             <button onClick={handleAiReport} disabled={isGenerating} className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 w-full mt-4 disabled:opacity-50">
               {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-              {isGenerating ? 'Gemini analyse vos données...' : 'Générer le Rapport IA'}
+              {isGenerating ? 'L’IA analyse vos données...' : 'Générer le Rapport IA'}
             </button>
           </SectionCard>
 
           {aiReport && (
             <div className="space-y-4">
+              {aiReport.donnees_exploitees && (
+                <div className="p-4 rounded-xl bg-indigo-500/10 border-l-4 border-indigo-500">
+                  <h4 className="font-bold text-sm text-indigo-300 uppercase tracking-wider mb-3 flex items-center gap-2"><Activity className="w-4 h-4" /> Données réelles exploitées</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                    {[
+                      ['Interventions', aiReport.donnees_exploitees.interventions], ['Équipements', aiReport.donnees_exploitees.equipements],
+                      ['Machines analysées', aiReport.donnees_exploitees.machines_analysees], ['Techniciens', aiReport.donnees_exploitees.techniciens_analyses],
+                      ['Codes erreurs', aiReport.donnees_exploitees.codes_erreurs], ['Causes récurrentes', aiReport.donnees_exploitees.causes_recurrentes],
+                      ['Contrats', aiReport.donnees_exploitees.contrats], ['Références stock', aiReport.donnees_exploitees.references_stock],
+                    ].map(([label, value]) => <div key={String(label)} className="p-2 rounded-lg bg-savia-bg/40"><div className="font-black text-indigo-300">{value ?? 0}</div><div className="text-[11px] text-savia-text-muted">{label}</div></div>)}
+                  </div>
+                </div>
+              )}
               {/* analyze-performance format */}
               {aiReport.alertes_critiques?.length > 0 && (
                 <div className="p-4 rounded-xl bg-red-500/10 border-l-4 border-red-500">
@@ -615,6 +693,20 @@ export default function ReportsPage() {
                     )}
                   </div>
                   {aiReport.analyse && <p className="text-sm text-savia-text leading-relaxed">{aiReport.analyse}</p>}
+                </div>
+              )}
+              {aiReport.analyse_parc?.length > 0 && (
+                <div className="p-4 rounded-xl bg-cyan-500/10 border-l-4 border-cyan-500">
+                  <h4 className="font-bold text-sm text-cyan-300 uppercase tracking-wider mb-3 flex items-center gap-2"><Wrench className="w-4 h-4" /> Analyse du parc par machine</h4>
+                  <div className="space-y-3">
+                    {aiReport.analyse_parc.map((item: any, index: number) => <div key={`${item.machine}-${index}`} className="p-3 rounded-lg bg-savia-bg/40 border border-savia-border/50"><div className="flex justify-between gap-2 flex-wrap"><span className="font-semibold text-sm">{item.machine}</span><span className="text-xs font-bold text-cyan-300">{item.priorite || 'À évaluer'}</span></div><p className="text-xs text-savia-text-muted mt-1">{item.constat}</p><p className="text-xs text-cyan-200 mt-2"><span className="font-semibold">Action :</span> {item.action}</p></div>)}
+                  </div>
+                </div>
+              )}
+              {aiReport.risques_stock?.length > 0 && (
+                <div className="p-4 rounded-xl bg-orange-500/10 border-l-4 border-orange-500">
+                  <h4 className="font-bold text-sm text-orange-300 uppercase tracking-wider mb-3 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Risques de stock</h4>
+                  <div className="space-y-2">{aiReport.risques_stock.map((item: any, index: number) => <div key={`${item.reference}-${index}`} className="p-3 rounded-lg bg-savia-bg/40 text-xs"><span className="font-semibold text-savia-text">{item.reference}</span> — {item.constat}<div className="mt-1 text-orange-200"><span className="font-semibold">Action :</span> {item.action}</div></div>)}</div>
                 </div>
               )}
               {aiReport.points_forts?.length > 0 && (
@@ -655,6 +747,19 @@ export default function ReportsPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+              {aiReport.performance_equipe?.length > 0 && (
+                <div className="p-4 rounded-xl bg-savia-surface-hover/60">
+                  <h4 className="font-bold text-sm text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Building2 className="w-4 h-4" /> Performance de l&apos;équipe</h4>
+                  <div className="space-y-2">{aiReport.performance_equipe.map((item: any, index: number) => <div key={`${item.technicien}-${index}`} className="flex justify-between gap-3 p-2 rounded-lg bg-savia-bg/40 text-sm"><span className="font-semibold">{item.technicien}</span><span className="text-savia-text-muted">{item.evaluation} — {item.commentaire}</span></div>)}</div>
+                </div>
+              )}
+              {aiReport.analyse_couts && (
+                <div className="p-4 rounded-xl bg-orange-500/10 border-l-4 border-orange-500">
+                  <h4 className="font-bold text-sm text-orange-300 uppercase tracking-wider mb-2 flex items-center gap-2"><DollarSign className="w-4 h-4" /> Analyse des coûts</h4>
+                  <p className="text-sm text-savia-text"><span className="font-semibold">{aiReport.analyse_couts.verdict || 'À évaluer'} :</span> {aiReport.analyse_couts.detail}</p>
+                  {aiReport.analyse_couts.economie_possible && <p className="text-xs text-orange-200 mt-2">Économie possible : {aiReport.analyse_couts.economie_possible}</p>}
                 </div>
               )}
               {/* Shared: machines_stables, plan_maintenance, estimation_couts, tendances, conclusion */}
@@ -708,6 +813,18 @@ export default function ReportsPage() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+              {aiReport.priorites_immediates?.length > 0 && (
+                <div className="p-4 rounded-xl bg-red-500/10 border-l-4 border-red-500">
+                  <h4 className="font-bold text-sm text-red-300 uppercase tracking-wider mb-2 flex items-center gap-2"><Target className="w-4 h-4" /> Priorités immédiates</h4>
+                  <div className="space-y-1">{aiReport.priorites_immediates.map((item: string, index: number) => <div key={index} className="text-sm text-savia-text flex gap-2"><span className="text-red-300 font-bold">{index + 1}.</span>{item}</div>)}</div>
+                </div>
+              )}
+              {aiReport.donnees_a_completer?.length > 0 && (
+                <div className="p-4 rounded-xl bg-yellow-500/10 border-l-4 border-yellow-500">
+                  <h4 className="font-bold text-sm text-yellow-300 uppercase tracking-wider mb-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Données à compléter</h4>
+                  <div className="space-y-1">{aiReport.donnees_a_completer.map((item: string, index: number) => <div key={index} className="text-sm text-savia-text-muted">• {item}</div>)}</div>
                 </div>
               )}
               {aiReport.conclusion && (

@@ -849,7 +849,7 @@ export default function AdminPage() {
       {/* ─── TAB: AI GOVERNANCE ─────────────────────────────── */}
       {tab === 'ai' && (
         <div className="space-y-5">
-          <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-purple-400" /> Gemini — quotas et contrôle humain</span>}>
+          <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-purple-400" /> IA — quotas et contrôle humain</span>}>
             <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-4 text-sm text-savia-text-muted space-y-1">
               <p className="font-bold text-savia-text">Recommandations uniquement — validation humaine obligatoire.</p>
               <p>SAVIA ne conserve ni prompts ni réponses IA ; le journal contient seulement l’utilisateur, la date, la fonctionnalité, le statut et le compteur.</p>

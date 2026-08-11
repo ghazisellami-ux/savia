@@ -61,6 +61,45 @@ def get_knowledge(user: dict = Depends(_verify_token)):
     return results
 
 
+@app.post("/api/knowledge")
+def save_confirmed_knowledge(body: dict, user: dict = Depends(_verify_token)):
+    """Save an explicitly confirmed cause and applied solution from supervision."""
+    require_roles(user, *KNOWLEDGE_WRITE_ROLES)
+
+    code = str(body.get("code") or "").strip()
+    cause = str(body.get("cause") or "").strip()
+    solution = str(body.get("solution") or "").strip()
+    if not code or not cause or not solution:
+        raise HTTPException(status_code=400, detail="Le code, la cause confirmée et la solution appliquée sont requis.")
+
+    message = str(body.get("message") or "").strip()
+    error_type = str(body.get("type") or "Hardware").strip()[:80] or "Hardware"
+    priority = str(body.get("priorite") or "MOYENNE").strip().upper()
+    if priority not in {"HAUTE", "MOYENNE", "BASSE"}:
+        priority = "MOYENNE"
+    validated_by = str(user.get("username") or user.get("sub") or "Utilisateur SAVIA")[:120]
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
+                "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
+                (code[:120], message[:500], error_type),
+            )
+            conn.execute(
+                "INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (mot_cle) DO UPDATE SET "
+                "type=EXCLUDED.type, priorite=EXCLUDED.priorite, cause=EXCLUDED.cause, "
+                "solution=EXCLUDED.solution, validated_by=EXCLUDED.validated_by, updated_at=CURRENT_TIMESTAMP",
+                (code[:120], error_type, priority, cause[:4000], solution[:8000], validated_by),
+            )
+        return {"ok": True, "message": "Cause et solution confirmées enregistrées dans la base de connaissances."}
+    except Exception as exc:
+        logger.exception("Impossible d'enregistrer la connaissance confirmée")
+        raise HTTPException(status_code=500, detail=f"Erreur d'enregistrement: {exc}")
+
+
 # Parsing and encoding are implemented in services.knowledge_import.
 
 

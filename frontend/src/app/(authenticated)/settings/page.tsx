@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff, Bot, Headphones, BarChart3, Package, Settings, MessageCircle, ClipboardList, Building2, Wrench, DollarSign, Brain, KeyRound } from 'lucide-react';
+import { Save, CheckCircle, AlertCircle, Send, Eye, EyeOff, Bot, Headphones, BarChart3, Package, Settings, MessageCircle, ClipboardList, Building2, Wrench, DollarSign, Brain, Cpu } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import AiPrivacyPanel from '@/components/ai/ai-privacy-panel';
 
@@ -72,9 +72,8 @@ export default function SettingsPage() {
     Object.fromEntries(BOTS.map(b => [b.key, { bot_key: b.key, enabled: 1, hour: 8, minute: 30, days_of_week: '1,2,3,4,5,6,7' }]))
   );
 
-  const [geminiKey, setGeminiKey] = useState('');
+  const [aiProvider, setAiProvider] = useState<'google' | 'fireworks'>('google');
   const [orgName, setOrgName] = useState('');
-  const [showGemini, setShowGemini] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveErr, setSaveErr] = useState('');
@@ -107,7 +106,7 @@ export default function SettingsPage() {
           };
         });
         setBots(newBots);
-        setGeminiKey(data.gemini_api_key || '');
+        setAiProvider(data.ai_provider === 'fireworks' ? 'fireworks' : 'google');
         setOrgName(data.nom_organisation || 'SIC Radiologie');
       })
       .catch(err => {
@@ -187,7 +186,7 @@ export default function SettingsPage() {
         botPayload[`${b.key}_token`] = bots[b.key]?.token || '';
         botPayload[`${b.key}_chat_id`] = bots[b.key]?.chatId || '';
       });
-      botPayload.gemini_api_key = geminiKey;
+      botPayload.ai_provider = aiProvider;
       botPayload.nom_organisation = orgName;
 
       const botRes = await fetch('/api/settings', {
@@ -510,21 +509,19 @@ export default function SettingsPage() {
           <h2 className="font-bold text-base text-savia-text">Intelligence Artificielle</h2>
         </div>
         <div>
-          <label className={LABEL}><span className="inline-flex items-center gap-1.5"><KeyRound className="w-3.5 h-3.5" /> Clé API Gemini</span></label>
-          <div className="relative">
-            <input
-              type={showGemini ? 'text' : 'password'}
-              className={INPUT + ' pr-10'}
-              placeholder="AIzaSy..."
-              value={geminiKey}
-              onChange={e => setGeminiKey(e.target.value)}
-            />
-            <button type="button" onClick={() => setShowGemini(v => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-savia-text-muted hover:text-savia-text">
-              {showGemini ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
-          <p className="text-xs text-savia-text-muted mt-1">
+          <label className={LABEL}><span className="inline-flex items-center gap-1.5"><Cpu className="w-3.5 h-3.5" /> Modèle IA actif</span></label>
+          <select
+            className={`${INPUT} cursor-pointer`}
+            value={aiProvider}
+            onChange={e => setAiProvider(e.target.value === 'fireworks' ? 'fireworks' : 'google')}
+          >
+            <option value="google">Google Gemini</option>
+            <option value="fireworks">Fireworks AI — DeepSeek V4 Flash</option>
+          </select>
+          <p className="text-xs text-savia-text-muted mt-2">
+            Les clés API restent configurées côté serveur dans le fichier <code>.env</code>. Le choix est réservé à l&apos;administrateur.
+          </p>
+          <p className="hidden">
             Obtenez votre clé sur{' '}
             <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer"
               className="text-savia-accent underline">Google AI Studio</a>

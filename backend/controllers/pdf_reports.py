@@ -310,7 +310,12 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
             add_sec('POINTS FAIBLES',   ai.get('points_faibles', []),  [250,84,87],  '\u25b3', 'weak')
             # Recommandations - TEAL + ARROW
             recs = ai.get('recommandations', [])
-            recs_c = [r if isinstance(r, str) else r.get('action', str(r)) for r in recs]
+            recs_c = [
+                r if isinstance(r, str) else (
+                    f"{r.get('titre', r.get('action', 'Recommandation'))} : {r.get('description', r.get('action', ''))}"
+                )
+                for r in recs
+            ]
             add_sec('RECOMMANDATIONS',  recs_c,                        [1,180,188],  '\u2192', 'reco')
             # Alertes - CORAL + WARNING
             add_sec('ALERTES CRITIQUES',ai.get('alertes_critiques',[]),[250,84,87],  '\u26a0', 'alert')
@@ -339,6 +344,29 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 for k_, v_ in couts.items():
                     if v_: body_item(str(k_)+' : '+str(v_), [250,137,37], '\u25cf')
                 pdf.ln(4)
+
+            # Analyse du parc - CYAN
+            parc = ai.get('analyse_parc', [])
+            parc_items = [
+                item if isinstance(item, str) else (
+                    f"{item.get('machine', '')} — {item.get('constat', '')} | Action : {item.get('action', '')}"
+                )
+                for item in parc
+            ]
+            add_sec('ANALYSE DU PARC', parc_items, [1, 180, 188], '\u25cf', 'resume')
+
+            # Risques de stock - AMBER
+            stock_risks = ai.get('risques_stock', [])
+            stock_items = [
+                item if isinstance(item, str) else (
+                    f"{item.get('reference', '')} — {item.get('constat', '')} | Action : {item.get('action', '')}"
+                )
+                for item in stock_risks
+            ]
+            add_sec('RISQUES DE STOCK', stock_items, [250, 137, 37], '\u25b3', 'alert')
+
+            # Données à compléter - AMBER
+            add_sec('DONNEES A COMPLETER', ai.get('donnees_a_completer', []), [250, 137, 37], '\u25cf', 'alert')
 
             # Priorites - ORANGE + LIGHTNING
             add_sec('PRIORITES IMMEDIATES', ai.get('priorites_immediates',[]),[250,137,37],'\u26a1', 'priority')
@@ -514,4 +542,3 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
 __all__ = [
     "generate_pdf_report",
 ]
-
