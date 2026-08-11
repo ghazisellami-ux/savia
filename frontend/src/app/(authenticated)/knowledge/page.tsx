@@ -219,7 +219,7 @@ export default function KnowledgePage() {
                 <>
                   <Upload className="w-8 h-8 mx-auto text-savia-text-dim mb-2" />
                   <p className="text-savia-text-muted text-sm">Drag and drop file here</p>
-                  <p className="text-xs text-savia-text-dim mt-1">Limit 200MB per file • CSV, XLSX</p>
+                  <p className="text-xs text-savia-text-dim mt-1">Limit 20MB per file • CSV, XLSX</p>
                 </>
               )}
             </div>
@@ -258,7 +258,7 @@ export default function KnowledgePage() {
                 <>
                   <Upload className="w-8 h-8 mx-auto text-red-400/60 mb-2" />
                   <p className="text-savia-text-muted text-sm">Drag and drop file here</p>
-                  <p className="text-xs text-savia-text-dim mt-1">Limit 200MB per file • PDF</p>
+                  <p className="text-xs text-savia-text-dim mt-1">Limit 20MB per file • PDF</p>
                 </>
               )}
             </div>
@@ -296,7 +296,7 @@ export default function KnowledgePage() {
                 <>
                   <Upload className="w-8 h-8 mx-auto text-blue-400/60 mb-2" />
                   <p className="text-savia-text-muted text-sm">Drag and drop file here</p>
-                  <p className="text-xs text-savia-text-dim mt-1">Limit 200MB per file • DOCX, DOC</p>
+                  <p className="text-xs text-savia-text-dim mt-1">Limit 20MB per file • DOCX, DOC</p>
                 </>
               )}
             </div>

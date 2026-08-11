@@ -869,6 +869,10 @@ def init_db():
         _safe_add_column("interventions", "priorite")
         _safe_add_column("contrats", "equipement")
         _safe_add_column("contrats", "fichier_contrat")
+        _safe_add_column("contrats", "fichier_storage_key")
+        _safe_add_column("contrats", "fichier_content_type")
+        _safe_add_column("contrats", "fichier_size_bytes", "BIGINT", "NULL")
+        _safe_add_column("contrats", "fichier_sha256")
         _safe_add_column("equipements", "document_technique")
         # Prediction feedback needs the equipment identity and forecast context
         # to support honest temporal validation and post-deployment calibration.

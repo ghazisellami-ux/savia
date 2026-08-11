@@ -279,6 +279,28 @@ def _migration_007_telegram_outbox(conn) -> None:
     )
 
 
+def _migration_008_contract_private_file_metadata(conn) -> None:
+    """Store contract attachments in private object storage."""
+    statements = (
+        "ALTER TABLE contrats ADD COLUMN IF NOT EXISTS fichier_storage_key TEXT",
+        "ALTER TABLE contrats ADD COLUMN IF NOT EXISTS fichier_content_type TEXT",
+        "ALTER TABLE contrats ADD COLUMN IF NOT EXISTS fichier_size_bytes BIGINT",
+        "ALTER TABLE contrats ADD COLUMN IF NOT EXISTS fichier_sha256 TEXT",
+    )
+    for statement in statements:
+        conn.execute(statement)
+    # The legacy column helper initializes TEXT columns with ''. Normalize
+    # empty values so the partial unique index only covers real object keys.
+    conn.execute(
+        "UPDATE contrats SET fichier_storage_key = NULL "
+        "WHERE BTRIM(COALESCE(fichier_storage_key, '')) = ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_contrats_fichier_storage_key "
+        "ON contrats(fichier_storage_key) WHERE fichier_storage_key IS NOT NULL"
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -287,6 +309,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("005", "equipment lifecycle and request priority", _migration_005_equipment_lifecycle_and_request_priority),
     ("006", "offline mutation idempotency", _migration_006_offline_idempotency),
     ("007", "reliable Telegram notification outbox", _migration_007_telegram_outbox),
+    ("008", "private contract attachment metadata", _migration_008_contract_private_file_metadata),
 )
 
 

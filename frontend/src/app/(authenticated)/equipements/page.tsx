@@ -1411,7 +1411,7 @@ export default function EquipementsPage() {
                       {docFiles.length === 0 ? (
                         <>
                           <p className="text-sm text-savia-text-muted">Aucun fichier choisi — drag & drop ici</p>
-                          <p className="text-xs text-savia-text-dim mt-1">PDF, PNG, JPG, DOC, XLSX · max 200MB</p>
+                          <p className="text-xs text-savia-text-dim mt-1">PDF, PNG, JPG, WEBP, DOCX, XLSX · max 20MB</p>
                         </>
                       ) : (
                         <div className="space-y-1 text-sm text-savia-text">

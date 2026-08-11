@@ -2,7 +2,9 @@
 
 from api.runtime import (
     Depends,
+    File,
     Optional,
+    UploadFile,
     ajouter_conformite,
     ajouter_contrat,
     app,
@@ -33,6 +35,7 @@ from services.scheduled_jobs import (
     lire_contrats,
     logger,
 )
+from services.file_security import read_validated_upload
 from controllers.auth_dashboard import (
     Depends,
     Optional,
@@ -54,6 +57,10 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
     # Enrich each contract with its equipements array
     for record in records:
         contrat_id = record.get("id")
+        record["has_fichier"] = bool(record.get("fichier_storage_key"))
+        # Never expose private object-storage keys or file hashes to clients.
+        record.pop("fichier_storage_key", None)
+        record.pop("fichier_sha256", None)
         if contrat_id:
             try:
                 equipements = get_contract_equipements(contrat_id)
@@ -125,6 +132,109 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
         except Exception as e:
             logger.error(f"Erreur génération planning pour contrat #{contrat_id}: {e}")
     return {"ok": True, "contrat_id": contrat_id, "nb_plannings": nb_plannings}
+
+
+@app.post("/api/contrats/{contrat_id}/fichier")
+async def upload_contrat_file(
+    contrat_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(_verify_token),
+):
+    """Attach a validated image or PDF to a contract."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        previous = conn.execute(
+            "SELECT fichier_storage_key FROM contrats WHERE id = %s",
+            (contrat_id,),
+        ).fetchone()
+    if not previous:
+        raise HTTPException(status_code=404, detail="Contrat non trouvé")
+
+    validated = await read_validated_upload(file, "contrat")
+    from s3_storage import upload_private_file
+
+    stored = upload_private_file(
+        validated.data,
+        category="contrats",
+        extension=validated.extension,
+        content_type=validated.content_type,
+        original_name=validated.display_name,
+        content_hash=validated.sha256,
+        metadata={"contract-id": contrat_id, "uploaded-by": user.get("sub", "unknown")},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+
+    old_key = previous.get("fichier_storage_key") if previous else None
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE contrats
+                   SET fichier_contrat = %s,
+                       fichier_storage_key = %s,
+                       fichier_content_type = %s,
+                       fichier_size_bytes = %s,
+                       fichier_sha256 = %s
+                   WHERE id = %s""",
+                (
+                    validated.display_name,
+                    stored["s3_key"],
+                    validated.content_type,
+                    stored["size_bytes"],
+                    validated.sha256,
+                    contrat_id,
+                ),
+            )
+    except Exception:
+        from s3_storage import delete_file
+        delete_file(stored["s3_key"])
+        raise
+
+    if old_key and old_key != stored["s3_key"]:
+        from s3_storage import delete_file
+        if not delete_file(old_key):
+            logger.warning("Ancienne pièce jointe du contrat #%s non supprimée du stockage", contrat_id)
+
+    return {
+        "ok": True,
+        "filename": validated.display_name,
+        "content_type": validated.content_type,
+        "size_bytes": stored["size_bytes"],
+    }
+
+
+@app.get("/api/contrats/{contrat_id}/fichier")
+def download_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
+    """Download a contract attachment after client-scope authorization."""
+    from fastapi.responses import Response
+
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        row = conn.execute(
+            """SELECT fichier_contrat, fichier_storage_key, fichier_content_type
+               FROM contrats WHERE id = %s""",
+            (contrat_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Contrat non trouvé")
+    if not row.get("fichier_storage_key"):
+        raise HTTPException(status_code=404, detail="Aucune pièce jointe pour ce contrat")
+
+    from s3_storage import download_private_file
+    stored = download_private_file(row["fichier_storage_key"])
+    if not stored:
+        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+    content, detected_content_type = stored
+    filename = row.get("fichier_contrat") or f"contrat_{contrat_id}"
+    content_type = row.get("fichier_content_type") or detected_content_type
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @app.put("/api/contrats/{contrat_id}")
@@ -212,6 +322,8 @@ def delete_conformite(conformite_id: int, user: dict = Depends(_verify_token)):
 __all__ = [
     "get_contrats",
     "create_contrat",
+    "upload_contrat_file",
+    "download_contrat_file",
     "update_contrat",
     "delete_contrat",
     "get_conformite",
