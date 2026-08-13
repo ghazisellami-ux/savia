@@ -1,4 +1,4 @@
 -r requirements.txt
 
 # Test dependencies are separate from the production image.
-pytest==8.3.5
+pytest==9.1.1
