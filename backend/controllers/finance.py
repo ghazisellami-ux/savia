@@ -7,6 +7,7 @@ from api.runtime import (
     app,
     datetime,
     db_lire_clients,
+    lire_villes_custom,
     get_config,
     get_db,
     lire_contrats,
@@ -253,7 +254,7 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
 # ==========================================
 
 @app.get("/api/map/sites")
-def map_sites(user: dict = Depends(_verify_token)):
+def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)):
     """Retourne les sites clients avec coordonnées GPS et score de santé."""
     import random, hashlib
 
@@ -272,7 +273,41 @@ def map_sites(user: dict = Depends(_verify_token)):
         'grombalia': (36.6017, 10.5042), 'la marsa': (36.8783, 10.3252), 'carthage': (36.8528, 10.3233),
         'omrane': (36.8300, 10.1600), 'el omrane': (36.8300, 10.1600),
     }
-    CITY_LIST = list(TUNISIAN_CITIES.values())
+    COUNTRY_CITIES = {
+        'DZ': {'alger': (36.7538, 3.0588), 'oran': (35.6971, -0.6308), 'constantine': (36.365, 6.6147), 'annaba': (36.9, 7.7667), 'blida': (36.47, 2.83), 'setif': (36.19, 5.41), 'tlemcen': (34.88, -1.32), 'bejaia': (36.75, 5.06), 'batna': (35.56, 6.17), 'ouargla': (31.95, 5.33)},
+        'MA': {'rabat': (34.0209, -6.8416), 'casablanca': (33.5731, -7.5898), 'marrakech': (31.6295, -7.9811), 'fes': (34.0331, -5.0003), 'tanger': (35.7595, -5.834), 'agadir': (30.4278, -9.5981), 'oujda': (34.6814, -1.9086), 'meknes': (33.8935, -5.5473), 'tetouan': (35.5889, -5.3626), 'safi': (32.2994, -9.2372)},
+        'SN': {'dakar': (14.7167, -17.4677), 'thies': (14.7886, -16.926), 'saint-louis': (16.0326, -16.4818), 'kaolack': (14.151, -16.0726), 'ziguinchor': (12.5833, -16.2719), 'touba': (14.85, -15.8833)},
+        'FR': {'paris': (48.8566, 2.3522), 'marseille': (43.2965, 5.3698), 'lyon': (45.764, 4.8357), 'toulouse': (43.6047, 1.4442), 'nice': (43.7102, 7.262), 'nantes': (47.2184, -1.5536), 'strasbourg': (48.5734, 7.7521), 'bordeaux': (44.8378, -0.5792), 'lille': (50.6292, 3.0573), 'montpellier': (43.6108, 3.8767)},
+        'US': {'new york': (40.7128, -74.006), 'los angeles': (34.0522, -118.2437), 'chicago': (41.8781, -87.6298), 'houston': (29.7604, -95.3698), 'miami': (25.7617, -80.1918), 'boston': (42.3601, -71.0589), 'atlanta': (33.749, -84.388), 'dallas': (32.7767, -96.797)},
+        'QA': {'doha': (25.2854, 51.531), 'al rayyan': (25.2919, 51.4244), 'al wakrah': (25.1659, 51.5976), 'al khor': (25.6804, 51.5058)},
+        'SA': {'riyad': (24.7136, 46.6753), 'jeddah': (21.5433, 39.1728), 'dammam': (26.4207, 50.0888), 'medine': (24.5247, 39.5692), 'la mecque': (21.3891, 39.8579), 'abha': (18.2465, 42.5117)},
+    }
+    country_aliases = {'TUNISIE': 'TN', 'TUNISIA': 'TN', 'ALGÉRIE': 'DZ', 'ALGERIE': 'DZ', 'MAROC': 'MA', 'SÉNÉGAL': 'SN', 'SENEGAL': 'SN', 'FRANCE': 'FR', 'ÉTATS-UNIS': 'US', 'ETATS-UNIS': 'US', 'QATAR': 'QA', 'ARABIE SAOUDITE': 'SA'}
+    configured_countries = str(country or get_config('pays', 'TN')).replace(';', ',').split(',')
+    requested_countries = []
+    for raw_country in configured_countries:
+        raw_key = str(raw_country).strip().upper()
+        if not raw_key:
+            continue
+        normalized_key = country_aliases.get(raw_key, raw_key)
+        if normalized_key not in requested_countries:
+            requested_countries.append(normalized_key)
+    if not requested_countries:
+        requested_countries = ['TN']
+    country_key = requested_countries[0]
+    active_cities = {}
+    for selected_key in requested_countries:
+        active_cities.update(TUNISIAN_CITIES if selected_key == 'TN' else COUNTRY_CITIES.get(selected_key, {}))
+    try:
+        for selected_key in requested_countries:
+            for custom_city in lire_villes_custom(selected_key):
+                if custom_city.get("latitude") is not None and custom_city.get("longitude") is not None:
+                    active_cities[str(custom_city.get("nom", "")).strip().lower()] = (
+                        float(custom_city["latitude"]), float(custom_city["longitude"])
+                    )
+    except Exception as exc:
+        logger.warning("Impossible de charger les villes personnalisées pour la carte: %s", exc)
+    CITY_LIST = list(active_cities.values())
 
     def _guess_city_coords(client_name: str, ville: str):
         """Try to guess coordinates from client name or ville field."""
@@ -280,13 +315,15 @@ def map_sites(user: dict = Depends(_verify_token)):
             if not text:
                 continue
             lower = text.lower()
-            for city, coords in TUNISIAN_CITIES.items():
+            for city, coords in active_cities.items():
                 if city in lower:
                     return coords
         return None
 
     def _deterministic_random_coords(client_name: str):
         """Assign a deterministic 'random' city based on client name hash, with slight jitter."""
+        if not CITY_LIST:
+            return None
         h = int(hashlib.md5(client_name.encode()).hexdigest(), 16)
         city_coords = CITY_LIST[h % len(CITY_LIST)]
         # Add slight jitter (±0.01 degrees ≈ ±1km) so markers don't overlap
@@ -306,8 +343,24 @@ def map_sites(user: dict = Depends(_verify_token)):
             df_clients = None
 
         sites = {}
-        if df_equip.empty:
-            return []
+        if df_clients is not None and not df_clients.empty:
+            for _, client_row in df_clients.iterrows():
+                cl = str(client_row.get("nom", "") or "").strip()
+                if not cl:
+                    continue
+                client_country = str(client_row.get("country_code", "TN") or "TN").strip().upper()
+                if client_country not in requested_countries:
+                    continue
+                sites[cl] = {
+                    "client": cl,
+                    "country_code": client_country,
+                    "equipements": [],
+                    "nb_equipements": 0,
+                    "latitude": client_row.get("latitude", None),
+                    "longitude": client_row.get("longitude", None),
+                    "adresse": client_row.get("adresse", "") or "",
+                    "ville": client_row.get("ville", "") or "",
+                }
 
         for _, eq in df_equip.iterrows():
             cl = eq.get("Client", "")
@@ -319,6 +372,9 @@ def map_sites(user: dict = Depends(_verify_token)):
                 if df_clients is not None and not df_clients.empty:
                     client_row = df_clients[df_clients["nom"] == cl]
                     if not client_row.empty:
+                        client_country = str(client_row.iloc[0].get("country_code", "TN") or "TN").strip().upper()
+                        if client_country not in requested_countries:
+                            continue
                         ville = client_row.iloc[0].get("ville", "") or ""
                 
                 # Fallback to equipment ville if client ville not found
@@ -327,6 +383,7 @@ def map_sites(user: dict = Depends(_verify_token)):
                 
                 sites[cl] = {
                     "client": cl,
+                    "country_code": client_country if df_clients is not None and not df_clients.empty and not client_row.empty else country_key,
                     "equipements": [],
                     "nb_equipements": 0,
                     "latitude": eq.get("latitude", None),
@@ -334,6 +391,14 @@ def map_sites(user: dict = Depends(_verify_token)):
                     "adresse": eq.get("adresse", ""),
                     "ville": ville,
                 }
+            else:
+                if not sites[cl].get("ville"):
+                    sites[cl]["ville"] = eq.get("Ville", eq.get("ville", "")) or ""
+                if not sites[cl].get("adresse"):
+                    sites[cl]["adresse"] = eq.get("adresse", "") or ""
+                if not sites[cl].get("latitude") and eq.get("latitude"):
+                    sites[cl]["latitude"] = eq.get("latitude")
+                    sites[cl]["longitude"] = eq.get("longitude")
             nom = eq.get("Nom", "")
             statut = eq.get("Statut", eq.get("statut", "Actif"))
             sites[cl]["equipements"].append({"nom": nom, "type": eq.get("Type", ""), "statut": statut})
@@ -353,20 +418,20 @@ def map_sites(user: dict = Depends(_verify_token)):
                 guessed = _guess_city_coords(cl, assigned_ville)
                 if guessed:
                     lat, lng = guessed
-                    # Extract the matched city name for the ville field
                     if not assigned_ville:
                         lower = cl.lower()
-                        for city_name in TUNISIAN_CITIES:
+                        for city_name in active_cities:
                             if city_name in lower:
                                 assigned_ville = city_name.capitalize()
                                 break
                 else:
-                    lat, lng = _deterministic_random_coords(cl)
-                    if not assigned_ville:
-                        # Find the closest city name for display
-                        h = int(hashlib.md5(cl.encode()).hexdigest(), 16)
-                        city_names = list(TUNISIAN_CITIES.keys())
-                        assigned_ville = city_names[h % len(city_names)].capitalize()
+                    fallback = _deterministic_random_coords(cl)
+                    if fallback:
+                        lat, lng = fallback
+                        if not assigned_ville:
+                            h = int(hashlib.md5(cl.encode()).hexdigest(), 16)
+                            city_names = list(active_cities.keys())
+                            assigned_ville = city_names[h % len(city_names)].capitalize()
 
             # Count interventions
             machines = [e["nom"] for e in site["equipements"]]

@@ -387,6 +387,19 @@ export const typesClient = {
   create: (nom: string) => request<{ ok: boolean }>('/api/types-client-custom', { method: 'POST', body: { nom } }),
 };
 
+export const villesCustom = {
+  list: (countryCode: string) => request<Array<{ id: number; country_code: string; nom: string; latitude?: number | null; longitude?: number | null }>>(`/api/villes-custom?country=${encodeURIComponent(countryCode)}`),
+  create: (countryCode: string, nom: string, coordinates?: [number, number] | null) => request<{ ok: boolean; city?: { country_code: string; nom: string; latitude?: number | null; longitude?: number | null } }>('/api/villes-custom', { method: 'POST', body: { country_code: countryCode, nom, latitude: coordinates?.[0], longitude: coordinates?.[1] } }),
+  update: (countryCode: string, nom: string, nouveauNom: string) => request<{ ok: boolean; city?: { country_code: string; nom: string; latitude?: number | null; longitude?: number | null } }>(`/api/villes-custom/${encodeURIComponent(countryCode)}/${encodeURIComponent(nom)}`, { method: 'PUT', body: { nom: nouveauNom } }),
+  delete: (countryCode: string, nom: string) => request<{ ok: boolean }>(`/api/villes-custom/${encodeURIComponent(countryCode)}/${encodeURIComponent(nom)}`, { method: 'DELETE' }),
+};
+
+export const paysCustom = {
+  list: () => request<Array<{ id: number; code: string; nom: string; flag?: string; latitude?: number | null; longitude?: number | null }>>('/api/pays-custom'),
+  create: (nom: string, flag = '🌍') => request<{ ok: boolean; country?: { id: number; code: string; nom: string; flag?: string; latitude?: number | null; longitude?: number | null } }>('/api/pays-custom', { method: 'POST', body: { nom, flag } }),
+  delete: (code: string) => request<{ ok: boolean }>(`/api/pays-custom/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+};
+
 export const admin = {
   users: () => request<Array<Record<string, unknown>>>('/api/admin/users'),
   createUser: (data: Record<string, unknown>) =>
@@ -467,7 +480,7 @@ export const finances = {
 
 // --- Map ---
 export const mapApi = {
-  sites: () => request<Array<Record<string, unknown>>>('/api/map/sites'),
+  sites: (country?: string) => request<Array<Record<string, unknown>>>(`/api/map/sites${country ? `?country=${encodeURIComponent(country)}` : ''}`),
   updateCoordinates: (clientName: string, data: { latitude: number; longitude: number; adresse?: string }) =>
     request<{ ok: boolean }>(`/api/map/sites/${encodeURIComponent(clientName)}/coordinates`, { method: 'PUT', body: data }),
 };
@@ -495,5 +508,5 @@ export const domaines_custom = {
 export { ApiError };
 
 // Default export for backward compatibility
-const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, settings };
+const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, typesClient, villesCustom, paysCustom, settings };
 export default apiClient;

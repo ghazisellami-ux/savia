@@ -8,11 +8,12 @@ import {
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
   ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3
 } from 'lucide-react';
-import { planning, equipements, clients as clientsApi, techniciens as techApi, typesIntervention } from '@/lib/api';
+import { planning, equipements, clients as clientsApi, paysCustom as paysCustomApi, techniciens as techApi, typesIntervention } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { exportComparateurToCSV, exportComparateurToJSON, exportComparateurToPDF, getComparateurSummary } from '@/lib/export';
 import { useAuth } from '@/lib/auth-context';
 import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
+import { DEFAULT_COUNTRY, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 // Import domaines API
 import { domaines_custom } from '@/lib/api';
@@ -190,6 +191,9 @@ export default function PlanningPage() {
   const [filterStatut,  setFilterStatut]  = useState('Tous');
   const [filterRegion,  setFilterRegion]  = useState('Tous');
   const [filterVille,   setFilterVille]   = useState('Tous');
+  const [filterCountry, setFilterCountry] = useState('Tous');
+  const [selectedCountries, setSelectedCountries] = useState<CountryCode[]>(() => (typeof window !== 'undefined' ? parseCountrySelection(localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')) : [DEFAULT_COUNTRY]));
+  const [customCountries, setCustomCountries] = useState<Array<{ code: string; nom: string; flag?: string }>>([]);
   const [clientsFullData, setClientsFullData] = useState<any[]>([]);
   
   // PDF date filters
@@ -290,6 +294,19 @@ export default function PlanningPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const loadCountrySelection = async () => {
+      try {
+        const token = localStorage.getItem('savia_token') || '';
+        const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+        const settings = response.ok ? await response.json() : {};
+        setSelectedCountries(parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')));
+        setCustomCountries(await paysCustomApi.list().catch(() => []));
+      } catch { /* local storage fallback is already loaded */ }
+    };
+    void loadCountrySelection();
+  }, []);
 
 
   // Calendar grid
@@ -633,25 +650,30 @@ export default function PlanningPage() {
         // Derive region/ville from clients data
         const clientRegionMap = new Map<string, string>();
         const clientVilleMap = new Map<string, string>();
+        const clientCountryMap = new Map<string, string>();
         clientsFullData.forEach((c: any) => {
           const name = c.nom || c.Nom || '';
           if (c.region) clientRegionMap.set(name, c.region);
           if (c.ville) clientVilleMap.set(name, c.ville);
+          clientCountryMap.set(name, c.country_code || DEFAULT_COUNTRY);
         });
         const getRegion = (client: string) => clientRegionMap.get(client) || '';
         const getVille = (client: string) => clientVilleMap.get(client) || '';
+        const getCountryCode = (client: string) => clientCountryMap.get(client) || DEFAULT_COUNTRY;
 
         const fRegions  = ['Tous', ...Array.from(new Set(data.map(d => getRegion(d.client)).filter(Boolean))).sort()];
         const fVilles   = ['Tous', ...Array.from(new Set(
-          data.filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
+          data.filter(d => (filterCountry === 'Tous' || getCountryCode(d.client) === filterCountry) && (filterRegion === 'Tous' || getRegion(d.client) === filterRegion))
             .map(d => getVille(d.client)).filter(Boolean)
         )).sort()];
+        const fCountries = ['Tous', ...selectedCountries];
         const fEquips   = ['Tous', ...Array.from(new Set(
           data.filter(d => filterClient === 'Tous' || d.client === filterClient).map(d => d.machine).filter(Boolean)
         )).sort()];
         const fTechs    = ['Tous', ...Array.from(new Set(data.map(d => d.technicien).filter(Boolean))).sort()];
         const fStatuts  = ['Tous', 'Planifiée', 'En cours', 'Cloturee', 'En retard', 'Décalé'];
         const filteredData = data
+          .filter(d => filterCountry === 'Tous' || getCountryCode(d.client) === filterCountry)
           .filter(d => filterRegion === 'Tous' || getRegion(d.client) === filterRegion)
           .filter(d => filterVille  === 'Tous' || getVille(d.client) === filterVille)
           .filter(d => filterClient === 'Tous' || d.client === filterClient)
@@ -675,6 +697,20 @@ export default function PlanningPage() {
       <SectionCard title={"Toutes les Maintenances (" + filteredData.length + (filteredData.length !== data.length ? " / " + data.length : "") + ")"}>
         {/* Filter bar */}
         <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
+          {/* Région */}
+          {selectedCountries.length > 1 && (
+          <div className="flex items-center gap-2">
+            <MapPin className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
+            <select value={filterCountry} onChange={e => { setFilterCountry(e.target.value); setFilterRegion('Tous'); setFilterVille('Tous'); setFilterClient('Tous'); setFilterEquip('Tous'); }} className={selCls}>
+              {fCountries.map(code => {
+                if (code === 'Tous') return <option key={code} value={code}>Tous les pays</option>;
+                const custom = customCountries.find(item => item.code === code);
+                const builtIn = getCountry(code);
+                return <option key={code} value={code}>{custom?.flag || builtIn.flag} {custom?.nom || builtIn.name}</option>;
+              })}
+            </select>
+          </div>
+          )}
           {/* Région */}
           <div className="flex items-center gap-2">
             <MapPin className="w-3.5 h-3.5 text-savia-accent flex-shrink-0" />
@@ -741,8 +777,8 @@ export default function PlanningPage() {
             />
           </div>
           {/* Reset */}
-          {(filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous' || filterRegion !== 'Tous' || filterVille !== 'Tous') && (
-            <button onClick={() => { setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); setFilterRegion('Tous'); setFilterVille('Tous'); }}
+          {(filterCountry !== 'Tous' || filterClient !== 'Tous' || filterEquip !== 'Tous' || filterTech !== 'Tous' || filterStatut !== 'Tous' || filterRegion !== 'Tous' || filterVille !== 'Tous') && (
+            <button onClick={() => { setFilterCountry('Tous'); setFilterClient('Tous'); setFilterEquip('Tous'); setFilterTech('Tous'); setFilterStatut('Tous'); setFilterRegion('Tous'); setFilterVille('Tous'); }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-all cursor-pointer">
               <X className="w-3 h-3" /> Réinitialiser
             </button>

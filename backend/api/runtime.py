@@ -65,6 +65,8 @@ from db_engine import (
     lire_types_equipement_custom, ajouter_type_equipement_custom,
     lire_types_intervention_custom, ajouter_type_intervention_custom,
     lire_types_client_custom, ajouter_type_client_custom,
+    lire_villes_custom, ajouter_ville_custom, supprimer_ville_custom, modifier_ville_custom,
+    lire_pays_custom, ajouter_pays_custom, supprimer_pays_custom,
     lire_notification_schedules, sauvegarder_notification_schedules_batch,
     predict_commande_date, predict_pieces_a_commander,
     update_piece_parameters_batch, calculate_piece_parameters,

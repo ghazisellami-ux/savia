@@ -177,11 +177,86 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
             )
 
 
+def reconcilier_statuts_equipements() -> int:
+    """Reconcile automatic equipment statuses with active interventions.
+
+    Intervention events normally keep this state synchronized. This defensive
+    pass repairs legacy rows or events that were closed before the equipment
+    link was available, while preserving manual ``Hors Service`` and
+    ``En atelier`` statuses.
+    """
+    from database.core import get_db
+
+    changed = 0
+    with get_db() as conn:
+        equipments = conn.execute(
+            "SELECT id, nom, client, statut FROM equipements ORDER BY id"
+        ).fetchall()
+        placeholders = ", ".join(["%s"] * len(ACTIVE_INTERVENTION_STATUSES))
+
+        for equipment in equipments:
+            current_status = str(equipment.get("statut") or "").strip()
+            if _is_out_of_service(current_status) or current_status == "En atelier":
+                continue
+
+            machine = str(equipment.get("nom") or "").strip()
+            client = str(equipment.get("client") or "").strip()
+            if not machine:
+                continue
+
+            active = conn.execute(
+                f"""
+                SELECT 1
+                FROM interventions i
+                WHERE LOWER(i.machine) = LOWER(%s)
+                  AND i.statut IN ({placeholders})
+                  AND LOWER(COALESCE(NULLIF(i.client, ''), %s)) = LOWER(%s)
+                LIMIT 1
+                """,
+                (machine, *ACTIVE_INTERVENTION_STATUSES, client, client),
+            ).fetchone()
+
+            has_active_intervention = bool(active)
+            is_automatic_status = current_status in {
+                "", "Actif", EQUIPMENT_OPERATIONAL, EQUIPMENT_MAINTENANCE
+            }
+            if not is_automatic_status:
+                continue
+
+            next_status = (
+                EQUIPMENT_MAINTENANCE if has_active_intervention
+                else EQUIPMENT_OPERATIONAL
+            )
+            if current_status == next_status:
+                continue
+
+            conn.execute(
+                "UPDATE equipements SET statut = %s WHERE id = %s",
+                (next_status, equipment["id"]),
+            )
+            enregistrer_historique_statut_equipement(
+                conn,
+                equipment["id"],
+                current_status,
+                next_status,
+                source="reconciliation",
+                raison=(
+                    "Aucune intervention active restante"
+                    if not has_active_intervention
+                    else "Intervention active détectée"
+                ),
+            )
+            changed += 1
+
+    return changed
+
+
 __all__ = [
     "EQUIPMENT_OPERATIONAL",
     "EQUIPMENT_MAINTENANCE",
     "EQUIPMENT_OUT_OF_SERVICE",
     "calculer_nouveau_statut_equipement",
     "enregistrer_historique_statut_equipement",
+    "reconcilier_statuts_equipements",
     "synchroniser_statut_equipement",
 ]

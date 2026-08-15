@@ -10,18 +10,10 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal, History,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, domaines_custom } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
-
-// Tunisian cities for dropdown
-const TUNISIAN_CITIES = [
-  'Tunis', 'Ariana', 'Ben Arous', 'Manouba', 'Nabeul', 'Zaghouan',
-  'Bizerte', 'Béja', 'Jendouba', 'Kef', 'Siliana', 'Sousse',
-  'Monastir', 'Mahdia', 'Sfax', 'Kairouan', 'Kasserine', 'Sidi Bouzid',
-  'Gabès', 'Médenine', 'Tataouine', 'Gafsa', 'Tozeur', 'Kébili',
-  'Hammamet', 'Tabarka', 'Djerba', 'Grombalia', 'La Marsa', 'Carthage',
-];
+import { COUNTRIES, DEFAULT_COUNTRY, cityCoordinates, countryCities, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 const REGIONS: Record<string, string[]> = {
   'Nord': ['Tunis','Ariana','Ben Arous','Manouba','Bizerte','Béja','Jendouba','Kef','Siliana','Nabeul','Zaghouan'],
@@ -167,8 +159,14 @@ function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; 
 
 export default function EquipementsPage() {
   const { user } = useAuth();
+  const [country, setCountry] = useState<CountryCode>(() => (typeof window !== 'undefined' ? (localStorage.getItem('savia_pays') as CountryCode) || DEFAULT_COUNTRY : DEFAULT_COUNTRY));
+  const [selectedCountries, setSelectedCountries] = useState<CountryCode[]>(() => (typeof window !== 'undefined' ? parseCountrySelection(localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')) : [DEFAULT_COUNTRY]));
+  const [customCountries, setCustomCountries] = useState<Array<{ id: number; code: string; nom: string; flag?: string }>>([]);
+  const isTunisia = country === 'TN';
+  const selectedCountryName = customCountries.find(item => item.code === country)?.nom || getCountry(country).name;
   const isLecteur = user?.role === 'Lecteur';
   const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique'].includes(user.role);
+  const canManageSavedLocations = user?.role === 'Admin' || user?.role === 'Manager';
   const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>(isLecteur ? 'equipements' : 'clients');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
@@ -302,17 +300,25 @@ export default function EquipementsPage() {
   const allClientNames = useMemo(() => Array.from(clientMatriculeMap.keys()), [clientMatriculeMap]);
 
   // ── Clients from dedicated table ──
-  interface ClientRecord { id: number; nom: string; code_client: string; matricule_fiscale: string; ville: string; region: string; contact: string; telephone: string; adresse: string; type_client: string; international: boolean; nb_equipements: number; nb_interventions: number; score_sante: number; }
+  interface ClientRecord { id: number; nom: string; code_client: string; matricule_fiscale: string; country_code?: string; ville: string; region: string; contact: string; telephone: string; adresse: string; type_client: string; international: boolean; nb_equipements: number; nb_interventions: number; score_sante: number; }
   const [clientsList, setClientsList] = useState<ClientRecord[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientRecord | null>(null);
   const [confirmDeleteClient, setConfirmDeleteClient] = useState<ClientRecord | null>(null);
-  const emptyClientForm = { nom: '', code_client: '', matricule_fiscale: '', ville: '', region: '', contact: '', telephone: '', adresse: '', type_client: 'Privé', international: false as boolean };
+  const emptyClientForm = { nom: '', code_client: '', matricule_fiscale: '', country_code: country, ville: typeof window !== 'undefined' ? localStorage.getItem(`savia_last_city_${country}`) || '' : '', region: '', contact: '', telephone: '', adresse: '', type_client: 'Privé', international: false as boolean };
   const [clientForm, setClientForm] = useState(emptyClientForm);
+  const clientCountryCode = clientForm.country_code || country;
+  const clientIsTunisia = clientCountryCode === 'TN';
+  const clientCountryName = customCountries.find(item => item.code === clientCountryCode)?.nom || getCountry(clientCountryCode).name;
+  const clientCountryOptions = [
+    ...COUNTRIES,
+    ...customCountries.map(item => ({ code: item.code, name: item.nom, flag: item.flag || '🌍' })),
+  ].filter((item, index, items) => items.findIndex(candidate => candidate.code === item.code) === index);
   const [isCodeAutoGenerated, setIsCodeAutoGenerated] = useState(false);
   const [clientSearch, setClientSearch] = useState('');
   const [clientTypeFilter, setClientTypeFilter] = useState('');
+  const [clientCountryFilter, setClientCountryFilter] = useState('');
   const [clientRegionFilter, setClientRegionFilter] = useState('');
   const [clientVilleFilter, setClientVilleFilter] = useState('');
   const [savingClient, setSavingClient] = useState(false);
@@ -321,10 +327,97 @@ export default function EquipementsPage() {
   const [customClientTypeValue, setCustomClientTypeValue] = useState('');
   const [savingCustomClientType, setSavingCustomClientType] = useState(false);
   const [customClientTypeError, setCustomClientTypeError] = useState('');
+  const [customCitiesByCountry, setCustomCitiesByCountry] = useState<Record<string, string[]>>({});
+  const [customCityMode, setCustomCityMode] = useState(false);
+  const [customCityOriginal, setCustomCityOriginal] = useState('');
+  const [customCityValue, setCustomCityValue] = useState('');
+  const [savingCustomCity, setSavingCustomCity] = useState(false);
+  const [customCityError, setCustomCityError] = useState('');
   const [importingExcel, setImportingExcel] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
   const excelFileRef = useRef<HTMLInputElement>(null);
-  const clientVilles = clientForm.international ? [] : (clientForm.region ? (REGIONS[clientForm.region] || []) : Object.values(REGIONS).flat());
+
+  const loadCustomCities = useCallback(async (countryCode: CountryCode) => {
+    try {
+      const result = await villesCustomApi.list(countryCode);
+      setCustomCitiesByCountry(current => ({ ...current, [countryCode]: result.map(city => city.nom).filter(Boolean) }));
+    } catch (error) {
+      console.error('Failed to load custom cities', error);
+    }
+  }, []);
+
+  const loadCustomCountries = useCallback(async () => {
+    try { setCustomCountries(await paysCustomApi.list()); }
+    catch (error) { console.error('Failed to load custom countries', error); }
+  }, []);
+
+  const loadCountry = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('savia_token') || '';
+      const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) return;
+      const settings = await response.json();
+      const selectedList = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
+      const selected = selectedList[0] as CountryCode;
+      setSelectedCountries(selectedList);
+      setCountry(selected);
+      localStorage.setItem('savia_pays', selected);
+      localStorage.setItem('savia_pays_selectionnes', selectedList.join(','));
+    } catch (error) {
+      console.error('Failed to load application country', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onCountryChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ country?: string; countries?: string[] }>).detail;
+      const selectedList = parseCountrySelection(detail?.countries || localStorage.getItem('savia_pays_selectionnes') || detail?.country || localStorage.getItem('savia_pays') || DEFAULT_COUNTRY);
+      const selected = selectedList[0] as CountryCode;
+      setSelectedCountries(selectedList);
+      setCountry(selected);
+    };
+    void loadCountry();
+    void loadCustomCountries();
+    window.addEventListener('savia_country_changed', onCountryChanged);
+    window.addEventListener('savia_settings_changed', loadCountry);
+    return () => {
+      window.removeEventListener('savia_country_changed', onCountryChanged);
+      window.removeEventListener('savia_settings_changed', loadCountry);
+    };
+  }, [loadCountry, loadCustomCountries]);
+
+  useEffect(() => {
+    void loadCustomCities(country);
+  }, [country, loadCustomCities]);
+
+  useEffect(() => {
+    if (showClientForm && editingClient) return;
+    setClientForm(current => ({
+      ...current,
+      country_code: country,
+      region: '',
+      ville: typeof window !== 'undefined' ? localStorage.getItem(`savia_last_city_${country}`) || '' : '',
+    }));
+  }, [country]);
+
+  useEffect(() => {
+    if (clientCountryCode !== country) void loadCustomCities(clientCountryCode);
+  }, [clientCountryCode, country, loadCustomCities]);
+
+  useEffect(() => {
+    if (!selectedCountries.includes('TN')) setClientRegionFilter('');
+    setClientVilleFilter('');
+    setClientForm(current => ({ ...current, region: '', ville: '' }));
+  }, [selectedCountries]);
+  const clientVilles = clientForm.international
+    ? []
+    : [
+        ...(clientIsTunisia
+          ? (clientForm.region ? (REGIONS[clientForm.region] || []) : Object.values(REGIONS).flat())
+          : countryCities(clientCountryCode)),
+        ...(customCitiesByCountry[clientCountryCode] || []),
+      ].filter((city, index, cities) => cities.indexOf(city) === index);
+  const selectedCityIsCustom = Boolean(clientForm.ville && (customCitiesByCountry[clientCountryCode] || []).includes(clientForm.ville));
   const clientTypeOptions = useMemo(() => {
     const savedTypes = [...customClientTypes, ...clientsList.map(client => client.type_client)]
       .map(type => type.trim())
@@ -504,7 +597,7 @@ export default function EquipementsPage() {
       const res = await clientsApi.list();
       setClientsList(res.map((c: any) => ({
         id: c.id, nom: c.nom || '', code_client: c.code_client || '',
-        matricule_fiscale: c.matricule_fiscale || '',
+        matricule_fiscale: c.matricule_fiscale || '', country_code: c.country_code || DEFAULT_COUNTRY,
         ville: c.ville || '', region: c.region || '',
         contact: c.contact || '', telephone: c.telephone || '',
         adresse: c.adresse || '', type_client: c.type_client || '',
@@ -539,12 +632,63 @@ export default function EquipementsPage() {
     }
   };
 
+  const handleSaveCustomCity = async () => {
+    const value = customCityValue.trim();
+    if (!value) return;
+    setSavingCustomCity(true);
+    setCustomCityError('');
+    try {
+      const coordinates = cityCoordinates(clientCountryCode, value);
+      await villesCustomApi.create(clientCountryCode, value, coordinates);
+      setCustomCitiesByCountry(current => ({
+        ...current,
+        [clientCountryCode]: Array.from(new Set([...(current[clientCountryCode] || []), value])).sort(),
+      }));
+      setClientForm(current => ({ ...current, ville: value }));
+      localStorage.setItem(`savia_last_city_${clientCountryCode}`, value);
+      setCustomCityValue('');
+      setCustomCityOriginal('');
+      setCustomCityMode(false);
+    } catch (err) {
+      console.error('Failed to save custom city', err);
+      setCustomCityError("Impossible d'enregistrer cette ville.");
+    } finally {
+      setSavingCustomCity(false);
+    }
+  };
+
+  const handleUpdateCustomCity = async () => {
+    const value = customCityValue.trim();
+    if (!customCityOriginal || !value || value === customCityOriginal) return;
+    setSavingCustomCity(true);
+    setCustomCityError('');
+    try {
+      await villesCustomApi.update(clientCountryCode, customCityOriginal, value);
+      setCustomCitiesByCountry(current => ({
+        ...current,
+        [clientCountryCode]: (current[clientCountryCode] || []).map(savedCity => savedCity === customCityOriginal ? value : savedCity).sort(),
+      }));
+      setClientForm(current => ({ ...current, ville: value }));
+      if (localStorage.getItem(`savia_last_city_${clientCountryCode}`) === customCityOriginal) {
+        localStorage.setItem(`savia_last_city_${clientCountryCode}`, value);
+      }
+      setCustomCityValue('');
+      setCustomCityOriginal('');
+      setCustomCityMode(false);
+    } catch (err) {
+      console.error('Failed to update custom city', err);
+      setCustomCityError("Impossible de modifier cette ville.");
+    } finally {
+      setSavingCustomCity(false);
+    }
+  };
+
   const handleSaveClient = async () => {
     if (!clientForm.nom.trim()) return;
     setSavingClient(true);
     try {
       // Auto-generate code_client for new clients if not already set
-      let formToSave = { ...clientForm };
+      let formToSave = clientIsTunisia ? { ...clientForm, country_code: clientCountryCode } : { ...clientForm, country_code: clientCountryCode, region: '' };
       if (!editingClient && !formToSave.code_client.trim()) {
         // Generate as CL001, CL002, etc. based on existing clients count
         const nextNumber = clientsList.length + 1;
@@ -556,6 +700,9 @@ export default function EquipementsPage() {
       } else {
         await clientsApi.create(formToSave);
       }
+      if (formToSave.ville && !formToSave.international) {
+        localStorage.setItem(`savia_last_city_${clientCountryCode}`, formToSave.ville);
+      }
       setClientForm(emptyClientForm); setShowClientForm(false); setEditingClient(null);
       await loadClients();
     } catch (err) { console.error('Save client failed', err); }
@@ -564,7 +711,7 @@ export default function EquipementsPage() {
 
   const startEditClient = (c: ClientRecord) => {
     setEditingClient(c);
-    setClientForm({ nom: c.nom, code_client: c.code_client, matricule_fiscale: c.matricule_fiscale, ville: c.ville, region: c.region, contact: c.contact, telephone: c.telephone, adresse: c.adresse, type_client: c.type_client || 'Privé', international: c.international });
+    setClientForm({ nom: c.nom, code_client: c.code_client, matricule_fiscale: c.matricule_fiscale, country_code: c.country_code || country, ville: c.ville, region: c.region, contact: c.contact, telephone: c.telephone, adresse: c.adresse, type_client: c.type_client || 'Privé', international: c.international });
     setCustomClientTypeMode(false);
     setCustomClientTypeValue('');
     setCustomClientTypeError('');
@@ -1764,22 +1911,92 @@ export default function EquipementsPage() {
                     {clientForm.international ? (
                       <p className="text-sm text-blue-400 italic flex items-center gap-2"><Globe className="w-4 h-4" /> Client international — pas de filtre géographique</p>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className={`grid grid-cols-1 ${clientIsTunisia ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
                         <div>
-                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région *</label>
-                          <select className={INPUT_CLS} value={clientForm.region} onChange={e => setClientForm({ ...clientForm, region: e.target.value, ville: '' })}>
-                            <option value="">— Sélectionner —</option>
-                            <option value="Nord">Nord</option>
-                            <option value="Centre">Centre</option>
-                            <option value="Sud">Sud</option>
+                          <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Pays *</label>
+                          <select className={INPUT_CLS} value={clientCountryCode} onChange={e => {
+                            const nextCountry = e.target.value;
+                            setClientForm(current => ({
+                              ...current,
+                              country_code: nextCountry,
+                              region: '',
+                              ville: typeof window !== 'undefined' ? localStorage.getItem(`savia_last_city_${nextCountry}`) || '' : '',
+                            }));
+                            setCustomCityMode(false);
+                            setCustomCityOriginal('');
+                            setCustomCityValue('');
+                            setCustomCityError('');
+                          }}>
+                            {clientCountryOptions.map(option => <option key={option.code} value={option.code}>{option.flag} — {option.name}</option>)}
                           </select>
                         </div>
+                        {clientIsTunisia && (
+                          <div>
+                            <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Région *</label>
+                            <select className={INPUT_CLS} value={clientForm.region} onChange={e => setClientForm({ ...clientForm, region: e.target.value, ville: '' })}>
+                              <option value="">— Sélectionner —</option>
+                              <option value="Nord">Nord</option>
+                              <option value="Centre">Centre</option>
+                              <option value="Sud">Sud</option>
+                            </select>
+                          </div>
+                        )}
                         <div>
                           <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Ville *</label>
-                          <select className={INPUT_CLS} value={clientForm.ville} onChange={e => setClientForm({ ...clientForm, ville: e.target.value })}>
-                            <option value="">— Sélectionner —</option>
+                          <select className={INPUT_CLS} value={clientForm.ville} onChange={e => {
+                            if (e.target.value === '__add_city__') {
+                              setCustomCityMode(true);
+                              setCustomCityOriginal('');
+                              setCustomCityValue(clientForm.ville.trim());
+                              setCustomCityError('');
+                              return;
+                            }
+                            setClientForm({ ...clientForm, ville: e.target.value });
+                          }}>
+                            <option value="">— Sélectionner une ville —</option>
                             {clientVilles.map(v => <option key={v} value={v}>{v}</option>)}
+                            <option value="__add_city__">＋ Ajouter une ville manuellement...</option>
                           </select>
+                          <div className="mt-2">
+                            {customCityMode ? (
+                              <div className="flex gap-2">
+                                <input
+                                  autoFocus
+                                  className={`${INPUT_CLS} flex-1`}
+                                  placeholder="Nouvelle ville"
+                                  value={customCityValue}
+                                  onChange={e => { setCustomCityValue(e.target.value); setCustomCityError(''); }}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      void (customCityOriginal ? handleUpdateCustomCity() : handleSaveCustomCity());
+                                    }
+                                  }}
+                                />
+                                <button type="button" onClick={() => void (customCityOriginal ? handleUpdateCustomCity() : handleSaveCustomCity())} disabled={!customCityValue.trim() || savingCustomCity}
+                                  className="px-3 rounded-lg bg-savia-accent text-white text-xs font-bold disabled:opacity-50">
+                                  {savingCustomCity ? <Loader2 className="w-4 h-4 animate-spin" /> : customCityOriginal ? 'Modifier' : 'Ajouter'}
+                                </button>
+                                <button type="button" onClick={() => { setCustomCityMode(false); setCustomCityOriginal(''); setCustomCityValue(''); setCustomCityError(''); }}
+                                  className="px-3 rounded-lg bg-savia-surface-hover text-savia-text-muted text-xs font-bold">
+                                  Annuler
+                                </button>
+                              </div>
+                            ) : selectedCityIsCustom ? (
+                              canManageSavedLocations && (
+                                <button type="button" onClick={() => { setCustomCityMode(true); setCustomCityOriginal(clientForm.ville); setCustomCityValue(clientForm.ville); setCustomCityError(''); }}
+                                  className="text-xs font-semibold text-savia-accent hover:text-savia-accent-blue cursor-pointer">
+                                  Modifier cette ville
+                                </button>
+                              )
+                            ) : (
+                              <button type="button" onClick={() => { setCustomCityMode(true); setCustomCityOriginal(''); setCustomCityValue(clientForm.ville.trim()); setCustomCityError(''); }}
+                                className="text-xs font-semibold text-savia-accent hover:text-savia-accent-blue cursor-pointer">
+                                {clientForm.ville.trim() ? 'Enregistrer cette ville' : `+ Ajouter une ville pour ${clientCountryName}`}
+                              </button>
+                            )}
+                            {customCityError && <p className="mt-1 text-xs text-red-400">{customCityError}</p>}
+                          </div>
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2">Adresse *</label>
@@ -1815,7 +2032,7 @@ export default function EquipementsPage() {
                       className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">
                       Annuler
                     </button>
-                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim() || !clientForm.matricule_fiscale.trim() || !clientForm.contact.trim() || !clientForm.telephone.trim() || !clientForm.type_client || (!clientForm.international && (!clientForm.region || !clientForm.ville || !clientForm.adresse.trim()))}
+                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim() || !clientForm.matricule_fiscale.trim() || !clientForm.contact.trim() || !clientForm.telephone.trim() || !clientForm.type_client || (!clientForm.international && (!clientForm.ville || (clientIsTunisia && !clientForm.region) || !clientForm.adresse.trim()))}
                       className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
                       {savingClient ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       {editingClient ? 'Mettre à jour' : 'Sauvegarder'}
@@ -1840,19 +2057,31 @@ export default function EquipementsPage() {
                 <option key={t} value={t}>{t === 'Public' ? '🏛️' : '🏢'} {t}</option>
               )}
             </select>
-            <select value={clientRegionFilter} onChange={e => { setClientRegionFilter(e.target.value); setClientVilleFilter(''); }}
-              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
-              <option value="">Toutes régions</option>
-              <option value="Nord">🔵 Nord</option>
-              <option value="Centre">🟢 Centre</option>
-              <option value="Sud">🟠 Sud</option>
-              <option value="International">🌍 International</option>
-            </select>
+            {selectedCountries.length > 1 && (
+              <select value={clientCountryFilter} onChange={e => { setClientCountryFilter(e.target.value); setClientRegionFilter(''); setClientVilleFilter(''); }}
+                className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+                <option value="">Tous les pays</option>
+                {selectedCountries.map(code => {
+                  const option = customCountries.find(item => item.code === code);
+                  return <option key={code} value={code}>{option?.flag || getCountry(code).flag} {option?.nom || getCountry(code).name}</option>;
+                })}
+              </select>
+            )}
+            {selectedCountries.includes('TN') && (
+              <select value={clientRegionFilter} onChange={e => { setClientRegionFilter(e.target.value); setClientVilleFilter(''); }}
+                className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+                <option value="">Toutes régions</option>
+                <option value="Nord">🔵 Nord</option>
+                <option value="Centre">🟢 Centre</option>
+                <option value="Sud">🟠 Sud</option>
+                <option value="International">🌍 International</option>
+              </select>
+            )}
             <select value={clientVilleFilter} onChange={e => setClientVilleFilter(e.target.value)}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm"
               disabled={clientRegionFilter === 'International'}>
               <option value="">Toutes villes</option>
-              {clientRegionFilter !== 'International' && [...new Set(clientsList.filter(c => !clientRegionFilter || c.region === clientRegionFilter).map(c => c.ville).filter(Boolean))].sort().map(v =>
+              {clientRegionFilter !== 'International' && [...new Set(clientsList.filter(c => (!clientCountryFilter || c.country_code === clientCountryFilter) && (!clientRegionFilter || c.region === clientRegionFilter)).map(c => c.ville).filter(Boolean))].sort().map(v =>
                 <option key={v} value={v}>📍 {v}</option>
               )}
             </select>
@@ -1872,6 +2101,8 @@ export default function EquipementsPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {clientsList.filter(c => {
+                if (selectedCountries.length > 0 && !selectedCountries.includes(c.country_code || DEFAULT_COUNTRY)) return false;
+                if (clientCountryFilter && c.country_code !== clientCountryFilter) return false;
                 if (clientSearch && !c.nom.toLowerCase().includes(clientSearch.toLowerCase())) return false;
                 if (clientTypeFilter && c.type_client !== clientTypeFilter) return false;
                 if (clientRegionFilter === 'International') {
@@ -1897,7 +2128,7 @@ export default function EquipementsPage() {
                         <div className="flex items-center gap-3 text-xs text-savia-text-muted mt-0.5">
                           {c.international ? <span className="text-blue-400 flex items-center gap-1"><Globe className="w-3 h-3" /> International</span> : <>
                             {c.ville && <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {c.ville}</span>}
-                            {c.region && <span>{c.region}</span>}
+                            {isTunisia && c.region && <span>{c.region}</span>}
                           </>}
                           {c.matricule_fiscale && <span className="flex items-center gap-1"><Hash className="w-3 h-3" /> {c.matricule_fiscale}</span>}
                         </div>

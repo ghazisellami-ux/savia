@@ -36,7 +36,7 @@ VALID_ROLES = [
     'Admin', 'Technicien', 'Lecteur', 'Manager', 'Responsable Technique',
     'Gestionnaire', 'Gestionnaire de stock',
 ]
-PUBLIC_SETTING_KEYS = ["nom_organisation", "logo_path", "langue", "theme", "devise", "role_permissions"]
+PUBLIC_SETTING_KEYS = ["nom_organisation", "logo_path", "langue", "theme", "devise", "pays", "role_permissions"]
 PRIVATE_SETTING_KEYS = [
     "taux_horaire_technicien", "telegram_token", "telegram_chat_id",
     "telegram_sav_token", "telegram_sav_chat_id", "telegram_manager_token",
@@ -500,7 +500,7 @@ def update_admin_settings(body: dict = Body(...), user: dict = Depends(_verify_t
         with get_db() as conn:
             for k, v in body.items():
                 # Only allow specific admin settings
-                allowed_keys = ["taux_horaire_technicien", "langue"]
+                allowed_keys = ["taux_horaire_technicien", "langue", "pays"]
                 if k not in allowed_keys:
                     logger.warning(f"[UPDATE_ADMIN_SETTINGS] Attempt to modify non-allowed key: {k}")
                     continue

@@ -8,37 +8,8 @@ import {
   MapPin, Building2, Loader2, Wrench, Heart, Calendar,
   Edit3, Save, X, Search, AlertTriangle, Cpu,
 } from 'lucide-react';
-import { mapApi } from '@/lib/api';
-
-// Tunisian cities with approximate GPS coordinates for auto-population
-const TUNISIAN_CITIES: Record<string, [number, number]> = {
-  'tunis': [36.8065, 10.1815], 'ariana': [36.8601, 10.1956], 'ben arous': [36.7533, 10.2281],
-  'manouba': [36.8100, 10.0987], 'nabeul': [36.4561, 10.7376], 'zaghouan': [36.4028, 10.1428],
-  'bizerte': [37.2744, 9.8739], 'beja': [36.7256, 9.1817], 'jendouba': [36.5011, 8.7803],
-  'kef': [36.1676, 8.7049], 'siliana': [36.0847, 9.3711], 'sousse': [35.8254, 10.6369],
-  'monastir': [35.7643, 10.8113], 'mahdia': [35.5047, 11.0622], 'sfax': [34.7404, 10.7602],
-  'kairouan': [35.6804, 10.0963], 'kasserine': [35.1672, 8.8365], 'sidi bouzid': [35.0380, 9.4849],
-  'gabes': [33.8819, 10.0982], 'medenine': [33.3540, 10.5050], 'tataouine': [32.9297, 10.4518],
-  'gafsa': [34.4250, 8.7842], 'tozeur': [33.9197, 8.1339], 'kebili': [33.7041, 8.9711],
-  'hammamet': [36.4000, 10.6167], 'tabarka': [36.9541, 8.7580], 'djerba': [33.8076, 10.8451],
-  'grombalia': [36.6017, 10.5042], 'la marsa': [36.8783, 10.3252], 'carthage': [36.8528, 10.3233],
-};
-
-function guessCoordinates(site: { client: string; ville?: string }): [number, number] | null {
-  // Priority: use the ville field if set
-  if (site.ville) {
-    const lower = site.ville.toLowerCase();
-    for (const [city, coords] of Object.entries(TUNISIAN_CITIES)) {
-      if (lower.includes(city) || city.includes(lower)) return coords;
-    }
-  }
-  // Fallback: try client name
-  const lower = site.client.toLowerCase();
-  for (const [city, coords] of Object.entries(TUNISIAN_CITIES)) {
-    if (lower.includes(city)) return coords;
-  }
-  return null;
-}
+import { mapApi, paysCustom as paysCustomApi, villesCustom as villesCustomApi } from '@/lib/api';
+import { DEFAULT_COUNTRY, cityCoordinates, customCountryCenter, findStaticCountry, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 interface Site {
   client: string;
@@ -55,6 +26,10 @@ interface Site {
 
 export default function CartePage() {
   const [sites, setSites] = useState<Site[]>([]);
+  const [country, setCountry] = useState<CountryCode>(() => (typeof window !== 'undefined' ? (localStorage.getItem('savia_pays') as CountryCode) || DEFAULT_COUNTRY : DEFAULT_COUNTRY));
+  const [selectedCountries, setSelectedCountries] = useState<CountryCode[]>(() => (typeof window !== 'undefined' ? parseCountrySelection(localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')) : [DEFAULT_COUNTRY]));
+  const [customCountries, setCustomCountries] = useState<Array<{ id: number; code: string; nom: string; flag?: string; latitude?: number | null; longitude?: number | null }>>([]);
+  const [customCities, setCustomCities] = useState<Array<{ nom: string; latitude?: number | null; longitude?: number | null }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedSite, setSelectedSite] = useState<Site | null>(null);
   const [editingSite, setEditingSite] = useState<string | null>(null);
@@ -66,15 +41,33 @@ export default function CartePage() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const selectedCountryName = customCountries.find(item => item.code === country)?.nom || getCountry(country).name;
+  const selectedCountryNames = selectedCountries.map(code => customCountries.find(item => item.code === code)?.nom || getCountry(code).name).join(', ');
 
   const load = useCallback(async () => {
     try {
-      const data = (await mapApi.sites()) as unknown as Site[];
+      const token = localStorage.getItem('savia_token') || '';
+      const settingsResponse = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+      const settings = settingsResponse.ok ? await settingsResponse.json() : {};
+      const selectedCountriesFromSettings = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
+      const [countryList, cityLists] = await Promise.all([
+        paysCustomApi.list().catch(() => []),
+        Promise.all(selectedCountriesFromSettings.map(code => villesCustomApi.list(code).catch(() => []))),
+      ]);
+      const selectedCountry = selectedCountriesFromSettings[0] as CountryCode;
+      setCustomCountries(countryList);
+      setCustomCities(cityLists.flat());
+      setSelectedCountries(selectedCountriesFromSettings);
+      setCountry(selectedCountry);
+      localStorage.setItem('savia_pays', selectedCountry);
+      localStorage.setItem('savia_pays_selectionnes', selectedCountriesFromSettings.join(','));
+      const data = (await mapApi.sites(selectedCountriesFromSettings.join(','))) as unknown as Site[];
       // Auto-assign coordinates to sites without them
       const enriched = data.map(s => {
+        const guess = selectedCountriesFromSettings.reduce<[number, number] | null>((found, selectedCode) => found || cityCoordinates(selectedCode, s.ville) || cityCoordinates(selectedCode, s.client), null);
+        if (guess) return { ...s, latitude: guess[0], longitude: guess[1] };
         if (s.latitude && s.longitude) return s;
-        const guess = guessCoordinates(s);
-        return { ...s, latitude: guess ? guess[0] : null, longitude: guess ? guess[1] : null };
+        return { ...s, latitude: null, longitude: null };
       });
       setSites(enriched);
     } catch (err) {
@@ -85,6 +78,16 @@ export default function CartePage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const onCountryChanged = () => { void load(); };
+    window.addEventListener('savia_country_changed', onCountryChanged);
+    window.addEventListener('savia_settings_changed', onCountryChanged);
+    return () => {
+      window.removeEventListener('savia_country_changed', onCountryChanged);
+      window.removeEventListener('savia_settings_changed', onCountryChanged);
+    };
+  }, [load]);
 
   // Load Leaflet dynamically
   useEffect(() => {
@@ -121,7 +124,32 @@ export default function CartePage() {
       mapInstanceRef.current.remove();
     }
 
-    const map = L.map(mapRef.current).setView([35.5, 9.5], 7);
+    const staticCountries = selectedCountries.map(code => findStaticCountry(code)).filter(Boolean);
+    const customCountryOptions = selectedCountries.map(code => customCountries.find(item => item.code === code)).filter(Boolean);
+    const knownCustomCenters = customCountryOptions.map(item => customCountryCenter(item?.nom)).filter(Boolean);
+    const customCityEntries = customCities
+      .filter(city => city.latitude != null && city.longitude != null)
+      .map(city => [city.nom, [Number(city.latitude), Number(city.longitude)] as [number, number]] as [string, [number, number]]);
+    const cityEntries = new Map<string, [number, number]>([
+      ...staticCountries.flatMap(item => Object.entries(item!.cities)),
+      ...customCityEntries,
+    ]);
+    const cityCoordinatesForBounds = Array.from(cityEntries.values());
+    const countryCenters = [
+      ...staticCountries.map(item => item!.center),
+      ...customCountryOptions.filter(item => item?.latitude != null && item?.longitude != null).map(item => [Number(item!.latitude), Number(item!.longitude)] as [number, number]),
+      ...knownCustomCenters.map(item => item!.center),
+    ];
+    const customCenter = countryCenters.length > 0
+      ? countryCenters.reduce((center, point) => [center[0] + point[0], center[1] + point[1]], [0, 0]).map(value => value / countryCenters.length) as [number, number]
+      : cityCoordinatesForBounds.length > 0
+      ? cityCoordinatesForBounds.reduce((center, point) => [center[0] + point[0], center[1] + point[1]], [0, 0]).map(value => value / cityCoordinatesForBounds.length) as [number, number]
+      : [20, 0] as [number, number];
+    const mapCenter = customCenter;
+    const mapZoom = selectedCountries.length === 1
+      ? (staticCountries[0]?.zoom ?? knownCustomCenters[0]?.zoom ?? (cityCoordinatesForBounds.length > 0 ? 6 : 2))
+      : (cityCoordinatesForBounds.length > 0 ? 3 : 2);
+    const map = L.map(mapRef.current).setView(mapCenter, mapZoom);
     mapInstanceRef.current = map;
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -131,6 +159,20 @@ export default function CartePage() {
 
     // Clear old markers
     markersRef.current = [];
+
+    // Always show the cities of the selected country, even when no client is
+    // registered there yet. Client sites are rendered above these reference markers.
+    Array.from(cityEntries.entries()).forEach(([city, coordinates]) => {
+      const cityMarker = L.circleMarker(coordinates, {
+        radius: 4,
+        color: '#38bdf8',
+        weight: 1,
+        fillColor: '#38bdf8',
+        fillOpacity: 0.65,
+      }).addTo(map);
+      cityMarker.bindTooltip(city, { direction: 'top', offset: [0, -4], opacity: 0.9 });
+      markersRef.current.push(cityMarker);
+    });
 
     // Add markers
     sites.forEach(site => {
@@ -180,11 +222,12 @@ export default function CartePage() {
       markersRef.current.push(marker);
     });
 
-    // Fit bounds
-    const validSites = sites.filter(s => s.latitude && s.longitude);
-    if (validSites.length > 1) {
-      const bounds = L.latLngBounds(validSites.map((s: Site) => [s.latitude!, s.longitude!]));
+    // Fit to the country catalogue so the complete selected country remains visible.
+    if (cityCoordinatesForBounds.length > 1) {
+      const bounds = L.latLngBounds(cityCoordinatesForBounds);
       map.fitBounds(bounds, { padding: [30, 30] });
+    } else if (mapCenter) {
+      map.setView(mapCenter, mapZoom);
     }
 
     return () => {
@@ -193,7 +236,7 @@ export default function CartePage() {
         mapInstanceRef.current = null;
       }
     };
-  }, [mapLoaded, sites, isLoading]);
+  }, [country, selectedCountries, customCities, customCountries, mapLoaded, sites, isLoading]);
 
   const handleSaveCoords = async (clientName: string) => {
     try {
@@ -231,9 +274,9 @@ export default function CartePage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-black gradient-text flex items-center gap-3">
-          <MapPin className="w-7 h-7" /> Carte du Parc Client
+          <MapPin className="w-7 h-7" /> Carte du Parc Client — {selectedCountryNames || selectedCountryName}
         </h1>
-        <p className="text-savia-text-muted text-sm mt-1">Visualisation géographique de vos sites et équipements</p>
+        <p className="text-savia-text-muted text-sm mt-1">Visualisation géographique de vos sites, équipements et villes du pays sélectionné</p>
       </div>
 
       {/* KPIs */}
@@ -253,7 +296,7 @@ export default function CartePage() {
       </div>
 
       {/* Map */}
-      <SectionCard title={<span className="flex items-center gap-2"><MapPin className="w-4 h-4 text-savia-accent" /> Carte Interactive</span>}>
+      <SectionCard title={<span className="flex items-center gap-2"><MapPin className="w-4 h-4 text-savia-accent" /> Carte de {selectedCountryNames || selectedCountryName}</span>}>
         <div className="relative">
           <div ref={mapRef} className="w-full rounded-xl overflow-hidden" style={{ height: 480 }} />
           {/* Legend */}
