@@ -446,9 +446,13 @@ def lire_historique_statut_equipement(equip_id, limit=100):
         rows = conn.execute(
             """SELECT h.id, h.equipement_id, h.ancien_statut, h.nouveau_statut,
                       h.source, h.intervention_id, h.raison, h.change_par, h.change_le,
+                      COALESCE(NULLIF(BTRIM(u.nom_complet), ''), h.change_par, '')
+                          AS change_par_nom_complet,
                       e.nom AS equipement, e.client
                FROM equipement_statut_historique h
                JOIN equipements e ON e.id = h.equipement_id
+               LEFT JOIN utilisateurs u
+                 ON LOWER(BTRIM(u.username)) = LOWER(BTRIM(h.change_par))
                WHERE h.equipement_id = %s
                ORDER BY h.change_le DESC, h.id DESC
                LIMIT %s""",

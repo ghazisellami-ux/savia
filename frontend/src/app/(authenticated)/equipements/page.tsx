@@ -1732,7 +1732,7 @@ export default function EquipementsPage() {
                       <span className="ml-auto text-xs text-savia-text-dim">{String(entry.change_le || '').replace('T', ' ').slice(0, 16)}</span>
                     </div>
                     <div className="mt-1 text-xs text-savia-text-muted">
-                      Source : {entry.source}{entry.intervention_id ? ' · Intervention #' + entry.intervention_id : ''}{entry.change_par ? ' · ' + entry.change_par : ''}
+                      Source : {entry.source}{entry.intervention_id ? ' · Intervention #' + entry.intervention_id : ''} · Opération par : {String(entry.change_par_nom_complet || entry.change_par || '').trim() || 'Système automatique'}
                     </div>
                     {entry.raison && <div className="mt-1 text-xs text-savia-text-muted">{entry.raison}</div>}
                   </div>
