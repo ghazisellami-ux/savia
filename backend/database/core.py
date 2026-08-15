@@ -691,10 +691,12 @@ def init_db():
         );
 
         -- Insérer config par défaut si absente
-        INSERT INTO config_client (cle, valeur) VALUES ('nom_organisation', 'SIC Radiologie') ON CONFLICT DO NOTHING,
+        INSERT INTO config_client (cle, valeur) VALUES
+            ('nom_organisation', 'SIC Radiologie'),
             ('logo_path', ''),
             ('langue', 'fr'),
-            ('theme', 'dark');
+            ('theme', 'dark')
+        ON CONFLICT (cle) DO NOTHING;
 
         -- Télémétrie IoT
         CREATE TABLE IF NOT EXISTS telemetry (
@@ -851,10 +853,10 @@ def init_db():
                     pass
                 logger.debug(f"⚠️  Erreur lors de l'ajout de {col} à {tbl}: {e}")
 
-        _run_migration("ALTER TABLE equipements ADD COLUMN client TEXT DEFAULT 'Centre Principal'", "client sur equipements")
-        _run_migration("ALTER TABLE techniciens ADD COLUMN telegram_id TEXT DEFAULT ''", "telegram_id sur techniciens")
-        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN client TEXT DEFAULT ''", "client sur planning")
-        _run_migration("ALTER TABLE utilisateurs ADD COLUMN client TEXT DEFAULT ''", "client sur utilisateurs")
+        _safe_add_column("equipements", "client", "TEXT", "'Centre Principal'")
+        _safe_add_column("techniciens", "telegram_id")
+        _safe_add_column("planning_maintenance", "client")
+        _safe_add_column("utilisateurs", "client")
         _safe_add_column("utilisateurs", "password_changed_at", "TIMESTAMP", "CURRENT_TIMESTAMP")
         _safe_add_column("utilisateurs", "must_change_password", "BOOLEAN", "false")
         _safe_add_column("utilisateurs", "password_version", "INTEGER", "1")
@@ -864,10 +866,10 @@ def init_db():
                 password_version = COALESCE(password_version, 1),
                 must_change_password = COALESCE(must_change_password, false)
         """)
-        _run_migration("ALTER TABLE equipements ADD COLUMN domaine TEXT DEFAULT 'Radiologie'", "domaine sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN est_annexe BOOLEAN DEFAULT false", "est_annexe sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_debut TEXT DEFAULT ''", "garantie_debut sur equipements")
-        _run_migration("ALTER TABLE equipements ADD COLUMN garantie_duree INTEGER DEFAULT 0", "garantie_duree sur equipements")
+        _safe_add_column("equipements", "domaine", "TEXT", "'Radiologie'")
+        _safe_add_column("equipements", "est_annexe", "BOOLEAN", "false")
+        _safe_add_column("equipements", "garantie_debut")
+        _safe_add_column("equipements", "garantie_duree", "INTEGER", "0")
         _safe_add_column("pieces_rechange", "domaine", "TEXT", "'Radiologie'")
         _safe_add_column("pieces_rechange", "est_annexe", "BOOLEAN", "false")
         
@@ -879,10 +881,10 @@ def init_db():
         _safe_add_column("pieces_rechange", "utilisation_recente_30j", "INTEGER", "0")
         _safe_add_column("pieces_rechange", "data_confidence", "VARCHAR(20)", "'INSUFFICIENT'")
         
-        _run_migration("ALTER TABLE logs_uploaded ADD COLUMN parsed_errors TEXT DEFAULT NULL", "parsed_errors sur logs_uploaded")
+        _safe_add_column("logs_uploaded", "parsed_errors", "TEXT", "NULL")
         
         # Migration: Ghost entry tracking for reschedule feature
-        _run_migration("ALTER TABLE planning_maintenance ADD COLUMN is_ghost BOOLEAN DEFAULT false", "is_ghost sur planning_maintenance")
+        _safe_add_column("planning_maintenance", "is_ghost", "BOOLEAN", "false")
 
         # Migrations : colonnes ajoutées progressivement
         _safe_add_column("equipements", "matricule_fiscale")
@@ -892,10 +894,21 @@ def init_db():
         _safe_add_column("interventions", "priorite")
         _safe_add_column("contrats", "equipement")
         _safe_add_column("contrats", "fichier_contrat")
-        _safe_add_column("contrats", "fichier_storage_key")
-        _safe_add_column("contrats", "fichier_content_type")
+        _safe_add_column("contrats", "fichier_storage_key", "TEXT", "NULL")
+        _safe_add_column("contrats", "fichier_content_type", "TEXT", "NULL")
         _safe_add_column("contrats", "fichier_size_bytes", "BIGINT", "NULL")
-        _safe_add_column("contrats", "fichier_sha256")
+        _safe_add_column("contrats", "fichier_sha256", "TEXT", "NULL")
+        # Empty storage keys are not attachments. Normalize legacy rows and
+        # remove the empty-string default so the partial unique index remains
+        # compatible with contracts created after migration 008.
+        try:
+            conn.execute(
+                "UPDATE contrats SET fichier_storage_key = NULL "
+                "WHERE BTRIM(COALESCE(fichier_storage_key, '')) = ''"
+            )
+            conn.execute("ALTER TABLE contrats ALTER COLUMN fichier_storage_key DROP DEFAULT")
+        except Exception as e:
+            logger.debug(f"Migration clé stockage contrats ignorée: {e}")
         _safe_add_column("equipements", "document_technique")
         # Prediction feedback needs the equipment identity and forecast context
         # to support honest temporal validation and post-deployment calibration.

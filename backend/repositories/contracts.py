@@ -436,7 +436,7 @@ def modifier_contrat(contrat_id, contrat_dict):
         conn.execute(f"""
             UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
                 sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
-                fichier_contrat={ph}, equipement={ph}, pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
+                equipement={ph}, pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
             WHERE id={ph}
         """, (
             contrat_dict.get("client", ""),
@@ -449,7 +449,6 @@ def modifier_contrat(contrat_id, contrat_dict):
             contrat_dict.get("conditions", ""),
             contrat_dict.get("notes", ""),
             contrat_dict.get("statut", "Actif"),
-            contrat_dict.get("fichier_contrat", ""),
             first_equipment,
             pieces_incluses,
             1 if contrat_dict.get("avec_pieces") else 0,

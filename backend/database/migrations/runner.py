@@ -299,6 +299,7 @@ def _migration_008_contract_private_file_metadata(conn) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_contrats_fichier_storage_key "
         "ON contrats(fichier_storage_key) WHERE fichier_storage_key IS NOT NULL"
     )
+    conn.execute("ALTER TABLE contrats ALTER COLUMN fichier_storage_key DROP DEFAULT")
 
 
 MIGRATIONS: tuple[Migration, ...] = (
