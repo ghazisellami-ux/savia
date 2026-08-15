@@ -8,7 +8,7 @@ import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
   X, ChevronDown, Package, Bell, RefreshCcw, CheckSquare, StickyNote,
   Loader2, AlertTriangle, CheckCircle2, ShieldCheck, Building2,
-  Eye, Download, Edit2, Camera, Paperclip
+  Eye, Download, Edit2, Camera, Paperclip, Trash2
 } from 'lucide-react';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
@@ -72,7 +72,7 @@ const normalizeContractEquipments = (item: any): string[] => {
 
 export default function ContratsPage() {
   const { user } = useAuth();
-  const canEdit = user?.role === 'Admin' || user?.role === 'Manager';
+  const canEdit = user?.role === 'Admin' || user?.role === 'Manager' || user?.role === 'Responsable Technique';
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('');
   const [data, setData] = useState<Contrat[]>([]);
@@ -88,6 +88,7 @@ export default function ContratsPage() {
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
   const [contractAttachment, setContractAttachment] = useState<File | null>(null);
+  const [pendingAttachmentUpload, setPendingAttachmentUpload] = useState<{ contractId: string; file: File } | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement>(null);
   const contractCameraInputRef = useRef<HTMLInputElement>(null);
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
@@ -185,7 +186,40 @@ export default function ContratsPage() {
       })
     : stockPieces;
 
+  const applyAttachmentState = (contractId: string, filename: string) => {
+    setData(previous => previous.map(contract => contract.id === contractId
+      ? { ...contract, has_fichier: true, fichier_contrat: filename }
+      : contract));
+    setSelectedContrat(previous => previous?.id === contractId
+      ? { ...previous, has_fichier: true, fichier_contrat: filename }
+      : previous);
+  };
+
+  const retryAttachmentUpload = async () => {
+    if (!pendingAttachmentUpload) return;
+    setIsSaving(true);
+    try {
+      const result = await contrats.uploadFile(pendingAttachmentUpload.contractId, pendingAttachmentUpload.file);
+      applyAttachmentState(pendingAttachmentUpload.contractId, result.filename);
+      setPendingAttachmentUpload(null);
+      setContractAttachment(null);
+      setSaveMsg('✅ Contrat sauvegardé et pièce jointe envoyée avec succès.');
+      await load();
+      setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 2500);
+    } catch (err: any) {
+      setSaveMsg(`Échec de l'envoi de la pièce jointe : ${err?.message || 'indisponible'}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleSave = async () => {
+    // A contract whose creation/update already succeeded must never be
+    // submitted again just because its attachment upload failed.
+    if (pendingAttachmentUpload) {
+      await retryAttachmentUpload();
+      return;
+    }
     if (!form.client) { setSaveMsg('Veuillez sélectionner un client.'); return; }
     if (form.equipements.length === 0) { setSaveMsg('Veuillez sélectionner au moins un équipement.'); return; }
     setIsSaving(true);
@@ -223,7 +257,15 @@ export default function ContratsPage() {
         setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
       }
       if (contractAttachment && savedContractId) {
-        await contrats.uploadFile(savedContractId, contractAttachment);
+        try {
+          const uploaded = await contrats.uploadFile(savedContractId, contractAttachment);
+          applyAttachmentState(savedContractId, uploaded.filename);
+        } catch {
+          setPendingAttachmentUpload({ contractId: savedContractId, file: contractAttachment });
+          await load();
+          setSaveMsg('');
+          return;
+        }
       }
       setForm(emptyForm());
       setContractAttachment(null);
@@ -240,6 +282,7 @@ export default function ContratsPage() {
   const openEdit = (c: Contrat) => {
     setEditingContrat(c);
     setContractAttachment(null);
+    setPendingAttachmentUpload(null);
     
     // Parse pieces_incluses from JSON if it exists
     let pieces_selectionnees: { ref: string; designation: string; quota: number }[] = [];
@@ -297,6 +340,7 @@ export default function ContratsPage() {
 
   const clearContractAttachment = () => {
     setContractAttachment(null);
+    setPendingAttachmentUpload(null);
     if (contractFileInputRef.current) contractFileInputRef.current.value = '';
     if (contractCameraInputRef.current) contractCameraInputRef.current.value = '';
   };
@@ -433,6 +477,29 @@ export default function ContratsPage() {
     }
   };
 
+  const handleDeleteContractAttachment = async (c: Contrat) => {
+    if (!canEdit || !c.has_fichier) return;
+    if (!window.confirm(`Supprimer définitivement la pièce jointe du contrat #${c.id} ?`)) return;
+    setIsDeleting(true);
+    try {
+      await contrats.deleteFile(c.id);
+      setData(previous => previous.map(contract => contract.id === c.id
+        ? { ...contract, has_fichier: false, fichier_contrat: '' }
+        : contract));
+      setSelectedContrat(previous => previous?.id === c.id
+        ? { ...previous, has_fichier: false, fichier_contrat: '' }
+        : previous);
+      setEditingContrat(previous => previous?.id === c.id
+        ? { ...previous, has_fichier: false, fichier_contrat: '' }
+        : previous);
+      setSaveMsg('✅ Pièce jointe supprimée.');
+    } catch (err: any) {
+      setSaveMsg(`❌ Erreur suppression pièce jointe: ${err?.message || 'Indisponible'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleDeleteContrat = async () => {
     if (!deleteConfirm) return;
     setIsDeleting(true);
@@ -469,10 +536,10 @@ export default function ContratsPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion des contrats SAV et maintenance préventive</p>
         </div>
-        <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setContractAttachment(null); setSaveMsg(''); setShowModal(true); }}
+        {canEdit && <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setContractAttachment(null); setPendingAttachmentUpload(null); setSaveMsg(''); setShowModal(true); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
           <Plus className="w-4 h-4" /> Nouveau contrat
-        </button>
+        </button>}
       </div>
 
       {/* KPIs - All in one row */}
@@ -801,9 +868,21 @@ export default function ContratsPage() {
                         <p className="text-sm font-semibold truncate">{c.fichier_contrat || 'Document joint'}</p>
                       </div>
                     </div>
-                    <button onClick={() => handleContractAttachmentDownload(c)} className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer">
-                      <Download className="w-3.5 h-3.5" /> Télécharger
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button onClick={() => handleContractAttachmentDownload(c)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer">
+                        <Download className="w-3.5 h-3.5" /> Télécharger
+                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => handleDeleteContractAttachment(c)}
+                          disabled={isDeleting}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-400/20 transition-all cursor-pointer disabled:opacity-50"
+                          title="Supprimer la pièce jointe"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Supprimer
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1146,6 +1225,27 @@ export default function ContratsPage() {
                 </div>
               </div>
 
+              {pendingAttachmentUpload && (
+                <div className="p-3 rounded-lg border border-amber-400/30 bg-amber-500/10 text-sm text-amber-200">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div className="space-y-2">
+                      <p className="font-semibold">Le contrat #{pendingAttachmentUpload.contractId} a bien été sauvegardé, mais l'envoi de la pièce jointe a échoué.</p>
+                      <p className="text-xs text-amber-100/80">Réessayez l'envoi ci-dessous. Le contrat ne sera pas recréé.</p>
+                      <button
+                        type="button"
+                        onClick={retryAttachmentUpload}
+                        disabled={isSaving}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+                        Réessayer l'envoi
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Save message */}
               {saveMsg && (
                 <div className={`p-3 rounded-lg text-sm font-semibold whitespace-pre-line ${saveMsg.includes('✅') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
@@ -1160,10 +1260,10 @@ export default function ContratsPage() {
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer">
                 Annuler
               </button>
-              <button onClick={handleSave} disabled={isSaving || !form.client}
+              <button onClick={handleSave} disabled={isSaving || (!pendingAttachmentUpload && !form.client)}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {isSaving ? 'Enregistrement...' : editingContrat ? 'Mettre à jour' : 'Créer le contrat'}
+                {isSaving ? 'Enregistrement...' : pendingAttachmentUpload ? 'Réessayer l’envoi' : editingContrat ? 'Mettre à jour' : 'Créer le contrat'}
               </button>
             </div>
           </div>

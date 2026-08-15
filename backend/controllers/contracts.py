@@ -1,8 +1,11 @@
 """Contract and compliance routes."""
 
+import json
+
 from api.runtime import (
     Depends,
     File,
+    HTTPException,
     Optional,
     UploadFile,
     ajouter_conformite,
@@ -77,10 +80,11 @@ def create_contrat(body: dict, user: dict = Depends(_verify_token)):
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     contrat_id = ajouter_contrat(body)
+    if not contrat_id:
+        raise HTTPException(status_code=500, detail="Le contrat n'a pas pu être sauvegardé")
     
     # Log audit
     username = user.get("sub", "unknown")
-    import json
     details = json.dumps({
         "client": body.get("client", ""),
         "equipements": body.get("equipements", []),
@@ -147,13 +151,26 @@ async def upload_contrat_file(
     with get_db() as conn:
         assert_resource_client_access(conn, "contrat", contrat_id, user)
         previous = conn.execute(
-            "SELECT fichier_storage_key FROM contrats WHERE id = %s",
+            """SELECT fichier_contrat, fichier_storage_key, fichier_content_type,
+                      fichier_size_bytes, fichier_sha256
+               FROM contrats WHERE id = %s""",
             (contrat_id,),
         ).fetchone()
     if not previous:
         raise HTTPException(status_code=404, detail="Contrat non trouvé")
 
     validated = await read_validated_upload(file, "contrat")
+    # A retry after a lost HTTP response must be idempotent. If the exact
+    # content is already attached, do not create a second private object.
+    if previous.get("fichier_storage_key") and previous.get("fichier_sha256") == validated.sha256:
+        return {
+            "ok": True,
+            "filename": previous.get("fichier_contrat") or validated.display_name,
+            "content_type": previous.get("fichier_content_type") or validated.content_type,
+            "size_bytes": previous.get("fichier_size_bytes") or len(validated.data),
+            "already_attached": True,
+        }
+
     from s3_storage import upload_private_file
 
     stored = upload_private_file(
@@ -235,6 +252,55 @@ def download_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
         media_type=content_type,
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+@app.delete("/api/contrats/{contrat_id}/fichier")
+def delete_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
+    """Delete a private contract attachment after RBAC and client-scope checks."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+
+    with get_db() as conn:
+        # This check must happen before reading or deleting the private object.
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        row = conn.execute(
+            """SELECT fichier_storage_key FROM contrats WHERE id = %s""",
+            (contrat_id,),
+        ).fetchone()
+
+    storage_key = row.get("fichier_storage_key") if row else None
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="Aucune pièce jointe pour ce contrat")
+
+    from s3_storage import delete_file
+    if not delete_file(storage_key):
+        raise HTTPException(status_code=503, detail="La suppression du fichier privé a échoué. Réessayez.")
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE contrats
+                   SET fichier_contrat = NULL,
+                       fichier_storage_key = NULL,
+                       fichier_content_type = NULL,
+                       fichier_size_bytes = NULL,
+                       fichier_sha256 = NULL
+                   WHERE id = %s""",
+                (contrat_id,),
+            )
+    except Exception:
+        # The object has already been removed. Keep the failure explicit so an
+        # operator can reconcile the metadata instead of reporting success.
+        logger.exception("Pièce jointe du contrat #%s supprimée mais métadonnées non mises à jour", contrat_id)
+        raise HTTPException(status_code=503, detail="Le fichier a été supprimé mais la mise à jour du contrat a échoué")
+
+    log_audit(
+        user.get("sub", "unknown"),
+        "DELETE_CONTRAT_FILE",
+        json.dumps({"contrat_id": contrat_id}, ensure_ascii=False),
+        "contrats",
+    )
+    return {"ok": True, "contrat_id": contrat_id}
 
 
 @app.put("/api/contrats/{contrat_id}")
@@ -324,6 +390,7 @@ __all__ = [
     "create_contrat",
     "upload_contrat_file",
     "download_contrat_file",
+    "delete_contrat_file",
     "update_contrat",
     "delete_contrat",
     "get_conformite",

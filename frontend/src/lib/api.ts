@@ -300,17 +300,30 @@ export const contrats = {
     if (token && token !== 'undefined' && token !== 'null') {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    const res = await fetch(`/api/contrats/${id}/fichier`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    let res: Response;
+    try {
+      res = await fetch(`/api/contrats/${id}/fichier`, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+    } catch (error: any) {
+      if (error?.name === 'AbortError') throw new Error('Délai dépassé pendant l’envoi de la pièce jointe');
+      throw new Error(`Erreur réseau pendant l’envoi : ${error?.message || 'indisponible'}`);
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
       throw new Error(data.error || data.detail || `HTTP ${res.status}`);
     }
-    return res.json() as Promise<{ ok: boolean; filename: string; content_type: string; size_bytes: number }>;
+    return res.json() as Promise<{ ok: boolean; filename: string; content_type: string; size_bytes: number; already_attached?: boolean }>;
   },
+  deleteFile: (id: string | number) =>
+    request<{ ok: boolean; contrat_id: string | number }>(`/api/contrats/${id}/fichier`, { method: 'DELETE' }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) =>
