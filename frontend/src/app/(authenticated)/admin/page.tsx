@@ -11,8 +11,9 @@ import {
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
   ChevronDown, Brain,
 } from 'lucide-react';
-import { admin, techniciens, clients } from '@/lib/api';
+import { admin, techniciens, clients, paysCustom as paysCustomApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { COUNTRIES, DEFAULT_COUNTRY, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
@@ -219,6 +220,13 @@ export default function AdminPage() {
     { code: 'SAR', label: 'Riyal Saoudien', flag: '🇸🇦', symbol: 'ر.س' },
   ];
   const [devise, setDevise] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'TND' : 'TND'));
+  const [pays, setPays] = useState<CountryCode>(() => (typeof window !== 'undefined' ? (localStorage.getItem('savia_pays') as CountryCode) || DEFAULT_COUNTRY : DEFAULT_COUNTRY));
+  const [paysSelectionnes, setPaysSelectionnes] = useState<CountryCode[]>(() => (typeof window !== 'undefined' ? parseCountrySelection(localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')) : [DEFAULT_COUNTRY]));
+  const [customCountries, setCustomCountries] = useState<Array<{ id: number; code: string; nom: string; flag?: string }>>([]);
+  const [customCountryMode, setCustomCountryMode] = useState(false);
+  const [customCountryName, setCustomCountryName] = useState('');
+  const [customCountryError, setCustomCountryError] = useState('');
+  const [savingCustomCountry, setSavingCustomCountry] = useState(false);
   const [language, setLanguage] = useState<'fr' | 'en'>(() => (typeof window !== 'undefined' && localStorage.getItem('savia_lang') === 'en' ? 'en' : 'fr'));
   const [companyName, setCompanyName] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_company') || '' : ''));
   const [logoPreview, setLogoPreview] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('savia_logo') || '' : ''));
@@ -230,6 +238,20 @@ export default function AdminPage() {
   const [aiGovernance, setAiGovernance] = useState<any>(null);
   const [aiSaving, setAiSaving] = useState('');
   const [aiMessage, setAiMessage] = useState('');
+
+  const countryOptions = [
+    ...COUNTRIES,
+    ...customCountries.map(country => ({ code: country.code, name: country.nom, flag: country.flag || '🌍' })),
+  ];
+  const selectedCountryOption = countryOptions.find(country => country.code === pays) || getCountry(pays);
+  const selectedCountryOptions = countryOptions.filter(country => paysSelectionnes.includes(country.code));
+
+  const loadCustomCountries = useCallback(async () => {
+    try { setCustomCountries(await paysCustomApi.list()); }
+    catch (error) { console.error('Failed to load custom countries', error); }
+  }, []);
+
+  useEffect(() => { void loadCustomCountries(); }, [loadCustomCountries]);
 
   const loadAiGovernance = useCallback(async () => {
     if (currentUser?.role !== 'Admin') return;
@@ -275,6 +297,45 @@ export default function AdminPage() {
     reader.onload = ev => setLogoPreview(ev.target?.result as string);
     reader.readAsDataURL(file);
   };
+
+  const handleSaveCustomCountry = async () => {
+    const value = customCountryName.trim();
+    if (!value) return;
+    setSavingCustomCountry(true);
+    setCustomCountryError('');
+    try {
+      const result = await paysCustomApi.create(value);
+      if (result.country) {
+        setCustomCountries(current => [...current.filter(country => country.code !== result.country?.code), result.country!].sort((a, b) => a.nom.localeCompare(b.nom)));
+        setPaysSelectionnes(current => Array.from(new Set([result.country!.code, ...current])));
+        setPays(result.country.code);
+      }
+      setCustomCountryName('');
+      setCustomCountryMode(false);
+    } catch (error: any) {
+      console.error('Failed to save custom country', error);
+      setCustomCountryError(error?.message || "Impossible d'enregistrer ce pays.");
+    } finally {
+      setSavingCustomCountry(false);
+    }
+  };
+
+  const handleDeleteCustomCountry = async (code: string) => {
+    try {
+      await paysCustomApi.delete(code);
+      setCustomCountries(current => current.filter(country => country.code !== code));
+      setPaysSelectionnes(current => {
+        const next = current.filter(item => item !== code);
+        const fallback = next.length > 0 ? next : [DEFAULT_COUNTRY];
+        setPays(fallback[0]);
+        return fallback;
+      });
+    } catch (error) {
+      console.error('Failed to delete custom country', error);
+      setCustomCountryError("Impossible de supprimer ce pays.");
+    }
+  };
+
   const saveSettings = async () => {
     const jwtToken = localStorage.getItem('savia_token') || '';
     try {
@@ -282,6 +343,7 @@ export default function AdminPage() {
       const payload = {
         taux_horaire_technicien: tauxHoraire,
         langue: language,
+        pays: paysSelectionnes.join(','),
       };
       const res = await fetch('/api/admin/settings', {
         method: 'PUT',
@@ -301,11 +363,14 @@ export default function AdminPage() {
     
     // Save local settings
     localStorage.setItem('savia_devise', devise);
+    localStorage.setItem('savia_pays', paysSelectionnes[0] || pays || DEFAULT_COUNTRY);
+    localStorage.setItem('savia_pays_selectionnes', paysSelectionnes.join(','));
     localStorage.setItem('savia_lang', language);
     localStorage.setItem('savia_company', companyName);
     if (logoPreview) localStorage.setItem('savia_logo', logoPreview);
     else localStorage.removeItem('savia_logo');
     window.dispatchEvent(new Event('savia_settings_changed'));
+    window.dispatchEvent(new CustomEvent('savia_country_changed', { detail: { country: paysSelectionnes[0] || pays, countries: paysSelectionnes } }));
     window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang: language } }));
     setSettingsSaved(true);
     setTimeout(() => setSettingsSaved(false), 2000);
@@ -326,7 +391,20 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [usersRes, techsRes, clientsRes] = await Promise.all([admin.users(), techniciens.list(), clients.list()]);
+      const [usersResult, techsResult, clientsResult] = await Promise.allSettled([
+        admin.users(),
+        techniciens.list(),
+        clients.list(),
+      ]);
+
+      const usersRes = usersResult.status === 'fulfilled' ? usersResult.value : [];
+      const techsRes = techsResult.status === 'fulfilled' ? techsResult.value : [];
+      const clientsRes = clientsResult.status === 'fulfilled' ? clientsResult.value : [];
+
+      if (usersResult.status === 'rejected') console.error('[ADMIN] Failed to load users:', usersResult.reason);
+      if (techsResult.status === 'rejected') console.error('[ADMIN] Failed to load technicians:', techsResult.reason);
+      if (clientsResult.status === 'rejected') console.error('[ADMIN] Failed to load clients:', clientsResult.reason);
+
       setClientsList((clientsRes as any[]).map((c: any) => c.nom || c.client || '').filter(Boolean));
       
       // Utiliser DEFAULT_PROFILES pour éviter une dépendance circulaire
@@ -408,6 +486,12 @@ export default function AdminPage() {
           setTauxHoraire(rate);
           const dbLang = settingsData.langue === 'en' ? 'en' : 'fr';
           setLanguage(dbLang);
+          const dbCountries = parseCountrySelection(settingsData.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
+          const dbCountry = dbCountries[0] || DEFAULT_COUNTRY;
+          setPaysSelectionnes(dbCountries);
+          setPays(dbCountry);
+          localStorage.setItem('savia_pays', dbCountry);
+          localStorage.setItem('savia_pays_selectionnes', dbCountries.join(','));
           localStorage.setItem('savia_lang', dbLang);
           window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang: dbLang } }));
           
@@ -919,6 +1003,74 @@ export default function AdminPage() {
                   {language === item.code && <Check className="w-4 h-4 shrink-0" />}
                 </button>
               ))}
+            </div>
+          </SectionCard>
+
+          {/* Pays */}
+          <SectionCard title={<span className="flex items-center gap-2"><MapPin className="w-4 h-4 text-savia-accent" /> Pays de l'application</span>}>
+            <p className="text-xs text-savia-text-muted mb-4">Le pays sélectionné adapte les villes, les filtres clients et la carte géographique.</p>
+            <div className="max-w-xl">
+              <label className={LABEL}>Pays</label>
+              <div className="relative">
+                <select
+                  multiple
+                  size={Math.min(7, Math.max(3, countryOptions.length))}
+                  className={`${INPUT} cursor-pointer min-h-[120px]`}
+                  value={paysSelectionnes}
+                  onChange={e => {
+                    const next = Array.from(e.target.selectedOptions).map(option => option.value as CountryCode);
+                    const selected = next.length > 0 ? next : [DEFAULT_COUNTRY];
+                    setPaysSelectionnes(selected);
+                    setPays(selected[0]);
+                  }}
+                >
+                  {countryOptions.map(country => (
+                    <option key={country.code} value={country.code}>
+                      {country.flag} — {country.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-muted" />
+              </div>
+              <p className="text-xs text-savia-text-muted mt-2">
+                Pays sélectionnés : <strong className="text-savia-text">{selectedCountryOptions.length > 0 ? selectedCountryOptions.map(country => country.name).join(', ') : selectedCountryOption.name}</strong>
+              </p>
+              <p className="text-[11px] text-savia-text-dim mt-1">Maintenez Ctrl (Windows) ou Cmd (Mac) pour sélectionner plusieurs pays.</p>
+              <div className="mt-3">
+                {customCountryMode ? (
+                  <div className="flex gap-2">
+                    <input autoFocus className={`${INPUT} flex-1`} placeholder="Nom du nouveau pays"
+                      value={customCountryName}
+                      onChange={e => { setCustomCountryName(e.target.value); setCustomCountryError(''); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleSaveCustomCountry(); } }} />
+                    <button type="button" onClick={() => void handleSaveCustomCountry()} disabled={!customCountryName.trim() || savingCustomCountry}
+                      className="px-3 rounded-lg bg-savia-accent text-white text-xs font-bold disabled:opacity-50">
+                      {savingCustomCountry ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ajouter'}
+                    </button>
+                    <button type="button" onClick={() => { setCustomCountryMode(false); setCustomCountryName(''); setCustomCountryError(''); }}
+                      className="px-3 rounded-lg bg-savia-surface-hover text-savia-text-muted text-xs font-bold">Annuler</button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => { setCustomCountryMode(true); setCustomCountryName(''); setCustomCountryError(''); }}
+                    className="text-xs font-semibold text-savia-accent hover:text-savia-accent-blue cursor-pointer">
+                    + Ajouter un pays manuellement
+                  </button>
+                )}
+                {customCountryError && <p className="mt-1 text-xs text-red-400">{customCountryError}</p>}
+                {customCountries.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="text-[10px] uppercase tracking-wider text-savia-text-dim self-center mr-1">Pays ajoutés</span>
+                    {customCountries.map(country => (
+                      <span key={country.code} className="inline-flex items-center gap-1 rounded-full bg-savia-accent/10 border border-savia-accent/20 px-2 py-1 text-[11px] text-savia-accent">
+                        {country.flag || '🌍'} {country.nom}
+                        <button type="button" title={`Supprimer ${country.nom}`} onClick={() => void handleDeleteCustomCountry(country.code)} className="text-red-400 hover:text-red-300 cursor-pointer">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </SectionCard>
 

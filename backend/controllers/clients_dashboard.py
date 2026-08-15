@@ -14,10 +14,16 @@ from api.runtime import (
     lire_equipements,
     lire_interventions,
     lire_types_client_custom,
+    lire_villes_custom,
+    lire_pays_custom,
     log_audit,
     logger,
     modifier_client,
     ajouter_type_client_custom,
+    ajouter_ville_custom, modifier_ville_custom,
+    ajouter_pays_custom,
+    supprimer_ville_custom,
+    supprimer_pays_custom,
     pd,
     read_sql,
     supprimer_client,
@@ -95,8 +101,20 @@ def get_clients(user: dict = Depends(_verify_token)):
             
             # Build result with enriched data
             result = []
+
+            def json_value(value):
+                """Convert pandas NULL/NaN values to JSON-safe Python values."""
+                if value is None:
+                    return None
+                try:
+                    if pd.isna(value):
+                        return None
+                except (TypeError, ValueError):
+                    pass
+                return value
+
             for _, row in df_clients.iterrows():
-                client_name = row.get("nom", "")
+                client_name = json_value(row.get("nom", "")) or ""
                 if scoped_client and str(client_name).strip().casefold() != scoped_client.casefold():
                     continue
                 
@@ -117,17 +135,20 @@ def get_clients(user: dict = Depends(_verify_token)):
                 nb_int = int(int_stat.get("nb_int", 0)) if int_stat is not None else 0
                 
                 result.append({
-                    "id": row.get("id"),
+                    "id": json_value(row.get("id")),
                     "nom": client_name,
-                    "code_client": row.get("code_client", ""),
-                    "matricule_fiscale": row.get("matricule_fiscale", ""),
-                    "ville": row.get("ville", ""),
-                    "region": row.get("region", ""),
-                    "contact": row.get("contact", ""),
-                    "telephone": row.get("telephone", ""),
-                    "adresse": row.get("adresse", ""),
-                    "type_client": row.get("type_client", ""),
-                    "international": bool(row.get("international", False)),
+                    "code_client": json_value(row.get("code_client", "")) or "",
+                    "matricule_fiscale": json_value(row.get("matricule_fiscale", "")) or "",
+                    "country_code": json_value(row.get("country_code", "TN")) or "TN",
+                    "ville": json_value(row.get("ville", "")) or "",
+                    "region": json_value(row.get("region", "")) or "",
+                    "contact": json_value(row.get("contact", "")) or "",
+                    "telephone": json_value(row.get("telephone", "")) or "",
+                    "adresse": json_value(row.get("adresse", "")) or "",
+                    "latitude": json_value(row.get("latitude")),
+                    "longitude": json_value(row.get("longitude")),
+                    "type_client": json_value(row.get("type_client", "")) or "",
+                    "international": bool(json_value(row.get("international", False)) or False),
                     "nb_equipements": nb_eq,
                     "nb_interventions": nb_int,
                     "score_sante": score_sante,
@@ -513,6 +534,96 @@ def create_type_client_custom(body: dict, user: dict = Depends(_verify_token)):
     return {"ok": True}
 
 
+@app.get("/api/villes-custom")
+def get_villes_custom(country: Optional[str] = None, user: dict = Depends(_verify_token)):
+    """Liste les villes personnalisées, filtrées par pays si demandé."""
+    return lire_villes_custom(country)
+
+
+@app.post("/api/villes-custom")
+def create_ville_custom(body: dict, user: dict = Depends(_verify_token)):
+    """Ajoute une ville réutilisable pour le pays sélectionné."""
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins",
+        )
+    country = str(body.get("country_code", "")).strip().upper()
+    nom = str(body.get("nom", "")).strip()
+    if not country or not nom:
+        raise HTTPException(status_code=400, detail="Pays et ville requis")
+    try:
+        latitude = float(body["latitude"]) if body.get("latitude") is not None else None
+        longitude = float(body["longitude"]) if body.get("longitude") is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Coordonnées GPS invalides")
+    city = ajouter_ville_custom(country, nom, latitude, longitude)
+    return {"ok": True, "city": city}
+
+
+@app.delete("/api/villes-custom/{country_code}/{nom}")
+def delete_ville_custom(country_code: str, nom: str, user: dict = Depends(_verify_token)):
+    """Ancienne route de suppression, conservée mais réservée aux Admins et Managers."""
+    if str(user.get("role", "")).strip() not in {"Admin", "Manager"}:
+        raise HTTPException(
+            status_code=403,
+            detail="La suppression des villes est réservée aux Admins et Managers",
+        )
+    supprimer_ville_custom(country_code, nom)
+    return {"ok": True}
+
+
+@app.put("/api/villes-custom/{country_code}/{nom}")
+def update_ville_custom(country_code: str, nom: str, body: dict, user: dict = Depends(_verify_token)):
+    """Modifie le nom d'une ville enregistrée; réservé aux Admins et Managers."""
+    if str(user.get("role", "")).strip() not in {"Admin", "Manager"}:
+        raise HTTPException(status_code=403, detail="La modification des villes est réservée aux Admins et Managers")
+    nouveau_nom = str(body.get("nom", "")).strip()
+    if not nouveau_nom:
+        raise HTTPException(status_code=400, detail="Nouveau nom de ville requis")
+    try:
+        city = modifier_ville_custom(country_code, nom, nouveau_nom)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "city": city}
+
+
+@app.get("/api/pays-custom")
+def get_pays_custom(user: dict = Depends(_verify_token)):
+    """Liste les pays ajoutés manuellement."""
+    return lire_pays_custom()
+
+
+@app.post("/api/pays-custom")
+def create_pays_custom(body: dict, user: dict = Depends(_verify_token)):
+    """Ajoute un pays réutilisable dans les paramètres et la carte."""
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins",
+        )
+    nom = str(body.get("nom", "")).strip()
+    if not nom:
+        raise HTTPException(status_code=400, detail="Nom du pays requis")
+    try:
+        country = ajouter_pays_custom(nom, body.get("flag", "🌍"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "country": country}
+
+
+@app.delete("/api/pays-custom/{code}")
+def delete_pays_custom(code: str, user: dict = Depends(_verify_token)):
+    """Supprime un pays personnalisé."""
+    if not _check_create_permission(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Cette action est réservée aux Responsables, Managers et Admins",
+        )
+    supprimer_pays_custom(code)
+    return {"ok": True}
+
+
 @app.post("/api/clients/import-excel")
 async def import_clients_excel(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
     """Import clients from an Excel or CSV file with auto-detection of columns."""
@@ -659,6 +770,13 @@ __all__ = [
     "create_client",
     "get_types_client_custom",
     "create_type_client_custom",
+    "get_villes_custom",
+    "create_ville_custom",
+    "delete_ville_custom",
+    "update_ville_custom",
+    "get_pays_custom",
+    "create_pays_custom",
+    "delete_pays_custom",
     "import_clients_excel",
     "update_client_api",
     "delete_client_api",

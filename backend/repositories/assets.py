@@ -1,6 +1,11 @@
 """Client, equipment, catalogue, and technical-document persistence."""
 
+import json
+import re
+import unicodedata
 import pandas as pd
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from database.core import _trigger_backup, get_db, logger, read_sql
 from repositories.knowledge import _fix_df_text
@@ -9,6 +14,7 @@ from repositories.equipment_status import (
     ACTIVE_INTERVENTION_STATUSES,
     _is_out_of_service,
     enregistrer_historique_statut_equipement,
+    reconcilier_statuts_equipements,
 )
 
 __all__ = [
@@ -30,6 +36,13 @@ __all__ = [
     "ajouter_type_intervention_custom",
     "lire_types_client_custom",
     "ajouter_type_client_custom",
+    "lire_villes_custom",
+    "ajouter_ville_custom",
+    "supprimer_ville_custom",
+    "lire_pays_custom",
+    "ajouter_pays_custom",
+    "supprimer_pays_custom",
+    "modifier_ville_custom",
     "lire_domaines_custom",
     "ajouter_domaine_custom",
     "_ensure_domaines_custom_table",
@@ -46,6 +59,139 @@ __all__ = [
 ]
 
 # Historique supprimé au profit de la table interventions.
+
+
+COUNTRY_NAMES = {
+    "TN": "Tunisie", "DZ": "Algérie", "MA": "Maroc", "SN": "Sénégal",
+    "FR": "France", "US": "États-Unis", "QA": "Qatar", "SA": "Arabie saoudite",
+}
+
+COUNTRY_CENTERS = {
+    "ITALIE": (41.8719, 12.5674), "ITALIA": (41.8719, 12.5674), "ITALY": (41.8719, 12.5674),
+    "ESPAGNE": (40.4637, -3.7492), "SPAIN": (40.4637, -3.7492), "ESPANA": (40.4637, -3.7492),
+    "ALLEMAGNE": (51.1657, 10.4515), "GERMANY": (51.1657, 10.4515),
+    "PORTUGAL": (39.3999, -8.2245), "BELGIQUE": (50.5039, 4.4699), "BELGIUM": (50.5039, 4.4699),
+}
+
+
+def geocode_country(country_name):
+    """Retourne le centre GPS d'un pays, avec alias locaux puis Nominatim."""
+    name = str(country_name or "").strip()
+    if not name:
+        return None, None
+    normalized = unicodedata.normalize("NFD", name).encode("ascii", "ignore").decode("ascii").upper()
+    if normalized in COUNTRY_CENTERS:
+        return COUNTRY_CENTERS[normalized]
+    try:
+        url = f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&featuretype=country&q={quote(name)}"
+        request = Request(url, headers={"User-Agent": "SAVIA/1.0 country-geocoder"})
+        with urlopen(request, timeout=4) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if result:
+            return float(result[0]["lat"]), float(result[0]["lon"])
+    except Exception as exc:
+        logger.warning("Géocodage impossible pour le pays %s: %s", name, exc)
+    return None, None
+
+
+def lire_pays_custom():
+    """Retourne les pays ajoutés manuellement."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pays_custom (
+                id SERIAL PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                nom TEXT NOT NULL UNIQUE,
+                flag TEXT DEFAULT '🌍',
+                latitude REAL NULL,
+                longitude REAL NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        rows = conn.execute("SELECT id, code, nom, flag, latitude, longitude FROM pays_custom ORDER BY nom").fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            if item.get("latitude") is None or item.get("longitude") is None:
+                latitude, longitude = geocode_country(item.get("nom"))
+                if latitude is not None and longitude is not None:
+                    conn.execute(
+                        "UPDATE pays_custom SET latitude = %s, longitude = %s WHERE code = %s",
+                        (latitude, longitude, item["code"]),
+                    )
+                    item["latitude"], item["longitude"] = latitude, longitude
+            result.append(item)
+        return result
+
+
+def ajouter_pays_custom(nom, flag="🌍"):
+    """Ajoute un pays et génère un code stable réutilisable pour ses villes."""
+    country_name = str(nom or "").strip()
+    if not country_name:
+        raise ValueError("Nom du pays requis")
+    normalized = unicodedata.normalize("NFD", country_name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", normalized).strip("_").upper()[:36]
+    if not slug:
+        raise ValueError("Nom de pays invalide")
+    code = f"CUSTOM_{slug}"
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pays_custom (
+                id SERIAL PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                nom TEXT NOT NULL UNIQUE,
+                flag TEXT DEFAULT '🌍',
+                latitude REAL NULL,
+                longitude REAL NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        latitude, longitude = geocode_country(country_name)
+        conn.execute(
+            """INSERT INTO pays_custom (code, nom, flag, latitude, longitude)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (code) DO UPDATE SET
+                 nom = EXCLUDED.nom,
+                 latitude = COALESCE(pays_custom.latitude, EXCLUDED.latitude),
+                 longitude = COALESCE(pays_custom.longitude, EXCLUDED.longitude)""",
+            (code, country_name, str(flag or "🌍"), latitude, longitude),
+        )
+        row = conn.execute("SELECT id, code, nom, flag, latitude, longitude FROM pays_custom WHERE code = %s", (code,)).fetchone()
+    return dict(row)
+
+
+def supprimer_pays_custom(code):
+    """Supprime un pays personnalisé; ses villes restent supprimables séparément."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM pays_custom WHERE code = %s", (str(code or "").strip().upper(),))
+    return True
+
+
+def geocode_city(country_code, city):
+    """Résout une ville en coordonnées GPS via Nominatim, avec échec silencieux."""
+    city = str(city or "").strip()
+    if not city:
+        return None, None
+    code = str(country_code or "").strip().upper()
+    country = COUNTRY_NAMES.get(code, "")
+    if not country and code:
+        try:
+            with get_db() as conn:
+                row = conn.execute("SELECT nom FROM pays_custom WHERE code = %s", (code,)).fetchone()
+                country = row["nom"] if row else ""
+        except Exception:
+            country = ""
+    query = f"{city}, {country}" if country else city
+    try:
+        url = f"https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q={quote(query)}"
+        request = Request(url, headers={"User-Agent": "SAVIA/1.0 city-geocoder"})
+        with urlopen(request, timeout=4) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if result:
+            return float(result[0]["lat"]), float(result[0]["lon"])
+    except Exception as exc:
+        logger.warning("Géocodage impossible pour %s: %s", query, exc)
+    return None, None
 
 
 # ==========================================
@@ -67,13 +213,18 @@ def lire_clients():
 
 def ajouter_client(client_dict):
     """Ajoute un nouveau client."""
+    latitude = client_dict.get("latitude")
+    longitude = client_dict.get("longitude")
+    if client_dict.get("ville") and (latitude is None or longitude is None):
+        latitude, longitude = geocode_city(client_dict.get("country_code", ""), client_dict.get("ville", ""))
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO clients (nom, matricule_fiscale, ville, contact, telephone, adresse,
-                                code_client, region, type_client, international)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO clients (nom, matricule_fiscale, country_code, ville, contact, telephone, adresse,
+                                code_client, region, type_client, international, latitude, longitude)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(nom) DO UPDATE SET
                 matricule_fiscale=excluded.matricule_fiscale,
+                country_code=excluded.country_code,
                 ville=excluded.ville,
                 contact=excluded.contact,
                 telephone=excluded.telephone,
@@ -81,10 +232,13 @@ def ajouter_client(client_dict):
                 code_client=excluded.code_client,
                 region=excluded.region,
                 type_client=excluded.type_client,
-                international=excluded.international
+                international=excluded.international,
+                latitude=excluded.latitude,
+                longitude=excluded.longitude
         """, (
             client_dict.get("nom", ""),
             client_dict.get("matricule_fiscale", ""),
+            str(client_dict.get("country_code", "TN") or "TN").strip().upper(),
             client_dict.get("ville", ""),
             client_dict.get("contact", ""),
             client_dict.get("telephone", ""),
@@ -93,6 +247,8 @@ def ajouter_client(client_dict):
             client_dict.get("region", ""),
             client_dict.get("type_client", ""),
             bool(client_dict.get("international", False)),
+            latitude,
+            longitude,
         ))
     _trigger_backup()
     return True
@@ -100,16 +256,22 @@ def ajouter_client(client_dict):
 
 def modifier_client(client_id, client_dict):
     """Modifie un client existant."""
+    latitude = client_dict.get("latitude")
+    longitude = client_dict.get("longitude")
+    if client_dict.get("ville") and (latitude is None or longitude is None):
+        latitude, longitude = geocode_city(client_dict.get("country_code", ""), client_dict.get("ville", ""))
     with get_db() as conn:
         conn.execute("""
             UPDATE clients SET
-                nom = %s, matricule_fiscale = %s, ville = %s,
+                nom = %s, matricule_fiscale = %s, country_code = %s, ville = %s,
                 contact = %s, telephone = %s, adresse = %s,
-                code_client = %s, region = %s, type_client = %s, international = %s
+                code_client = %s, region = %s, type_client = %s, international = %s,
+                latitude = %s, longitude = %s
             WHERE id = %s
         """, (
             client_dict.get("nom", ""),
             client_dict.get("matricule_fiscale", ""),
+            str(client_dict.get("country_code", "TN") or "TN").strip().upper(),
             client_dict.get("ville", ""),
             client_dict.get("contact", ""),
             client_dict.get("telephone", ""),
@@ -118,6 +280,8 @@ def modifier_client(client_id, client_dict):
             client_dict.get("region", ""),
             client_dict.get("type_client", ""),
             bool(client_dict.get("international", False)),
+            latitude,
+            longitude,
             client_id,
         ))
     _trigger_backup()
@@ -173,6 +337,9 @@ def lire_equipements():
         pd.DataFrame: Liste des équipements.
     """
     try:
+        # Keep legacy/manual rows consistent with the current intervention
+        # lifecycle before exposing equipment status to any page or report.
+        reconcilier_statuts_equipements()
         with get_db() as conn:
             # Select only necessary columns to reduce data transfer and processing
             df = read_sql("""
@@ -469,6 +636,101 @@ def ajouter_type_client_custom(nom):
             (nom.strip(),),
         )
     return True
+
+
+def lire_villes_custom(country_code=None):
+    """Retourne les villes ajoutées manuellement, éventuellement pour un pays."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS villes_custom (
+                id SERIAL PRIMARY KEY,
+                country_code TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                latitude REAL NULL,
+                longitude REAL NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(country_code, nom)
+            )
+        """)
+        if country_code:
+            rows = conn.execute(
+                "SELECT id, country_code, nom, latitude, longitude FROM villes_custom WHERE country_code = %s ORDER BY nom",
+                (str(country_code).strip().upper(),),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id, country_code, nom, latitude, longitude FROM villes_custom ORDER BY country_code, nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_ville_custom(country_code, nom, latitude=None, longitude=None):
+    """Ajoute une ville réutilisable pour un pays donné. Ignore les doublons."""
+    country = str(country_code or "").strip().upper()
+    city = str(nom or "").strip()
+    if not country or not city:
+        raise ValueError("Pays et ville requis")
+    if latitude is None or longitude is None:
+        latitude, longitude = geocode_city(country, city)
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS villes_custom (
+                id SERIAL PRIMARY KEY,
+                country_code TEXT NOT NULL,
+                nom TEXT NOT NULL,
+                latitude REAL NULL,
+                longitude REAL NULL,
+                date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(country_code, nom)
+            )
+        """)
+        conn.execute(
+            """
+            INSERT INTO villes_custom (country_code, nom, latitude, longitude)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (country_code, nom) DO UPDATE SET
+                latitude = COALESCE(villes_custom.latitude, excluded.latitude),
+                longitude = COALESCE(villes_custom.longitude, excluded.longitude)
+            """,
+            (country, city, latitude, longitude),
+        )
+    return {"country_code": country, "nom": city, "latitude": latitude, "longitude": longitude}
+
+
+def supprimer_ville_custom(country_code, nom):
+    """Supprime une ville personnalisée pour un pays."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM villes_custom WHERE country_code = %s AND nom = %s",
+            (str(country_code or "").strip().upper(), str(nom or "").strip()),
+        )
+    return True
+
+
+def modifier_ville_custom(country_code, nom, nouveau_nom):
+    """Renomme une ville personnalisée et recalcule son emplacement GPS."""
+    country = str(country_code or "").strip().upper()
+    old_name = str(nom or "").strip()
+    new_name = str(nouveau_nom or "").strip()
+    if not country or not old_name or not new_name:
+        raise ValueError("Pays et noms de ville requis")
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT latitude, longitude FROM villes_custom WHERE country_code = %s AND nom = %s",
+            (country, old_name),
+        ).fetchone()
+        if not existing:
+            raise ValueError("Ville introuvable")
+        latitude, longitude = geocode_city(country, new_name)
+        if latitude is None or longitude is None:
+            latitude, longitude = existing["latitude"], existing["longitude"]
+        try:
+            conn.execute(
+                """UPDATE villes_custom SET nom = %s, latitude = %s, longitude = %s
+                   WHERE country_code = %s AND nom = %s""",
+                (new_name, latitude, longitude, country, old_name),
+            )
+        except Exception as exc:
+            raise ValueError("Cette ville existe déjà pour ce pays") from exc
+    return {"country_code": country, "nom": new_name, "latitude": latitude, "longitude": longitude}
 
 
 def lire_domaines_custom():

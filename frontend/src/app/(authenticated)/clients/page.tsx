@@ -1,7 +1,8 @@
 'use client';
 import { Search, Building2, Users, Wrench, Loader2, Plus, Upload, X, Globe, MapPin, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
-import { clients as clientsApi } from '@/lib/api';
+import { clients as clientsApi, paysCustom as paysCustomApi } from '@/lib/api';
+import { DEFAULT_COUNTRY, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 const REGIONS: Record<string, string[]> = {
   'Nord': ['Tunis','Ariana','Ben Arous','Manouba','Bizerte','Béja','Jendouba','Le Kef','Siliana','Nabeul','Zaghouan'],
@@ -10,7 +11,7 @@ const REGIONS: Record<string, string[]> = {
 };
 
 interface Client {
-  id?: number; nom: string; code_client: string; ville: string; region: string;
+  id?: number; nom: string; code_client: string; country_code?: string; ville: string; region: string;
   contact: string; telephone: string; adresse: string; matricule_fiscale: string;
   type_client: string; international: boolean;
   nb_equipements: number; nb_interventions: number; score_sante: number;
@@ -28,6 +29,9 @@ export default function ClientsPage() {
   const [regionFilter, setRegionFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [villeFilter, setVilleFilter] = useState('');
+  const [countryFilter, setCountryFilter] = useState('');
+  const [selectedCountries, setSelectedCountries] = useState<CountryCode[]>(() => (typeof window !== 'undefined' ? parseCountrySelection(localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')) : [DEFAULT_COUNTRY]));
+  const [customCountries, setCustomCountries] = useState<Array<{ code: string; nom: string; flag?: string }>>([]);
   const [data, setData] = useState<Client[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -45,6 +49,7 @@ export default function ClientsPage() {
       const res = await clientsApi.list();
       setData(res.map((item: any) => ({
         id: item.id, nom: item.nom||'', code_client: item.code_client||'',
+        country_code: item.country_code || DEFAULT_COUNTRY,
         ville: item.ville||'', region: item.region||'',
         contact: item.contact||'', telephone: item.telephone||'',
         adresse: item.adresse||'', matricule_fiscale: item.matricule_fiscale||'',
@@ -70,10 +75,23 @@ export default function ClientsPage() {
   useEffect(() => { 
     loadData();
     fetchUserRole();
+    const loadCountrySelection = async () => {
+      try {
+        const token = localStorage.getItem('savia_token') || '';
+        const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+        const settings = response.ok ? await response.json() : {};
+        const selected = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
+        setSelectedCountries(selected);
+        setCustomCountries(await paysCustomApi.list().catch(() => []));
+      } catch { /* local storage fallback is already loaded */ }
+    };
+    void loadCountrySelection();
   }, []);
 
   const filtered = data.filter(c => {
     if (search && !c.nom.toLowerCase().includes(search.toLowerCase())) return false;
+    if (selectedCountries.length > 0 && !selectedCountries.includes(c.country_code || DEFAULT_COUNTRY)) return false;
+    if (countryFilter && c.country_code !== countryFilter) return false;
     if (regionFilter && c.region !== regionFilter) return false;
     if (typeFilter && c.type_client !== typeFilter) return false;
     if (villeFilter && c.ville !== villeFilter) return false;
@@ -98,7 +116,7 @@ export default function ClientsPage() {
 
   const openAdd = () => { setForm(emptyForm()); setEditId(null); setShowModal(true); };
   const openEdit = (c: Client) => {
-    setForm({ nom:c.nom, code_client:c.code_client, matricule_fiscale:c.matricule_fiscale,
+    setForm({ nom:c.nom, code_client:c.code_client, country_code: c.country_code || selectedCountries[0] || DEFAULT_COUNTRY, matricule_fiscale:c.matricule_fiscale,
       ville:c.ville, region:c.region, contact:c.contact, telephone:c.telephone,
       adresse:c.adresse, type_client:c.type_client||'Privé', international:c.international });
     setEditId(c.id||null); setShowModal(true);
@@ -109,8 +127,9 @@ export default function ClientsPage() {
     setSaving(true);
     setError(null);
     try {
-      if (editId) await clientsApi.update(editId, form);
-      else await clientsApi.create(form);
+      const payload = { ...form, country_code: form.country_code || selectedCountries[0] || DEFAULT_COUNTRY };
+      if (editId) await clientsApi.update(editId, payload);
+      else await clientsApi.create(payload);
       setShowModal(false); await loadData();
     } catch(e: any) {
       const errorMsg = e.message || 'Erreur inconnue';
@@ -219,6 +238,17 @@ export default function ClientsPage() {
           <option value="">Tous les types</option>
           {typeOptions.map(t => <option key={t} value={t}>{t === 'Public' ? '🏛️' : '🏢'} {t}</option>)}
         </select>
+        {selectedCountries.length > 1 && (
+          <select value={countryFilter} onChange={e => { setCountryFilter(e.target.value); setRegionFilter(''); setVilleFilter(''); }}
+            className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
+            <option value="">Tous les pays</option>
+            {selectedCountries.map(code => {
+              const custom = customCountries.find(item => item.code === code);
+              const builtIn = getCountry(code);
+              return <option key={code} value={code}>{custom?.flag || builtIn.flag} {custom?.nom || builtIn.name}</option>;
+            })}
+          </select>
+        )}
         <select value={regionFilter} onChange={e => { setRegionFilter(e.target.value); setVilleFilter(''); }}
           className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40">
           <option value="">Toutes régions</option>

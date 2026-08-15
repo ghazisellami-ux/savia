@@ -514,6 +514,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL UNIQUE,
             matricule_fiscale TEXT DEFAULT '',
+            country_code TEXT DEFAULT 'TN',
             ville TEXT DEFAULT '',
             contact TEXT DEFAULT '',
             telephone TEXT DEFAULT '',
@@ -525,6 +526,28 @@ def init_db():
         CREATE TABLE IF NOT EXISTS types_client_custom (
             id SERIAL PRIMARY KEY,
             nom TEXT NOT NULL UNIQUE,
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Villes ajoutées par l'administrateur, réutilisables par pays
+        CREATE TABLE IF NOT EXISTS villes_custom (
+            id SERIAL PRIMARY KEY,
+            country_code TEXT NOT NULL,
+            nom TEXT NOT NULL,
+            latitude REAL NULL,
+            longitude REAL NULL,
+            date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(country_code, nom)
+        );
+
+        -- Pays ajoutés manuellement dans les paramètres
+        CREATE TABLE IF NOT EXISTS pays_custom (
+            id SERIAL PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            nom TEXT NOT NULL UNIQUE,
+            flag TEXT DEFAULT '🌍',
+            latitude REAL NULL,
+            longitude REAL NULL,
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -925,9 +948,16 @@ def init_db():
 
         # Client enrichment columns
         _safe_add_column("clients", "code_client")
+        _safe_add_column("clients", "country_code", "TEXT", "'TN'")
         _safe_add_column("clients", "region")
         _safe_add_column("clients", "type_client")
         _safe_add_column("clients", "international", "BOOLEAN", "false")
+        _safe_add_column("clients", "latitude", "REAL", "NULL")
+        _safe_add_column("clients", "longitude", "REAL", "NULL")
+        _safe_add_column("villes_custom", "latitude", "REAL", "NULL")
+        _safe_add_column("villes_custom", "longitude", "REAL", "NULL")
+        _safe_add_column("pays_custom", "latitude", "REAL", "NULL")
+        _safe_add_column("pays_custom", "longitude", "REAL", "NULL")
 
         # Service column on equipements
         _safe_add_column("equipements", "service")
