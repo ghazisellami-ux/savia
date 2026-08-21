@@ -18,6 +18,7 @@ from api.runtime import (
     _normalize_lang,
     app,
     datetime,
+    get_config,
     get_db,
     lire_contrats,
     lire_equipements,
@@ -32,6 +33,56 @@ from api.security import (
     require_roles,
 )
 from services.ai_governance import governed_ai_endpoint
+
+
+_AI_COUNTRY_NAMES = {
+    "TN": "Tunisie",
+    "DZ": "Algérie",
+    "MA": "Maroc",
+    "SN": "Sénégal",
+    "FR": "France",
+    "US": "États-Unis",
+    "QA": "Qatar",
+    "SA": "Arabie saoudite",
+}
+
+
+def _configured_country_names():
+    """Return the countries selected in Administration > Settings for AI prompts."""
+    raw_selection = str(get_config("pays", "TN") or "TN")
+    selected_values = [
+        value.strip()
+        for value in re.split(r"[,;]", raw_selection)
+        if value.strip()
+    ]
+    if not selected_values:
+        selected_values = ["TN"]
+
+    custom_names = {}
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT code, nom FROM pays_custom").fetchall()
+            custom_names = {
+                str(row.get("code") or "").strip().upper(): str(row.get("nom") or "").strip()
+                for row in rows
+                if row.get("code") and row.get("nom")
+            }
+    except Exception as country_error:
+        # A missing optional custom-country table must not prevent an AI report.
+        logger.debug("Impossible de charger les noms de pays personnalisés: %s", country_error)
+
+    names = []
+    seen = set()
+    for value in selected_values:
+        normalized = unicodedata.normalize("NFKD", value)
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        key = normalized.strip().upper()
+        name = custom_names.get(key) or _AI_COUNTRY_NAMES.get(key) or value
+        dedupe_key = name.casefold()
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
+            names.append(name)
+    return ", ".join(names)
 
 
 def _cost_number(value):
@@ -968,8 +1019,9 @@ def analyze_performance(body: dict, user: dict = Depends(_verify_token), x_savia
     import datetime
     today = datetime.date.today()
 
+    configured_countries = _configured_country_names()
     prompt = f"""{_ai_language_instruction(lang)}
-Tu es Directeur du Service Technique d'une entreprise de maintenance d'\u00e9quipements d'imagerie m\u00e9dicale en Tunisie.
+Tu es Directeur du Service Technique d'une entreprise de maintenance d'\u00e9quipements d'imagerie m\u00e9dicale opérant dans les pays suivants : {configured_countries}.
 Analyse ces donn\u00e9es R\u00c9ELLES et produis un rapport pr\u00e9dictif d\u00e9taill\u00e9.
 
 === CHIFFRES DU PARC ===
@@ -1355,8 +1407,9 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
         interventions_json = machines_json = errors_json = causes_json = "[]"
         tech_json = equipment_json = contracts_json = stock_json = "[]"
 
+    configured_countries = _configured_country_names()
     prompt = f"""{_ai_language_instruction(lang)}
-Tu es un expert en gestion de maintenance SAV pour équipements d'imagerie médicale en Tunisie.
+Tu es un expert en gestion de maintenance SAV pour équipements d'imagerie médicale opérant dans les pays suivants : {configured_countries}.
 Analyse ces données SAV RÉELLES et produis un rapport COMPLET et DÉTAILLÉ.
 
 === STATISTIQUES GLOBALES ===
