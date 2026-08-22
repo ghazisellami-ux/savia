@@ -34,6 +34,7 @@ interface Equipment {
   matriculeFiscale: string;
   localisation: string;
   ville: string;
+  region?: string;
   dateInstallation: string;
   derniereMaintenance: string;
   prochaineMaintenance: string;
@@ -771,6 +772,7 @@ export default function EquipementsPage() {
       MatriculeFiscale: eq.matriculeFiscale || '',
       Notes: eq.localisation,
       Ville: eq.ville || '',
+      Region: eq.region || '',
       Statut: eq.statut || 'Opérationnel',
       DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : new Date().toISOString().split('T')[0],
       DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],

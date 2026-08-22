@@ -61,10 +61,15 @@ export const COUNTRIES: CountryDefinition[] = [
 export const DEFAULT_COUNTRY: CountryCode = 'TN';
 
 export function parseCountrySelection(value: unknown, fallback: CountryCode = DEFAULT_COUNTRY): CountryCode[] {
-  const rawValues = Array.isArray(value)
+  const rawValues: unknown[] = Array.isArray(value)
     ? value
     : typeof value === 'string' && value.trim().startsWith('[')
-      ? (() => { try { return JSON.parse(value); } catch { return []; } })()
+      ? (() => {
+          try {
+            const parsed: unknown = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch { return []; }
+        })()
       : String(value || '').split(',');
   const countries = rawValues
     .map(item => String(item || '').trim())

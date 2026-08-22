@@ -73,13 +73,13 @@ export default function LogsTab() {
       });
       
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = (await res.json()) as AuditLog[];
       
       setLogs(data || []);
       
       // Extract unique values for filters
-      const users = [...new Set(data?.map((l: AuditLog) => l.username) || [])];
-      const actions = [...new Set(data?.map((l: AuditLog) => l.action) || [])];
+      const users = [...new Set(data.map((l) => l.username))];
+      const actions = [...new Set(data.map((l) => l.action))];
       setUniqueUsers(users.sort());
       setUniqueActions(actions.sort());
     } catch (err) {

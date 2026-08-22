@@ -295,6 +295,7 @@ export default function SavPage() {
         technicien: item.technicien || 'Non assigné',
         duree: Math.round((Number(item.duree_minutes) || 0) / 60),
         duree_minutes: Number(item.duree_minutes) || 0,
+        duree_deplacement: Number(item.duree_deplacement) || 0,
         deplacement: Math.round((Number(item.duree_deplacement) || 0) / 60 * 10) / 10,
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
@@ -957,8 +958,8 @@ export default function SavPage() {
           { label: 'En cours', value: enCours, icon: <Clock className="w-5 h-5" />, color: 'text-yellow-400' },
           { label: 'Taux résol.', value: `${tauxResolution}%`, icon: <Target className="w-5 h-5" />, color: 'text-blue-400' },
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
-          !isClient && !isTechnicien && { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
-        ].filter(Boolean).map(k => (
+          ...(!isClient && !isTechnicien ? [{ label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' }] : []),
+        ].map(k => (
           <div key={k.label} className="glass rounded-xl p-3 text-center">
             <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
             <div className={`text-2xl font-black ${k.color}`}>{k.value}</div>

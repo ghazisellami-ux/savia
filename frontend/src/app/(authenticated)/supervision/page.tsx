@@ -55,6 +55,7 @@ interface AiDiagnostic {
   pieces_outils?: string[];
   validation?: string[];
   escalade?: string;
+  isFromKnowledgeBase?: boolean;
 }
 
 // --- AI Fallback ---
@@ -119,7 +120,7 @@ export default function SupervisionPage() {
   const [selectedMachine, setSelectedMachine] = useState<string>('');
   const [selectedError, setSelectedError] = useState<string>('');
   const [loadedErrors, setLoadedErrors] = useState<{code:string;message:string;statut:string;type:string;frequence:number}[]|null>(null);
-  const [knowledgeResult, setKnowledgeResult] = useState<any>(null); // Solution from knowledge base
+  const [knowledgeResult, setKnowledgeResult] = useState<AiDiagnostic | null>(null); // Solution from knowledge base
   const [selectedLogId, setSelectedLogId] = useState<number|null>(null);
   const [logLoadFailed, setLogLoadFailed] = useState<boolean>(false); // true when log selected but content unavailable
   const [logMergeApplied, setLogMergeApplied] = useState<boolean>(false); // prevents infinite loop in fleet/log merge
@@ -318,7 +319,7 @@ export default function SupervisionPage() {
       );
       
       if (response && response.ok && response.result) {
-        setAiResult(response.result as AiDiagnostic);
+        setAiResult(response.result as unknown as AiDiagnostic);
       } else {
         // Dynamic fallback using the error's own data
         setAiResult({
