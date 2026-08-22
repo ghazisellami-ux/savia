@@ -22,6 +22,7 @@ export default function ChangePasswordPage() {
     setLoading(true);
     try {
       const result = await auth.changePassword(currentPassword, newPassword);
+      localStorage.removeItem('savia_token');
       localStorage.setItem('savia_user', JSON.stringify(result.user));
       window.location.assign('/dashboard');
     } catch (err: unknown) {

@@ -9,6 +9,8 @@ export const SESSION_EXPIRED_EVENT = 'savia_session_expired';
 
 export function expireSession(): void {
   if (typeof window === 'undefined') return;
+  // Remove the pre-cookie credential if an older deployment left it behind.
+  localStorage.removeItem('savia_token');
   localStorage.removeItem('savia_user');
   window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }

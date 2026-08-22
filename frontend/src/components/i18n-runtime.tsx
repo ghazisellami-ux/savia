@@ -28,6 +28,9 @@ export default function I18nRuntime() {
 
   useEffect(() => {
     const loadSettings = async () => {
+      // /api/settings/public still requires an authenticated SAVIA session.
+      // Avoid a predictable 401 on the login page.
+      if (!localStorage.getItem('savia_user')) return;
       try {
         const res = await fetch('/api/settings/public', { credentials: 'same-origin' });
         if (!res.ok) return;

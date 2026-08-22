@@ -22,6 +22,7 @@ export default function LoginPage() {
 
     try {
       const res = await auth.login(username, password);
+      localStorage.removeItem('savia_token');
       localStorage.setItem('savia_user', JSON.stringify(res.user));
       router.push(res.password_change_required ? '/change-password' : '/dashboard');
     } catch (err: unknown) {

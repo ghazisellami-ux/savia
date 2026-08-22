@@ -231,6 +231,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
         <button
           onClick={() => {
             void auth.logout().catch(() => {});
+            localStorage.removeItem('savia_token');
             localStorage.removeItem('savia_user');
             window.location.href = '/login';
           }}

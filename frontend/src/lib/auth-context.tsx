@@ -110,6 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const restoreSession = async () => {
       const savedUser = localStorage.getItem('savia_user');
+      const legacyToken = localStorage.getItem('savia_token');
+      if (legacyToken) {
+        localStorage.removeItem('savia_token');
+        localStorage.removeItem('savia_user');
+        if (active) setIsLoading(false);
+        return;
+      }
       if (!savedUser) {
         if (active) setIsLoading(false);
         return;
@@ -146,6 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await authApi.login(username, password);
+    localStorage.removeItem('savia_token');
     localStorage.setItem('savia_user', JSON.stringify(res.user));
     setUser(res.user);
     if (!res.user.password_change_required) {
@@ -158,6 +166,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     void authApi.logout().catch(() => {});
+    localStorage.removeItem('savia_token');
     localStorage.removeItem('savia_user');
     setUser(null);
     setPermissions(DEFAULT_PERMS);
