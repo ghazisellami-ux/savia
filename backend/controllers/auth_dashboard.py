@@ -35,40 +35,46 @@ from api.security import (
     resolve_client_scope,
     validate_password_policy,
 )
-from collections import defaultdict, deque
-from threading import Lock
-from time import monotonic
-
-
 _LOGIN_WINDOW_SECONDS = 15 * 60
 _LOGIN_MAX_ATTEMPTS = 5
-_login_attempts: dict[str, deque[float]] = defaultdict(deque)
-_login_attempts_lock = Lock()
 
 
-def _is_login_rate_limited(*keys: str) -> bool:
-    now = monotonic()
-    with _login_attempts_lock:
+def _consume_login_attempts(*keys: str) -> bool:
+    """Atomically reserve attempts in PostgreSQL for all Coolify replicas."""
+    limited = False
+    with get_db() as conn:
         for key in keys:
-            attempts = _login_attempts[key]
-            while attempts and now - attempts[0] >= _LOGIN_WINDOW_SECONDS:
-                attempts.popleft()
-            if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-                return True
-    return False
-
-
-def _record_failed_login(*keys: str) -> None:
-    now = monotonic()
-    with _login_attempts_lock:
-        for key in keys:
-            _login_attempts[key].append(now)
+            row = conn.execute(
+                """INSERT INTO login_rate_limits
+                       (rate_key, window_started_at, attempts, updated_at)
+                   VALUES (%s, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
+                   ON CONFLICT (rate_key) DO UPDATE SET
+                       attempts = CASE
+                           WHEN login_rate_limits.window_started_at
+                                <= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+                           THEN 1
+                           ELSE login_rate_limits.attempts + 1
+                       END,
+                       window_started_at = CASE
+                           WHEN login_rate_limits.window_started_at
+                                <= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+                           THEN CURRENT_TIMESTAMP
+                           ELSE login_rate_limits.window_started_at
+                       END,
+                       updated_at = CURRENT_TIMESTAMP
+                   RETURNING attempts""",
+                (key,),
+            ).fetchone()
+            if row and int(row["attempts"]) > _LOGIN_MAX_ATTEMPTS:
+                limited = True
+    return limited
 
 
 def _clear_login_attempts(*keys: str) -> None:
-    with _login_attempts_lock:
+    """Clear both the account and IP counters after a successful login."""
+    with get_db() as conn:
         for key in keys:
-            _login_attempts.pop(key, None)
+            conn.execute("DELETE FROM login_rate_limits WHERE rate_key = %s", (key,))
 
 
 def _password_rotation_due(password_changed_at: Any) -> bool:
@@ -122,7 +128,7 @@ def login(body: LoginRequest, request: Request):
     username_key = body.username.strip().casefold()
     ip_key = f"ip:{ip_address}"
     account_key = f"account:{username_key}"
-    if _is_login_rate_limited(ip_key, account_key):
+    if _consume_login_attempts(ip_key, account_key):
         raise HTTPException(
             status_code=429,
             detail="Trop de tentatives de connexion. Réessayez dans 15 minutes.",
@@ -136,7 +142,6 @@ def login(body: LoginRequest, request: Request):
         ).fetchone()
 
     if not row or not _verify_password(body.password, row["password_hash"]):
-        _record_failed_login(ip_key, account_key)
         log_audit(body.username, "LOGIN_FAILED", f"Identifiants incorrects", "auth", ip_address)
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 

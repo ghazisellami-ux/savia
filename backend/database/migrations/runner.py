@@ -302,6 +302,22 @@ def _migration_008_contract_private_file_metadata(conn) -> None:
     conn.execute("ALTER TABLE contrats ALTER COLUMN fichier_storage_key DROP DEFAULT")
 
 
+def _migration_009_distributed_login_rate_limits(conn) -> None:
+    """Store login throttling state in PostgreSQL so all app replicas share it."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS login_rate_limits (
+               rate_key TEXT PRIMARY KEY,
+               window_started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_login_rate_limits_updated_at
+           ON login_rate_limits(updated_at)"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -311,6 +327,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("006", "offline mutation idempotency", _migration_006_offline_idempotency),
     ("007", "reliable Telegram notification outbox", _migration_007_telegram_outbox),
     ("008", "private contract attachment metadata", _migration_008_contract_private_file_metadata),
+    ("009", "distributed login rate limits", _migration_009_distributed_login_rate_limits),
 )
 
 

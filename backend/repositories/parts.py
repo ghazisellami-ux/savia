@@ -216,24 +216,40 @@ def compter_notifications_non_lues(destination, technicien=None):
         return int(row["cnt"]) if row else 0
 
 
-def marquer_notification_lue(notif_id):
-    """Marque une notification comme lue."""
+def marquer_notification_lue(notif_id, destination=None, technicien=None):
+    """Marque une notification comme lue, avec filtrage d'appartenance optionnel."""
+    query = (
+        "UPDATE notifications_pieces "
+        "SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = %s"
+    )
+    params = [notif_id]
+    if destination:
+        query += " AND destination = %s"
+        params.append(destination)
+    if technicien:
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
+    query += " RETURNING id"
     with get_db() as conn:
-        conn.execute(
-            "UPDATE notifications_pieces SET statut = 'lu', date_lecture = CURRENT_TIMESTAMP WHERE id = %s",
-            (notif_id,)
-        )
-    return True
+        return bool(conn.execute(query, tuple(params)).fetchone())
 
 
-def marquer_notification_traitee(notif_id):
-    """Marque une notification comme traitée."""
+def marquer_notification_traitee(notif_id, destination=None, technicien=None):
+    """Marque une notification comme traitée, avec filtrage d'appartenance optionnel."""
+    query = (
+        "UPDATE notifications_pieces "
+        "SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = %s"
+    )
+    params = [notif_id]
+    if destination:
+        query += " AND destination = %s"
+        params.append(destination)
+    if technicien:
+        query += " AND LOWER(technicien) LIKE LOWER(%s)"
+        params.append(f"%{technicien}%")
+    query += " RETURNING id"
     with get_db() as conn:
-        conn.execute(
-            "UPDATE notifications_pieces SET statut = 'traite', date_traitement = CURRENT_TIMESTAMP WHERE id = %s",
-            (notif_id,)
-        )
-    return True
+        return bool(conn.execute(query, tuple(params)).fetchone())
 
 
 def notifications_rupture_pour_piece(piece_reference):
