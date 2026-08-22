@@ -26,6 +26,7 @@ from api.security import (
     _verify_token,
     require_roles,
     get_db,
+    resolve_client_scope,
 )
 from services.scheduled_jobs import (
     get_db,
@@ -258,6 +259,8 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
     """Retourne les sites clients avec coordonnées GPS et score de santé."""
     import random, hashlib
 
+    effective_client = resolve_client_scope(user, None)
+
     # Tunisian cities with GPS coordinates
     TUNISIAN_CITIES = {
         'tunis': (36.8065, 10.1815), 'ariana': (36.8601, 10.1956), 'ben arous': (36.7533, 10.2281),
@@ -407,6 +410,8 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
         # Compute health scores per site + auto-assign coordinates
         result = []
         for cl, site in sites.items():
+            if effective_client and str(cl).strip().casefold() != effective_client.strip().casefold():
+                continue
             nb = site["nb_equipements"]
             nb_hs = sum(1 for e in site["equipements"] if e["statut"] in ("Hors Service", "Critique", "En panne"))
             score = max(0, round(((nb - nb_hs) / nb) * 100)) if nb > 0 else 100
@@ -476,6 +481,7 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
 @app.put("/api/map/sites/{client_name}/coordinates")
 def update_site_coordinates(client_name: str, body: dict, user: dict = Depends(_verify_token)):
     """Met à jour les coordonnées GPS d'un site client (sur tous ses équipements)."""
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     lat = body.get("latitude")
     lng = body.get("longitude")
     adresse = body.get("adresse", "")
@@ -484,11 +490,19 @@ def update_site_coordinates(client_name: str, body: dict, user: dict = Depends(_
         raise HTTPException(status_code=400, detail="latitude et longitude requis")
 
     try:
+        latitude = float(lat)
+        longitude = float(lng)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Coordonnées GPS invalides") from None
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        raise HTTPException(status_code=400, detail="Coordonnées GPS hors limites")
+
+    try:
         with get_db() as conn:
             # Update all equipments for this client
             conn.execute(
                 "UPDATE equipements SET latitude = %s, longitude = %s, adresse = %s WHERE client = %s",
-                (float(lat), float(lng), adresse, client_name)
+                (latitude, longitude, adresse, client_name)
             )
         return {"ok": True, "message": f"Coordonnées mises à jour pour {client_name}"}
     except Exception as e:
@@ -502,6 +516,7 @@ def update_site_coordinates(client_name: str, body: dict, user: dict = Depends(_
 @app.get("/api/sla/status")
 def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     """Suivi SLA temps réel : interventions ouvertes vs engagements contractuels."""
+    effective_client = resolve_client_scope(user, client)
     try:
         df_contrats = lire_contrats()
         df_interv = lire_interventions()
@@ -536,8 +551,12 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
         # Active interventions (not clôturées)
         if not df_interv.empty:
             active = df_interv[~df_interv["statut"].str.lower().str.contains("termin|clotur|clôtur", na=False)]
-            if client:
-                machines_client = [m for m, c in machine_client.items() if c == client]
+            if effective_client:
+                target_client = effective_client.strip().casefold()
+                machines_client = [
+                    m for m, c in machine_client.items()
+                    if str(c or "").strip().casefold() == target_client
+                ]
                 active = active[active["machine"].isin(machines_client)]
 
             for _, interv in active.iterrows():
@@ -580,8 +599,11 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
         # Active demandes (waiting response)
         if not df_demandes.empty:
             active_dem = df_demandes[df_demandes["statut"].isin(["Nouvelle", "En attente"])]
-            if client:
-                active_dem = active_dem[active_dem["client"] == client]
+            if effective_client:
+                active_dem = active_dem[
+                    active_dem["client"].astype(str).str.strip().str.casefold()
+                    == effective_client.strip().casefold()
+                ]
 
             for _, dem in active_dem.iterrows():
                 cl = dem.get("client", "")
@@ -640,6 +662,8 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                         if pd.isna(start) or pd.isna(end):
                             continue
                         cl_name = machine_client.get(ci.get("machine", ""), "")
+                        if effective_client and str(cl_name).strip().casefold() != effective_client.strip().casefold():
+                            continue
                         sla = client_sla[cl_name] if cl_name in client_sla else 24
                         if sla <= 0:
                             continue

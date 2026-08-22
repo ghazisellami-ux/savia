@@ -127,7 +127,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(restoredUser);
         localStorage.setItem('savia_user', JSON.stringify(restoredUser));
         if (!restoredUser.password_change_required) {
-          loadRolePermissions(restoredUser.role, token).then(setPermissions);
+          // Wait for the persisted role permissions before marking the auth
+          // state as ready. Otherwise a guarded page can briefly see the
+          // fallback permissions and redirect a user who was granted access.
+          const restoredPermissions = await loadRolePermissions(restoredUser.role, token);
+          if (!active) return;
+          setPermissions(restoredPermissions);
         }
       } catch {
         localStorage.removeItem('savia_token');

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { contrats, equipements, pieces as piecesApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useRoleGuard } from '@/lib/use-role-guard';
 import { downloadBlob } from '@/lib/download';
 import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
@@ -72,6 +73,7 @@ const normalizeContractEquipments = (item: any): string[] => {
 
 export default function ContratsPage() {
   const { user } = useAuth();
+  useRoleGuard('contrats');
   const canEdit = user?.role === 'Admin' || user?.role === 'Manager' || user?.role === 'Responsable Technique';
   const [search, setSearch] = useState('');
   const [filterStatut, setFilterStatut] = useState('');
@@ -97,7 +99,10 @@ export default function ContratsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [ctrs, eqs, cls, pcs] = await Promise.all([contrats.list(), equipements.list(), clientsApi.list(), piecesApi.list()]);
+      // The contract list is readable by client accounts. The other datasets
+      // are only needed by the internal create/edit form; /api/pieces is
+      // deliberately forbidden for Lecteur and must not hide valid contracts.
+      const ctrs = await contrats.list();
       setData((ctrs as any[]).map((item: any) => ({
         id: String(item.id || ''),
         client: item.client || item.Client || '',
@@ -120,12 +125,16 @@ export default function ContratsPage() {
         fichier_content_type: item.fichier_content_type || '',
         has_fichier: Boolean(item.has_fichier),
       })));
+
+      if (!canEdit) return;
+
+      const [eqs, cls, pcs] = await Promise.all([equipements.list(), clientsApi.list(), piecesApi.list()]);
       setEquips(eqs as any[]);
       setClients(cls as any[]);
       setStockPieces(pcs as any[]);
     } catch (err) { console.error(err); }
     finally { setIsLoading(false); }
-  }, []);
+  }, [canEdit]);
 
   useEffect(() => { load(); }, [load]);
 

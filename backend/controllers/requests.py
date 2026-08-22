@@ -26,6 +26,7 @@ from api.security import (
     _verify_token,
     assert_resource_client_access,
     assert_intervention_write_access,
+    require_roles,
     resolve_client_scope,
 )
 from services.scheduled_jobs import (
@@ -52,6 +53,20 @@ from services.idempotency import (
     operation_id_from_request,
     save_idempotent_response,
 )
+
+
+_INTERVENTION_ACTION_ROLES = (
+    "Admin",
+    "Manager",
+    "Responsable Technique",
+    "Technicien",
+)
+
+
+def _assert_intervention_action_access(conn, intervention_id: int, user: dict) -> None:
+    """Authorize status actions before any intervention mutation is performed."""
+    require_roles(user, *_INTERVENTION_ACTION_ROLES)
+    assert_intervention_write_access(conn, intervention_id, user)
 
 
 def _synchroniser_statut_parent_multi_tech(intervention_id, statut_technicien, update_status):
@@ -881,6 +896,7 @@ def get_intervention_techniciens(intervention_id: int, user: dict = Depends(_ver
     try:
         # Verify intervention exists
         with get_db() as conn:
+            assert_resource_client_access(conn, "intervention", intervention_id, user)
             intervention = conn.execute(
                 "SELECT id FROM interventions WHERE id = %s",
                 (intervention_id,)
@@ -939,6 +955,7 @@ def get_intervention_techniciens_aggregated(intervention_id: int, user: dict = D
     try:
         # Verify intervention exists
         with get_db() as conn:
+            assert_resource_client_access(conn, "intervention", intervention_id, user)
             intervention = conn.execute(
                 "SELECT id, statut FROM interventions WHERE id = %s",
                 (intervention_id,)
@@ -1014,6 +1031,7 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
     endpoint = f"/api/interventions/{intervention_id}/accept"
     operation_id = operation_id_from_request(request)
     with get_db() as conn:
+        _assert_intervention_action_access(conn, intervention_id, user)
         row = conn.execute(
             "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
             (intervention_id,)
@@ -1052,6 +1070,7 @@ def refuse_intervention(intervention_id: int, request: Request, body: dict, user
         raise HTTPException(status_code=400, detail="La raison du refus est obligatoire")
 
     with get_db() as conn:
+        _assert_intervention_action_access(conn, intervention_id, user)
         row = conn.execute(
             """SELECT id, machine, technicien, statut, notes,
                       (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
