@@ -3,10 +3,10 @@ name: savia_dev
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     container_name: savia_dev_postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
     environment:
@@ -29,7 +29,7 @@ services:
       dockerfile: Dockerfile
     container_name: savia_dev_backend
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     volumes:
       - ./data:/app/data
     environment:
@@ -102,11 +102,11 @@ services:
       - savia_dev_network
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: savia_dev_minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data_dev:/data
     environment:
@@ -127,7 +127,7 @@ services:
         BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
     container_name: savia_dev_frontend
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
       NODE_ENV: production
@@ -153,7 +153,7 @@ services:
       dockerfile: Dockerfile
     container_name: savia_dev_pwa
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       BACKEND_URL: ${BACKEND_URL:-http://backend:8001}
       PORT: 3001
