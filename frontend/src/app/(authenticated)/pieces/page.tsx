@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Sparkles,
@@ -389,7 +390,7 @@ export default function PiecesPage() {
   };
 
   // Display deterministic values from the replenishment engine.
-  const getPredictionDisplay = (p: Piece): JSX.Element => {
+  const getPredictionDisplay = (p: Piece): ReactNode => {
     const pred = predictions[p.id];
     if (!pred) {
       return <span className="text-savia-text-muted text-xs">Chargement...</span>;

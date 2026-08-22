@@ -137,7 +137,7 @@ interface Technicien {
   nom: string;
   prenom: string;
   specialite: string;
-  competences?: Array<{ domaine: string; modalites: string[] }>;
+  competences?: Competence[];
   qualification: string;
   niveau_competence: string;
   dispo: string;
@@ -151,6 +151,7 @@ const emptyUser = () => ({
 });
 const SPECIALITES = ['Radiologie', 'POC', 'Ultrason', 'Autre'];
 const NIVEAUX = ['Junior', 'Intermédiaire', 'Senior', 'Expert'];
+type Competence = { domaine: string; modalites: string[] };
 
 // Domaines médicaux et leurs modalités
 const DOMAINES_MEDICAUX: Record<string, string[]> = {
@@ -160,9 +161,9 @@ const DOMAINES_MEDICAUX: Record<string, string[]> = {
   'Autre': [],
 };
 
-const emptyTech = () => ({
+const emptyTech = (): Omit<Technicien, 'id'> => ({
   nom: '', prenom: '', specialite: '', competences: [], qualification: '',
-  niveau_competence: 'Intermédiaire', email: '', telephone: '', telegram_id: '',
+  niveau_competence: 'Intermédiaire', dispo: 'Disponible', email: '', telephone: '', telegram_id: '',
 });
 
 // Fonction pour formater les compétences pour l'affichage
@@ -618,6 +619,7 @@ export default function AdminPage() {
       competences: t.competences || [],
       qualification: t.qualification,
       niveau_competence: t.niveau_competence || 'Intermédiaire',
+      dispo: t.dispo || 'Disponible',
       email: t.email,
       telephone: t.telephone,
       telegram_id: t.telegram_id,

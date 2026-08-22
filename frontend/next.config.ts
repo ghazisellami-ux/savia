@@ -20,7 +20,6 @@ const contentSecurityPolicy = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  typescript: { ignoreBuildErrors: true },
   // Proxy API requests to the Python backend
   async rewrites() {
     return [
