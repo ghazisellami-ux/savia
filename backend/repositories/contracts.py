@@ -134,7 +134,16 @@ def lire_contrats(client=None):
     """Lit les contrats, optionnellement filtrés par client."""
     with get_db() as conn:
         if client:
-            df = read_sql("SELECT * FROM contrats WHERE client=%s ORDER BY date_fin DESC", conn, params=(client,))
+            # Client names are user-managed labels. Match the same normalized
+            # value used by the authorization layer so case/spacing differences
+            # do not hide contracts from a client account.
+            df = read_sql(
+                """SELECT * FROM contrats
+                   WHERE LOWER(TRIM(client)) = LOWER(TRIM(%s))
+                   ORDER BY date_fin DESC""",
+                conn,
+                params=(client,),
+            )
         else:
             df = read_sql("SELECT * FROM contrats ORDER BY date_fin DESC", conn)
     return df

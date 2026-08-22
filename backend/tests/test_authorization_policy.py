@@ -3,10 +3,12 @@ from fastapi import HTTPException
 
 from api.security import (
     assert_client_access,
+    assert_resource_client_access,
     assert_intervention_write_access,
     get_client_scope,
     resolve_client_scope,
 )
+from controllers.requests import _assert_intervention_action_access
 
 
 def lecteur(client="Clinique A"):
@@ -71,3 +73,22 @@ def test_technician_cannot_update_another_technicians_assignment():
 
     with pytest.raises(HTTPException, match="pas assignée"):
         assert_intervention_write_access(conn, 42, user)
+
+
+class _ClientScopedInterventionConnection:
+    def execute(self, query, _params):
+        if "COALESCE(NULLIF(i.client" in query:
+            return _Result(one={"client": "Clinique B"})
+        return _Result(many=[])
+
+
+def test_client_account_cannot_read_another_clients_intervention_details():
+    conn = _ClientScopedInterventionConnection()
+
+    with pytest.raises(HTTPException, match="ressource"):
+        assert_resource_client_access(conn, "intervention", 42, lecteur("Clinique A"))
+
+
+def test_client_account_cannot_use_intervention_status_actions():
+    with pytest.raises(HTTPException, match="rôle"):
+        _assert_intervention_action_access(None, 42, lecteur())
