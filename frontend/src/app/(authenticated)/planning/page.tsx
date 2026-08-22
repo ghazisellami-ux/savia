@@ -340,14 +340,17 @@ export default function PlanningPage() {
   [data]);
 
   const monthEvents = data.filter(d => {
+    if (d.is_ghost) return false;
     const dt = new Date(d.date_planifiee);
     return dt.getMonth() === currentMonth && dt.getFullYear() === currentYear;
   });
   const overdueCount = data.filter(d => {
+    if (d.is_ghost) return false;
     const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
     // Only count as overdue if automatic status is "En retard"
     return automaticStatus === 'En retard';
   }).length;
+  const realPlanningCount = data.filter(d => !d.is_ghost).length;
 
   const handleSave = async () => {
     setError('');
@@ -540,9 +543,9 @@ export default function PlanningPage() {
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Total planifié', value: data.length, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
+          { label: 'Total planifié', value: realPlanningCount, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
           { label: 'Ce mois', value: monthEvents.length, color: 'text-blue-400', icon: <Calendar className="w-5 h-5" /> },
-          { label: 'Réalisées', value: data.filter(d => d.statut === 'Réalisée' || d.statut === 'Cloturee').length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
+          { label: 'Réalisées', value: data.filter(d => !d.is_ghost && (d.statut === 'Réalisée' || d.statut === 'Cloturee')).length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
           <div key={kpi.label} className="glass rounded-xl p-4 text-center">
@@ -692,9 +695,11 @@ export default function PlanningPage() {
             if (!dateStr) return false;
             return dateStr >= pdfDateFrom && dateStr <= pdfDateTo;
           });
+        const realFilteredData = filteredData.filter(d => !d.is_ghost);
+        const ghostFilteredCount = filteredData.length - realFilteredData.length;
         const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
         return (
-      <SectionCard title={"Toutes les Maintenances (" + filteredData.length + (filteredData.length !== data.length ? " / " + data.length : "") + ")"}>
+      <SectionCard title={"Toutes les Maintenances (" + realFilteredData.length + (realFilteredData.length !== realPlanningCount ? " / " + realPlanningCount : "") + ")" + (ghostFilteredCount > 0 ? " · " + ghostFilteredCount + " historique(s)" : "")}>
         {/* Filter bar */}
         <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
           {/* Région */}
