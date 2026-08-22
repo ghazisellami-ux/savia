@@ -30,6 +30,7 @@ ROLE_POLICY_MATRIX = {
     "create_operational_resource": set(INTERNAL_WRITE_ROLES),
     "create_demande": {"Admin", "Manager", "Responsable Technique", "Lecteur"},
     "read_stock": {"Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire"},
+    "create_piece": {"Admin", "Manager", "Responsable Technique", "Gestionnaire"},
 }
 
 
@@ -60,7 +61,7 @@ def test_creation_policies_match_the_role_matrix(role):
     user = user_for(role)
     assert _check_create_permission(user) is (role in ROLE_POLICY_MATRIX["create_operational_resource"])
     assert _check_create_demande_permission(user) is (role in ROLE_POLICY_MATRIX["create_demande"])
-    assert _check_create_piece_permission(user) is (role in ROLE_POLICY_MATRIX["read_stock"])
+    assert _check_create_piece_permission(user) is (role in ROLE_POLICY_MATRIX["create_piece"])
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
