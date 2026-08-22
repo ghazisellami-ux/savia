@@ -2,6 +2,7 @@
 
 from api.runtime import (
     BaseModel,
+    Cookie,
     Depends,
     HTTPAuthorizationCredentials,
     HTTPException,
@@ -9,6 +10,7 @@ from api.runtime import (
     JWT_SECRET,
     Optional,
     Request,
+    Response,
     _tech_name_or_username_matches,
     bcrypt,
     get_db,
@@ -22,6 +24,7 @@ from pydantic import Field
 # not client-bound because they operate SAVIA on behalf of every customer.
 CLIENT_BOUND_ROLES = frozenset({"Lecteur"})
 INTERNAL_WRITE_ROLES = frozenset({"Admin", "Manager", "Responsable Technique"})
+AUTH_COOKIE_NAME = "savia_access"
 
 
 def _normalise_client(value: object) -> str:
@@ -145,14 +148,20 @@ def _decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token invalide")
 
 
-def _authenticated_user(credentials: Optional[HTTPAuthorizationCredentials]) -> dict:
-    if not credentials:
+def _authenticated_user(
+    credentials: Optional[HTTPAuthorizationCredentials],
+    access_token: Optional[str] = None,
+) -> dict:
+    # Bearer remains supported for the offline PWA and machine integrations,
+    # while the browser application uses the HttpOnly cookie below.
+    token = credentials.credentials if credentials else access_token
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Authentification requise",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    payload = _decode_token(credentials.credentials)
+    payload = _decode_token(token)
     with get_db() as conn:
         row = conn.execute(
             """SELECT username, role, nom_complet, client, pages_autorisees, actif,
@@ -175,9 +184,13 @@ def _authenticated_user(credentials: Optional[HTTPAuthorizationCredentials]) -> 
     return payload
 
 
-def _verify_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
-    """Require a valid Bearer JWT for every protected business route."""
-    payload = _authenticated_user(credentials)
+def _verify_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    access_token: Optional[str] = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict:
+    """Require a valid browser cookie or Bearer JWT for business routes."""
+    payload = _authenticated_user(credentials, access_token)
     if payload["password_change_required"]:
         raise HTTPException(
             status_code=403,
@@ -192,9 +205,13 @@ def _verify_token(request: Request, credentials: Optional[HTTPAuthorizationCrede
     return payload
 
 
-def _verify_password_change_token(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> dict:
+def _verify_password_change_token(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    access_token: Optional[str] = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict:
     """Allow only the password-change flow for a session requiring rotation."""
-    payload = _authenticated_user(credentials)
+    payload = _authenticated_user(credentials, access_token)
     request.state.access_username = payload.get("sub", "")
     request.state.access_role = payload.get("role", "")
     return payload
@@ -276,4 +293,5 @@ __all__ = [
     "require_roles",
     "LoginRequest",
     "ChangePasswordRequest",
+    "AUTH_COOKIE_NAME",
 ]

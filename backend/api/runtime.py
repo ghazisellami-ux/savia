@@ -23,7 +23,7 @@ from typing import Optional, Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body, Request
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body, Request, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
@@ -520,6 +520,10 @@ async def security_response_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "camera=(self), geolocation=(), microphone=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     if IS_PRODUCTION:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response

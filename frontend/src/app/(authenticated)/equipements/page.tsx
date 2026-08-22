@@ -353,8 +353,7 @@ export default function EquipementsPage() {
 
   const loadCountry = useCallback(async () => {
     try {
-      const token = localStorage.getItem('savia_token') || '';
-      const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch('/api/settings/public', { credentials: 'same-origin' });
       if (!response.ok) return;
       const settings = await response.json();
       const selectedList = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
@@ -919,12 +918,12 @@ export default function EquipementsPage() {
 
   const handleDownloadAttestation = async (eq: Equipment) => {
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const cn = localStorage.getItem('savia_company') || 'SAVIA';
       const cl = localStorage.getItem('savia_logo') || '';
       const res = await fetch(`/api/equipements/${eq.id}/attestation-pdf`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ company_name: cn, company_logo: cl }),
       });
       if (!res.ok) throw new Error('Erreur PDF');
@@ -936,12 +935,12 @@ export default function EquipementsPage() {
   const handleExportPdf = async (exportType: 'clients' | 'equipements', filters: Record<string, string>, filename: string) => {
     setIsExportingPdf(true);
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const companyName = localStorage.getItem('savia_company') || 'SAVIA';
       const companyLogo = localStorage.getItem('savia_logo') || '';
       const response = await fetch('/api/equipements/export-pdf', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ export_type: exportType, company_name: companyName, company_logo: companyLogo, ...filters }),
       });
       if (!response.ok) {

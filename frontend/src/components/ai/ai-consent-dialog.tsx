@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 import { Brain, CheckCircle2, ShieldCheck, X } from 'lucide-react';
 
 async function setConsent(accepted: boolean) {
-  const token = localStorage.getItem('savia_token') || '';
   const response = await fetch('/api/ai/governance/consent', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify({ accepted }),
   });
   if (!response.ok) {

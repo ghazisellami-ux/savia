@@ -77,8 +77,7 @@ export default function ClientsPage() {
     fetchUserRole();
     const loadCountrySelection = async () => {
       try {
-        const token = localStorage.getItem('savia_token') || '';
-        const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+        const response = await fetch('/api/settings/public', { credentials: 'same-origin' });
         const settings = response.ok ? await response.json() : {};
         const selected = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
         setSelectedCountries(selected);

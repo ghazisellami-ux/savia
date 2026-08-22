@@ -54,12 +54,11 @@ export default function KnowledgePage() {
     setImportLoading(true);
     setImportMsg('');
     try {
-      const token = localStorage.getItem('savia_token');
       const formData = new FormData();
       formData.append('file', file);
       const res = await fetch(`/api/knowledge/import`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'same-origin',
         body: formData,
       });
       const json = await res.json();
@@ -91,10 +90,9 @@ export default function KnowledgePage() {
   const handleDeleteCode = async (code: string) => {
     if (!confirm(`Êtes-vous sûr de vouloir supprimer le code ${code}?`)) return;
     try {
-      const token = localStorage.getItem('savia_token');
       const res = await fetch(`/api/knowledge/${code}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       const json = await res.json();
       if (res.ok) {

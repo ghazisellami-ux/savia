@@ -73,7 +73,11 @@ export const api = {
   // Auth
   login: (username: string, password: string) =>
     req<{ token: string; user: { username: string; nom: string; nom_complet?: string; role: string } }>(
-      '/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }
+      '/api/auth/login', {
+        method: 'POST',
+        headers: { 'X-SAVIA-Client': 'pwa' },
+        body: JSON.stringify({ username, password }),
+      }
     ),
 
   // Interventions

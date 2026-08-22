@@ -46,8 +46,7 @@ export default function CartePage() {
 
   const load = useCallback(async () => {
     try {
-      const token = localStorage.getItem('savia_token') || '';
-      const settingsResponse = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+      const settingsResponse = await fetch('/api/settings/public', { credentials: 'same-origin' });
       const settings = settingsResponse.ok ? await settingsResponse.json() : {};
       const selectedCountriesFromSettings = parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays'));
       const [countryList, cityLists] = await Promise.all([

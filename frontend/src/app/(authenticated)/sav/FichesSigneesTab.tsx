@@ -11,7 +11,6 @@ interface Props {
 }
 
 export function FichesSigneesTab({ fiches, setFiches }: Props) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : '';
   const { user } = useAuth();
   const [uploadingId, setUploadingId] = useState<number | null>(null);
   const [ficheUrls, setFicheUrls] = useState<Record<number, string>>({});
@@ -72,7 +71,7 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
     try {
       const response = await fetch(`/api/interventions/${id}/fiche`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       if (!response.ok) {
         const error = await response.json();
@@ -94,7 +93,7 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
       formData.append('file', file);
       const response = await fetch(`/api/interventions/${id}/fiche`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
         body: formData,
       });
       if (!response.ok) {

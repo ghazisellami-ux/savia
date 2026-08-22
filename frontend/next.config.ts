@@ -1,5 +1,23 @@
 import type { NextConfig } from "next";
 
+const isProduction = process.env.NODE_ENV === 'production';
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "frame-src 'none'",
+  "img-src 'self' blob: data: https://*.tile.openstreetmap.org",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline' https://unpkg.com",
+  `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"} https://unpkg.com`,
+  "connect-src 'self' https://api.telegram.org",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  "media-src 'self'",
+].join('; ');
+
 const nextConfig: NextConfig = {
   output: 'standalone',
   typescript: { ignoreBuildErrors: true },
@@ -24,7 +42,9 @@ const nextConfig: NextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Referrer-Policy', value: 'same-origin' },
           { key: 'Permissions-Policy', value: 'camera=(self), geolocation=(), microphone=()' },
-          { key: 'Content-Security-Policy', value: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' blob: data: https://*.tile.openstreetmap.org; font-src 'self' data:; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https://api.telegram.org" },
+          { key: 'Content-Security-Policy', value: contentSecurityPolicy },
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+          { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
         ],
       },
     ];

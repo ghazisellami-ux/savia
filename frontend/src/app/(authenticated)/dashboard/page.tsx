@@ -409,9 +409,7 @@ export default function DashboardPage() {
         if (selectedEquipType) params.equipment_type = selectedEquipType;
         
         const response = await fetch(`/api/dashboard/availability-trend?${new URLSearchParams(params).toString()}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('savia_token') || ''}`,
-          },
+          credentials: 'same-origin',
         });
         
         if (response.ok) {

@@ -337,7 +337,6 @@ export default function AdminPage() {
   };
 
   const saveSettings = async () => {
-    const jwtToken = localStorage.getItem('savia_token') || '';
     try {
       // Save to backend
       const payload = {
@@ -349,8 +348,8 @@ export default function AdminPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
         },
+        credentials: 'same-origin',
         body: JSON.stringify(payload),
       });
       
@@ -475,8 +474,7 @@ export default function AdminPage() {
 
       // Charger les permissions depuis la BD et les appliquer aux profils
       try {
-        const token = localStorage.getItem('savia_token') || '';
-        const settingsRes = await fetch('/api/settings', { headers: { Authorization: `Bearer ${token}` } });
+        const settingsRes = await fetch('/api/settings', { credentials: 'same-origin' });
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
           console.log('[ADMIN] settings data:', settingsData.role_permissions ? 'loaded' : 'empty');
@@ -660,10 +658,10 @@ export default function AdminPage() {
       // Forcer settings = true pour Admin (page réservée à l'admin)
       if (rolePerms['Admin']) rolePerms['Admin']['settings'] = true;
 
-      const token = localStorage.getItem('savia_token') || '';
       const res = await fetch('/api/settings', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ role_permissions: JSON.stringify(rolePerms) }),
       });
       if (!res.ok) throw new Error(`Erreur ${res.status}`);

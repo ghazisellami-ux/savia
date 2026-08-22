@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '@/lib/auth-context';
-import { demandes, notifications } from '@/lib/api';
+import { auth, demandes, notifications } from '@/lib/api';
 import { useEffect, useState, useCallback } from 'react';
 import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
@@ -230,6 +230,7 @@ export default function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
       <div className={clsx('border-t border-savia-border', isCollapsed ? 'p-2' : 'p-3')}>
         <button
           onClick={() => {
+            void auth.logout().catch(() => {});
             localStorage.removeItem('savia_token');
             localStorage.removeItem('savia_user');
             window.location.href = '/login';

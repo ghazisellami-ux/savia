@@ -628,7 +628,6 @@ export default function SavPage() {
   const handleGeneratePdf = async () => {
     setIsPdfGenerating(true);
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const cn    = localStorage.getItem('savia_company') || 'SAVIA';
       const cl    = localStorage.getItem('savia_logo') || '';
 
@@ -669,7 +668,8 @@ export default function SavPage() {
 
       const res = await fetch('/api/reports/generate-pdf', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Erreur ' + res.status);
@@ -686,12 +686,12 @@ export default function SavPage() {
     if (!aiResult) return;
     setIsPdfGenerating(true);
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const cn = localStorage.getItem('savia_company') || 'SAVIA';
       const cl = localStorage.getItem('savia_logo') || '';
       const res = await fetch('/api/reports/generate-pdf', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({
           title: 'Analyse IA - Interventions SAV',
           subtitle: 'Rapport d\'analyse IA complet',
@@ -711,12 +711,12 @@ export default function SavPage() {
   // ===== PDF Fiche d'intervention (backend FPDF) =====
   const handleDownloadFicheIntervention = async (interv: any) => {
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const cn = localStorage.getItem('savia_company') || 'SAVIA';
       const cl = localStorage.getItem('savia_logo') || '';
       const res = await fetch(`/api/interventions/${interv.id}/fiche-pdf`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ company_name: cn, company_logo: cl }),
       });
       if (!res.ok) throw new Error('Erreur ' + res.status);

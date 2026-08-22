@@ -89,11 +89,10 @@ export default function SettingsPage() {
 
   // Load settings
   useEffect(() => {
-    const jwtToken = localStorage.getItem('savia_token') || '';
     
     // Load bot settings
     fetch('/api/settings', {
-      headers: jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {},
+      credentials: 'same-origin',
     })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -115,7 +114,7 @@ export default function SettingsPage() {
 
     // Load notification schedules
     fetch('/api/notification-schedules', {
-      headers: jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {},
+      credentials: 'same-origin',
     })
       .then(r => {
         if (!r.ok) {
@@ -178,7 +177,6 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     setSaveErr(''); setSaved(false); setSaving(true);
-    const jwtToken = localStorage.getItem('savia_token') || '';
     try {
       // Save bot settings
       const botPayload: Record<string, string> = {};
@@ -193,8 +191,8 @@ export default function SettingsPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
         },
+        credentials: 'same-origin',
         body: JSON.stringify(botPayload),
       });
 
@@ -220,8 +218,8 @@ export default function SettingsPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          ...(jwtToken ? { Authorization: `Bearer ${jwtToken}` } : {}),
         },
+        credentials: 'same-origin',
         body: JSON.stringify(schedulePayload),
       });
 

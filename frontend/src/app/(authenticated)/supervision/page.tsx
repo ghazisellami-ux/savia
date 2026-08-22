@@ -170,9 +170,8 @@ export default function SupervisionPage() {
   const loadLogHistory = async () => {
     setHistoryLoading(true);
     try {
-      const token = localStorage.getItem('savia_token');
       const res = await fetch('/api/logs', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: 'same-origin',
       });
       if (res.ok) { const data = await res.json(); setLogHistory(data); if (data.length > 0) setExpandHistory(true); }
     } catch { /* silencieux */ }
@@ -364,13 +363,12 @@ export default function SupervisionPage() {
     setKnowledgeSaving(true);
     setKnowledgeSaveMessage('');
     try {
-      const token = localStorage.getItem('savia_token');
       const response = await fetch('/api/knowledge', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        credentials: 'same-origin',
         body: JSON.stringify({
           code: err.code,
           message: err.message,
@@ -393,9 +391,8 @@ export default function SupervisionPage() {
   // Fetch solution from knowledge base for a specific error code
   const fetchKnowledgeForCode = async (errorCode: string) => {
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
       const res = await fetch('/api/knowledge', {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        credentials: 'same-origin'
       });
       
       if (res.ok) {
@@ -497,9 +494,8 @@ export default function SupervisionPage() {
   // Priority: 1) parsed_errors from DB, 2) parse raw content, 3) null (show simulated)
   const fetchLogErrors = async (logId: number) => {
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
       const res = await fetch(`/api/logs/${logId}`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        credentials: 'same-origin'
       });
       if (res.ok) {
         const data = await res.json();
@@ -613,10 +609,10 @@ export default function SupervisionPage() {
 
       // Save log to backend database (relative URL via Nginx proxy)
       try {
-        const token = localStorage.getItem('savia_token');
         const saveRes = await fetch(`/api/logs/upload`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({
             equipement: importEquip.trim(),
             filename: importFile.name,
