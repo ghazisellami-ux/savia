@@ -9,7 +9,6 @@ export const SESSION_EXPIRED_EVENT = 'savia_session_expired';
 
 export function expireSession(): void {
   if (typeof window === 'undefined') return;
-  localStorage.removeItem('savia_token');
   localStorage.removeItem('savia_user');
   window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
@@ -29,7 +28,6 @@ class ApiError extends Error {
 }
 
 async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
   const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
   
   const headers: Record<string, string> = {
@@ -38,10 +36,6 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     ...options.headers,
   };
   
-  if (token && token !== 'undefined' && token !== 'null') {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
   const isAiEndpoint = endpoint.includes('/ai/');
   // Certaines analyses IA SAV prennent plus de 30 secondes (notamment avec
   // un modèle de raisonnement). Le backend peut déjà avoir terminé avec 200
@@ -55,6 +49,7 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
       method: options.method || 'GET',
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
+      credentials: 'same-origin',
       signal: controller.signal,
     });
   } catch(fetchErr: any) {
@@ -81,12 +76,13 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
 // --- Auth ---
 export const auth = {
   login: (username: string, password: string) =>
-    request<{ token: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
+    request<{ token?: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
       '/api/auth/login', { method: 'POST', body: { username, password } }
     ),
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<{ user: { sub: string; role: string; nom: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>('/api/auth/me'),
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<{ token: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
+    request<{ token?: string; password_change_required: boolean; user: { username: string; nom: string; role: string; client?: string; pages_autorisees?: string; password_change_required?: boolean } }>(
       '/api/auth/change-password', { method: 'POST', body: { current_password: currentPassword, new_password: newPassword } }
     ),
 };
@@ -174,22 +170,21 @@ export const interventions = {
 
   // Fiche signée
   uploadFiche: async (id: number, file: File): Promise<{ ok: boolean; filename: string }> => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
     const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
     const form = new FormData();
     form.append('file', file);
     const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
       method: 'POST',
-      headers: { 'X-SAVIA-Lang': lang, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'X-SAVIA-Lang': lang },
+      credentials: 'same-origin',
       body: form,
     });
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
     return res.json();
   },
   downloadFiche: async (id: number): Promise<Blob> => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
     const res = await fetch(`${API_BASE}/api/interventions/${id}/fiche`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'same-origin',
     });
     if (!res.ok) throw new ApiError(`Impossible de télécharger la fiche (${res.status})`, res.status);
     return res.blob();
@@ -292,14 +287,10 @@ export const contrats = {
   create: (data: Record<string, unknown>) =>
     request<{ ok: boolean; contrat_id?: number; nb_plannings?: number }>('/api/contrats', { method: 'POST', body: data }),
   uploadFile: async (id: string | number, file: File) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') : null;
     const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
     const formData = new FormData();
     formData.append('file', file);
     const headers: Record<string, string> = { 'X-SAVIA-Lang': lang };
-    if (token && token !== 'undefined' && token !== 'null') {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60000);
     let res: Response;
@@ -307,6 +298,7 @@ export const contrats = {
       res = await fetch(`/api/contrats/${id}/fichier`, {
         method: 'POST',
         headers,
+        credentials: 'same-origin',
         body: formData,
         signal: controller.signal,
       });
@@ -367,11 +359,11 @@ export const clients = {
   importExcel: async (file: File): Promise<Record<string, unknown>> => {
     const fd = new FormData();
     fd.append('file', file);
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
     const lang = typeof window !== 'undefined' ? (localStorage.getItem('savia_lang') || 'fr') : 'fr';
     const res = await fetch('/api/clients/import-excel', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'X-SAVIA-Lang': lang },
+      headers: { 'X-SAVIA-Lang': lang },
+      credentials: 'same-origin',
       body: fd,
     });
     if (!res.ok) throw new Error('Erreur import: ' + res.status);
@@ -447,13 +439,13 @@ export const ai = {
   analyzeCosts: (clients: Array<Record<string, unknown>>, kpis: Record<string, unknown>, sym: string = "TND") =>
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-costs', { method: 'POST', body: { clients, kpis, sym } }),
   analyzeCostsPdf: async (result: Record<string, unknown>, kpis: Record<string, unknown>, sym: string = "TND") => {
-    const token = localStorage.getItem('savia_token') || localStorage.getItem('token');
     const lang = localStorage.getItem('savia_lang') || 'fr';
     const cn = localStorage.getItem('savia_company') || 'SAVIA';
     const cl = localStorage.getItem('savia_logo') || '';
     const res = await fetch('/api/ai/analyze-costs/pdf', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-SAVIA-Lang': lang, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', 'X-SAVIA-Lang': lang },
+      credentials: 'same-origin',
       body: JSON.stringify({ result, kpis, sym, company_name: cn, company_logo: cl }),
     });
     if (!res.ok) throw new Error('Erreur PDF');

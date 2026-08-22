@@ -109,16 +109,15 @@ export function exportComparateurToJSON(data: any, filename: string = 'comparate
  */
 export async function exportComparateurToPDF(data: any, filename: string = 'comparateur.pdf'): Promise<void> {
   try {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('savia_token') || '' : '';
     const lang = getExportLang();
 
     const res = await fetch('/api/planning/comparateur/pdf', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
         'X-SAVIA-Lang': lang,
       },
+      credentials: 'same-origin',
       body: JSON.stringify({ ...data, lang }),
     });
 

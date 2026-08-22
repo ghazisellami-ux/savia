@@ -28,10 +28,8 @@ export default function I18nRuntime() {
 
   useEffect(() => {
     const loadSettings = async () => {
-      const token = localStorage.getItem('savia_token');
-      if (!token) return;
       try {
-        const res = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch('/api/settings/public', { credentials: 'same-origin' });
         if (!res.ok) return;
         const data = await res.json();
         const next = normalizeLang(data.langue);

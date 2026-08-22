@@ -83,10 +83,10 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
   },
 };
 
-async function loadRolePermissions(role: string, token: string): Promise<PermissionsMap> {
+async function loadRolePermissions(role: string): Promise<PermissionsMap> {
   try {
     const res = await fetch('/api/settings/public', {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'same-origin',
     });
     if (!res.ok) throw new Error('settings failed');
     const data = await res.json();
@@ -104,14 +104,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [permissions, setPermissions] = useState<PermissionsMap>(DEFAULT_PERMS);
   const [isLoading, setIsLoading]     = useState(true);
 
-  // Vérifier le token au chargement
+  // Vérifier la session HttpOnly au chargement
   useEffect(() => {
     let active = true;
 
     const restoreSession = async () => {
-      const token     = localStorage.getItem('savia_token');
       const savedUser = localStorage.getItem('savia_user');
-      if (!token || !savedUser) {
+      if (!savedUser) {
         if (active) setIsLoading(false);
         return;
       }
@@ -130,12 +129,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Wait for the persisted role permissions before marking the auth
           // state as ready. Otherwise a guarded page can briefly see the
           // fallback permissions and redirect a user who was granted access.
-          const restoredPermissions = await loadRolePermissions(restoredUser.role, token);
+          const restoredPermissions = await loadRolePermissions(restoredUser.role);
           if (!active) return;
           setPermissions(restoredPermissions);
         }
       } catch {
-        localStorage.removeItem('savia_token');
         localStorage.removeItem('savia_user');
       } finally {
         if (active) setIsLoading(false);
@@ -148,11 +146,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await authApi.login(username, password);
-    localStorage.setItem('savia_token', res.token);
     localStorage.setItem('savia_user', JSON.stringify(res.user));
     setUser(res.user);
     if (!res.user.password_change_required) {
-      const perms = await loadRolePermissions(res.user.role, res.token);
+      const perms = await loadRolePermissions(res.user.role);
       setPermissions(perms);
     } else {
       setPermissions(DEFAULT_PERMS);
@@ -160,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('savia_token');
+    void authApi.logout().catch(() => {});
     localStorage.removeItem('savia_user');
     setUser(null);
     setPermissions(DEFAULT_PERMS);

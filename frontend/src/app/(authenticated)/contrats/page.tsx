@@ -450,14 +450,13 @@ export default function ContratsPage() {
     setIsPdfGen(true);
     console.log('Starting contract PDF generation for:', c.id);
     try {
-      const token = localStorage.getItem('savia_token') || '';
-      if (!token) { throw new Error('Session expirée'); }
       const cn = localStorage.getItem('savia_company') || 'SAVIA';
       const cl = localStorage.getItem('savia_logo') || '';
 
       const res = await fetch(`/api/contrats/${c.id}/contrat-pdf`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ company_name: cn, company_logo: cl }),
       });
       if (!res.ok) throw new Error('Erreur HTTP ' + res.status);
@@ -474,9 +473,8 @@ export default function ContratsPage() {
 
   const handleContractAttachmentDownload = async (c: Contrat) => {
     try {
-      const token = localStorage.getItem('savia_token') || '';
       const res = await fetch(`/api/contrats/${c.id}/fichier`, {
-        headers: token ? { Authorization: 'Bearer ' + token } : undefined,
+        credentials: 'same-origin',
       });
       if (!res.ok) throw new Error('Pièce jointe indisponible');
       const blob = await res.blob();
@@ -513,12 +511,9 @@ export default function ContratsPage() {
     if (!deleteConfirm) return;
     setIsDeleting(true);
     try {
-      const token = localStorage.getItem('savia_token') || '';
-      if (!token) throw new Error('Session expirée');
-
       const res = await fetch(`/api/contrats/${deleteConfirm.contratId}`, {
         method: 'DELETE',
-        headers: { 'Authorization': 'Bearer ' + token },
+        credentials: 'same-origin',
       });
 
       if (!res.ok) throw new Error(`Erreur HTTP ${res.status}`);

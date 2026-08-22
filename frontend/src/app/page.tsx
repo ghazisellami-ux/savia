@@ -7,8 +7,8 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    const token = localStorage.getItem('savia_token');
-    if (token) {
+    const savedUser = localStorage.getItem('savia_user');
+    if (savedUser) {
       router.replace('/dashboard');
     } else {
       router.replace('/login');

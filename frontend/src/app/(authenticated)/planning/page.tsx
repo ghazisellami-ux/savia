@@ -298,8 +298,7 @@ export default function PlanningPage() {
   useEffect(() => {
     const loadCountrySelection = async () => {
       try {
-        const token = localStorage.getItem('savia_token') || '';
-        const response = await fetch('/api/settings/public', { headers: { Authorization: `Bearer ${token}` } });
+        const response = await fetch('/api/settings/public', { credentials: 'same-origin' });
         const settings = response.ok ? await response.json() : {};
         setSelectedCountries(parseCountrySelection(settings.pays || localStorage.getItem('savia_pays_selectionnes') || localStorage.getItem('savia_pays')));
         setCustomCountries(await paysCustomApi.list().catch(() => []));
@@ -812,13 +811,13 @@ export default function PlanningPage() {
                   .sort((a, b) => (a.date_planifiee || '').localeCompare(b.date_planifiee || ''));
                 
                 const filterLabel = filterClient !== 'Tous' ? filterClient : filterRegion !== 'Tous' ? `Région: ${filterRegion}` : filterVille !== 'Tous' ? `Ville: ${filterVille}` : filterTech !== 'Tous' ? `Technicien: ${filterTech}` : 'Tous les clients';
-                const token = localStorage.getItem('savia_token') || '';
                 const cn = localStorage.getItem('savia_company') || 'SAVIA';
                 const cl = localStorage.getItem('savia_logo') || '';
                 
                 const res = await fetch('/api/planning/pdf', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'same-origin',
                   body: JSON.stringify({ 
                     rows: printData, 
                     filter_label: filterLabel, 

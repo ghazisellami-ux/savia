@@ -11,8 +11,7 @@ export default function AiPrivacyPanel() {
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    const token = localStorage.getItem('savia_token') || '';
-    const res = await fetch('/api/ai/governance/me', { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch('/api/ai/governance/me', { credentials: 'same-origin' });
     if (res.ok) setState(await res.json());
   };
   useEffect(() => { load(); }, []);
@@ -20,8 +19,7 @@ export default function AiPrivacyPanel() {
   const changeConsent = async (accepted: boolean) => {
     setBusy(true); setMessage('');
     try {
-      const token = localStorage.getItem('savia_token') || '';
-      const res = await fetch('/api/ai/governance/consent', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ accepted }) });
+      const res = await fetch('/api/ai/governance/consent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ accepted }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erreur de sauvegarde');
       setState(data); setMessage(accepted ? 'Consentement IA enregistré.' : 'Consentement retiré : les analyses IA sont bloquées pour votre compte.');

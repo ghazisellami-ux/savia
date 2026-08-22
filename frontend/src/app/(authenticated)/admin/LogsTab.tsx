@@ -68,9 +68,8 @@ export default function LogsTab() {
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
       
-      const token = localStorage.getItem('savia_token');
       const res = await fetch(`/api/admin/audit-logs?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -116,13 +115,12 @@ export default function LogsTab() {
   const exportToPDF = async () => {
     setIsExporting(true);
     try {
-      const token = localStorage.getItem('savia_token');
       const res = await fetch('/api/admin/audit-logs/export-pdf', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
+        credentials: 'same-origin',
         body: JSON.stringify({
           limit,
           username,

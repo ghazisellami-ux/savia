@@ -7,9 +7,11 @@ from api.runtime import (
     JWT_EXPIRY_HOURS,
     JWT_ISSUER,
     JWT_SECRET,
+    IS_PRODUCTION,
     PASSWORD_ROTATION_DAYS,
     Optional,
     Request,
+    Response,
     app,
     bcrypt,
     datetime,
@@ -34,6 +36,7 @@ from api.security import (
     get_client_scope,
     resolve_client_scope,
     validate_password_policy,
+    AUTH_COOKIE_NAME,
 )
 _LOGIN_WINDOW_SECONDS = 15 * 60
 _LOGIN_MAX_ATTEMPTS = 5
@@ -102,10 +105,9 @@ def _issue_access_token(user_data: dict) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
-def _login_response(user_data: dict, token: str) -> dict:
+def _login_response(user_data: dict, token: str | None = None) -> dict:
     password_change_required = bool(user_data.get("must_change_password"))
-    return {
-        "token": token,
+    response = {
         "password_change_required": password_change_required,
         "user": {
             "username": user_data["username"],
@@ -116,6 +118,27 @@ def _login_response(user_data: dict, token: str) -> dict:
             "password_change_required": password_change_required,
         },
     }
+    # The browser never receives the JWT; it is set as an HttpOnly cookie.
+    # The explicit PWA compatibility path retains the token for offline sync.
+    if token is not None:
+        response["token"] = token
+    return response
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=JWT_EXPIRY_HOURS * 3600,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
 
 @app.get("/")
 def root():
@@ -123,7 +146,7 @@ def root():
 
 
 @app.post("/api/auth/login")
-def login(body: LoginRequest, request: Request):
+def login(body: LoginRequest, request: Request, response: Response):
     ip_address = request.client.host if request.client else "unknown"
     username_key = body.username.strip().casefold()
     ip_key = f"ip:{ip_address}"
@@ -165,8 +188,15 @@ def login(body: LoginRequest, request: Request):
     _clear_login_attempts(ip_key, account_key)
     
     token = _issue_access_token(user_data)
+    _set_auth_cookie(response, token)
+    is_pwa_client = request.headers.get("X-SAVIA-Client", "").lower() == "pwa"
+    return _login_response(user_data, token if is_pwa_client else None)
 
-    return _login_response(user_data, token)
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    _clear_auth_cookie(response)
+    return {"ok": True}
 
 
 @app.get("/api/auth/me")
@@ -175,7 +205,7 @@ def me(user: dict = Depends(_verify_password_change_token)):
 
 
 @app.post("/api/auth/change-password")
-def change_password(body: ChangePasswordRequest, request: Request, user: dict = Depends(_verify_password_change_token)):
+def change_password(body: ChangePasswordRequest, request: Request, response: Response, user: dict = Depends(_verify_password_change_token)):
     try:
         validate_password_policy(body.new_password, user["sub"])
     except ValueError as exc:
@@ -205,7 +235,9 @@ def change_password(body: ChangePasswordRequest, request: Request, user: dict = 
     user_data = dict(updated)
     ip_address = request.client.host if request.client else "unknown"
     log_audit(user_data["username"], "PASSWORD_CHANGED", "Mot de passe modifié par l'utilisateur", "auth", ip_address)
-    return _login_response(user_data, _issue_access_token(user_data))
+    token = _issue_access_token(user_data)
+    _set_auth_cookie(response, token)
+    return _login_response(user_data)
 
 
 def _get_client_filter(user: dict) -> Optional[str]:
