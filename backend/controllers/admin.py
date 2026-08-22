@@ -46,6 +46,15 @@ PRIVATE_SETTING_KEYS = [
 ]
 SETTING_KEYS = set(PUBLIC_SETTING_KEYS + PRIVATE_SETTING_KEYS)
 
+_NOTIFICATION_READER_ROLES = frozenset({
+    "Admin",
+    "Manager",
+    "Responsable Technique",
+    "Technicien",
+    "Gestionnaire",
+    "Gestionnaire de stock",  # ancien libellé conservé pour compatibilité
+})
+
 
 def _require_admin(user: dict) -> None:
     if user.get("role") != "Admin":
@@ -365,23 +374,32 @@ def export_audit_logs_pdf(
 # NOTIFICATIONS
 # ==========================================
 
+def _resolve_notification_scope(user: dict, destination: Optional[str] = None) -> tuple[str, Optional[str]]:
+    """Retourne la destination visible et le filtre technicien de l'utilisateur."""
+    role = user.get("role", "")
+    if role not in _NOTIFICATION_READER_ROLES:
+        raise HTTPException(status_code=403, detail="Accès non autorisé aux notifications de pièces")
+
+    expected_destination = "technicien" if role == "Technicien" else "gestionnaire"
+    requested_destination = (destination or "").strip().casefold()
+    if requested_destination and requested_destination != expected_destination:
+        raise HTTPException(status_code=403, detail="Cette destination de notifications n'est pas accessible")
+
+    if role == "Technicien":
+        technician_name = (user.get("nom") or "").strip()
+        if not technician_name:
+            raise HTTPException(status_code=403, detail="Aucun technicien n'est associé à ce compte")
+        return expected_destination, technician_name
+    return expected_destination, None
+
 @app.get("/api/notifications")
 def get_notifications(
     destination: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    """Liste les notifications. Destination auto-detectée selon le rôle."""
-    role = user.get("role", "")
-    nom = (user.get("nom") or "").strip()
-    if destination is None:
-        destination = "technicien" if role == "Technicien" else "gestionnaire"
-    df = lire_notifications_pieces(destination=destination)
-    # Pour les techniciens : filtrer par leur nom
-    if role == "Technicien" and nom and not df.empty:
-        from db_engine import read_sql
-        df = df[df["technicien"].fillna("").str.lower().apply(
-            lambda t: all(w in t for w in nom.lower().split() if len(w) > 1)
-        )]
+    """Liste uniquement les notifications de pièces visibles par le rôle courant."""
+    destination, technician = _resolve_notification_scope(user, destination)
+    df = lire_notifications_pieces(destination=destination, technicien=technician)
     return _df_to_records(df)
 
 
@@ -390,26 +408,27 @@ def get_notification_count(
     destination: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    """Compte les notifications non lues. Destination auto-detectée selon le rôle."""
-    role = user.get("role", "")
-    nom = (user.get("nom") or "").strip()
-    if destination is None:
-        destination = "technicien" if role == "Technicien" else "gestionnaire"
-    count = compter_notifications_non_lues(destination, technicien=nom if role == "Technicien" else None)
+    """Compte uniquement les notifications de pièces visibles par le rôle courant."""
+    destination, technician = _resolve_notification_scope(user, destination)
+    count = compter_notifications_non_lues(destination, technicien=technician)
     return {"count": count}
 
 
 @app.patch("/api/notifications/{notif_id}/read")
 def mark_notification_read(notif_id: int, user: dict = Depends(_verify_token)):
-    """Marque une notification comme lue."""
-    marquer_notification_lue(notif_id)
+    """Marque comme lue une notification appartenant à la destination visible."""
+    destination, technician = _resolve_notification_scope(user)
+    if not marquer_notification_lue(notif_id, destination=destination, technicien=technician):
+        raise HTTPException(status_code=404, detail="Notification introuvable")
     return {"ok": True}
 
 
 @app.patch("/api/notifications/{notif_id}/done")
 def mark_notification_done(notif_id: int, user: dict = Depends(_verify_token)):
-    """Marque une notification comme traitée."""
-    marquer_notification_traitee(notif_id)
+    """Marque comme traitée une notification appartenant à la destination visible."""
+    destination, technician = _resolve_notification_scope(user)
+    if not marquer_notification_traitee(notif_id, destination=destination, technicien=technician):
+        raise HTTPException(status_code=404, detail="Notification introuvable")
     return {"ok": True}
 
 

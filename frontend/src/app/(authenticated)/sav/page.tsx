@@ -17,6 +17,7 @@ import { interventions, ai, equipements, techniciens as techApi, contrats as con
 import { downloadBlob } from '@/lib/download';
 import { FichesSigneesTab } from './FichesSigneesTab';
 import { useAuth } from '@/lib/auth-context';
+import { useRoleGuard } from '@/lib/use-role-guard';
 import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
 
 interface Intervention {
@@ -49,6 +50,7 @@ const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border roun
 
 const TYPES_ERREUR = ["Hardware", "Software", "Réseau", "Calibration", "Mécanique", "Électrique", "Autre"];
 const PRIORITES = ["Haute", "Moyenne", "Basse"];
+const TECHNICIAN_VISIBLE_TABS = new Set([0, 3, 5]);
 
 const MONTHS = [
   { value: 0, label: 'Janvier' }, { value: 1, label: 'Février' }, { value: 2, label: 'Mars' },
@@ -59,6 +61,7 @@ const MONTHS = [
 
 export default function SavPage() {
   const { user } = useAuth();
+  useRoleGuard('sav');
   console.log('[SAV] Component rendering, user role:', user?.role);
   const isTechnicien = user?.role === 'Technicien';
   const isClient = user?.role === 'Lecteur'; // Client profile
@@ -359,7 +362,10 @@ export default function SavPage() {
     if (isClient && activeTab !== 0) {
       setActiveTab(0);
     }
-  }, [isClient, activeTab]);
+    if (isTechnicien && !TECHNICIAN_VISIBLE_TABS.has(activeTab)) {
+      setActiveTab(0);
+    }
+  }, [isClient, isTechnicien, activeTab]);
 
   // Infinite scroll: load more when user scrolls near bottom
   useEffect(() => {
@@ -951,7 +957,7 @@ export default function SavPage() {
           { label: 'En cours', value: enCours, icon: <Clock className="w-5 h-5" />, color: 'text-yellow-400' },
           { label: 'Taux résol.', value: `${tauxResolution}%`, icon: <Target className="w-5 h-5" />, color: 'text-blue-400' },
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
-          !isClient && { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
+          !isClient && !isTechnicien && { label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' },
         ].filter(Boolean).map(k => (
           <div key={k.label} className="glass rounded-xl p-3 text-center">
             <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
@@ -962,13 +968,15 @@ export default function SavPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 glass rounded-xl p-1 overflow-x-auto">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-1 glass rounded-xl p-1">
         {tabs.map((tab, i) => {
           // Clients (Lecteur) can only see Tab 0 (Interventions)
           if (isClient && i !== 0) return null;
+          // Technicians only see their interventions, PDF reports and signed forms.
+          if (isTechnicien && !TECHNICIAN_VISIBLE_TABS.has(i)) return null;
           return (
             <button key={i} onClick={() => setActiveTab(i)}
-              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer whitespace-nowrap ${
+              className={`min-w-0 flex items-center justify-center gap-2 py-2.5 px-2 rounded-lg text-sm font-semibold transition-all cursor-pointer text-center ${
                 activeTab === i
                   ? 'bg-gradient-to-r from-savia-accent to-savia-accent-blue text-white shadow-md'
                   : 'text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover'
