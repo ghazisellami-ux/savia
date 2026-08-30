@@ -1096,12 +1096,34 @@ def force_planning_sync(user: dict = Depends(_verify_token)):
 
 def mark_intervention_factured(intervention_id: int, user: dict = Depends(_verify_token)):
     require_roles(user, "Admin", "Manager")
-    """Marque une intervention comme facturee (arrete les rappels)."""
+    """Compatibilité : convertit l'ancien marqueur en étape à confirmer."""
+    actor = user.get("sub", "unknown")
     with get_db() as conn:
         conn.execute(
             "UPDATE interventions SET facture_envoyee = TRUE WHERE id = %s",
             (intervention_id,)
         )
+        conn.execute(
+            """INSERT INTO billing_cases (
+                   intervention_id, client, equipment, created_by, updated_by
+               )
+               SELECT id, COALESCE(client, ''), machine, %s, %s
+               FROM interventions WHERE id=%s
+               ON CONFLICT (intervention_id) DO NOTHING""",
+            (actor, actor, intervention_id),
+        )
+        conn.execute(
+            """INSERT INTO billing_steps (
+                   case_id, step_type, effective_date, note, created_by, updated_by
+               )
+               SELECT id, 'invoice', CURRENT_DATE,
+                      'Créé depuis l''ancienne action : référence, montant et échéance à confirmer',
+                      %s, %s
+               FROM billing_cases WHERE intervention_id=%s
+               ON CONFLICT (case_id, step_type) DO NOTHING""",
+            (actor, actor, intervention_id),
+        )
+    log_audit(actor, "LEGACY_MARK_FACTURED", f'{{"intervention_id": {intervention_id}}}', "facturation")
     return {"ok": True}
 
 

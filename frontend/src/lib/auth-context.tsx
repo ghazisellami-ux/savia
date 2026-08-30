@@ -42,42 +42,49 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
   Admin: {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: true,
+    facturation: true,
     reports: true, contrats: true, admin: true, settings: true, demandes: true,
     finances: true, carte: true, sla: true,
   },
   Manager: {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: true,
+    facturation: true,
     reports: true, contrats: true, admin: true, settings: true, demandes: true,
     finances: true, carte: true, sla: true,
   },
   'Responsable Technique': {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: false,
+    facturation: true,
     reports: true, contrats: false, admin: false, settings: true, demandes: true,
     finances: false, carte: true, sla: true,
   },
   Technicien: {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: true,
+    facturation: false,
     reports: true, contrats: true, admin: false, settings: true, demandes: true,
     finances: false, carte: true, sla: true,
   },
   Gestionnaire: {
     dashboard: true, supervision: false, equipements: true, predictions: true,
     base_connaissances: false, sav: false, planning: false, pieces: true,
+    facturation: true,
     reports: true, contrats: true, admin: false, settings: true, demandes: false,
     finances: true, carte: true, sla: true,
   },
   'Gestionnaire de stock': {
     dashboard: true, supervision: false, equipements: true, predictions: true,
     base_connaissances: false, sav: false, planning: false, pieces: true,
+    facturation: false,
     reports: true, contrats: true, admin: false, settings: true, demandes: false,
     finances: true, carte: true, sla: true,
   },
   Lecteur: {
     dashboard: true, supervision: true, equipements: true, predictions: false,
     base_connaissances: false, sav: false, planning: false, pieces: false,
+    facturation: false,
     reports: true, contrats: false, admin: false, settings: true, demandes: false,
     finances: false, carte: true, sla: false,
   },
@@ -94,7 +101,11 @@ async function loadRolePermissions(role: string): Promise<PermissionsMap> {
     localStorage.setItem('savia_lang', lang);
     window.dispatchEvent(new CustomEvent('savia_language_changed', { detail: { lang } }));
     const allRolePerms = JSON.parse(data.role_permissions || '{}');
-    if (allRolePerms[role]) return allRolePerms[role];
+    if (allRolePerms[role]) {
+      // New modules keep their safe role defaults on existing installations
+      // whose saved permission JSON predates the module.
+      return { ...(DEFAULT_ROLE_PERMS[role] || {}), ...allRolePerms[role] };
+    }
   } catch {}
   return DEFAULT_ROLE_PERMS[role] || DEFAULT_PERMS;
 }

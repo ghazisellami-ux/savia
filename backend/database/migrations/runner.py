@@ -318,6 +318,186 @@ def _migration_009_distributed_login_rate_limits(conn) -> None:
     )
 
 
+def _migration_010_billing_tracking(conn) -> None:
+    """Create auditable billing cases, documentary milestones, and payments."""
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS facture_envoyee BOOLEAN DEFAULT FALSE")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_cases (
+               id BIGSERIAL PRIMARY KEY,
+               intervention_id INTEGER NULL UNIQUE REFERENCES interventions(id) ON DELETE SET NULL,
+               request_id INTEGER NULL REFERENCES demandes_intervention(id) ON DELETE SET NULL,
+               client TEXT NOT NULL DEFAULT '',
+               equipment TEXT NOT NULL DEFAULT '',
+               owner_username TEXT NOT NULL DEFAULT '',
+               currency VARCHAR(3) NOT NULL DEFAULT 'TND',
+               case_state TEXT NOT NULL DEFAULT 'active'
+                   CHECK (case_state IN ('active', 'blocked', 'cancelled')),
+               block_reason TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL DEFAULT 'system',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL DEFAULT 'system',
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_steps (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               step_type TEXT NOT NULL
+                   CHECK (step_type IN ('quote', 'purchase_order', 'delivery_note', 'invoice')),
+               effective_date DATE NULL,
+               due_date DATE NULL,
+               reference TEXT NOT NULL DEFAULT '',
+               amount NUMERIC(14, 3) NULL CHECK (amount IS NULL OR amount >= 0),
+               not_required BOOLEAN NOT NULL DEFAULT FALSE,
+               note TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL,
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               UNIQUE(case_id, step_type),
+               CHECK (due_date IS NULL OR step_type = 'invoice')
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_payments (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               effective_date DATE NOT NULL,
+               amount NUMERIC(14, 3) NOT NULL CHECK (amount > 0),
+               reference TEXT NOT NULL DEFAULT '',
+               payment_method TEXT NOT NULL DEFAULT '',
+               note TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL,
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_history (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               action TEXT NOT NULL,
+               entity_type TEXT NOT NULL,
+               entity_id BIGINT NULL,
+               before_data JSONB NULL,
+               after_data JSONB NULL,
+               change_reason TEXT NOT NULL DEFAULT '',
+               actor_username TEXT NOT NULL,
+               occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_billing_cases_client_updated ON billing_cases(client, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_cases_intervention ON billing_cases(intervention_id)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_steps_case ON billing_steps(case_id)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_payments_case_date ON billing_payments(case_id, effective_date)",
+        "CREATE INDEX IF NOT EXISTS idx_billing_history_case_date ON billing_history(case_id, occurred_at DESC)",
+    ):
+        conn.execute(statement)
+
+    # Existing and future SAV interventions receive one traceability case.
+    conn.execute(
+        """INSERT INTO billing_cases (
+               intervention_id, request_id, client, equipment, created_by, updated_by
+           )
+           SELECT i.id, d.id, COALESCE(NULLIF(i.client, ''), e.client, ''), i.machine,
+                  'system-migration', 'system-migration'
+           FROM interventions i
+           LEFT JOIN equipements e
+             ON LOWER(e.nom) = LOWER(i.machine) AND LOWER(e.client) = LOWER(i.client)
+           LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
+           WHERE COALESCE(i.is_temporary, 0) = 0
+           ON CONFLICT (intervention_id) DO NOTHING"""
+    )
+    # The former boolean had no date or amount. Keep it as an explicitly
+    # incomplete legacy milestone so users can confirm the real information.
+    conn.execute(
+        """INSERT INTO billing_steps (
+               case_id, step_type, effective_date, reference, amount, note,
+               created_by, updated_by
+           )
+           SELECT bc.id, 'invoice', NULL, '', NULL,
+                  'Repris de l''ancien suivi : date, référence et montant à confirmer',
+                  'system-migration', 'system-migration'
+           FROM billing_cases bc
+           JOIN interventions i ON i.id = bc.intervention_id
+           WHERE COALESCE(i.facture_envoyee, FALSE) = TRUE
+           ON CONFLICT (case_id, step_type) DO NOTHING"""
+    )
+    conn.execute(
+        """INSERT INTO billing_history (
+               case_id, action, entity_type, entity_id, after_data, actor_username
+           )
+           SELECT bc.id, 'MIGRATE_CASE', 'case', bc.id,
+                  jsonb_build_object(
+                      'intervention_id', bc.intervention_id,
+                      'client', bc.client,
+                      'equipment', bc.equipment
+                  ),
+                  'system-migration'
+           FROM billing_cases bc
+           WHERE bc.created_by='system-migration'"""
+    )
+    conn.execute(
+        """INSERT INTO billing_history (
+               case_id, action, entity_type, entity_id, after_data, actor_username
+           )
+           SELECT bs.case_id, 'MIGRATE_LEGACY_INVOICE', 'step', bs.id,
+                  jsonb_build_object(
+                      'step_type', bs.step_type,
+                      'note', bs.note
+                  ),
+                  'system-migration'
+           FROM billing_steps bs
+           WHERE bs.created_by='system-migration' AND bs.step_type='invoice'"""
+    )
+    conn.execute(
+        """CREATE OR REPLACE FUNCTION ensure_intervention_billing_case()
+           RETURNS TRIGGER AS $$
+           DECLARE target_case_id BIGINT;
+           BEGIN
+               IF COALESCE(NEW.is_temporary, 0) = 0 THEN
+                   INSERT INTO billing_cases (
+                       intervention_id, client, equipment, created_by, updated_by
+                   ) VALUES (
+                       NEW.id, COALESCE(NEW.client, ''), COALESCE(NEW.machine, ''),
+                       'system', 'system'
+                   )
+                   ON CONFLICT (intervention_id) DO UPDATE SET
+                       client = CASE WHEN NULLIF(BTRIM(EXCLUDED.client), '') IS NOT NULL
+                                     THEN EXCLUDED.client ELSE billing_cases.client END,
+                       equipment = EXCLUDED.equipment,
+                       updated_at = CURRENT_TIMESTAMP
+                   RETURNING id INTO target_case_id;
+                   INSERT INTO billing_history (
+                       case_id, action, entity_type, entity_id, after_data, actor_username
+                   ) VALUES (
+                       target_case_id,
+                       CASE WHEN TG_OP='INSERT' THEN 'SYNC_INTERVENTION_CREATED'
+                            ELSE 'SYNC_INTERVENTION_UPDATED' END,
+                       'case', target_case_id,
+                       jsonb_build_object(
+                           'intervention_id', NEW.id,
+                           'client', COALESCE(NEW.client, ''),
+                           'equipment', COALESCE(NEW.machine, '')
+                       ),
+                       'system'
+                   );
+               END IF;
+               RETURN NEW;
+           END;
+           $$ LANGUAGE plpgsql"""
+    )
+    conn.execute("DROP TRIGGER IF EXISTS trg_intervention_billing_case ON interventions")
+    conn.execute(
+        """CREATE TRIGGER trg_intervention_billing_case
+           AFTER INSERT OR UPDATE OF client, machine ON interventions
+           FOR EACH ROW EXECUTE FUNCTION ensure_intervention_billing_case()"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -328,6 +508,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("007", "reliable Telegram notification outbox", _migration_007_telegram_outbox),
     ("008", "private contract attachment metadata", _migration_008_contract_private_file_metadata),
     ("009", "distributed login rate limits", _migration_009_distributed_login_rate_limits),
+    ("010", "auditable billing tracking", _migration_010_billing_tracking),
 )
 
 
