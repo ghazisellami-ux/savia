@@ -4,17 +4,23 @@ on:
   workflow_run:
     workflows: ["CI/CD Pipeline"]
     types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: write
   pull-requests: write
+  actions: read
 
 jobs:
   merge-after-ci:
     name: Merge Dependabot PR after successful CI
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Merge eligible Dependabot pull requests
@@ -22,20 +28,52 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const run = context.payload.workflow_run;
-            const { data: pullRequests } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner,
-              repo,
-              commit_sha: run.head_sha,
-            });
+            let dependabotPullRequests;
+            if (context.eventName === 'workflow_run') {
+              const { data: pullRequests } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: context.payload.workflow_run.head_sha,
+              });
+              dependabotPullRequests = pullRequests;
+            } else {
+              const { data: pullRequests } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100,
+              });
+              dependabotPullRequests = pullRequests;
+            }
 
-            const dependabotPullRequests = pullRequests.filter((pullRequest) =>
+            dependabotPullRequests = dependabotPullRequests.filter((pullRequest) =>
               pullRequest.state === 'open' &&
               pullRequest.user?.login === 'dependabot[bot]' &&
               pullRequest.head.repo?.full_name === `${owner}/${repo}`
             );
 
             for (const pullRequest of dependabotPullRequests) {
+              let ciSucceeded = context.eventName === 'workflow_run';
+              if (!ciSucceeded) {
+                const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+                  owner,
+                  repo,
+                  head_sha: pullRequest.head.sha,
+                  per_page: 100,
+                });
+                ciSucceeded = runs.workflow_runs.some((run) =>
+                  run.name === 'CI/CD Pipeline' &&
+                  run.head_sha === pullRequest.head.sha &&
+                  run.event === 'pull_request' &&
+                  run.status === 'completed' &&
+                  run.conclusion === 'success'
+                );
+              }
+              if (!ciSucceeded) {
+                core.info(`PR #${pullRequest.number} ignorée : la dernière CI n'est pas réussie.`);
+                continue;
+              }
+
               const merge = await github.rest.pulls.merge({
                 owner,
                 repo,
@@ -55,6 +93,41 @@ jobs:
                   owner,
                   repo,
                   ref: `heads/${pullRequest.head.ref}`,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+
+            // Remove closed/stale Dependabot branches, while preserving every
+            // branch that still backs an open Dependabot pull request.
+            const { data: openPullRequests } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const openDependabotRefs = new Set(
+              openPullRequests
+                .filter((pullRequest) =>
+                  pullRequest.user?.login === 'dependabot[bot]' &&
+                  pullRequest.head.repo?.full_name === `${owner}/${repo}`
+                )
+                .map((pullRequest) => pullRequest.head.ref)
+            );
+            const { data: branches } = await github.rest.repos.listBranches({
+              owner,
+              repo,
+              per_page: 100,
+            });
+            for (const branch of branches.filter((item) =>
+              item.name.startsWith('dependabot/') && !openDependabotRefs.has(item.name)
+            )) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${branch.name}`,
                 });
               } catch (error) {
                 if (error.status !== 404) throw error;
