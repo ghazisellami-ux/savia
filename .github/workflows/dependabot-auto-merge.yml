@@ -1,0 +1,62 @@
+name: Dependabot auto-merge
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge-after-ci:
+    name: Merge Dependabot PR after successful CI
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge eligible Dependabot pull requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const { data: pullRequests } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: run.head_sha,
+            });
+
+            const dependabotPullRequests = pullRequests.filter((pullRequest) =>
+              pullRequest.state === 'open' &&
+              pullRequest.user?.login === 'dependabot[bot]' &&
+              pullRequest.head.repo?.full_name === `${owner}/${repo}`
+            );
+
+            for (const pullRequest of dependabotPullRequests) {
+              const merge = await github.rest.pulls.merge({
+                owner,
+                repo,
+                pull_number: pullRequest.number,
+                merge_method: 'squash',
+              });
+
+              if (!merge.data.merged) {
+                core.warning(`PR #${pullRequest.number} n'a pas été fusionnée : ${merge.data.message}`);
+                continue;
+              }
+
+              // Remove the Dependabot branch after a successful merge so it
+              // does not accumulate alongside the project's working branches.
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${pullRequest.head.ref}`,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
