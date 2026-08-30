@@ -42,7 +42,10 @@ export function isTransientNetworkError(error: unknown) {
     || (error as any)?.name === 'NetworkError'
     || (typeof navigator !== 'undefined' && !navigator.onLine)
     || [408, 425, 429].includes(status)
-    || (status >= 500 && status <= 599);
+    // Only gateway/service availability errors are safe to retry as offline
+    // mutations. A generic 500 usually represents a backend validation or
+    // database error and must remain visible to the technician.
+    || [502, 503, 504].includes(status);
 }
 
 export function reportOfflineState(offline: boolean) {
@@ -153,7 +156,7 @@ async function sendItem(item: OfflineOutboxItem) {
       detail = payload?.detail || detail;
     } catch { /* keep status text */ }
     const error = new Error(detail) as Error & { permanent?: boolean };
-    error.permanent = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429;
+    error.permanent = ![408, 425, 429, 502, 503, 504].includes(response.status);
     throw error;
   }
   return response;

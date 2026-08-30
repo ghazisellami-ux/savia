@@ -144,6 +144,7 @@ export const PHRASES: Array<[string, string]> = [
   ['Pièces', 'Parts'],
   ['Pieces', 'Parts'],
   ['En cours', 'In progress'],
+  ["Transfert vers l'atelier", 'Transfer to workshop'],
   ['Clôturée', 'Closed'],
   ['Cloturee', 'Closed'],
   ['En attente de pièce', 'Waiting for part'],

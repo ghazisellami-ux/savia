@@ -45,6 +45,7 @@ from services.scheduled_jobs import (
     _send_telegram,
     _send_telegram_bot,
     send_telegram_reliably,
+    notify_workshop_transfer,
     get_db,
     lire_equipements,
     lire_interventions,
@@ -350,7 +351,9 @@ def get_intervention_filter_options(
         normalized_statuses = set()
         for status in statuses:
             low = status.lower()
-            if "tur" in low or "termin" in low or "clotur" in low:
+            if "atelier" in low or "transfert" in low:
+                normalized_statuses.add("Transfert vers l'atelier")
+            elif "tur" in low or "termin" in low or "clotur" in low:
                 normalized_statuses.add("Cloturee")
             elif "attente" in low and "pi" in low:
                 normalized_statuses.add("En attente de piece")
@@ -470,7 +473,8 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
         if cached_response is not None:
             return cached_response
         intervention_state = conn.execute(
-            "SELECT statut FROM interventions WHERE id = %s",
+            """SELECT statut, date_transfert_atelier, retour_site_confirme
+               FROM interventions WHERE id = %s""",
             (intervention_id,),
         ).fetchone()
         previous_status = str(intervention_state.get("statut") or "").strip() if intervention_state else ""
@@ -544,9 +548,18 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
         and previous_status == "Cloturee"
         and new_statut
         and "tur" not in str(new_statut).lower()
-        and ("cours" in str(new_statut).lower() or "attente" in str(new_statut).lower())
+        and (
+            "cours" in str(new_statut).lower()
+            or "attente" in str(new_statut).lower()
+            or "atelier" in str(new_statut).lower()
+        )
     ):
-        reopened_tech_status = "En attente de piece" if "attente" in str(new_statut).lower() else "En cours"
+        if "attente" in str(new_statut).lower():
+            reopened_tech_status = "En attente de piece"
+        elif "atelier" in str(new_statut).lower():
+            reopened_tech_status = "Transfert vers l'atelier"
+        else:
+            reopened_tech_status = "En cours"
         with get_db() as conn:
             result = conn.execute(
                 "UPDATE interventions_techniciens SET statut = %s, updated_at = CURRENT_TIMESTAMP WHERE intervention_id = %s AND statut = 'Cloturee'",
@@ -588,6 +601,8 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                 start_time=body.get("start_time"),
                 end_time=body.get("end_time"),
                 duree_deplacement=body.get("deplacement"),  # PWA sends "deplacement"
+                retour_site_confirme=body.get("retour_site_confirme") is True,
+                retour_site_confirme_par=user.get("nom") or user.get("sub") or "",
             )
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
@@ -952,6 +967,16 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
         except Exception as e:
             logger.error(f"❌ update_intervention #{intervention_id} FAILED: {e}")
             raise HTTPException(status_code=500, detail=f"Database update failed: {str(e)}")
+
+    if new_statut == "Transfert vers l'atelier" and previous_status != new_statut:
+        notify_workshop_transfer(
+            intervention_id,
+            operation_id,
+            {
+                "technicien_declarant": user.get("nom") or user.get("sub") or "",
+            },
+        )
+
     response = {"ok": True}
     save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
     return response

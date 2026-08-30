@@ -585,6 +585,10 @@ def init_db():
             code_erreur TEXT DEFAULT '',
             statut TEXT DEFAULT 'Terminée',
             notes TEXT DEFAULT '',
+            date_transfert_atelier TIMESTAMP DEFAULT NULL,
+            retour_site_confirme BOOLEAN DEFAULT false,
+            date_retour_site TIMESTAMP DEFAULT NULL,
+            retour_site_confirme_par TEXT DEFAULT '',
             is_temporary INTEGER DEFAULT 0,           -- 1 = intervention enfant temporaire
             parent_intervention_id INTEGER DEFAULT NULL -- ID de l'intervention parent (NULL si parent)
         );
@@ -760,7 +764,7 @@ def init_db():
             intervention_id INTEGER NOT NULL,
             technicien_id INTEGER,
             technicien_nom TEXT NOT NULL,
-            statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece')),
+            statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Transfert vers l''atelier', 'Cloturee', 'Refusé', 'En attente de piece', 'En attente de pièce')),
             probleme_tech TEXT DEFAULT '',
             cause_tech TEXT DEFAULT '',
             solution_tech TEXT DEFAULT '',
@@ -890,6 +894,10 @@ def init_db():
         _safe_add_column("equipements", "matricule_fiscale")
         _safe_add_column("interventions", "date_debut_intervention", "TIMESTAMP", "NULL")
         _safe_add_column("interventions", "date_cloture", "TIMESTAMP", "NULL")
+        _safe_add_column("interventions", "date_transfert_atelier", "TIMESTAMP", "NULL")
+        _safe_add_column("interventions", "retour_site_confirme", "BOOLEAN", "false")
+        _safe_add_column("interventions", "date_retour_site", "TIMESTAMP", "NULL")
+        _safe_add_column("interventions", "retour_site_confirme_par", "TEXT", "''")
         _safe_add_column("interventions", "type_erreur")
         _safe_add_column("interventions", "priorite")
         _safe_add_column("contrats", "equipement")
@@ -1029,7 +1037,7 @@ def init_db():
                     intervention_id INTEGER NOT NULL,
                     technicien_id INTEGER,
                     technicien_nom TEXT NOT NULL,
-                    statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Cloturee', 'Refusé', 'En attente de piece')),
+                    statut TEXT DEFAULT 'Assigné' CHECK(statut IN ('Assigné', 'En cours', 'Transfert vers l''atelier', 'Cloturee', 'Refusé', 'En attente de piece', 'En attente de pièce')),
                     probleme_tech TEXT DEFAULT '',
                     cause_tech TEXT DEFAULT '',
                     solution_tech TEXT DEFAULT '',

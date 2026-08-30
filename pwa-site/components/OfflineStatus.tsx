@@ -111,7 +111,7 @@ export default function OfflineStatus() {
             ? `${state.failed} action(s) à vérifier — synchronisation interrompue`
             : state.syncing
               ? `Synchronisation${state.pending ? ` — ${state.pending} action(s)` : ''}…`
-              : 'Synchronisation terminée'}
+              : `${state.pending} action(s) en attente de synchronisation`}
       </span>
       {state.online && (state.pending || state.failed) > 0 && (
         <button type="button" onClick={() => void retryBlockedOfflineOutbox()} style={{ border: 0, background: 'transparent', color: 'inherit', fontWeight: 800, cursor: 'pointer' }}>

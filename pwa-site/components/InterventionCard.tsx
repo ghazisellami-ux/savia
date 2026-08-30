@@ -5,6 +5,7 @@ import { Building2, User, Wrench, AlertOctagon, Calendar, ChevronRight } from 'l
 const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En maintenance':     { bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
   'En cours':           { bg: 'rgba(86,124,141,0.12)',  color: 'var(--teal)'    },
+  "Transfert vers l'atelier": { bg: 'rgba(37,99,235,0.12)', color: '#2563EB' },
   'En attente de piece':{ bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
   'Cloturee':           { bg: 'rgba(34,197,94,0.12)',   color: '#15803D'        },
   'Assignée':           { bg: 'rgba(168,85,247,0.12)',  color: '#7C3AED'        },

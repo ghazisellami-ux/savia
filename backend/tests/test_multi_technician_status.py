@@ -27,6 +27,19 @@ def test_multi_tech_in_progress_keeps_parent_status_synchronised():
     assert calls == [(27, "En cours")]
 
 
+def test_multi_tech_workshop_transfer_updates_parent_status():
+    calls = []
+
+    result = _synchroniser_statut_parent_multi_tech(
+        27,
+        "Transfert vers l'atelier",
+        lambda intervention_id, status: calls.append((intervention_id, status)),
+    )
+
+    assert result == "Transfert vers l'atelier"
+    assert calls == [(27, "Transfert vers l'atelier")]
+
+
 def test_multi_tech_unrelated_status_does_not_override_parent_status():
     calls = []
 

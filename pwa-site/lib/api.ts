@@ -33,7 +33,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
       let detail = `${res.status} ${res.statusText}`;
       try {
         const body = await res.json();
-        if (body?.detail) detail = body.detail;
+        if (body?.detail || body?.error) detail = body.detail || body.error;
       } catch {}
       const apiError = new Error(detail) as Error & { status?: number };
       apiError.status = res.status;

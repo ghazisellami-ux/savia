@@ -34,6 +34,7 @@ from services.scheduled_jobs import (
     _send_telegram,
     _send_telegram_bot,
     send_telegram_reliably,
+    notify_workshop_transfer,
     logger,
 )
 from controllers.auth_dashboard import (
@@ -77,6 +78,8 @@ def _synchroniser_statut_parent_multi_tech(intervention_id, statut_technicien, u
     """
     if statut_technicien == "En cours":
         parent_status = "En cours"
+    elif statut_technicien == "Transfert vers l'atelier":
+        parent_status = "Transfert vers l'atelier"
     elif statut_technicien in ("En attente de piece", "En attente de pièce"):
         parent_status = "En attente de piece"
     else:
@@ -177,9 +180,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         demande_id = new_demande["id"] if new_demande else None
 
         # A demand is visible in the maintenance planning as soon as it is
-        # created.  It remains stored as "Planifiée" here; the planning page
-        # derives the visual state from its date (future = blue, today = in
-        # progress, past = overdue) without allowing a premature acceptance.
+        # created. It remains "Planifiée", including on the scheduled day,
+        # until one of the assigned technicians explicitly accepts it.
         planning_id = None
         if demande_id:
             planning = conn.execute(
@@ -494,7 +496,7 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
             return cached_response
 
     from db_engine import (
-        get_db, update_interventions_techniciens, 
+        update_interventions_techniciens,
         get_or_create_interventions_techniciens, get_techniciens_status,
         finalize_intervention_from_techniciens, consolidate_technician_duplicates,
         update_intervention_statut,
@@ -510,10 +512,13 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         client = None
         technicien = None
         current_tech_status = None
+        retour_site_requis = False
         
         with get_db() as conn:
             intervention = conn.execute(
-                "SELECT id, machine, technicien FROM interventions WHERE id = %s",
+                """SELECT id, machine, technicien, statut,
+                          date_transfert_atelier, retour_site_confirme
+                   FROM interventions WHERE id = %s""",
                 (intervention_id,)
             ).fetchone()
             
@@ -523,6 +528,19 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
             # Extract intervention data
             machine = intervention.get("machine", "")
             technicien = intervention.get("technicien", "")
+            retour_site_requis = bool(intervention.get("date_transfert_atelier")) and not bool(
+                intervention.get("retour_site_confirme")
+            )
+
+            if (
+                body.get("statut") == "Cloturee"
+                and retour_site_requis
+                and body.get("retour_site_confirme") is not True
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Confirmez que l'équipement a bien été transféré sur site avant de clôturer l'intervention.",
+                )
             
             # Get client from equipements table (joined by machine name)
             try:
@@ -616,6 +634,21 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
 
+        if body.get("statut") == "Cloturee" and retour_site_requis:
+            with get_db() as conn:
+                conn.execute(
+                    """UPDATE interventions
+                       SET retour_site_confirme = true,
+                           date_retour_site = %s,
+                           retour_site_confirme_par = %s
+                       WHERE id = %s""",
+                    (
+                        datetime.now().isoformat(),
+                        user.get("nom") or user.get("sub") or tech_nom,
+                        intervention_id,
+                    ),
+                )
+
         if body.get("fiche_validation"):
             with get_db() as conn:
                 conn.execute(
@@ -625,11 +658,35 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         
         # Keep the shared parent intervention aligned with the technician's
         # active status. This is intentionally limited to the multi-tech flow.
-        _synchroniser_statut_parent_multi_tech(
-            intervention_id,
-            body.get("statut"),
-            update_intervention_statut,
-        )
+        # Once one technician has sent the equipment to the workshop, another
+        # technician saving "En cours" must not silently move the shared
+        # equipment back to maintenance. The workshop state remains authoritative
+        # until a technician explicitly confirms the return while closing.
+        if not (
+            retour_site_requis
+            and body.get("statut") not in {"Transfert vers l'atelier", "Cloturee"}
+        ):
+            _synchroniser_statut_parent_multi_tech(
+                intervention_id,
+                body.get("statut"),
+                update_intervention_statut,
+            )
+
+        if (
+            body.get("statut") == "Transfert vers l'atelier"
+            and current_tech_status != "Transfert vers l'atelier"
+        ):
+            notify_workshop_transfer(
+                intervention_id,
+                operation_id,
+                {
+                    "technicien_declarant": tech_nom,
+                    "probleme": body.get("probleme_tech") or "",
+                    "cause": body.get("cause_tech") or "",
+                    "notes": body.get("notes_tech") or "",
+                    "type_erreur": body.get("type_erreur_tech") or "",
+                },
+            )
 
         # Deduct stock if technician marked as Cloturee and pieces are provided
         if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):
@@ -1169,7 +1226,7 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
                 )
             conn.execute(
                 """UPDATE demandes_intervention
-                   SET statut = 'Assignée', date_planifiee = %s,
+                   SET statut = 'En cours', date_planifiee = %s,
                        date_traitement = CURRENT_TIMESTAMP
                    WHERE id = %s""",
                 (planned_date, row["demande_id"]),
@@ -1184,6 +1241,15 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
                    WHERE id = %s""",
                 (intervention_id,),
             )
+
+        # A multi-technician intervention is shared: the first acceptance
+        # starts the parent and releases every assigned technician's work form.
+        conn.execute(
+            """UPDATE interventions_techniciens
+               SET statut = 'En cours', updated_at = CURRENT_TIMESTAMP
+               WHERE intervention_id = %s AND statut = 'Assigné'""",
+            (intervention_id,),
+        )
 
     tech_name = user.get("nom") or user.get("username") or "?"
     machine = row["machine"] if row else ""

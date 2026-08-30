@@ -197,7 +197,7 @@ def sync_planning_to_interventions(*, notify=True):
             planned = conn.execute(
                 """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne,
                           pm.description, pm.type_maintenance, pm.date_prevue,
-                          pm.statut, pm.is_ghost
+                          pm.statut, pm.notes, pm.is_ghost
                    FROM planning_maintenance pm
                    WHERE pm.date_prevue <= %s
                      AND COALESCE(pm.is_ghost, FALSE) = FALSE""",
@@ -228,9 +228,13 @@ def sync_planning_to_interventions(*, notify=True):
             is_intervention_request = str(pm.get('notes') or '').strip().startswith('Demande #')
             type_maintenance = pm.get('type_maintenance', 'Préventive') or 'Préventive'
             is_preventive = 'preventive' in normalized_status(type_maintenance)
-            probleme = 'Maintenance préventive' if is_preventive else ''
+            probleme = (
+                pm.get('description', '') or ''
+                if is_intervention_request
+                else 'Maintenance préventive' if is_preventive else ''
+            )
             description = pm.get('description', '') or f"Maintenance préventive — {machine}"
-            notes = (
+            notes = str(pm.get('notes') or '').strip() if is_intervention_request else (
                 f"[{client}] Maintenance préventive planifiée #{pm_id}"
                 if client else f"Maintenance préventive planifiée #{pm_id}"
             )
@@ -251,7 +255,7 @@ def sync_planning_to_interventions(*, notify=True):
                             statut, priorite, notes, planning_id)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (planned_date, machine, technicien, type_maintenance, description, probleme,
-                         'En cours', 'Moyenne', notes, pm_id)
+                         'Assignée' if is_intervention_request else 'En cours', 'Moyenne', notes, pm_id)
                     )
                     linked = conn.execute(
                         "SELECT id, statut, technicien, probleme FROM interventions "
@@ -1151,6 +1155,100 @@ def send_telegram_reliably(bot_key: str, message: str, dedupe_key: str = "") -> 
     except Exception:
         logger.exception("Unable to queue Telegram notification: bot=%s key=%s", bot_key, dedupe_key)
     return False
+
+
+def notify_workshop_transfer(
+    intervention_id: int,
+    operation_id: str = "",
+    overrides: dict | None = None,
+) -> dict:
+    """Notify both technical and SAV teams after a workshop transfer is saved."""
+    from html import escape
+
+    overrides = overrides or {}
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                """SELECT i.machine, i.technicien, i.type_intervention,
+                          i.priorite, i.probleme, i.description, i.cause,
+                          i.code_erreur, i.type_erreur, i.notes,
+                          i.date_transfert_atelier,
+                          COALESCE(
+                              NULLIF(i.client, ''),
+                              (SELECT e.client FROM equipements e
+                               WHERE LOWER(e.nom) = LOWER(i.machine)
+                               ORDER BY e.id LIMIT 1),
+                              ''
+                          ) AS client
+                   FROM interventions i
+                   WHERE i.id = %s""",
+                (intervention_id,),
+            ).fetchone()
+    except Exception:
+        logger.exception(
+            "Impossible de préparer la notification de transfert atelier pour #%s",
+            intervention_id,
+        )
+        return {"telegram": False, "telegram_sav": False}
+
+    if not row:
+        logger.warning(
+            "Intervention #%s introuvable pour la notification de transfert atelier",
+            intervention_id,
+        )
+        return {"telegram": False, "telegram_sav": False}
+
+    data = dict(row)
+
+    def value(key: str, fallback: str = "", max_length: int = 350) -> str:
+        raw = overrides.get(key)
+        if raw is None or str(raw).strip() == "":
+            raw = data.get(key, fallback)
+        text = str(raw or fallback).strip()
+        if len(text) > max_length:
+            text = text[:max_length - 1].rstrip() + "…"
+        return escape(text)
+
+    declaring_technician = value("technicien_declarant") or value("technicien", "Non renseigné")
+    assigned_team = value("technicien", "Non renseigné")
+    problem = value("probleme", max_length=600) or value("description", "Non renseigné", 600)
+    transfer_time = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    lines = [
+        f"🏭 <b>TRANSFERT VERS L'ATELIER — #{intervention_id}</b>",
+        "",
+        f"🔧 Équipement : <b>{value('machine', 'Non renseigné')}</b>",
+        f"🏥 Client / site : <b>{value('client', 'Non renseigné')}</b>",
+        f"👷 Technicien déclarant : <b>{declaring_technician}</b>",
+    ]
+    if assigned_team and assigned_team != declaring_technician:
+        lines.append(f"👥 Équipe assignée : {assigned_team}")
+    lines.extend([
+        f"🔹 Type : {value('type_intervention', 'Non renseigné')}",
+        f"⚡ Priorité : {value('priorite', 'Non renseignée')}",
+        f"🔴 Problème : {problem}",
+    ])
+    if value("cause", max_length=500):
+        lines.append(f"🔍 Diagnostic / cause : {value('cause', max_length=500)}")
+    if value("type_erreur"):
+        lines.append(f"🧩 Type d'erreur : {value('type_erreur')}")
+    if value("code_erreur"):
+        lines.append(f"💻 Code erreur : {value('code_erreur')}")
+    if value("notes", max_length=500):
+        lines.append(f"📝 Notes : {value('notes', max_length=500)}")
+    lines.extend([
+        "",
+        "📌 Statut équipement : <b>En atelier</b>",
+        "⚠️ Suivi requis : réparation en atelier puis retour sur site à confirmer avant clôture.",
+        f"🕐 Transfert déclaré le {transfer_time}",
+    ])
+    message = "\n".join(lines)
+    dedupe_key = f"{operation_id}:workshop-transfer" if operation_id else ""
+
+    return {
+        "telegram": send_telegram_reliably("telegram", message, dedupe_key),
+        "telegram_sav": send_telegram_reliably("telegram_sav", message, dedupe_key),
+    }
 
 
 def process_telegram_outbox(limit: int = 50) -> int:

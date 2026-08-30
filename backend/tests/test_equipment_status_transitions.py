@@ -1,6 +1,7 @@
 from repositories.equipment_status import (
     EQUIPMENT_MAINTENANCE,
     EQUIPMENT_OPERATIONAL,
+    EQUIPMENT_WORKSHOP,
     calculer_nouveau_statut_equipement,
 )
 
@@ -16,6 +17,23 @@ def test_waiting_for_a_part_remains_an_active_equipment_state():
     assert (
         calculer_nouveau_statut_equipement(EQUIPMENT_OPERATIONAL, "En attente de piece")
         == EQUIPMENT_MAINTENANCE
+    )
+
+
+def test_workshop_transfer_puts_equipment_in_workshop():
+    assert (
+        calculer_nouveau_statut_equipement(
+            EQUIPMENT_MAINTENANCE,
+            "Transfert vers l'atelier",
+        )
+        == EQUIPMENT_WORKSHOP
+    )
+
+
+def test_closing_after_workshop_return_puts_equipment_back_in_operation():
+    assert (
+        calculer_nouveau_statut_equipement(EQUIPMENT_WORKSHOP, "Cloturee")
+        == EQUIPMENT_OPERATIONAL
     )
 
 

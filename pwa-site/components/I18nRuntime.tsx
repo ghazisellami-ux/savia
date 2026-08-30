@@ -53,6 +53,7 @@ const PHRASES: Array<[string, string]> = [
   ['Photo', 'Photo'],
   ['Signature', 'Signature'],
   ['En cours', 'In progress'],
+  ["Transfert vers l'atelier", 'Transfer to workshop'],
   ['Clôturée', 'Closed'],
   ['Cloturee', 'Closed'],
   ['En attente de pièce', 'Waiting for part'],
