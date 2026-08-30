@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Plus, Search, Clock, CheckCircle, AlertTriangle, X,
+  Plus, Search, Clock, Calendar, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
   Zap, FileText, Tag, Edit, Send, UserCheck, Lock, Users, Trash2
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/auth-context';
 interface Demande {
   id: number;
   date: string;
+  date_planifiee: string;
   machine: string;
   client: string;
   demandeur: string;
@@ -74,6 +75,18 @@ const formatDateTime = (dateStr: string): string => {
   return dateStr;
 };
 
+const formatDateOnly = (dateStr: string): string => {
+  if (!dateStr || dateStr === 'N/A') return dateStr;
+  const [year, month, day] = dateStr.replace('T', ' ').split(' ')[0].split('-');
+  return year && month && day ? `${day}/${month}/${year}` : dateStr;
+};
+
+const todayIso = (): string => {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
+
 export default function DemandesPage() {
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
@@ -93,6 +106,7 @@ export default function DemandesPage() {
     contact_nom: isLecteur ? demandeurNom : '',
     contact_tel: '',
     technicien_assigne: '',
+    date_planifiee: todayIso(),
   };
 
   const [search, setSearch] = useState('');
@@ -125,6 +139,7 @@ export default function DemandesPage() {
       const mapped = (res as any[]).map((item: any) => ({
         id: Number(item.id || 0),
         date: item.date_demande ? String(item.date_demande).substring(0, 16) : (item.date || 'N/A'),
+        date_planifiee: item.date_planifiee ? String(item.date_planifiee).substring(0, 10) : '',
         machine: item.equipement || item.machine || '',
         client: item.client || '',
         demandeur: item.demandeur || '',
@@ -193,14 +208,18 @@ export default function DemandesPage() {
       alert('Veuillez remplir le champ Demandeur');
       return;
     }
+    const payload = { ...formToSend, date_planifiee: formToSend.date_planifiee || todayIso() };
     setIsSaving(true);
     try {
-      await demandes.create(formToSend as any);
+      await demandes.create(payload as any);
       setShowNewModal(false);
       await loadData();
     } catch (err) {
       console.error(err);
-      alert('Erreur lors de la création de la demande');
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'Erreur lors de la création de la demande';
+      alert(message);
     } finally {
       setIsSaving(false);
     }
@@ -366,7 +385,8 @@ export default function DemandesPage() {
               <span className="flex items-center gap-1"><Server className="w-3 h-3" />{d.machine || '—'}</span>
               <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{d.client || '—'}</span>
               <span className="flex items-center gap-1"><User className="w-3 h-3" />{d.demandeur || '—'}</span>
-              <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDateTime(d.date)}</span>
+              <span className="flex items-center gap-1"><Clock className="w-3 h-3" />Demande : {formatDateTime(d.date)}</span>
+              <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />Prévue : {d.date_planifiee ? formatDateOnly(d.date_planifiee) : '—'}</span>
             </div>
             {d.technicien_assigne && (
               <div className="mt-2 text-xs text-blue-400 flex items-center gap-1 flex-wrap">
@@ -425,6 +445,17 @@ export default function DemandesPage() {
               )}
 
               {/* Client + Équipement */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <Calendar className="w-3.5 h-3.5 text-savia-accent" /> Date prévue d&apos;intervention *
+                  </label>
+                  <input type="date" className={INPUT_CLS} value={form.date_planifiee}
+                    min={todayIso()}
+                    onChange={e => setForm({...form, date_planifiee: e.target.value})} />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">

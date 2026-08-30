@@ -66,6 +66,10 @@ def test_creation_policies_match_the_role_matrix(role):
     assert _check_create_piece_permission(user) is (role in ROLE_POLICY_MATRIX["create_piece"])
 
 
+def test_responsable_technique_demande_permission_tolerates_legacy_whitespace():
+    assert _check_create_demande_permission({"role": " Responsable Technique "}) is True
+
+
 @pytest.mark.parametrize("role", ALL_ROLES)
 def test_client_scope_matrix_is_fail_closed_for_reader(role):
     user = user_for(role)

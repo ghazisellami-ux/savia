@@ -77,8 +77,8 @@ def check_garantie_expiry():
 
 def check_planning_reminder():
     """
-    Vérifie les maintenances préventives planifiées dans les prochains jours
-    et envoie un rappel Telegram pour chacune.
+    Vérifie les maintenances et demandes d'intervention planifiées dans les
+    prochains jours et envoie un rappel Telegram via le bot technique.
     
     Utilise le rappel_avant_jours configuré dans le contrat associé.
     Par défaut: 14 jours si pas de contrat ou rappel non configuré.
@@ -99,6 +99,8 @@ def check_planning_reminder():
             statut = str(row.get('statut', '') or '').strip()
             if statut not in ('Planifiée', 'En cours'):
                 continue
+
+            is_intervention_request = str(row.get('notes') or '').strip().startswith('Demande #')
             
             date_str = str(row.get('date_prevue', '') or '').strip()
             if not date_str:
@@ -140,6 +142,7 @@ def check_planning_reminder():
                         'technicien': row.get('technicien_assigne', ''),
                         'jours': jours,
                         'reminder_days': reminder_days,
+                        'is_intervention_request': is_intervention_request,
                     })
             except Exception:
                 continue
@@ -148,6 +151,7 @@ def check_planning_reminder():
             lines = '\n'.join(
                 f"  • <b>{r['machine']}</b>"
                 + (f" — {r['client']}" if r['client'] else "")
+                + (" — <b>Demande d'intervention</b>" if r.get('is_intervention_request') else "")
                 + f"\n    📅 {r['date']} ({r['jours']}j)"
                 + (f" | 👨‍🔧 {r['technicien']}" if r['technicien'] else " | ⚠️ <b>Technicien non assigné</b>")
                 + (f"\n    📝 {r['description'][:60]}" if r['description'] else "")
@@ -157,8 +161,8 @@ def check_planning_reminder():
             # Build dynamic message based on max reminder days used
             max_days = max((r['reminder_days'] for r in reminders), default=14)
             msg = (
-                f"🔧 <b>Rappel Maintenance Préventive</b>\n"
-                f"<i>{len(reminders)} maintenance(s) dans les {max_days} prochains jours :</i>\n\n"
+                f"🔧 <b>Rappel des interventions planifiées</b>\n"
+                f"<i>{len(reminders)} intervention(s)/maintenance(s) dans les {max_days} prochains jours :</i>\n\n"
                 f"{lines}\n\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
@@ -217,6 +221,11 @@ def sync_planning_to_interventions(*, notify=True):
             machine = pm.get('machine', '')
             client = pm.get('client', '')
             planned_date = str(pm.get('date_prevue') or today_str)[:10]
+            # Intervention requests are deliberately accepted by the
+            # technician on day J, not auto-started by the maintenance
+            # synchronizer.  Their planning row still remains visible (and
+            # is rendered overdue when its date is in the past).
+            is_intervention_request = str(pm.get('notes') or '').strip().startswith('Demande #')
             type_maintenance = pm.get('type_maintenance', 'Préventive') or 'Préventive'
             is_preventive = 'preventive' in normalized_status(type_maintenance)
             probleme = 'Maintenance préventive' if is_preventive else ''
@@ -261,7 +270,7 @@ def sync_planning_to_interventions(*, notify=True):
                         "UPDATE interventions SET probleme = %s WHERE id = %s",
                         (probleme, intervention_id)
                     )
-                if current_status in startable_statuses:
+                if current_status in startable_statuses and not is_intervention_request:
                     conn.execute(
                         """UPDATE interventions
                            SET statut = 'En cours',
