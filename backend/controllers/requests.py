@@ -125,6 +125,12 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     code_erreur        = body.get("code_erreur") or ""
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
+    date_planifiee     = str(body.get("date_planifiee") or datetime.now().date().isoformat())[:10]
+    if date_planifiee < datetime.now().date().isoformat():
+        raise HTTPException(
+            status_code=422,
+            detail="La date prévue d'intervention doit être aujourd'hui ou une date future",
+        )
     
     # Support for multiple technicians: can be string (single/comma-separated) or list (multiple)
     techniciens_input = body.get("technicien_assigne") or body.get("techniciens") or []
@@ -155,13 +161,13 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence, priorite,
                description, code_erreur, contact_nom, contact_tel,
-               statut, technicien_assigne)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+               statut, technicien_assigne, date_planifiee)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence, priorite,
             description, code_erreur, contact_nom, contact_tel,
-            statut, ", ".join(techniciens_fullnames),  # All techs in the demand
+            statut, ", ".join(techniciens_fullnames), date_planifiee,  # All techs in the demand
         ))
         
         # Get the newly created demand ID
@@ -169,6 +175,32 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             "SELECT id FROM demandes_intervention ORDER BY id DESC LIMIT 1"
         ).fetchone()
         demande_id = new_demande["id"] if new_demande else None
+
+        # A demand is visible in the maintenance planning as soon as it is
+        # created.  It remains stored as "Planifiée" here; the planning page
+        # derives the visual state from its date (future = blue, today = in
+        # progress, past = overdue) without allowing a premature acceptance.
+        planning_id = None
+        if demande_id:
+            planning = conn.execute(
+                """INSERT INTO planning_maintenance
+                   (machine, client, type_maintenance, description, date_prevue,
+                    technicien_assigne, recurrence, statut, notes)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    equipement,
+                    client,
+                    "Corrective",
+                    description,
+                    date_planifiee,
+                    ", ".join(techniciens_fullnames),
+                    "Aucune",
+                    "Planifiée",
+                    f"Demande #{demande_id}",
+                ),
+            ).fetchone()
+            planning_id = planning["id"] if planning else None
 
         # --- Create SINGLE SHARED intervention (visible to all assigned technicians) ---
         # NEW APPROACH: One intervention for ALL technicians instead of N children
@@ -183,8 +215,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             INSERT INTO interventions
               (date, machine, technicien, type_intervention, description,
                probleme, code_erreur, statut, priorite, notes,
-               is_temporary, parent_intervention_id, client)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+               is_temporary, parent_intervention_id, client, planning_id)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             now,
             equipement,
@@ -199,6 +231,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             0,  # is_temporary = FALSE (visible to all technicians)
             None,  # No parent - this is a standalone intervention
             client,
+            planning_id,
         ))
         
         intervention = conn.execute(
@@ -233,6 +266,11 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     contact_line = f"\n\U0001f4de Contact : <b>{contact_nom}</b>" + (f" — {contact_tel}" if contact_tel else "") if contact_nom else ""
     code_line    = f"\n\U0001f522 Code erreur : <code>{code_erreur}</code>" if code_erreur else ""
     techs_line   = f"\n\U0001f477 Assigné à : <b>{', '.join(techniciens_fullnames)}</b>" if techniciens_fullnames else ""
+    planned_date_display = date_planifiee
+    try:
+        planned_date_display = datetime.strptime(date_planifiee, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        pass
     msg = (
         f"\U0001f4cb <b>NOUVELLE DEMANDE D'INTERVENTION</b>\n\n"
         f"\U0001f3e2 Client : <b>{client}</b>\n"
@@ -243,7 +281,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         f"{contact_line}"
         f"{techs_line}\n"
         f"\U0001f464 Demandeur : <b>{demandeur}</b>\n"
-        f"\U0001f550 Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+        f"\U0001f550 Date d'émission : {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+        f"\U0001f4c5 Date prévue d'intervention : <b>{planned_date_display}</b>\n\n"
         f"\U0001f449 Connectez-vous à <b>SAVIA</b> pour traiter cette demande."
     )
     _send_telegram(msg)
@@ -1027,13 +1066,19 @@ def get_intervention_techniciens_aggregated(intervention_id: int, user: dict = D
 
 @app.put("/api/interventions/{intervention_id}/accept")
 def accept_intervention(intervention_id: int, request: Request, user: dict = Depends(_verify_token)):
-    from db_engine import get_db, update_intervention_statut
+    from db_engine import get_db
     endpoint = f"/api/interventions/{intervention_id}/accept"
     operation_id = operation_id_from_request(request)
     with get_db() as conn:
         _assert_intervention_action_access(conn, intervention_id, user)
         row = conn.execute(
-            "SELECT id, machine, technicien, statut FROM interventions WHERE id = %s",
+            """SELECT i.id, i.machine, i.technicien, i.statut, i.planning_id,
+                      d.id AS demande_id, d.client AS demande_client,
+                      d.description AS demande_description, d.code_erreur AS demande_code_erreur,
+                      d.date_planifiee
+               FROM interventions i
+               LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
+               WHERE i.id = %s""",
             (intervention_id,)
         ).fetchone()
         if not row:
@@ -1042,20 +1087,119 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
         if cached_response is not None:
             return cached_response
 
-    update_intervention_statut(intervention_id, "En cours")
+        # L'entrée du planning existe dès la création de la demande. Le
+        # technicien peut toutefois l'accepter uniquement le jour prévu.
+        if row.get("demande_id"):
+            today_str = datetime.now().date().isoformat()
+            planned_date = str(row.get("date_planifiee") or today_str)[:10]
+            if planned_date != today_str:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cette intervention peut être acceptée uniquement le {planned_date}"
+                    ),
+                )
+            planning_status = "En cours" if planned_date <= today_str else "Planifiée"
+            technician = str(row.get("technicien") or user.get("nom") or user.get("username") or "").strip()
+            planning_id = row.get("planning_id")
+
+            if not planning_id:
+                existing_planning = conn.execute(
+                    """SELECT id FROM planning_maintenance
+                       WHERE notes = %s ORDER BY id DESC LIMIT 1""",
+                    (f"Demande #{row['demande_id']}",),
+                ).fetchone()
+                planning_id = existing_planning["id"] if existing_planning else None
+
+            if planning_id:
+                conn.execute(
+                    """UPDATE planning_maintenance
+                       SET machine = %s, client = %s, type_maintenance = %s,
+                           description = %s, date_prevue = %s,
+                           technicien_assigne = %s, statut = %s
+                       WHERE id = %s""",
+                    (
+                        row.get("machine") or "",
+                        row.get("demande_client") or "",
+                        "Corrective",
+                        row.get("demande_description") or "",
+                        planned_date,
+                        technician,
+                        planning_status,
+                        planning_id,
+                    ),
+                )
+            else:
+                planning = conn.execute(
+                    """INSERT INTO planning_maintenance
+                       (machine, client, type_maintenance, description, date_prevue,
+                        technicien_assigne, recurrence, statut, notes)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       RETURNING id""",
+                    (
+                        row.get("machine") or "",
+                        row.get("demande_client") or "",
+                        "Corrective",
+                        row.get("demande_description") or "",
+                        planned_date,
+                        technician,
+                        "Aucune",
+                        planning_status,
+                        f"Demande #{row['demande_id']}",
+                    ),
+                ).fetchone()
+                planning_id = planning["id"] if planning else None
+
+            # Le lien permet au planning et aux listes d'interventions de
+            # rester synchronisés sans recréer une intervention.
+            if planning_status == "En cours":
+                conn.execute(
+                    """UPDATE interventions
+                       SET date = %s, statut = %s, planning_id = %s,
+                           date_debut_intervention = COALESCE(date_debut_intervention, CURRENT_TIMESTAMP)
+                       WHERE id = %s""",
+                    (planned_date, planning_status, planning_id, intervention_id),
+                )
+            else:
+                conn.execute(
+                    """UPDATE interventions
+                       SET date = %s, statut = %s, planning_id = %s
+                       WHERE id = %s""",
+                    (planned_date, planning_status, planning_id, intervention_id),
+                )
+            conn.execute(
+                """UPDATE demandes_intervention
+                   SET statut = 'Assignée', date_planifiee = %s,
+                       date_traitement = CURRENT_TIMESTAMP
+                   WHERE id = %s""",
+                (planned_date, row["demande_id"]),
+            )
+        else:
+            # Les interventions créées hors demande gardent le comportement
+            # historique : l'acceptation les démarre immédiatement.
+            conn.execute(
+                """UPDATE interventions
+                   SET statut = 'En cours',
+                       date_debut_intervention = COALESCE(date_debut_intervention, CURRENT_TIMESTAMP)
+                   WHERE id = %s""",
+                (intervention_id,),
+            )
 
     tech_name = user.get("nom") or user.get("username") or "?"
     machine = row["machine"] if row else ""
+    accepted_status = "En cours"
+    if row and row.get("demande_id"):
+        accepted_status = "En cours" if str(row.get("date_planifiee") or datetime.now().date().isoformat())[:10] <= datetime.now().date().isoformat() else "Planifiée"
     msg = (
         f"\u2705 <b>INTERVENTION #{intervention_id} — ACCEPTÉE</b>\n\n"
         f"\U0001f477 Technicien : <b>{tech_name}</b>\n"
         f"\U0001f3e5 Équipement : <b>{machine}</b>\n"
-        f"\U0001f4ca Statut : <b>En cours</b>\n"
+        f"\U0001f4ca Statut : <b>{accepted_status}</b>\n"
         f"\U0001f550 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     )
     _send_telegram(msg)
 
-    response = {"success": True, "statut": "En cours"}
+    response = {"success": True, "statut": accepted_status}
     save_idempotent_response(operation_id, user.get("sub", ""), endpoint, response)
     return response
 

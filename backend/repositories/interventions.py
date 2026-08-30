@@ -42,6 +42,7 @@ def lire_interventions(machine=None):
                    i.date_debut_intervention, i.date_cloture,
                    i.type_erreur, i.priorite,
                    i.start_time, i.end_time, i.planning_id,
+                   d.id AS demande_id, d.date_planifiee,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (NULLIF(i.fiche_storage_key, '') IS NOT NULL OR
@@ -49,6 +50,7 @@ def lire_interventions(machine=None):
                    COALESCE(NULLIF(i.client, ''), e.client, '') AS client
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+            LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
             WHERE i.is_temporary = 0
         """
         if machine:

@@ -247,9 +247,14 @@ def _check_create_demande_permission(user: dict) -> bool:
     Vérifier si l'utilisateur a le droit de créer une demande d'intervention.
     Autorisé pour: Admin, Manager, Responsable Technique, Lecteur (clients)
     """
-    role = user.get("role", "")
-    allowed_roles = ["Admin", "Manager", "Responsable Technique", "Lecteur"]
-    return role in allowed_roles
+    # Some legacy user records contain trailing whitespace in the role.  Use
+    # the canonical value for the authorization decision so that a
+    # Responsable Technique keeps the permission shown by the frontend.
+    normalized_roles = {
+        " ".join(str(user.get("role") or "").replace("_", " ").replace("-", " ").split()).casefold()
+    }
+    allowed_roles = {"admin", "manager", "responsable technique", "lecteur"}
+    return bool(normalized_roles & allowed_roles)
 
 
 def _check_create_piece_permission(user: dict) -> bool:

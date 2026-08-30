@@ -1212,6 +1212,7 @@ def init_db():
             technicien_assigne TEXT DEFAULT '',
             notes_traitement TEXT DEFAULT '',
             date_traitement TIMESTAMP,
+            date_planifiee DATE,
             intervention_id INTEGER
         )
         """)

@@ -84,6 +84,17 @@ function matchesMachine(machineEquipmentType: string, pieceEquipmentType: string
   return mt === pt;
 }
 
+function localDateIso(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+function displayDate(value: string): string {
+  const [year, month, day] = String(value || '').slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
 export default function InterventionDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -738,6 +749,8 @@ export default function InterventionDetailPage() {
   const isClotured    = form.statut === 'Cloturee';
   const isAttenteP    = form.statut === 'En attente de piece';
   const isAssignee    = form.statut === 'Assignée';
+  const plannedDate = String(intervention?.date_planifiee || '').slice(0, 10);
+  const canAcceptOnScheduledDay = !intervention?.demande_id || !plannedDate || plannedDate === localDateIso();
   const isTechnicianStatusLocked = initialTechnicianStatus === 'Cloturee';
   const hasClosedFollowUp = Boolean(photoFile) || form.fiche_validation !== initialFicheValidation;
   const isSingleStatusLocked = initialFormStatut === 'Cloturee';
@@ -765,12 +778,19 @@ export default function InterventionDetailPage() {
   }, [currentUserName, activeTabTech, usePerTechnicianMode, isCurrentUserActiveTech, isAssignee]);
 
   const handleAccept = async () => {
+    if (!canAcceptOnScheduledDay) {
+      setError(`Cette intervention peut être acceptée uniquement le ${displayDate(plannedDate)}.`);
+      return;
+    }
     setActionLoading(true);
     try {
-      await api.interventions.accept(id);
-      setForm(f => ({ ...f, statut: 'En cours' }));
-      setIntervention((prev: any) => ({ ...prev, statut: 'En cours' }));
-      setSuccess('Intervention acceptée ! Vous pouvez maintenant la compléter.');
+      const response = await api.interventions.accept(id);
+      const acceptedStatus = response?.statut || 'En cours';
+      setForm(f => ({ ...f, statut: acceptedStatus }));
+      setIntervention((prev: any) => ({ ...prev, statut: acceptedStatus }));
+      setSuccess(acceptedStatus === 'Planifiée'
+        ? 'Intervention acceptée et planifiée à la date prévue.'
+        : 'Intervention acceptée ! Vous pouvez maintenant la compléter.');
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de l\'acceptation.');
     } finally {
@@ -1389,13 +1409,15 @@ export default function InterventionDetailPage() {
               <Bell style={{ width: 18, height: 18 }} /> Intervention assignée
             </h3>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '16px', lineHeight: 1.5 }}>
-              Cette intervention vous a été assignée. Acceptez pour commencer le travail ou refusez avec une justification.
+              {canAcceptOnScheduledDay
+                ? 'Cette intervention vous a été assignée. Acceptez pour commencer le travail ou refusez avec une justification.'
+                : `Cette intervention est prévue le ${displayDate(plannedDate)}. L'acceptation sera disponible uniquement le jour J.`}
             </p>
 
             {!showRefuseForm ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <button type="button" onClick={handleAccept} disabled={actionLoading}
-                  style={{ padding: '14px 12px', background: 'linear-gradient(135deg, #22C55E, #15803D)', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.95rem', cursor: actionLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: actionLoading ? 0.7 : 1 }}>
+                <button type="button" onClick={handleAccept} disabled={actionLoading || !canAcceptOnScheduledDay}
+                  style={{ padding: '14px 12px', background: 'linear-gradient(135deg, #22C55E, #15803D)', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 800, fontSize: '0.95rem', cursor: actionLoading || !canAcceptOnScheduledDay ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: actionLoading || !canAcceptOnScheduledDay ? 0.45 : 1 }}>
                   {actionLoading ? <Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> : <ThumbsUp style={{ width: 18, height: 18 }} />}
                   Accepter
                 </button>

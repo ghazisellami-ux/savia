@@ -144,8 +144,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const u = JSON.parse(savedUser) as User;
         const session = await authApi.me();
         if (!active) return;
+        // The server session is authoritative.  Do not keep a stale role from
+        // localStorage after an account role/profile was changed in
+        // Administration; otherwise the UI can enable an action that the API
+        // correctly rejects for the actual session role.
         const restoredUser = {
           ...u,
+          username: session.user.sub || u.username,
+          nom: session.user.nom || u.nom,
+          role: session.user.role || u.role,
+          client: session.user.client ?? u.client,
           password_change_required: Boolean(session.user.password_change_required),
         };
         setUser(restoredUser);
