@@ -174,6 +174,7 @@ _EN_TRANSLATIONS = {
     "Cloturee": "Closed",
     "Clôturée": "Closed",
     "En cours": "In progress",
+    "Transfert vers l'atelier": "Transfer to workshop",
     "En attente de piece": "Waiting for part",
     "En attente de pièce": "Waiting for part",
     "Planifiée": "Scheduled",

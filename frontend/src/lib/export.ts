@@ -16,6 +16,7 @@ function translateStatus(value: unknown, lang: ExportLang): string {
   if (lang !== 'en') return text;
   const statuses: Record<string, string> = {
     'En cours': 'In progress',
+    "Transfert vers l'atelier": 'Transfer to workshop',
     'Cloturee': 'Closed',
     'Clôturée': 'Closed',
     'En attente de piece': 'Waiting for part',

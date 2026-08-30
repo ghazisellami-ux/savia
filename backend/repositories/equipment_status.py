@@ -5,13 +5,17 @@ from typing import Any
 
 EQUIPMENT_OPERATIONAL = "Opérationnel"
 EQUIPMENT_MAINTENANCE = "En maintenance"
+EQUIPMENT_WORKSHOP = "En atelier"
 EQUIPMENT_OUT_OF_SERVICE = "Hors Service"
+
+WORKSHOP_TRANSFER_STATUS = "Transfert vers l'atelier"
 
 # An intervention waiting for a part is still active from the equipment's
 # point of view: it must not become operational before the intervention is
 # actually closed.
 ACTIVE_INTERVENTION_STATUSES = (
     "En cours",
+    WORKSHOP_TRANSFER_STATUS,
     "En attente de piece",
     "En attente de pièce",
     "En attente de piÃ¨ce",
@@ -87,6 +91,8 @@ def calculer_nouveau_statut_equipement(
     """Pure transition rule used by the database synchronizer and tests."""
     if _is_out_of_service(current_status):
         return str(current_status or EQUIPMENT_OUT_OF_SERVICE)
+    if intervention_status == WORKSHOP_TRANSFER_STATUS:
+        return EQUIPMENT_WORKSHOP
     if intervention_status in ACTIVE_INTERVENTION_STATUSES:
         return EQUIPMENT_MAINTENANCE
     if intervention_status in CLOSED_INTERVENTION_STATUSES:
@@ -149,7 +155,9 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
         if _is_out_of_service(current_status):
             continue
 
-        if status in ACTIVE_INTERVENTION_STATUSES:
+        if status == WORKSHOP_TRANSFER_STATUS:
+            next_status = EQUIPMENT_WORKSHOP
+        elif status in ACTIVE_INTERVENTION_STATUSES:
             next_status = EQUIPMENT_MAINTENANCE
         elif status in {"Cloturee", "Clôturée", "ClÃ´turÃ©e", "Terminée", "TerminÃ©e"}:
             effective_client = client or str(equipment.get("client") or "").strip()
@@ -254,7 +262,9 @@ def reconcilier_statuts_equipements() -> int:
 __all__ = [
     "EQUIPMENT_OPERATIONAL",
     "EQUIPMENT_MAINTENANCE",
+    "EQUIPMENT_WORKSHOP",
     "EQUIPMENT_OUT_OF_SERVICE",
+    "WORKSHOP_TRANSFER_STATUS",
     "calculer_nouveau_statut_equipement",
     "enregistrer_historique_statut_equipement",
     "reconcilier_statuts_equipements",

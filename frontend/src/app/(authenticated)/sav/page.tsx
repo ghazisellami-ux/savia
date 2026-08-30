@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
-  Plus, Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
+  Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
   Sparkles, FileText, Download, Users, DollarSign, XCircle, ChevronDown,
   Edit, Calendar, BarChart3, Timer, Wallet, Activity, Target,
   Zap, Shield, TrendingUp, Gauge, Briefcase,
@@ -31,6 +31,8 @@ interface Intervention {
   start_time?: string;
   end_time?: string;
   statut: string;
+  date_transfert_atelier?: string;
+  retour_site_confirme?: boolean;
   description: string;
   probleme: string;
   cause: string;
@@ -273,6 +275,7 @@ export default function SavPage() {
       const normalizeStatut = (s: string): string => {
         if (!s) return 'En cours';
         const low = s.toLowerCase();
+        if (low.includes('atelier') || low.includes('transfert')) return "Transfert vers l'atelier";
         if (low.includes('tur') || low.includes('termin') || low.includes('clotur')) return 'Cloturee';
         if (low.includes('attente') && low.includes('pi')) return 'En attente de piece';
         if (low.includes('cours')) return 'En cours';
@@ -292,6 +295,8 @@ export default function SavPage() {
         duree_deplacement: Number(item.duree_deplacement) || 0,
         deplacement: Math.round((Number(item.duree_deplacement) || 0) / 60 * 10) / 10,
         statut: normalizeStatut(item.statut || ''),
+        date_transfert_atelier: item.date_transfert_atelier || '',
+        retour_site_confirme: Boolean(item.retour_site_confirme),
         description: item.description || '',
         probleme: item.probleme || '',
         cause: item.cause || '',
@@ -463,6 +468,17 @@ export default function SavPage() {
 
   const handleStatusChange = async () => {
     if (!selectedIntervention) return;
+
+    const retourSiteEnAttente = Boolean(selectedIntervention.date_transfert_atelier)
+      && !selectedIntervention.retour_site_confirme;
+    let retourSiteConfirme = false;
+    if (statusForm.statut === 'Cloturee' && retourSiteEnAttente) {
+      retourSiteConfirme = window.confirm(
+        "Confirmez-vous que l'équipement a bien été transféré sur site ?\n\nSi l'équipement est encore à l'atelier, annulez et ne clôturez pas l'intervention."
+      );
+      if (!retourSiteConfirme) return;
+    }
+
     setIsSaving(true);
     try {
       // Calculate duration from times if both are provided
@@ -480,6 +496,7 @@ export default function SavPage() {
         duree_deplacement: Math.round(Number(statusForm.duree_deplacement) * 60),
         start_time: statusForm.start_time,
         end_time: statusForm.end_time,
+        ...(retourSiteConfirme ? { retour_site_confirme: true } : {}),
       };
       // Envoyer les pièces en rupture sélectionnées pour générer des notifications
       if (statusForm.statut.toLowerCase().includes('attente') && statusForm.statut.toLowerCase().includes('pi')) {
@@ -819,11 +836,6 @@ export default function SavPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Suivi complet des interventions techniques</p>
         </div>
-        {!isTechnicien && (
-          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg">
-            <Plus className="w-4 h-4" /> Nouvelle intervention
-          </button>
-        )}
       </div>
 
       {/* Bandeau Technicien */}
@@ -1709,6 +1721,7 @@ export default function SavPage() {
               setManualPieces([]); setManualPieceForm({reference: '', designation: ''});
             }}>
               <option value="En cours">En cours</option>
+              <option value="Transfert vers l'atelier">Transfert vers l&apos;atelier</option>
               <option value="En attente de piece">En attente de pièce</option>
               <option value="Cloturee">Clôturée</option>
               <option value="Planifiee">Planifiée</option>

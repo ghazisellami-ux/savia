@@ -50,8 +50,9 @@ const getStatutColor = (statut: string, isOverdue: boolean) => {
   return STATUT_COLORS[statut] || { cell: 'bg-blue-500/20 border-blue-500 text-blue-300', badge: 'bg-blue-500/15 text-blue-400', dot: 'bg-blue-400' };
 };
 
-// Helper function to calculate automatic status based on date and stored status
-const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string => {
+// Les maintenances démarrent automatiquement le jour prévu. Une demande
+// d'intervention, elle, attend l'acceptation explicite d'un technicien.
+const getAutomaticStatus = (datePlanifiee: string, storedStatus: string, notes = ''): string => {
   if (!datePlanifiee) return storedStatus;
 
   const now = new Date();
@@ -68,6 +69,12 @@ const getAutomaticStatus = (datePlanifiee: string, storedStatus: string): string
   // If status is "Décalé" (ghost entry), keep it as is
   if (storedStatus === 'Décalé') {
     return 'Décalé';
+  }
+
+  const isPendingInterventionRequest = /^Demande\s+#\d+/i.test(notes.trim())
+    && storedStatus === 'Planifiée';
+  if (isPendingInterventionRequest && plannedDate >= today) {
+    return 'Planifiée';
   }
   
   // If planned date is in the future (> today), it's "Planifiée"
@@ -108,7 +115,7 @@ const CLOSED_PLANNING_STATUSES = new Set(['Réalisée', 'Cloturee', 'Annulée'])
 const canReschedule = (item: PlanItem) =>
   !item.is_ghost &&
   !CLOSED_PLANNING_STATUSES.has(item.statut) &&
-  !CLOSED_PLANNING_STATUSES.has(getAutomaticStatus(item.date_planifiee, item.statut));
+  !CLOSED_PLANNING_STATUSES.has(getAutomaticStatus(item.date_planifiee, item.statut, item.notes));
 
 const emptyForm = {
   domaine: 'Radiologie' as string,
@@ -345,7 +352,7 @@ export default function PlanningPage() {
   });
   const overdueCount = data.filter(d => {
     if (d.is_ghost) return false;
-    const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+    const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut, d.notes);
     // Only count as overdue if automatic status is "En retard"
     return automaticStatus === 'En retard';
   }).length;
@@ -611,7 +618,7 @@ export default function PlanningPage() {
                 <div className={`text-xs font-bold mb-1 ${isToday ? 'text-cyan-400' : cell.inMonth ? 'text-savia-text' : 'text-slate-600'}`}>{cell.day}</div>
                 <div className="space-y-0.5">
                   {events.slice(0, 3).map((ev, j) => {
-                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut, ev.notes);
                     const colors = getStatutColor(automaticStatus, false);
                     return (
                       <div key={j} className={`text-[10px] leading-tight px-1 py-0.5 rounded border-l-2 truncate ${colors.cell}`}
@@ -683,7 +690,7 @@ export default function PlanningPage() {
           .filter(d => filterTech   === 'Tous' || d.technicien === filterTech)
           .filter(d => {
             if (filterStatut === 'Tous') return true;
-            const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut);
+            const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut, d.notes);
             return automaticStatus === filterStatut;
           })
           .filter(d => {
@@ -859,7 +866,7 @@ export default function PlanningPage() {
                   })
                   .map(ev => {
                     const hasDate = !!ev.date_planifiee;
-                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                    const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut, ev.notes);
                     const colors = getStatutColor(automaticStatus, false);
                     const isOverdue = automaticStatus === 'En retard';
                     return (
@@ -1153,7 +1160,7 @@ export default function PlanningPage() {
             {/* Events */}
             <div className="px-6 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
               {dayDetailEvents.map((ev, i) => {
-                const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut);
+                const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut, ev.notes);
                 const colors = getStatutColor(automaticStatus, false);
                 return (
                   <div key={i} className={`rounded-xl border border-savia-border border-l-4 p-4 space-y-2 bg-savia-surface-hover/40 ${colors.dot.replace('bg-', 'border-l-').replace('bg-savia', 'border-l-savia')}`}

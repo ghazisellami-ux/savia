@@ -82,6 +82,8 @@ def test_current_stage_age_uses_the_milestone_that_opened_the_stage():
     ) == 7
 
 
-def test_billing_schema_migration_is_registered_last():
-    assert MIGRATIONS[-1][0] == "010"
-    assert "billing" in MIGRATIONS[-1][1]
+def test_billing_schema_migration_is_registered():
+    billing_migrations = [migration for migration in MIGRATIONS if migration[0] == "010"]
+
+    assert len(billing_migrations) == 1
+    assert "billing" in billing_migrations[0][1]

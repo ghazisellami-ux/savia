@@ -40,6 +40,8 @@ def lire_interventions(machine=None):
                    i.duree_deplacement,
                    i.code_erreur, i.statut, i.notes,
                    i.date_debut_intervention, i.date_cloture,
+                   i.date_transfert_atelier, i.retour_site_confirme,
+                   i.date_retour_site, i.retour_site_confirme_par,
                    i.type_erreur, i.priorite,
                    i.start_time, i.end_time, i.planning_id,
                    d.id AS demande_id, d.date_planifiee,

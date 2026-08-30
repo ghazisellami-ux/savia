@@ -34,6 +34,7 @@ const SECTION = {
 
 const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En cours':            { bg: 'rgba(86,124,141,0.12)',  color: 'var(--teal)'  },
+  "Transfert vers l'atelier": { bg: 'rgba(37,99,235,0.12)', color: '#2563EB' },
   'En attente de piece': { bg: 'rgba(245,158,11,0.12)',  color: '#B45309'      },
   'Cloturee':            { bg: 'rgba(34,197,94,0.12)',   color: '#15803D'      },
   'Assignée':            { bg: 'rgba(168,85,247,0.12)',  color: '#7C3AED'      },
@@ -494,6 +495,15 @@ export default function InterventionDetailPage() {
       return;
     }
 
+    let retourSiteConfirme = false;
+    const retourSiteEnAttente = Boolean(intervention?.date_transfert_atelier) && !intervention?.retour_site_confirme;
+    if (form.statut === 'Cloturee' && (retourSiteEnAttente || initialFormStatut === "Transfert vers l'atelier")) {
+      retourSiteConfirme = window.confirm(
+        "Confirmez-vous que l'équipement a bien été transféré sur site ?\n\nSi l'équipement est encore à l'atelier, annulez et ne clôturez pas l'intervention."
+      );
+      if (!retourSiteConfirme) return;
+    }
+
     setSaving(true);
     try {
       const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
@@ -549,6 +559,7 @@ export default function InterventionDetailPage() {
         end_time: form.end_time,      // Send HH:MM directly
         deplacement: deploymentMinutes,  // Send in minutes
         fiche_validation: form.fiche_validation,
+        ...(retourSiteConfirme ? { retour_site_confirme: true } : {}),
         pieces_a_deduire, 
         pieces_rupture, 
         ...(manualPieces.length > 0 ? { pieces_manuelles: manualPieces } : {}) 
@@ -596,6 +607,18 @@ export default function InterventionDetailPage() {
     if (techForm.statut === 'Cloturee' && !techForm.solution_tech.trim()) {
       setError('La "Solution" est obligatoire pour clôturer votre intervention.');
       return;
+    }
+
+    let retourSiteConfirme = false;
+    const retourSiteEnAttente = Boolean(intervention?.date_transfert_atelier) && !intervention?.retour_site_confirme;
+    if (
+      techForm.statut === 'Cloturee'
+      && (retourSiteEnAttente || initialTechnicianStatus === "Transfert vers l'atelier")
+    ) {
+      retourSiteConfirme = window.confirm(
+        "Confirmez-vous que l'équipement a bien été transféré sur site ?\n\nSi l'équipement est encore à l'atelier, annulez et ne clôturez pas l'intervention."
+      );
+      if (!retourSiteConfirme) return;
     }
 
     setSaving(true);
@@ -669,6 +692,7 @@ export default function InterventionDetailPage() {
         type_erreur_tech: techForm.type_erreur_tech,
         pieces_a_deduire,  // Include pieces (deducted when tech closes)
         pieces_rupture: pieces_rupture_tech,  // Include rupture pieces if waiting
+        ...(retourSiteConfirme ? { retour_site_confirme: true } : {}),
         ...(techForm.statut === 'Cloturee' ? { fiche_validation: form.fiche_validation } : {}),
         ...(manualPiecesMultiTech.length > 0 ? { pieces_manuelles: manualPiecesMultiTech } : {}) // Include manual pieces
       };
@@ -676,6 +700,24 @@ export default function InterventionDetailPage() {
       console.log('📤 Sending technician data:', payload);
       
       const response = await api.interventions.updateTechnicianData(id, payload);
+
+      // Reflect the selected status immediately in multi-tech mode. In
+      // particular, keep the workshop transfer visible instead of navigating
+      // away before the refreshed technician record can be displayed.
+      const savedStatus = techForm.statut;
+      setForm(current => ({ ...current, statut: savedStatus }));
+      setIntervention((current: any) => ({ ...current, statut: savedStatus }));
+      setInitialTechnicianStatus(savedStatus);
+      setTechnicianRecords(records => records.map((record: any) => (
+        namesMatch(record.technicien_nom || '', currentUserName)
+          ? { ...record, statut: savedStatus }
+          : record
+      )));
+
+      if (response?.queued || response?.offline) {
+        setSuccess('⏳ Modification enregistrée sur cet appareil. Elle sera appliquée dès que la connexion au serveur sera rétablie.');
+        return;
+      }
       
       if (response.status === 'ALL_COMPLETED') {
         // All technicians done, awaiting admin closure
@@ -788,6 +830,13 @@ export default function InterventionDetailPage() {
       const acceptedStatus = response?.statut || 'En cours';
       setForm(f => ({ ...f, statut: acceptedStatus }));
       setIntervention((prev: any) => ({ ...prev, statut: acceptedStatus }));
+      if (acceptedStatus === 'En cours') {
+        setTechForm(f => ({ ...f, statut: 'En cours' }));
+        setInitialTechnicianStatus('En cours');
+        setTechnicianRecords(records => records.map((record: any) => (
+          record.statut === 'Assigné' ? { ...record, statut: 'En cours' } : record
+        )));
+      }
       setSuccess(acceptedStatus === 'Planifiée'
         ? 'Intervention acceptée et planifiée à la date prévue.'
         : 'Intervention acceptée ! Vous pouvez maintenant la compléter.');
@@ -1118,6 +1167,7 @@ export default function InterventionDetailPage() {
                 onChange={e => setTechForm(f => ({ ...f, statut: e.target.value }))}
               >
                 <option value="En cours">En cours</option>
+                <option value="Transfert vers l'atelier">Transfert vers l&apos;atelier</option>
                 <option value="En attente de piece">En attente de pièce</option>
                 <option value="Cloturee">Intervention terminée</option>
               </select>
@@ -1643,8 +1693,8 @@ export default function InterventionDetailPage() {
           {/* ⑤ Statut — EN BAS */}
           <div style={SECTION}>
             <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings style={{ width: 16, height: 16 }} /> Statut de l&apos;intervention</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-              {['En cours', 'En attente de piece', 'Cloturee'].map(s => {
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              {['En cours', "Transfert vers l'atelier", 'En attente de piece', 'Cloturee'].map(s => {
                 const st = STATUT_STYLES[s] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
                 return (
                   <button key={s} type="button" disabled={isSingleStatusLocked} onClick={() => set('statut', s)}

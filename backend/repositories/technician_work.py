@@ -24,6 +24,52 @@ __all__ = [
 # INTERVENTIONS_TECHNICIENS — Per-Technician Tracking
 # ==========================================
 
+def _ensure_workshop_transfer_status_constraint(conn):
+    """Repair legacy status checks before a technician status update.
+
+    This is also executed at request time because some deployments keep a
+    long-running API process while the database schema is upgraded. Without
+    this guard, an older column-level CHECK rejects the workshop value and
+    the whole PWA request returns HTTP 500.
+    """
+    # These fields were added after the original multi-tech table. Ensure
+    # legacy databases can persist the complete PWA payload as well as its
+    # status, instead of failing with an undefined-column 500.
+    conn.execute(
+        "ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS type_erreur_tech TEXT DEFAULT ''"
+    )
+    conn.execute(
+        "ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS pieces_a_deduire TEXT DEFAULT ''"
+    )
+
+    rows = conn.execute(
+        """SELECT c.conname, pg_get_constraintdef(c.oid) AS definition
+           FROM pg_constraint c
+           JOIN pg_class t ON t.oid = c.conrelid
+           WHERE t.oid = 'interventions_techniciens'::regclass
+             AND c.contype = 'c'
+             AND pg_get_constraintdef(c.oid) ILIKE '%statut%'"""
+    ).fetchall()
+    if any(
+        "Transfert vers l'atelier" in str(row.get("definition", "")).replace("''", "'")
+        for row in rows
+    ):
+        return
+
+    for row in rows:
+        constraint_name = row.get("conname")
+        if constraint_name:
+            conn.execute(
+                f'ALTER TABLE interventions_techniciens DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+            )
+    conn.execute(
+        """ALTER TABLE interventions_techniciens
+           ADD CONSTRAINT interventions_techniciens_statut_check
+           CHECK (statut IN ('Assigné', 'En cours', 'Transfert vers l''atelier',
+                             'Cloturee', 'Refusé', 'En attente de piece',
+                             'En attente de pièce'))"""
+    )
+
 def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
     """
     Récupère ou crée un enregistrement interventions_techniciens pour un technicien.
@@ -131,8 +177,11 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
     ph = "%s"
     
     with get_db() as conn:
-        # Ensure the record exists
+        # Ensure the record exists first. The helper uses a separate
+        # connection; run the DDL compatibility guard only after it has
+        # released its transaction, otherwise the table lock can block it.
         get_or_create_interventions_techniciens(intervention_id, technicien_nom)
+        _ensure_workshop_transfer_status_constraint(conn)
         
         # Try to find the record ID first - use the ID if provided in data
         record_id = data.get('technicien_id')
@@ -576,10 +625,22 @@ def finalize_intervention_from_techniciens(intervention_id):
 
         # Serialize finalization for a shared intervention. Two technicians
         # may submit their closure at nearly the same time.
-        conn.execute(
-            "SELECT id FROM interventions WHERE id = %s FOR UPDATE",
+        parent_state = conn.execute(
+            """SELECT id, date_transfert_atelier, retour_site_confirme
+               FROM interventions WHERE id = %s FOR UPDATE""",
             (intervention_id,),
         ).fetchone()
+
+        if (
+            parent_state
+            and parent_state.get("date_transfert_atelier")
+            and not parent_state.get("retour_site_confirme")
+        ):
+            return {
+                'success': False,
+                'reason': 'return_site_confirmation_required',
+                'error': "Le retour de l'équipement sur site doit être confirmé avant la clôture.",
+            }
         
         # Get ALL technician records (only aggregate Cloturee ones)
         rows = conn.execute(f"""

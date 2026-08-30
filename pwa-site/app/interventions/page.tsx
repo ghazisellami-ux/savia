@@ -8,7 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import InterventionCard from '@/components/InterventionCard';
 import { ClipboardList, Loader2, Inbox } from 'lucide-react';
 
-const STATUTS = ['', 'Assignée', 'En cours', 'En attente de piece', 'Cloturee'];
+const STATUTS = ['', 'Assignée', 'En cours', "Transfert vers l'atelier", 'En attente de piece', 'Cloturee'];
 
 export default function InterventionsPage() {
   const router = useRouter();
@@ -39,8 +39,9 @@ export default function InterventionsPage() {
         'En attente de piece': 2,
         'En attente de pièce': 2,
         'En cours': 3,
-        'Cloturee': 4,
-        'Clôturée': 4,
+        "Transfert vers l'atelier": 4,
+        'Cloturee': 5,
+        'Clôturée': 5,
       };
 
       // Trier : d'abord par statut (selon l'ordre défini), puis par date décroissante

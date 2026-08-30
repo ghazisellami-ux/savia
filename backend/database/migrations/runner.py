@@ -498,6 +498,37 @@ def _migration_010_billing_tracking(conn) -> None:
     )
 
 
+def _migration_011_workshop_transfer_status(conn) -> None:
+    """Allow workshop transfers in per-technician intervention statuses."""
+    # Older installations created this table with a column-level CHECK that
+    # did not include the workshop transfer value. Replace every CHECK tied to
+    # the status column before adding the canonical named constraint.
+    constraint_rows = conn.execute(
+        """SELECT c.conname
+           FROM pg_constraint c
+           JOIN pg_class t ON t.oid = c.conrelid
+           JOIN pg_namespace n ON n.oid = t.relnamespace
+           WHERE n.nspname = current_schema()
+             AND t.relname = 'interventions_techniciens'
+             AND c.contype = 'c'
+             AND pg_get_constraintdef(c.oid) ILIKE '%statut%'"""
+    ).fetchall()
+    for row in constraint_rows:
+        constraint_name = row.get("conname") if hasattr(row, "get") else row[0]
+        if constraint_name:
+            conn.execute(
+                f'ALTER TABLE interventions_techniciens DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+            )
+
+    conn.execute(
+        """ALTER TABLE interventions_techniciens
+           ADD CONSTRAINT interventions_techniciens_statut_check
+           CHECK (statut IN ('Assigné', 'En cours', 'Transfert vers l''atelier',
+                             'Cloturee', 'Refusé', 'En attente de piece',
+                             'En attente de pièce'))"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -509,6 +540,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("008", "private contract attachment metadata", _migration_008_contract_private_file_metadata),
     ("009", "distributed login rate limits", _migration_009_distributed_login_rate_limits),
     ("010", "auditable billing tracking", _migration_010_billing_tracking),
+    ("011", "workshop transfer technician status", _migration_011_workshop_transfer_status),
 )
 
 

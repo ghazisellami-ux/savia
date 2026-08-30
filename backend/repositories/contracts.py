@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from database.core import _trigger_backup, get_db, read_sql
-from repositories.equipment_status import synchroniser_statut_equipement
+from repositories.equipment_status import WORKSHOP_TRANSFER_STATUS, synchroniser_statut_equipement
 
 logger = logging.getLogger("db_engine")
 
@@ -572,7 +572,16 @@ def update_intervention_statut(intervention_id, nouveau_statut):
     """Met a jour le statut d'une intervention avec horodatage."""
     with get_db() as conn:
         now = datetime.now().isoformat()
-        if nouveau_statut == "En cours":
+        if nouveau_statut == WORKSHOP_TRANSFER_STATUS:
+            conn.execute(
+                """UPDATE interventions
+                   SET statut=%s, date_transfert_atelier=%s,
+                       retour_site_confirme=false, date_retour_site=NULL,
+                       retour_site_confirme_par=''
+                   WHERE id=%s""",
+                (nouveau_statut, now, intervention_id),
+            )
+        elif nouveau_statut == "En cours":
             conn.execute("UPDATE interventions SET statut=%s, date_debut_intervention=%s WHERE id=%s",
                          (nouveau_statut, now, intervention_id))
         elif nouveau_statut in ("Cloturee", "Cl\u00f4tur\u00e9e"):
@@ -590,7 +599,19 @@ def update_intervention_statut(intervention_id, nouveau_statut):
 # FONCTIONS SPÉCIALES — WORKFLOW SAV
 # ==========================================
 
-def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_deduire=None, duree_minutes=None, start_time=None, end_time=None, duree_deplacement=None):
+def cloturer_intervention(
+    intervention_id,
+    probleme,
+    cause,
+    solution,
+    pieces_a_deduire=None,
+    duree_minutes=None,
+    start_time=None,
+    end_time=None,
+    duree_deplacement=None,
+    retour_site_confirme=False,
+    retour_site_confirme_par="",
+):
     """
     Clôture une intervention, déduit le stock et alimente la base de connaissances.
     pieces_a_deduire: liste de dict {'ref': str, 'qty': int, 'designation': str}
@@ -602,6 +623,22 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
     print(f"[CLOTURE] intervention_id={intervention_id}, pieces_a_deduire={pieces_a_deduire}")
 
     with get_db() as conn:
+        intervention_state = conn.execute(
+            """SELECT date_transfert_atelier, retour_site_confirme
+               FROM interventions WHERE id = %s FOR UPDATE""",
+            (intervention_id,),
+        ).fetchone()
+        if not intervention_state:
+            return False, "Intervention non trouvée."
+
+        retour_requis = bool(intervention_state.get("date_transfert_atelier")) and not bool(
+            intervention_state.get("retour_site_confirme")
+        )
+        if retour_requis and retour_site_confirme is not True:
+            return False, (
+                "Confirmez que l'équipement a bien été transféré sur site avant de clôturer l'intervention."
+            )
+
         # NOTE: La migration cout_pieces est dans verifier_et_migrer_schema(), PAS ici.
         # Un ALTER TABLE échoué invalide la transaction PostgreSQL !
 
@@ -685,6 +722,11 @@ def cloturer_intervention(intervention_id, probleme, cause, solution, pieces_a_d
             "date": date_cloture,
             "date_cloture": date_cloture
         }
+
+        if retour_requis:
+            update_data["retour_site_confirme"] = True
+            update_data["date_retour_site"] = date_cloture
+            update_data["retour_site_confirme_par"] = retour_site_confirme_par or ""
         
         # Ajouter les champs optionnels s'ils sont fournis
         if start_time is not None:
