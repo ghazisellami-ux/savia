@@ -437,8 +437,25 @@ def create_piece(body: dict, user: dict = Depends(_verify_token)):
             detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins"
         )
     
+    # Les références sont normalisées et doivent rester uniques, sans remplacer
+    # silencieusement une pièce existante.
+    body = dict(body)
+    body["reference"] = str(body.get("reference") or "").strip().upper()
     _validate_piece_payload(body)
-    ajouter_piece(body)
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM pieces_rechange WHERE LOWER(TRIM(reference)) = LOWER(%s) LIMIT 1",
+            (body["reference"],),
+        ).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="Cette référence existe déjà.")
+    try:
+        ajouter_piece(body)
+    except Exception as exc:
+        # Keep the uniqueness guarantee if two requests arrive at the same time.
+        if any(token in str(exc).lower() for token in ("duplicate", "unique")):
+            raise HTTPException(status_code=409, detail="Cette référence existe déjà.") from exc
+        raise
     
     # Log audit
     username = user.get("sub", "unknown")

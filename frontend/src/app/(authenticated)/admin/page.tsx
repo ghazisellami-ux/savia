@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { admin, techniciens, clients, paysCustom as paysCustomApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useRoleGuard } from '@/lib/use-role-guard';
 import { COUNTRIES, DEFAULT_COUNTRY, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
 
 const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-2 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all text-sm";
@@ -65,8 +66,8 @@ const DEFAULT_PROFILES: Profile[] = [
     couleur: 'text-blue-400',
     bg: 'bg-blue-500/10',
     border: 'border-blue-500/30',
-    description: 'SAV, planning, équipements, rapports',
-    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'facturation', 'demandes', 'planning', 'reports', 'base_connaissances'],
+    description: 'SAV, planning, équipements, rapports et administration technique',
+    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'facturation', 'demandes', 'planning', 'reports', 'base_connaissances', 'admin'],
   },
   {
     id: 'gestionnaire_stock',
@@ -188,9 +189,12 @@ const formatCompetences = (specialiteStr: string): string => {
 
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
-  const canManageUsers = currentUser?.role === 'Admin' || currentUser?.role === 'Manager';
-  // Les non-admins commencent directement sur l'onglet Paramètres
-  const defaultTab = currentUser?.role === 'Admin' ? 'users' : 'settings';
+  useRoleGuard('admin');
+  const currentRole = currentUser?.role;
+  const isTechnicalManager = currentRole === 'Responsable Technique';
+  const canManageUsers = currentRole === 'Admin' || currentRole === 'Manager';
+  // Le responsable technique commence sur la gestion des techniciens.
+  const defaultTab = isTechnicalManager ? 'techs' : currentRole === 'Admin' || currentRole === 'Manager' ? 'users' : 'settings';
   const [tab, setTab] = useState<'users' | 'profiles' | 'techs' | 'settings' | 'logs' | 'ai'>(defaultTab as any);
   const [users, setUsers] = useState<User[]>([]);
   const [techs, setTechs] = useState<Technicien[]>([]);
@@ -240,6 +244,19 @@ export default function AdminPage() {
   const [aiGovernance, setAiGovernance] = useState<any>(null);
   const [aiSaving, setAiSaving] = useState('');
   const [aiMessage, setAiMessage] = useState('');
+
+  useEffect(() => {
+    if (!currentRole) return;
+    setTab(previous => {
+      if (currentRole === 'Responsable Technique') {
+        return previous === 'users' || previous === 'techs' ? previous : 'techs';
+      }
+      if ((currentRole === 'Admin' || currentRole === 'Manager') && previous === 'settings') {
+        return 'users';
+      }
+      return previous;
+    });
+  }, [currentRole]);
 
   const countryOptions = [
     ...COUNTRIES,
@@ -501,7 +518,9 @@ export default function AdminPage() {
             setProfiles(prev => prev.map(p => {
               const role = PROFILE_ROLE_MAP[p.id];
               if (!role || !dbPerms[role]) return p;
-              const permsForRole = dbPerms[role];
+              const permsForRole = role === 'Responsable Technique'
+                ? { ...dbPerms[role], admin: true, settings: false }
+                : dbPerms[role];
               // Missing keys are new modules: retain the safe default of the
               // selected profile instead of silently hiding them.
               const authorizedPages = ALL_PAGES
@@ -523,6 +542,26 @@ export default function AdminPage() {
 
   // ── Save User ────────────────────────────────────────────
   const handleSaveUser = async () => {
+    if (isTechnicalManager) {
+      if (!editingUser || editingUser.username !== currentUser?.username) {
+        setUserMsg('Vous pouvez uniquement modifier votre propre mot de passe.');
+        return;
+      }
+      if (!userForm.password.trim()) {
+        setUserMsg('Nouveau mot de passe requis.');
+        return;
+      }
+      setIsSavingUser(true); setUserMsg('');
+      try {
+        await (admin as any).updateUser(editingUser.id, { password: userForm.password });
+        setUserMsg('✅ Mot de passe mis à jour.');
+        await load();
+        setTimeout(() => { setShowUserModal(false); setUserMsg(''); setEditingUser(null); }, 1500);
+      } catch (err: any) {
+        setUserMsg(`❌ ${err?.message || 'Erreur serveur'}`);
+      } finally { setIsSavingUser(false); }
+      return;
+    }
     if (!userForm.username.trim()) { setUserMsg('Nom d\'utilisateur requis.'); return; }
     if (!editingUser && !userForm.password.trim()) { setUserMsg('Mot de passe requis.'); return; }
     setIsSavingUser(true); setUserMsg('');
@@ -564,6 +603,7 @@ export default function AdminPage() {
     setShowUserModal(true);
   };
   const openEdit = (u: User) => {
+    if (isTechnicalManager && u.username !== currentUser?.username) return;
     setEditingUser(u);
     setUserForm({ username: u.username, password: '', nom_complet: u.nom_complet, email: u.email || '', profileId: u.profileId || 'lecteur', client: u.client, actif: u.actif === 1 });
     setSelectedTechId('');
@@ -586,6 +626,8 @@ export default function AdminPage() {
 
       const dataToSave = {
         ...techForm,
+        // La base stocke la disponibilité sous forme d'un entier (1/0).
+        dispo: techForm.dispo === 'Disponible' ? 1 : 0,
         specialite: competencesJSON,
         competences: techForm.competences || [],
       };
@@ -661,6 +703,10 @@ export default function AdminPage() {
       });
       // Forcer settings = true pour Admin (page réservée à l'admin)
       if (rolePerms['Admin']) rolePerms['Admin']['settings'] = true;
+      if (rolePerms['Responsable Technique']) {
+        rolePerms['Responsable Technique']['admin'] = true;
+        rolePerms['Responsable Technique']['settings'] = false;
+      }
 
       const res = await fetch('/api/settings', {
         method: 'PUT',
@@ -743,6 +789,7 @@ export default function AdminPage() {
           { id: 'settings', label: 'Paramètres',          icon: <Settings className="w-4 h-4" />, adminOnly: false },
         ]
           .filter(t => !t.adminOnly || currentUser?.role === 'Admin')
+          .filter(t => !isTechnicalManager || t.id === 'users' || t.id === 'techs')
           .map(t => (
           <button key={t.id} onClick={() => setTab(t.id as any)}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-lg transition-all cursor-pointer border-b-2 ${tab === t.id ? 'border-savia-accent text-savia-accent bg-savia-accent/5' : 'border-transparent text-savia-text-muted hover:text-savia-text'}`}>
@@ -779,11 +826,11 @@ export default function AdminPage() {
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-1">
-                        {canManageUsers && (u.username !== 'admin' || currentUser?.username === 'admin') && (
+                        {(canManageUsers && (u.username !== 'admin' || currentUser?.username === 'admin')) || (isTechnicalManager && u.username === currentUser?.username) ? (
                           <button onClick={() => openEdit(u)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-all" title="Modifier">
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                        ) : null}
                         {canManageUsers && u.username !== 'admin' && (
                           <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-all" title="Supprimer">
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1192,7 +1239,7 @@ export default function AdminPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-savia-border">
               <h2 className="text-lg font-black gradient-text flex items-center gap-2">
                 <UserCog className="w-5 h-5 text-savia-accent" />
-                {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
+                {isTechnicalManager ? 'Modifier mon mot de passe' : editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
               </h2>
               <button onClick={() => setShowUserModal(false)} className="p-1.5 rounded-lg hover:bg-savia-surface-hover text-savia-text-muted cursor-pointer">
                 <X className="w-5 h-5" />
@@ -1200,8 +1247,13 @@ export default function AdminPage() {
             </div>
 
             <div className="px-6 py-5 space-y-5">
+              {isTechnicalManager && (
+                <div className="p-3 rounded-lg bg-blue-500/10 text-blue-300 text-sm">
+                  Vous pouvez uniquement modifier votre propre mot de passe.
+                </div>
+              )}
               {/* Profil */}
-              <div>
+              {!isTechnicalManager && <div>
                 <label className={LABEL}>Profil *</label>
                 <div className="grid grid-cols-1 gap-2">
                   {profiles.filter(p => p.id !== 'admin').map(p => (
@@ -1218,12 +1270,12 @@ export default function AdminPage() {
                     </label>
                   ))}
                 </div>
-              </div>
+              </div>}
 
-              <div className="border-t border-savia-border" />
+              {!isTechnicalManager && <div className="border-t border-savia-border" />}
 
               {/* ── Technicien : sélecteur de tech enregistré ── */}
-              {userForm.profileId === 'technicien' && (
+              {!isTechnicalManager && userForm.profileId === 'technicien' && (
                 <div>
                   <label className={LABEL}>Lier à un technicien existant *</label>
                   <select className={INPUT} value={selectedTechId}
@@ -1244,7 +1296,7 @@ export default function AdminPage() {
               )}
 
               {/* ── Lecteur : sélecteur client obligatoire (avant identifiants) ── */}
-              {userForm.profileId === 'lecteur' && (
+              {!isTechnicalManager && userForm.profileId === 'lecteur' && (
                 <div>
                   <label className={LABEL}>Client associé *</label>
                   <select className={INPUT} value={userForm.client}
@@ -1264,14 +1316,14 @@ export default function AdminPage() {
                   <label className={LABEL}>Nom d'utilisateur *</label>
                   <input className={INPUT} placeholder="ex: j.dupont" value={userForm.username}
                     onChange={e => setUserForm(f => ({ ...f, username: e.target.value }))}
-                    disabled={!!editingUser} />
+                    disabled={!!editingUser || isTechnicalManager} />
                   {editingUser && <p className="text-xs text-savia-text-muted mt-1">Non modifiable</p>}
                 </div>
                 <div>
                   <label className={LABEL}>{editingUser ? 'Nouveau mot de passe' : 'Mot de passe *'}</label>
                   <div className="relative">
                     <input type={showPassword ? 'text' : 'password'} className={`${INPUT} pr-10`}
-                      placeholder={editingUser ? 'Laisser vide pour ne pas changer' : '••••••••'}
+                      placeholder={isTechnicalManager ? 'Saisir le nouveau mot de passe' : editingUser ? 'Laisser vide pour ne pas changer' : '••••••••'}
                       value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} />
                     <button type="button" onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-savia-text-muted hover:text-savia-text cursor-pointer">
@@ -1279,18 +1331,18 @@ export default function AdminPage() {
                     </button>
                   </div>
                 </div>
-                <div>
+                {!isTechnicalManager && <div>
                   <label className={LABEL}>Nom complet</label>
                   <input className={INPUT} placeholder="ex: Jean Dupont" value={userForm.nom_complet}
                     onChange={e => setUserForm(f => ({ ...f, nom_complet: e.target.value }))}
                     readOnly={userForm.profileId === 'technicien' && !!selectedTechId} />
-                </div>
-                <div>
+                </div>}
+                {!isTechnicalManager && <div>
                   <label className={LABEL}>Adresse email</label>
                   <input type="email" className={INPUT} placeholder="ex: j.dupont@savia.tn" value={userForm.email || ''}
                     onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))} />
-                </div>
-                <div className="flex items-end pb-1 col-span-2">
+                </div>}
+                {!isTechnicalManager && <div className="flex items-end pb-1 col-span-2">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <div onClick={() => setUserForm(f => ({ ...f, actif: !f.actif }))}
                       className={`w-10 h-5 rounded-full transition-all relative ${userForm.actif ? 'bg-savia-accent' : 'bg-savia-surface-hover border border-savia-border'}`}>
@@ -1298,11 +1350,11 @@ export default function AdminPage() {
                     </div>
                     <span className="text-sm font-semibold">Compte actif</span>
                   </label>
-                </div>
+                </div>}
               </div>
 
               {/* Pages summary */}
-              {userForm.profileId && (
+              {!isTechnicalManager && userForm.profileId && (
                 <div className="p-3 rounded-xl bg-savia-surface-hover/60 border border-savia-border">
                   <p className="text-xs text-savia-text-muted mb-2 font-semibold">Pages autorisées pour ce profil :</p>
                   <div className="flex flex-wrap gap-1.5">
@@ -1334,10 +1386,10 @@ export default function AdminPage() {
                 Annuler
               </button>
               <button onClick={handleSaveUser}
-                disabled={isSavingUser || !userForm.username.trim() || (userForm.profileId === 'lecteur' && !userForm.client)}
+                disabled={isSavingUser || (isTechnicalManager ? !userForm.password.trim() : !userForm.username.trim() || (userForm.profileId === 'lecteur' && !userForm.client))}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 shadow-lg shadow-cyan-500/20">
                 {isSavingUser ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {isSavingUser ? 'Enregistrement...' : editingUser ? 'Mettre à jour' : 'Créer l\'utilisateur'}
+                {isSavingUser ? 'Enregistrement...' : isTechnicalManager ? 'Mettre à jour le mot de passe' : editingUser ? 'Mettre à jour' : 'Créer l\'utilisateur'}
               </button>
             </div>
           </div>

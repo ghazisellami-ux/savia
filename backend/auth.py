@@ -204,7 +204,7 @@ DEFAULT_PERMISSIONS = {
         "predictions": True, "base_connaissances": True, "sav": True,
         "facturation": True,
         "demandes": True, "planning": True, "pieces": True, "reports": True,
-        "contrats": True, "conformite": True, "admin": False, "settings": False,
+        "contrats": True, "conformite": True, "admin": True, "settings": False,
     },
     "Gestionnaire de stock": {
         "dashboard": True, "supervision": False, "equipements": True,
@@ -247,6 +247,12 @@ def get_permissions():
                     for page in DEFAULT_PERMISSIONS[role]:
                         if page not in perms[role]:
                             perms[role][page] = DEFAULT_PERMISSIONS[role][page]
+            # The technical manager has a dedicated administration scope
+            # (technicians and own password), so keep the page discoverable
+            # even on installations with older saved permission JSON.
+            if "Responsable Technique" in perms:
+                perms["Responsable Technique"]["admin"] = True
+                perms["Responsable Technique"]["settings"] = False
             return perms
         except (json.JSONDecodeError, TypeError):
             pass
