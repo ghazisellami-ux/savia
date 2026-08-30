@@ -198,10 +198,6 @@ export const interventions = {
       method: 'PATCH',
       body: { validation },
     }),
-  listFacturation: () =>
-    request<Array<Record<string, unknown>>>('/api/interventions/facturation'),
-  markFactured: (id: number) =>
-    request<{ ok: boolean }>(`/api/interventions/${id}/factured`, { method: 'POST' }),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/interventions/${id}`, { method: 'DELETE' }),
 };
@@ -503,6 +499,7 @@ export const sla = {
 // --- Settings ---
 export const settings = {
   get: () => request<Record<string, string>>('/api/settings'),
+  public: () => request<Record<string, string>>('/api/settings/public'),
 };
 
 // --- Custom Domains ---
@@ -512,8 +509,34 @@ export const domaines_custom = {
   delete: (nom: string) => request<{ ok: boolean }>(`/api/domaines-custom/${encodeURIComponent(nom)}`, { method: 'DELETE' }),
 };
 
+// --- Suivi facturation ---
+export const billing = {
+  responsibles: () => request<Array<Record<string, unknown>>>('/api/billing/responsibles'),
+  list: (filters?: { status?: string; client?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.client) params.set('client', filters.client);
+    if (filters?.search) params.set('search', filters.search);
+    const qs = params.toString();
+    return request<Array<Record<string, unknown>>>(`/api/billing/cases${qs ? `?${qs}` : ''}`);
+  },
+  get: (caseId: number) => request<Record<string, unknown>>(`/api/billing/cases/${caseId}`),
+  create: (data: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/billing/cases', { method: 'POST', body: data }),
+  updateCase: (caseId: number, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}`, { method: 'PATCH', body: data }),
+  saveStep: (caseId: number, stepType: string, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/steps/${encodeURIComponent(stepType)}`, { method: 'PUT', body: data }),
+  addPayment: (caseId: number, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/payments`, { method: 'POST', body: data }),
+  updatePayment: (caseId: number, paymentId: number, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/payments/${paymentId}`, { method: 'PUT', body: data }),
+  history: (caseId: number) =>
+    request<Array<Record<string, unknown>>>(`/api/billing/cases/${caseId}/history`),
+};
+
 export { ApiError };
 
 // Default export for backward compatibility
-const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, mapApi, sla, typesIntervention, typesClient, villesCustom, paysCustom, settings };
+const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, billing, mapApi, sla, typesIntervention, typesClient, villesCustom, paysCustom, settings };
 export default apiClient;

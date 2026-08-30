@@ -459,76 +459,6 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
     return {"ok": True}
 
 
-@app.get("/api/interventions/facturation")
-def get_facturation_tracking(user: dict = Depends(_verify_token)):
-    """Retourne les interventions cloturees avec le suivi de facturation."""
-    from datetime import date, timedelta
-    try:
-        with get_db() as conn:
-            rows = conn.execute("""
-                SELECT i.id, i.machine, i.technicien, i.type_intervention,
-                       COALESCE(i.date_cloture, i.date) as date_cloture,
-                       i.facture_envoyee, i.notes,
-                       i.pieces_utilisees, i.cout, i.duree_minutes, i.duree_deplacement,
-                       i.description, i.probleme, i.cause, i.solution,
-                       i.priorite, i.type_erreur, i.code_erreur,
-                       i.date_debut_intervention, i.date, i.cout_pieces
-                FROM interventions i
-                WHERE i.statut IN ('Cloturee', 'Terminee', 'Terminée')
-                ORDER BY COALESCE(i.date_cloture, i.date) DESC
-            """).fetchall()
-        today = date.today()
-        result = []
-        for row in rows:
-            d = dict(row)
-            dc = d['date_cloture']
-            if isinstance(dc, str):
-                cloture_date = date.fromisoformat(str(dc)[:10])
-            elif hasattr(dc, 'date'):
-                cloture_date = dc.date()
-            elif hasattr(dc, 'year'):
-                cloture_date = dc
-            else:
-                cloture_date = date.fromisoformat(str(dc)[:10])
-            jours_depuis = (today - cloture_date).days
-            deadline = cloture_date + timedelta(days=10)
-            jours_restants = (deadline - today).days
-            notes = str(d.get('notes', '') or '')
-            client = notes[1:notes.index(']')] if notes.startswith('[') and ']' in notes else ''
-            # Extract ville from client name if format "Name Ville"
-            result.append({
-                "id": d['id'],
-                "machine": d.get('machine', ''),
-                "technicien": d.get('technicien', ''),
-                "type_intervention": d.get('type_intervention', ''),
-                "client": client,
-                "date_cloture": str(cloture_date),
-                "facture_envoyee": bool(d.get('facture_envoyee', False)),
-                "jours_depuis_cloture": jours_depuis,
-                "jours_restants": jours_restants,
-                "deadline": str(deadline),
-                "pieces_utilisees": d.get('pieces_utilisees', ''),
-                "cout": d.get('cout', 0) or 0,
-                "cout_pieces": d.get('cout_pieces', 0) or 0,
-                "duree_minutes": d.get('duree_minutes', 0) or 0,
-                "duree_deplacement": d.get('duree_deplacement', 0) or 0,
-                "en_retard": jours_restants < 0 and not d.get('facture_envoyee', False),
-                "description": d.get('description', ''),
-                "probleme": d.get('probleme', ''),
-                "cause": d.get('cause', ''),
-                "solution": d.get('solution', ''),
-                "priorite": d.get('priorite', ''),
-                "type_erreur": d.get('type_erreur', ''),
-                "code_erreur": d.get('code_erreur', ''),
-                "date_intervention": str(d.get('date', '') or '')[:10] if d.get('date') else '',
-                "date_debut_intervention": str(d.get('date_debut_intervention', '') or '')[:10] if d.get('date_debut_intervention') else '',
-            })
-        return result
-    except Exception as e:
-        logger.error(f"Facturation tracking error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.put("/api/interventions/{intervention_id}")
 def update_intervention(intervention_id: int, request: Request, body: dict = Body(...), user: dict = Depends(_verify_token)):
     endpoint = f"/api/interventions/{intervention_id}"
@@ -737,7 +667,7 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                         f"⏱️ Durée : {duree_h}h"
                         f"\n\U0001f697 D\u00e9placement : {deplacement_h}h"
                         f"{pieces_line}\n\n"
-                        f"💰 <i>Délai de facturation : 10 jours</i>\n"
+                        f"💰 <i>Dossier disponible dans le module Suivi Facturation</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
                     send_telegram_reliably("telegram_sav", msg_sav, operation_id)
@@ -1261,7 +1191,6 @@ __all__ = [
     "get_interventions",
     "get_child_interventions_endpoint",
     "create_intervention",
-    "get_facturation_tracking",
     "update_intervention",
     "delete_intervention",
     "upload_fiche",

@@ -1,17 +1,15 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { SectionCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { TimePicker } from '@/components/ui/time-picker';
-import { DurationCalculator } from '@/components/ui/duration-calculator';
 import {
   Plus, Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
   Sparkles, FileText, Download, Users, DollarSign, XCircle, ChevronDown,
-  ChevronUp, Edit, Calendar, BarChart3, Timer, Wallet, Activity, Target,
-  ArrowUpRight, ArrowDownRight, Zap, Shield, TrendingUp, Gauge, Briefcase,
+  Edit, Calendar, BarChart3, Timer, Wallet, Activity, Target,
+  Zap, Shield, TrendingUp, Gauge, Briefcase,
   ClipboardList, Brain, Lightbulb, ThumbsUp, ThumbsDown, Server, Building2,
-  Filter, CalendarDays, CalendarRange, Camera, Eye, ImageOff, Upload,
-  Receipt, CircleDot, AlertOctagon, CheckCircle2, Ban, Check, X, Trash2, Package
+  Filter, CalendarDays, CalendarRange, Camera, Eye, Upload,
+  Check, X, Trash2, Package
 } from 'lucide-react';
 import { interventions, ai, equipements, techniciens as techApi, contrats as contratsApi, clients as clientsApi, typesIntervention, settings, dashboard } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
@@ -71,6 +69,7 @@ export default function SavPage() {
   const [ficheFile, setFicheFile] = useState<File | null>(null);
   const [fiches, setFiches] = useState<any[]>([]);
   const [allPieces, setAllPieces] = useState<any[]>([]);
+  const [, setContratsData] = useState<any[]>([]);
   const [rupturePieces, setRupturePieces] = useState<any[]>([]); // pièces sélectionnées en rupture
   const [manualPieces, setManualPieces] = useState<{reference: string; designation: string}[]>([]); // pièces non référencées
   const [manualPieceForm, setManualPieceForm] = useState({reference: '', designation: ''});
@@ -78,9 +77,7 @@ export default function SavPage() {
   const [piecesDropdownOpen, setPiecesDropdownOpen] = useState(false);
   const [equipementsData, setEquipementsData] = useState<any[]>([]);
   const [clientsData, setClientsData] = useState<any[]>([]);
-  const [contratsData, setContratsData] = useState<any[]>([]);
   const [intervDetailItem, setIntervDetailItem] = useState<any>(null);
-  const [lichboxId, setLightboxId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   // Technicien: voir par défaut seulement ses interventions "En cours"
   const [filterStatut, setFilterStatut] = useState(isTechnicien ? 'En cours' : 'Tous');
@@ -105,6 +102,7 @@ export default function SavPage() {
   const [hasMore, setHasMore] = useState(true);
   const [offset, setOffset] = useState(0);
   const PAGE_SIZE = 200;
+  const [, setTotalInterventionsInDB] = useState<number>(0);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<Intervention | null>(null);
@@ -113,9 +111,6 @@ export default function SavPage() {
   const [aiResult, setAiResult] = useState<any>(null);
   const [aiError, setAiError] = useState('');
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
-  const [facturationData, setFacturationData] = useState<any[]>([]);
-  const [factFilter, setFactFilter] = useState<'all' | 'pending' | 'done' | 'overdue'>('all');
-  const [factDetailItem, setFactDetailItem] = useState<any>(null);
   const [savTechDropdownOpen, setSavTechDropdownOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<Intervention | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -134,7 +129,6 @@ export default function SavPage() {
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
   const [tauxHoraire, setTauxHoraire] = useState<number>(0);
-  const [totalInterventionsInDB, setTotalInterventionsInDB] = useState<number>(0);
 
   // Load custom types from database on mount
   useEffect(() => {
@@ -391,9 +385,6 @@ export default function SavPage() {
       setTimeout(() => {
         interventions.listFiches().then(setFiches).catch(() => {});
       }, 300),
-      setTimeout(() => {
-        interventions.listFacturation().then(setFacturationData).catch(() => {});
-      }, 400),
       setTimeout(() => {
         import('@/lib/api').then(({ pieces: piecesApi }) => {
           piecesApi.list().then((data: any) => setAllPieces(data || [])).catch(() => {});
@@ -797,17 +788,7 @@ export default function SavPage() {
     { icon: <FileText className="w-4 h-4" />, label: 'Rapport PDF' },
     { icon: <Sparkles className="w-4 h-4" />, label: 'Analyse IA' },
     { icon: <Camera className="w-4 h-4" />, label: 'Fiches Signées' },
-    { icon: <Receipt className="w-4 h-4" />, label: 'Suivi Facturation' },
   ];
-
-  // Facturation helpers
-  const handleMarkFactured = async (id: number) => {
-    try {
-      await interventions.markFactured(id);
-      const updated = await interventions.listFacturation();
-      setFacturationData(updated);
-    } catch (e) { console.error('Mark factured failed', e); }
-  };
 
   // Delete intervention handler
   const handleDeleteIntervention = async () => {
@@ -823,14 +804,6 @@ export default function SavPage() {
       setIsDeleting(false);
     }
   };
-  const filteredFacturation = useMemo(() => {
-    return facturationData.filter((f: any) => {
-      if (factFilter === 'done') return f.facture_envoyee;
-      if (factFilter === 'pending') return !f.facture_envoyee && !f.en_retard;
-      if (factFilter === 'overdue') return f.en_retard;
-      return true;
-    });
-  }, [facturationData, factFilter]);
 
   if (isLoading) {
     return (<div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>);
@@ -1898,251 +1871,6 @@ export default function SavPage() {
         <FichesSigneesTab fiches={fiches} setFiches={setFiches} />
       )}
 
-      {/* === ONGLET 6 : SUIVI FACTURATION === */}
-      {activeTab === 6 && (
-        <div className="space-y-4">
-          {/* KPIs facturation */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { label: 'Total clôturées', value: facturationData.length, icon: <ClipboardList className="w-5 h-5" />, color: 'text-savia-accent', filter: 'all' as const },
-              { label: 'Non facturées', value: facturationData.filter((f: any) => !f.facture_envoyee && !f.en_retard).length, icon: <CircleDot className="w-5 h-5" />, color: 'text-yellow-400', filter: 'pending' as const },
-              { label: 'En retard', value: facturationData.filter((f: any) => f.en_retard).length, icon: <AlertOctagon className="w-5 h-5" />, color: 'text-red-400', filter: 'overdue' as const },
-              { label: 'Facturées', value: facturationData.filter((f: any) => f.facture_envoyee).length, icon: <CheckCircle2 className="w-5 h-5" />, color: 'text-green-400', filter: 'done' as const },
-            ].map(k => (
-              <button key={k.label} onClick={() => setFactFilter(k.filter)}
-                className={`glass rounded-xl p-4 text-center cursor-pointer transition-all hover:scale-[1.02] ${
-                  factFilter === k.filter ? 'ring-2 ring-savia-accent shadow-lg' : ''
-                }`}>
-                <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
-                <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
-                <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
-              </button>
-            ))}
-          </div>
-
-          {/* Table facturation */}
-          <div className="glass rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-savia-border/50 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Receipt className="w-4 h-4 text-savia-accent" />
-                <span className="font-semibold text-sm">{filteredFacturation.length} intervention{filteredFacturation.length > 1 ? 's' : ''}</span>
-              </div>
-              {factFilter !== 'all' && (
-                <button onClick={() => setFactFilter('all')} className="text-xs text-savia-accent hover:underline cursor-pointer">Voir tout</button>
-              )}
-            </div>
-            <div className="overflow-x-auto max-h-[450px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-savia-surface-hover/80 backdrop-blur-sm">
-                  <tr className="border-b border-savia-border">
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">ID</th>
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Machine</th>
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Client</th>
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Technicien</th>
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Date clôture</th>
-                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Compteur</th>
-                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Deadline</th>
-                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs">Pièces</th>
-                    <th className="text-center py-2.5 px-3 text-savia-text-muted text-xs">Statut</th>
-                    <th className="py-2.5 px-3 text-center text-savia-text-muted text-xs">Détails</th>
-                    <th className="py-2.5 px-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredFacturation.map((f: any) => {
-                    const progress = Math.min(100, Math.max(0, ((10 - f.jours_restants) / 10) * 100));
-                    return (
-                      <tr key={f.id} className={`border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors ${
-                        f.en_retard ? 'bg-red-500/5' : f.facture_envoyee ? 'bg-green-500/5' : ''
-                      }`}>
-                        <td className="py-2.5 px-3 font-mono text-xs text-savia-accent">#{f.id}</td>
-                        <td className="py-2.5 px-3 font-semibold text-sm">{f.machine}</td>
-                        <td className="py-2.5 px-3 text-sm text-savia-text-muted">{f.client || '—'}</td>
-                        <td className="py-2.5 px-3 text-sm">{f.technicien}</td>
-                        <td className="py-2.5 px-3 text-xs">{f.date_cloture}</td>
-                        <td className="py-2.5 px-3">
-                          <div className="flex flex-col items-center gap-1">
-                            <span className={`text-xs font-bold ${
-                              f.facture_envoyee ? 'text-green-400' :
-                              f.jours_restants <= 0 ? 'text-red-400' :
-                              f.jours_restants <= 2 ? 'text-orange-400' : 'text-savia-text'
-                            }`}>
-                              {f.facture_envoyee ? '✓' : `J+${f.jours_depuis_cloture}`}
-                            </span>
-                            {!f.facture_envoyee && (
-                              <div className="w-16 bg-savia-surface-hover rounded-full h-1.5 overflow-hidden">
-                                <div className={`h-full rounded-full transition-all ${
-                                  f.jours_restants <= 0 ? 'bg-red-400' :
-                                  f.jours_restants <= 2 ? 'bg-orange-400' :
-                                  f.jours_restants <= 5 ? 'bg-yellow-400' : 'bg-green-400'
-                                }`} style={{ width: `${progress}%` }} />
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className={`text-xs font-semibold ${
-                            f.facture_envoyee ? 'text-green-400' :
-                            f.jours_restants <= 0 ? 'text-red-400 animate-pulse' :
-                            f.jours_restants <= 2 ? 'text-orange-400' : 'text-savia-text-muted'
-                          }`}>
-                            {f.facture_envoyee ? 'Facturée' :
-                             f.jours_restants <= 0 ? `${Math.abs(f.jours_restants)}j de retard` :
-                             `${f.jours_restants}j restants`}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-xs text-savia-text-muted max-w-[150px] truncate">{f.pieces_utilisees || '—'}</td>
-                        <td className="py-2.5 px-3 text-center">
-                          {f.facture_envoyee ? (
-                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-green-500/15 text-green-400">✓ Facturée</span>
-                          ) : f.en_retard ? (
-                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-red-500/15 text-red-400 animate-pulse">⚠ Retard</span>
-                          ) : (
-                            <span className="px-2 py-1 rounded-full text-xs font-bold bg-yellow-500/15 text-yellow-400">En attente</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <button onClick={() => setFactDetailItem(f)}
-                            className="p-1.5 rounded-lg text-savia-text-muted hover:text-savia-accent hover:bg-savia-accent/10 cursor-pointer transition-colors"
-                            title="Voir les détails"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                        </td>
-                        <td className="py-2.5 px-3">
-                          {!f.facture_envoyee && (
-                            <button onClick={() => handleMarkFactured(f.id)}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors whitespace-nowrap"
-                            >
-                              ✓ Facturer
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {filteredFacturation.length === 0 && (
-                    <tr><td colSpan={10} className="text-center py-8 text-savia-text-dim">
-                      <Receipt className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                      Aucune intervention dans cette catégorie.
-                    </td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Modal détail intervention */}
-          {factDetailItem && (
-            <Modal isOpen={!!factDetailItem} onClose={() => setFactDetailItem(null)} title={`Intervention #${factDetailItem?.id}`} size="lg">
-              <div className="space-y-4 max-h-[75vh] overflow-y-auto">
-                <div className="flex items-center justify-between border-b border-savia-border pb-3">
-                  <h2 className="text-lg font-black gradient-text flex items-center gap-2">
-                    <ClipboardList className="w-5 h-5" /> Intervention #{factDetailItem.id}
-                  </h2>
-                  <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                    factDetailItem.facture_envoyee ? 'bg-green-500/15 text-green-400' :
-                    factDetailItem.en_retard ? 'bg-red-500/15 text-red-400' :
-                    'bg-yellow-500/15 text-yellow-400'
-                  }`}>
-                    {factDetailItem.facture_envoyee ? 'Facturée' : factDetailItem.en_retard ? 'En retard' : 'En attente'}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { icon: <Wrench className="w-3.5 h-3.5" />, label: 'Machine', value: factDetailItem.machine },
-                    { icon: <Users className="w-3.5 h-3.5" />, label: 'Technicien', value: factDetailItem.technicien },
-                    { icon: <Building2 className="w-3.5 h-3.5" />, label: 'Client', value: factDetailItem.client || '—' },
-                    { icon: <Briefcase className="w-3.5 h-3.5" />, label: 'Type', value: factDetailItem.type_intervention || '—' },
-                    { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date intervention', value: factDetailItem.date_intervention || '—' },
-                    { icon: <Calendar className="w-3.5 h-3.5" />, label: 'Date clôture', value: factDetailItem.date_cloture },
-                    { icon: <Timer className="w-3.5 h-3.5" />, label: 'Durée (h)', value: factDetailItem.duree_minutes ? `${+(factDetailItem.duree_minutes / 60).toFixed(2)}h` : '—' },
-                    { icon: <Clock className="w-3.5 h-3.5" />, label: 'Déplacement (h)', value: Number(factDetailItem.duree_deplacement) > 0 ? `${+(Number(factDetailItem.duree_deplacement) / 60).toFixed(2)}h` : '—' },
-                    { icon: <Gauge className="w-3.5 h-3.5" />, label: 'Priorité', value: factDetailItem.priorite || '—' },
-                  ].map((item, i) => (
-                    <div key={i} className="bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50">
-                      <div className="flex items-center gap-1.5 text-savia-text-muted text-xs mb-0.5">{item.icon} {item.label}</div>
-                      <div className="text-sm font-semibold text-savia-text">{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {(factDetailItem.description || factDetailItem.probleme) && (
-                  <div className="space-y-2">
-                    {factDetailItem.description && (
-                      <div className="bg-savia-bg/50 rounded-lg p-3 border border-savia-border/50">
-                        <div className="text-xs text-savia-text-muted mb-1 flex items-center gap-1.5"><FileText className="w-3.5 h-3.5" /> Description</div>
-                        <p className="text-sm text-savia-text">{factDetailItem.description}</p>
-                      </div>
-                    )}
-                    {factDetailItem.probleme && (
-                      <div className="bg-savia-bg/50 rounded-lg p-3 border border-savia-border/50">
-                        <div className="text-xs text-savia-text-muted mb-1 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-orange-400" /> Problème</div>
-                        <p className="text-sm text-savia-text">{factDetailItem.probleme}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {(factDetailItem.cause || factDetailItem.solution) && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {factDetailItem.cause && (
-                      <div className="bg-orange-500/5 rounded-lg p-3 border border-orange-500/20">
-                        <div className="text-xs text-orange-400 mb-1 flex items-center gap-1.5"><Target className="w-3.5 h-3.5" /> Cause</div>
-                        <p className="text-sm text-savia-text">{factDetailItem.cause}</p>
-                      </div>
-                    )}
-                    {factDetailItem.solution && (
-                      <div className="bg-green-500/5 rounded-lg p-3 border border-green-500/20">
-                        <div className="text-xs text-green-400 mb-1 flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" /> Solution</div>
-                        <p className="text-sm text-savia-text">{factDetailItem.solution}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {factDetailItem.pieces_utilisees && (
-                  <div className="bg-blue-500/5 rounded-lg p-3 border border-blue-500/20">
-                    <div className="text-xs text-blue-400 mb-1 flex items-center gap-1.5"><Server className="w-3.5 h-3.5" /> Pièces de rechange</div>
-                    <p className="text-sm text-savia-text">{factDetailItem.pieces_utilisees}</p>
-                  </div>
-                )}
-
-
-
-                {factDetailItem.code_erreur && (
-                  <div className="bg-savia-bg/50 rounded-lg p-2.5 border border-savia-border/50">
-                    <span className="text-xs text-savia-text-muted">Code erreur :</span>{' '}
-                    <span className="font-mono text-sm text-savia-accent">{factDetailItem.code_erreur}</span>
-                    {factDetailItem.type_erreur && <span className="text-xs text-savia-text-dim ml-2">({factDetailItem.type_erreur})</span>}
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button onClick={() => handleDownloadFicheIntervention(factDetailItem)}
-                    className="px-4 py-2 rounded-lg text-sm font-bold bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 cursor-pointer transition-colors"
-                  >
-                    <Download className="w-4 h-4 inline mr-1" /> Télécharger PDF
-                  </button>
-                  {!factDetailItem.facture_envoyee && (
-                    <button onClick={() => { handleMarkFactured(factDetailItem.id); setFactDetailItem(null); }}
-                      className="px-4 py-2 rounded-lg text-sm font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer transition-colors"
-                    >
-                      <Check className="w-4 h-4 inline mr-1" /> Marquer facturée
-                    </button>
-                  )}
-                  <button onClick={() => setFactDetailItem(null)}
-                    className="px-4 py-2 rounded-lg text-sm font-bold bg-savia-surface-hover text-savia-text hover:bg-savia-border cursor-pointer transition-colors"
-                  >
-                    Fermer
-                  </button>
-                </div>
-              </div>
-            </Modal>
-          )}
-        </div>
-      )}
       {/* Modal Détails Intervention */}
       {intervDetailItem && (
         <Modal isOpen={!!intervDetailItem} onClose={() => setIntervDetailItem(null)} title={`Intervention #${intervDetailItem?.id}`} size="lg">

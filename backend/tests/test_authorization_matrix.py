@@ -12,6 +12,7 @@ from api.security import (
     resolve_client_scope,
 )
 from controllers.requests import _INTERVENTION_ACTION_ROLES
+from controllers.billing import BILLING_ROLES
 
 
 ALL_ROLES = (
@@ -31,6 +32,7 @@ ROLE_POLICY_MATRIX = {
     "create_demande": {"Admin", "Manager", "Responsable Technique", "Lecteur"},
     "read_stock": {"Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire"},
     "create_piece": {"Admin", "Manager", "Responsable Technique", "Gestionnaire"},
+    "billing_tracking": set(BILLING_ROLES),
 }
 
 

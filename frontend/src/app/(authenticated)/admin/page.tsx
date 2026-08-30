@@ -9,7 +9,7 @@ import {
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
-  ChevronDown, Brain,
+  ChevronDown, Brain, Receipt,
 } from 'lucide-react';
 import { admin, techniciens, clients, paysCustom as paysCustomApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -26,6 +26,7 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'predictions',        label: 'Prédictions',            icon: TrendingUp     },
   { key: 'base_connaissances', label: 'Base de Connaissances',  icon: BookOpen       },
   { key: 'sav',                label: 'SAV & Interventions',    icon: Wrench         },
+  { key: 'facturation',        label: 'Suivi Facturation',      icon: Receipt        },
   { key: 'demandes',           label: "Demandes d'intervention", icon: ClipboardList  },
   { key: 'planning',           label: 'Planning',               icon: CalendarDays   },
   { key: 'pieces',             label: 'Pièces de Rechange',     icon: Cog            },
@@ -65,7 +66,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-blue-500/10',
     border: 'border-blue-500/30',
     description: 'SAV, planning, équipements, rapports',
-    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'demandes', 'planning', 'reports', 'base_connaissances'],
+    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'facturation', 'demandes', 'planning', 'reports', 'base_connaissances'],
   },
   {
     id: 'gestionnaire_stock',
@@ -74,7 +75,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-amber-500/10',
     border: 'border-amber-500/30',
     description: 'Pièces de rechange, prédictions, commandes',
-    pages: ['dashboard', 'pieces', 'predictions', 'reports'],
+    pages: ['dashboard', 'pieces', 'predictions', 'facturation', 'reports'],
   },
   {
     id: 'technicien',
@@ -501,10 +502,11 @@ export default function AdminPage() {
               const role = PROFILE_ROLE_MAP[p.id];
               if (!role || !dbPerms[role]) return p;
               const permsForRole = dbPerms[role];
-              // Convertir {page: true/false} en tableau de pages autorisées
-              const authorizedPages = Object.entries(permsForRole)
-                .filter(([, v]) => v === true)
-                .map(([k]) => k);
+              // Missing keys are new modules: retain the safe default of the
+              // selected profile instead of silently hiding them.
+              const authorizedPages = ALL_PAGES
+                .filter(page => permsForRole[page.key] ?? p.pages.includes(page.key))
+                .map(page => page.key);
               console.log(`[ADMIN] ${p.nom} (${role}): ${authorizedPages.length} pages authorized`);
               return { ...p, pages: authorizedPages };
             }));
