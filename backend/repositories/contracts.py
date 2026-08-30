@@ -34,6 +34,12 @@ __all__ = [
 # FONCTIONS CRUD — TECHNICIENS
 # ==========================================
 
+def _normalize_disponibilite(value):
+    """Convertit les libellés frontend de disponibilité vers le format DB 1/0."""
+    if isinstance(value, str):
+        return 1 if value.strip().lower() in {"1", "true", "oui", "yes", "disponible", "available"} else 0
+    return 1 if value else 0
+
 def lire_techniciens():
     """
     Lit la liste des techniciens.
@@ -59,6 +65,7 @@ def ajouter_technicien(tech_dict):
     """
     Ajoute un technicien.
     """
+    dispo = _normalize_disponibilite(tech_dict.get("dispo", 1))
     try:
         with get_db() as conn:
             res = conn.execute("""
@@ -71,7 +78,7 @@ def ajouter_technicien(tech_dict):
                 tech_dict.get("specialite", "Généraliste"),
                 tech_dict.get("qualification", ""),
                 tech_dict.get("niveau_competence", "Junior"),
-                tech_dict.get("dispo", 1),
+                dispo,
                 tech_dict.get("notes", ""),
                 tech_dict.get("email", ""),
                 tech_dict.get("telephone", ""),
@@ -84,12 +91,13 @@ def ajouter_technicien(tech_dict):
         return True
     except Exception as e:
         logger.error(f"Erreur ajouter_technicien: {e}")
-        return False
+        raise
 
 def update_technicien(tech_id, tech_dict):
     """
     Met à jour un technicien.
     """
+    dispo = _normalize_disponibilite(tech_dict.get("dispo", 1))
     try:
         with get_db() as conn:
             conn.execute("""
@@ -103,7 +111,7 @@ def update_technicien(tech_id, tech_dict):
                 tech_dict.get("specialite", ""),
                 tech_dict.get("qualification", ""),
                 tech_dict.get("niveau_competence", "Junior"),
-                tech_dict.get("dispo", 1),
+                dispo,
                 tech_dict.get("notes", ""),
                 tech_dict.get("email", ""),
                 tech_dict.get("telephone", ""),

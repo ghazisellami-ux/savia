@@ -42,10 +42,6 @@ def ajouter_piece(piece_dict):
                                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
                                          nombre_equipements_relies, utilisation_recente_30j)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(reference) DO UPDATE SET
-                domaine=excluded.domaine, equipement_type=excluded.equipement_type,
-                est_annexe=excluded.est_annexe, stock_actuel=excluded.stock_actuel,
-                prix_unitaire=excluded.prix_unitaire
         """, (
             piece_dict.get("reference", ""),
             piece_dict.get("designation", ""),

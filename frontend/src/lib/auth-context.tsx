@@ -57,7 +57,7 @@ const DEFAULT_ROLE_PERMS: Record<string, PermissionsMap> = {
     dashboard: true, supervision: true, equipements: true, predictions: true,
     base_connaissances: true, sav: true, planning: true, pieces: false,
     facturation: true,
-    reports: true, contrats: false, admin: false, settings: true, demandes: true,
+    reports: true, contrats: false, admin: true, settings: false, demandes: true,
     finances: false, carte: true, sla: true,
   },
   Technicien: {
@@ -104,7 +104,14 @@ async function loadRolePermissions(role: string): Promise<PermissionsMap> {
     if (allRolePerms[role]) {
       // New modules keep their safe role defaults on existing installations
       // whose saved permission JSON predates the module.
-      return { ...(DEFAULT_ROLE_PERMS[role] || {}), ...allRolePerms[role] };
+      const merged = { ...(DEFAULT_ROLE_PERMS[role] || {}), ...allRolePerms[role] };
+      // This role has a deliberately narrow administration scope. Keep the
+      // page visible even when an older installation saved admin=false.
+      if (role === 'Responsable Technique') {
+        merged.admin = true;
+        merged.settings = false;
+      }
+      return merged;
     }
   } catch {}
   return DEFAULT_ROLE_PERMS[role] || DEFAULT_PERMS;

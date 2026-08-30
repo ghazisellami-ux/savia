@@ -260,6 +260,12 @@ export default function PiecesPage() {
     if (!form.reference.trim() || !form.designation.trim() || !form.domaine.trim() || !form.equipement_type.trim() || !form.fournisseur.trim()) {
       return 'Référence, désignation, domaine, type d’équipement et fournisseur sont obligatoires.';
     }
+    if (!selectedPiece) {
+      const reference = form.reference.trim().toUpperCase();
+      if (data.some(piece => String(piece.reference || '').trim().toUpperCase() === reference)) {
+        return 'Cette référence existe déjà.';
+      }
+    }
     const stock = Number(form.stock_actuel);
     const minimum = Number(form.stock_minimum);
     const price = Number(form.prix_unitaire);
@@ -300,7 +306,10 @@ export default function PiecesPage() {
       setForm(emptyForm);
       setShowAddModal(false);
       await loadData();
-    } catch (err) { console.error("Save failed", err); }
+    } catch (err: any) {
+      console.error("Save failed", err);
+      setFormError(err?.message || "Impossible d'enregistrer la pièce.");
+    }
     finally { setIsSaving(false); }
   };
 
@@ -326,7 +335,10 @@ export default function PiecesPage() {
       setShowEditModal(false);
       setSelectedPiece(null);
       await loadData();
-    } catch (err) { console.error("Edit failed", err); }
+    } catch (err: any) {
+      console.error("Edit failed", err);
+      setFormError(err?.message || "Impossible de modifier la pièce.");
+    }
     finally { setIsSaving(false); }
   };
 
@@ -532,7 +544,7 @@ export default function PiecesPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion du stock, traçabilité et prédictions IA</p>
         </div>
-        <button onClick={() => { setForm(emptyForm); setFormError(''); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <button onClick={() => { setSelectedPiece(null); setForm(emptyForm); setFormError(''); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> Nouvelle Pièce
         </button>
       </div>

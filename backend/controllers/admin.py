@@ -55,6 +55,8 @@ _NOTIFICATION_READER_ROLES = frozenset({
     "Gestionnaire de stock",  # ancien libellé conservé pour compatibilité
 })
 
+_USER_DIRECTORY_ROLES = frozenset({"Admin", "Manager", "Responsable Technique"})
+
 
 def _require_admin(user: dict) -> None:
     if user.get("role") != "Admin":
@@ -66,6 +68,23 @@ def _require_admin_or_manager(user: dict) -> None:
         raise HTTPException(status_code=403, detail="Acces reserve aux administrateurs et managers")
 
 
+def _require_user_directory_access(user: dict) -> None:
+    if user.get("role") not in _USER_DIRECTORY_ROLES:
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs, managers et responsables techniques")
+
+
+def _require_user_update_access(user: dict, target: dict, body: dict) -> None:
+    """Allow technical managers to update only their own password."""
+    if user.get("role") in {"Admin", "Manager"}:
+        return
+    if user.get("role") != "Responsable Technique":
+        raise HTTPException(status_code=403, detail="Acces reserve aux administrateurs et managers")
+    if target.get("username") != user.get("sub"):
+        raise HTTPException(status_code=403, detail="Vous pouvez uniquement modifier votre propre mot de passe")
+    if set(body) != {"password"} or not str(body.get("password") or "").strip():
+        raise HTTPException(status_code=403, detail="Un responsable technique peut uniquement modifier son mot de passe")
+
+
 def _validate_password(password: str, username: str = "") -> None:
     try:
         validate_password_policy(password, username)
@@ -74,7 +93,7 @@ def _validate_password(password: str, username: str = "") -> None:
 
 @app.get("/api/admin/users")
 def get_users(user: dict = Depends(_verify_token)):
-    _require_admin_or_manager(user)
+    _require_user_directory_access(user)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT id, username, nom_complet, role, client, email, actif, profil,
@@ -124,13 +143,13 @@ def create_user(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/admin/users/{user_id}")
 def update_user(user_id: int, body: dict, user: dict = Depends(_verify_token)):
-    _require_admin_or_manager(user)
     if "role" in body and body["role"] not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Rôle invalide")
     with get_db() as conn:
         target = conn.execute("SELECT username, role, actif FROM utilisateurs WHERE id = %s", (user_id,)).fetchone()
         if not target:
             raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+        _require_user_update_access(user, target, body)
         if "password" in body and body["password"]:
             _validate_password(body["password"], target["username"])
         removes_last_admin = (

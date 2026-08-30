@@ -834,8 +834,7 @@ export default function EquipementsPage() {
       form.Service.trim() &&
       form.DateInstallation &&
       form.DernieresMaintenance &&
-      form.GarantieDebut &&
-      form.GarantieDuree > 0
+      (form.GarantieDuree === 0 || (form.GarantieDuree > 0 && Boolean(form.GarantieDebut)))
     );
   };
 
@@ -1512,9 +1511,10 @@ export default function EquipementsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Calendar className="w-3.5 h-3.5" /> Date début garantie *
+                          <Calendar className="w-3.5 h-3.5" /> Date début garantie {form.GarantieDuree > 0 ? '*' : '(facultative)'}
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.GarantieDebut}
+                          disabled={form.GarantieDuree === 0}
                           onChange={e => setForm({ ...form, GarantieDebut: e.target.value })} />
                       </div>
                       <div>
@@ -1522,7 +1522,14 @@ export default function EquipementsPage() {
                           <Settings className="w-3.5 h-3.5" /> Durée de garantie *
                         </label>
                         <select className={INPUT_CLS} value={form.GarantieDuree}
-                          onChange={e => setForm({ ...form, GarantieDuree: Number(e.target.value) })}>
+                          onChange={e => {
+                            const garantieDuree = Number(e.target.value);
+                            setForm({
+                              ...form,
+                              GarantieDuree: garantieDuree,
+                              GarantieDebut: garantieDuree === 0 ? '' : form.GarantieDebut,
+                            });
+                          }}>
                           <option value={0}>Aucune garantie</option>
                           <option value={1}>1 an</option>
                           <option value={2}>2 ans</option>
