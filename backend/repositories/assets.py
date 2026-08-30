@@ -30,6 +30,8 @@ __all__ = [
     "modifier_equipement",
     "lire_fabricants",
     "ajouter_fabricant",
+    "lire_fournisseurs",
+    "ajouter_fournisseur",
     "lire_types_equipement_custom",
     "ajouter_type_equipement_custom",
     "lire_types_intervention_custom",
@@ -571,6 +573,20 @@ def ajouter_fabricant(nom):
     """Ajoute un fabricant. Ignore si déjà existant."""
     with get_db() as conn:
         conn.execute("INSERT INTO fabricants (nom) VALUES (%s) ON CONFLICT DO NOTHING", (nom.strip(),))
+    return True
+
+
+def lire_fournisseurs():
+    """Retourne la liste des fournisseurs de pièces enregistrés."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, nom FROM fournisseurs ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_fournisseur(nom):
+    """Ajoute un fournisseur de pièces. Ignore s'il existe déjà."""
+    with get_db() as conn:
+        conn.execute("INSERT INTO fournisseurs (nom) VALUES (%s) ON CONFLICT DO NOTHING", (nom.strip(),))
     return True
 
 
