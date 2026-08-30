@@ -249,6 +249,11 @@ export const pieces = {
     request<Array<Record<string, unknown>>>(`/api/pieces/prediction-feedback?limit=${limit}`),
 };
 
+export const fournisseurs = {
+  list: () => request<Array<{ id: number; nom: string }>>('/api/fournisseurs'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/fournisseurs', { method: 'POST', body: { nom } }),
+};
+
 export const piecesDemandees = {
   list: (statut?: string) => request<Array<Record<string, unknown>>>(`/api/pieces-demandees${statut ? `?statut=${statut}` : ''}`),
   resoudre: (id: number) => request<{ok: boolean}>(`/api/pieces-demandees/${id}/resoudre`, { method: 'POST' }),

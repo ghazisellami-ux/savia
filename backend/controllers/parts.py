@@ -10,6 +10,8 @@ from api.runtime import (
     calculate_piece_parameters,
     datetime,
     get_db,
+    lire_fournisseurs,
+    ajouter_fournisseur,
     lire_pieces,
     lire_pieces_demandees_en_attente,
     lire_toutes_pieces_demandees,
@@ -90,6 +92,25 @@ def _validate_piece_payload(body: dict) -> None:
 def get_pieces(user: dict = Depends(_verify_token)):
     require_roles(user, *STOCK_READ_ROLES)
     return _df_to_records(lire_pieces())
+
+
+@app.get("/api/fournisseurs")
+def get_fournisseurs(user: dict = Depends(_verify_token)):
+    """Return the supplier catalog used by spare-part forms."""
+    require_roles(user, *STOCK_READ_ROLES)
+    return lire_fournisseurs()
+
+
+@app.post("/api/fournisseurs")
+def post_fournisseur(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Register a supplier so it can be selected for future spare parts."""
+    if not _check_create_piece_permission(user):
+        raise HTTPException(status_code=403, detail="Création de fournisseur non autorisée")
+    nom = str(payload.get("nom") or "").strip()
+    if not nom:
+        raise HTTPException(status_code=400, detail="Nom du fournisseur requis")
+    ajouter_fournisseur(nom)
+    return {"ok": True}
 
 
 @app.get("/api/pieces/predictions/priorite")

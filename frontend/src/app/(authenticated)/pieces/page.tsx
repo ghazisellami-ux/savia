@@ -7,7 +7,7 @@ import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Spar
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
   Brain, Boxes, Factory, ThumbsUp, ThumbsDown, Calendar, ShieldCheck, ShoppingCart, Clock,
   Bell, CheckCheck, Package2, Hash, User } from 'lucide-react';
-import { pieces, interventions, ai, notifications as notifApi, piecesDemandees, equipements } from '@/lib/api';
+import { pieces, interventions, ai, notifications as notifApi, piecesDemandees, equipements, fournisseurs as fournisseursApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 interface Piece {
@@ -43,7 +43,9 @@ export default function PiecesPage() {
   
   const [activeTab, setActiveTab] = useState(0);
   const [search, setSearch] = useState('');
+  const [filterDomaine, setFilterDomaine] = useState('Tous');
   const [filterType, setFilterType] = useState('Tous');
+  const [filterFournisseur, setFilterFournisseur] = useState('Tous');
   const [data, setData] = useState<Piece[]>([]);
   const [interventionData, setInterventionData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,11 +67,17 @@ export default function PiecesPage() {
   const [notifCount, setNotifCount] = useState(0);
   const [editDomaineFilter, setEditDomaineFilter] = useState('');
   const [editTypeFilter, setEditTypeFilter] = useState('');
+  const [editFournisseurFilter, setEditFournisseurFilter] = useState('');
+  const [traceDomaineFilter, setTraceDomaineFilter] = useState('');
+  const [traceTypeFilter, setTraceTypeFilter] = useState('');
+  const [traceFournisseurFilter, setTraceFournisseurFilter] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
   const [equipmentCatalog, setEquipmentCatalog] = useState<Array<{ nom: string; type: string; domaine: string }>>([]);
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
+  const [fournisseursList, setFournisseursList] = useState<string[]>([]);
+  const [customFournisseur, setCustomFournisseur] = useState(false);
 
   const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
@@ -100,6 +108,21 @@ export default function PiecesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const loadFournisseurs = useCallback(async () => {
+    try {
+      const res = await fournisseursApi.list();
+      setFournisseursList(
+        (Array.isArray(res) ? res : [])
+          .map(item => String(item.nom || '').trim())
+          .filter(Boolean),
+      );
+    } catch (err) {
+      console.error('Erreur chargement fournisseurs:', err);
+    }
+  }, []);
+
+  useEffect(() => { loadFournisseurs(); }, [loadFournisseurs]);
 
   // Charger les demandes de pièces en attente
   const loadDemandes = useCallback(async () => {
@@ -296,6 +319,7 @@ export default function PiecesPage() {
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
+      await registerFournisseur(form.fournisseur);
       // Si liée à une demande, résoudre la demande + notifier le technicien
       if (linkedDemandeId) {
         // La création du stock résout déjà la demande et envoie la notification Telegram complète.
@@ -332,6 +356,7 @@ export default function PiecesPage() {
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
+      await registerFournisseur(form.fournisseur);
       setShowEditModal(false);
       setSelectedPiece(null);
       await loadData();
@@ -380,6 +405,21 @@ export default function PiecesPage() {
       loadPredictions();
     }
   }, [activeTab, predictions, loadPredictions]);
+
+  const registerFournisseur = async (value: string) => {
+    const nom = value.trim();
+    if (!nom) return;
+    const exists = fournisseursList.some(item => item.toLowerCase() === nom.toLowerCase());
+    if (!exists) {
+      try {
+        await fournisseursApi.create(nom);
+        await loadFournisseurs();
+      } catch (err) {
+        console.error('Erreur enregistrement fournisseur:', err);
+      }
+    }
+    setCustomFournisseur(false);
+  };
 
   const formatForecastNumber = (value: unknown, suffix = '') => {
     if (value === null || value === undefined || value === '') return 'Non calculable';
@@ -473,9 +513,24 @@ export default function PiecesPage() {
   };
 
   // Filters
-  const types = useMemo(() => ['Tous', ...new Set(data.map(p => p.equipement_type).filter(Boolean))], [data]);
+  const domaines = useMemo(() => ['Tous', ...new Set(data.map(p => p.domaine).filter(Boolean))], [data]);
+  const stockTypes = useMemo(() => ['Tous', ...new Set(
+    data
+      .filter(piece => filterDomaine === 'Tous' || piece.domaine === filterDomaine)
+      .map(piece => piece.equipement_type)
+      .filter(Boolean),
+  )], [data, filterDomaine]);
+  const stockSupplierOptions = useMemo(() => ['Tous', ...Array.from(new Set(
+    data
+      .filter(piece => (filterDomaine === 'Tous' || piece.domaine === filterDomaine)
+        && (filterType === 'Tous' || piece.equipement_type === filterType))
+      .map(piece => piece.fournisseur)
+      .filter(Boolean),
+  )).sort((a, b) => a.localeCompare(b, 'fr'))], [data, filterDomaine, filterType]);
   const filtered = data.filter(p => {
+    if (filterDomaine !== 'Tous' && p.domaine !== filterDomaine) return false;
     if (filterType !== 'Tous' && p.equipement_type !== filterType) return false;
+    if (filterFournisseur !== 'Tous' && p.fournisseur.toLowerCase() !== filterFournisseur.toLowerCase()) return false;
     if (search) {
       const s = search.toLowerCase();
       return p.reference.toLowerCase().includes(s) || p.designation.toLowerCase().includes(s) || p.fournisseur.toLowerCase().includes(s);
@@ -497,9 +552,17 @@ export default function PiecesPage() {
       if (!piecesStr.trim()) return;
       const parts = piecesStr.replace(/;/g, ',').split(',').map((p: string) => p.trim()).filter(Boolean);
       parts.forEach((partName: string) => {
+        const referenceMatch = partName.match(/\bRef(?:érence)?\s*:\s*([^|,]+)/i);
+        const supplierMatch = partName.match(/\bFournisseur\s*:\s*([^|,]+)/i);
+        const reference = referenceMatch?.[1]?.trim() || '';
+        const catalogPiece = data.find(piece => reference && piece.reference.toLowerCase() === reference.toLowerCase());
         rows.push({
           date: (inter.date || '').substring(0, 10),
           piece: partName,
+          reference,
+          domaine: catalogPiece?.domaine || '',
+          equipement_type: catalogPiece?.equipement_type || '',
+          fournisseur: catalogPiece?.fournisseur || supplierMatch?.[1]?.trim() || '',
           equipement: inter.machine || '',
           client: inter.client || '',
           technicien: inter.technicien || '',
@@ -508,7 +571,28 @@ export default function PiecesPage() {
       });
     });
     return rows.sort((a, b) => b.date.localeCompare(a.date));
-  }, [interventionData]);
+  }, [interventionData, data]);
+
+  const filteredTraceData = traceData.filter(row => {
+    if (traceDomaineFilter && row.domaine !== traceDomaineFilter) return false;
+    if (traceTypeFilter && row.equipement_type !== traceTypeFilter) return false;
+    if (traceFournisseurFilter && row.fournisseur.toLowerCase() !== traceFournisseurFilter.toLowerCase()) return false;
+    return true;
+  });
+  const traceDomaines = useMemo(() => ['Tous', ...new Set(traceData.map(row => row.domaine).filter(Boolean))], [traceData]);
+  const traceTypes = useMemo(() => ['Tous', ...new Set(
+    traceData
+      .filter(row => !traceDomaineFilter || row.domaine === traceDomaineFilter)
+      .map(row => row.equipement_type)
+      .filter(Boolean),
+  )], [traceData, traceDomaineFilter]);
+  const traceSupplierOptions = useMemo(() => ['Tous', ...Array.from(new Set(
+    traceData
+      .filter(row => (!traceDomaineFilter || row.domaine === traceDomaineFilter)
+        && (!traceTypeFilter || row.equipement_type === traceTypeFilter))
+      .map(row => row.fournisseur)
+      .filter(Boolean),
+  )).sort((a, b) => a.localeCompare(b, 'fr'))], [traceData, traceDomaineFilter, traceTypeFilter]);
 
   const tabs = [
     { icon: <Package className="w-4 h-4" />, label: 'Stock' },
@@ -544,7 +628,7 @@ export default function PiecesPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion du stock, traçabilité et prédictions IA</p>
         </div>
-        <button onClick={() => { setSelectedPiece(null); setForm(emptyForm); setFormError(''); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <button onClick={() => { setSelectedPiece(null); setForm(emptyForm); setCustomFournisseur(false); setFormError(''); setShowAddModal(true); }} disabled={!canCreatePiece} className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> Nouvelle Pièce
         </button>
       </div>
@@ -635,7 +719,7 @@ export default function PiecesPage() {
                       return keywords.some(kw => kw.length >= 3 && machineStr.includes(kw));
                     });
                     const equipmentContext = getEquipmentContext(d.equipement);
-                    setForm({
+                      setForm({
                       ...emptyForm,
                       reference: d.reference || '',
                       designation: d.designation || '',
@@ -660,14 +744,20 @@ export default function PiecesPage() {
       )}
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
           <input type="text" placeholder="Rechercher par référence, désignation ou fournisseur..." value={search} onChange={e => setSearch(e.target.value)}
             className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
         </div>
-        <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-          {types.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
+        <select value={filterDomaine} onChange={e => { setFilterDomaine(e.target.value); setFilterType('Tous'); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+          {domaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
+        </select>
+        <select value={filterType} onChange={e => { setFilterType(e.target.value); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+          {stockTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
+        </select>
+        <select value={filterFournisseur} onChange={e => setFilterFournisseur(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+          {stockSupplierOptions.map(name => <option key={name} value={name}>{name === 'Tous' ? 'Tous les fournisseurs' : name}</option>)}
         </select>
       </div>
 
@@ -741,9 +831,32 @@ export default function PiecesPage() {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <select value={traceDomaineFilter} onChange={e => { setTraceDomaineFilter(e.target.value); setTraceTypeFilter(''); setTraceFournisseurFilter(''); }}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              <option value="">Tous les domaines</option>
+              {traceDomaines.filter(d => d !== 'Tous').map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select value={traceTypeFilter} onChange={e => { setTraceTypeFilter(e.target.value); setTraceFournisseurFilter(''); }}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              <option value="">Tous les types</option>
+              {traceTypes.filter(t => t !== 'Tous').map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select value={traceFournisseurFilter} onChange={e => setTraceFournisseurFilter(e.target.value)}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              <option value="">Tous les fournisseurs</option>
+              {traceSupplierOptions.filter(name => name !== 'Tous').map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+          <div className="text-xs text-savia-text-muted flex items-center gap-1">
+            <History className="w-3.5 h-3.5" /> {filteredTraceData.length} utilisation(s) affichée(s)
+          </div>
+
           <SectionCard title="Historique d'utilisation des pièces">
-            {traceData.length === 0 ? (
-              <div className="text-center text-savia-text-muted py-8">Aucune donnée de traçabilité disponible.</div>
+            {filteredTraceData.length === 0 ? (
+              <div className="text-center text-savia-text-muted py-8">
+                {traceData.length === 0 ? 'Aucune donnée de traçabilité disponible.' : 'Aucune utilisation ne correspond aux filtres sélectionnés.'}
+              </div>
             ) : (
               <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
                 <table className="w-full text-sm">
@@ -755,7 +868,7 @@ export default function PiecesPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {traceData.map((t, i) => (
+                    {filteredTraceData.map((t, i) => (
                       <tr key={i} className="border-b border-savia-border/30">
                         <td className="py-2 px-3 text-xs">{t.date}</td>
                         <td className="py-2 px-3 font-semibold text-savia-accent">{t.piece}</td>
@@ -782,23 +895,36 @@ export default function PiecesPage() {
             .map(p => p.equipement_type)
             .filter(Boolean)
         )].sort();
+        const editSupplierOptions = [...new Set(
+          data
+            .filter(p => (!editDomaineFilter || p.domaine === editDomaineFilter)
+              && (!editTypeFilter || p.equipement_type === editTypeFilter))
+            .map(p => p.fournisseur)
+            .filter(Boolean)
+        )].sort((a, b) => a.localeCompare(b, 'fr'));
         const editFiltered = data.filter(p => {
           if (editDomaineFilter && p.domaine !== editDomaineFilter) return false;
           if (editTypeFilter && p.equipement_type !== editTypeFilter) return false;
+          if (editFournisseurFilter && p.fournisseur.toLowerCase() !== editFournisseurFilter.toLowerCase()) return false;
           return true;
         });
         return (
         <div className="space-y-3">
           <div className="flex gap-3 flex-wrap">
-            <select value={editDomaineFilter} onChange={e => { setEditDomaineFilter(e.target.value); setEditTypeFilter(''); }}
+            <select value={editDomaineFilter} onChange={e => { setEditDomaineFilter(e.target.value); setEditTypeFilter(''); setEditFournisseurFilter(''); }}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
               <option value="">Tous domaines</option>
               {editDomaines.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
-            <select value={editTypeFilter} onChange={e => setEditTypeFilter(e.target.value)}
+            <select value={editTypeFilter} onChange={e => { setEditTypeFilter(e.target.value); setEditFournisseurFilter(''); }}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
               <option value="">Tous types équipement</option>
               {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select value={editFournisseurFilter} onChange={e => setEditFournisseurFilter(e.target.value)}
+              className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
+              <option value="">Tous les fournisseurs</option>
+              {editSupplierOptions.map(name => <option key={name} value={name}>{name}</option>)}
             </select>
             <span className="flex items-center text-xs text-savia-text-muted ml-auto">{editFiltered.length} pièce(s)</span>
           </div>
@@ -826,7 +952,7 @@ export default function PiecesPage() {
                     <button onClick={() => {
                       setSelectedPiece(p);
                       setFormError('');
-                      setForm({
+                    setForm({
                         reference: p.reference, designation: p.designation,
                         domaine: p.domaine || 'Radiologie',
                         equipement_type: p.equipement_type,
@@ -834,6 +960,9 @@ export default function PiecesPage() {
                         stock_actuel: String(p.stock_actuel), stock_minimum: String(p.stock_minimum),
                         prix_unitaire: String(p.prix_unitaire), fournisseur: p.fournisseur, notes: p.notes,
                       });
+                      setCustomFournisseur(
+                        Boolean(p.fournisseur) && !fournisseursList.some(item => item.toLowerCase() === p.fournisseur.toLowerCase()),
+                      );
                       setShowEditModal(true);
                     }} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 text-sm font-semibold cursor-pointer">
                       <Edit className="w-3.5 h-3.5" /> Modifier
@@ -1325,7 +1454,28 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label><input required className={INPUT_CLS} placeholder="Siemens" value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+            <div>
+              <label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label>
+              {customFournisseur ? (
+                <div className="flex gap-2">
+                  <input required className={INPUT_CLS} placeholder="Nom du fournisseur..." value={form.fournisseur}
+                    onChange={e => setForm({...form, fournisseur: e.target.value})} />
+                  <button type="button" onClick={() => registerFournisseur(form.fournisseur)} disabled={!form.fournisseur.trim()}
+                    className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 disabled:opacity-50 cursor-pointer" title="Enregistrer le fournisseur">
+                    <Save className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <select required className={INPUT_CLS} value={form.fournisseur} onChange={e => {
+                  if (e.target.value === '__autre__') { setCustomFournisseur(true); setForm({...form, fournisseur: ''}); }
+                  else setForm({...form, fournisseur: e.target.value});
+                }}>
+                  <option value="">— Sélectionner —</option>
+                  {fournisseursList.map(f => <option key={f} value={f}>{f}</option>)}
+                  <option value="__autre__">+ Autre (saisie manuelle)</option>
+                </select>
+              )}
+            </div>
             <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           </div>
         </div>
@@ -1404,7 +1554,28 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label><input required className={INPUT_CLS} value={form.fournisseur} onChange={e => setForm({...form, fournisseur: e.target.value})} /></div>
+            <div>
+              <label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label>
+              {customFournisseur ? (
+                <div className="flex gap-2">
+                  <input required className={INPUT_CLS} placeholder="Nom du fournisseur..." value={form.fournisseur}
+                    onChange={e => setForm({...form, fournisseur: e.target.value})} />
+                  <button type="button" onClick={() => registerFournisseur(form.fournisseur)} disabled={!form.fournisseur.trim()}
+                    className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 disabled:opacity-50 cursor-pointer" title="Enregistrer le fournisseur">
+                    <Save className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <select required className={INPUT_CLS} value={form.fournisseur} onChange={e => {
+                  if (e.target.value === '__autre__') { setCustomFournisseur(true); setForm({...form, fournisseur: ''}); }
+                  else setForm({...form, fournisseur: e.target.value});
+                }}>
+                  <option value="">— Sélectionner —</option>
+                  {fournisseursList.map(f => <option key={f} value={f}>{f}</option>)}
+                  <option value="__autre__">+ Autre (saisie manuelle)</option>
+                </select>
+              )}
+            </div>
             <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1">Notes</label><input className={INPUT_CLS} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           </div>
         </div>

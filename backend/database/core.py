@@ -1086,6 +1086,27 @@ def init_db():
         except Exception:
             try: conn.rollback()
             except Exception: pass
+        # Suppliers used by spare parts. Keep this catalog separate from
+        # equipment manufacturers so each form can offer the right choices.
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fournisseurs (
+                    id SERIAL PRIMARY KEY,
+                    nom TEXT UNIQUE NOT NULL
+                )
+            """)
+            cur.execute("""
+                INSERT INTO fournisseurs (nom)
+                SELECT DISTINCT BTRIM(fournisseur)
+                FROM pieces_rechange
+                WHERE fournisseur IS NOT NULL AND BTRIM(fournisseur) <> ''
+                ON CONFLICT DO NOTHING
+            """)
+            conn.commit()
+        except Exception:
+            try: conn.rollback()
+            except Exception: pass
         # Custom equipment types table (per domain)
         try:
             cur = conn.cursor()

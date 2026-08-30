@@ -61,7 +61,7 @@ from db_engine import (
     lire_demandes_intervention,
     lire_clients as db_lire_clients, ajouter_client, modifier_client, supprimer_client,
     migrer_clients_depuis_equipements,
-    lire_fabricants, ajouter_fabricant,
+    lire_fabricants, ajouter_fabricant, lire_fournisseurs, ajouter_fournisseur,
     lire_types_equipement_custom, ajouter_type_equipement_custom,
     lire_types_intervention_custom, ajouter_type_intervention_custom,
     lire_types_client_custom, ajouter_type_client_custom,
