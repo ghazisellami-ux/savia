@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertTriangle, ArrowRight, Banknote, Ban, Building2, Calendar,
-  Check, CheckCircle2, Circle, Clock3, FileCheck2, FileText, History,
+  Check, CheckCircle2, Circle, Clock3, Eye, FileCheck2, FileText, History,
   Loader2, PackageCheck, Plus, Receipt, RefreshCw, Search, Send,
-  WalletCards, Wrench, X,
+  Users, WalletCards, Wrench, X,
 } from 'lucide-react';
 import { billing, clients as clientsApi, equipements, interventions, settings as settingsApi } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
@@ -42,7 +42,10 @@ interface BillingPayment {
 
 interface BillingCase {
   id: number;
+  reused_existing_case?: boolean;
+  merged_into_case_id?: number | null;
   intervention_id?: number | null;
+  request_id?: number | null;
   client: string;
   equipment: string;
   owner_username: string;
@@ -51,8 +54,28 @@ interface BillingCase {
   block_reason: string;
   intervention_status?: string;
   technicien?: string;
+  intervention_date?: string | null;
   intervention_started_at?: string | null;
   intervention_closed_at?: string | null;
+  intervention_type?: string;
+  intervention_description?: string;
+  intervention_problem?: string;
+  intervention_cause?: string;
+  intervention_solution?: string;
+  intervention_error_code?: string;
+  intervention_error_type?: string;
+  intervention_priority?: string;
+  intervention_notes?: string;
+  intervention_duration_minutes?: number;
+  intervention_travel_minutes?: number;
+  intervention_start_time?: string;
+  intervention_end_time?: string;
+  intervention_technicians?: Array<{
+    name: string;
+    duration_minutes: number;
+    travel_minutes: number;
+    status: string;
+  }>;
   pieces_utilisees?: string;
   has_parts: boolean;
   steps: Partial<Record<StepType, BillingStep>>;
@@ -101,6 +124,14 @@ interface ResponsibleOption {
   role: string;
 }
 
+interface DuplicateResolutionState {
+  first: BillingCase;
+  second: BillingCase;
+  keepCaseId: number;
+  interventionCaseId: number;
+  reason: string;
+}
+
 const INPUT = 'w-full rounded-lg border border-savia-border bg-savia-surface-hover px-3 py-2.5 text-sm text-savia-text outline-none transition focus:ring-2 focus:ring-savia-accent/40';
 const LABEL = 'mb-1 block text-xs font-semibold uppercase tracking-wider text-savia-text-muted';
 
@@ -141,6 +172,19 @@ const formatDate = (value?: string | null) => value ? new Date(`${value.substrin
 const formatDateTime = (value?: string | null) => value ? new Date(value).toLocaleString('fr-FR') : '—';
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 const stepCompleted = (step?: BillingStep) => Boolean(step && (step.id || step.not_required));
+const billingActivityCount = (item: BillingCase) => Object.keys(item.steps || {}).length + (item.payments || []).length;
+const interventionProgressScore = (item: BillingCase) => {
+  if (item.intervention_closed_at) return 4;
+  if (item.intervention_started_at) return 3;
+  const status = String(item.intervention_status || '').toLocaleLowerCase('fr');
+  if (status.includes('cours') || status.includes('atelier')) return 2;
+  return item.intervention_id ? 1 : 0;
+};
+const hasOpenTechnicalCycle = (item: BillingCase) => Boolean(
+  !item.merged_into_case_id
+  && item.case_state !== 'cancelled'
+  && (!item.intervention_id || !item.intervention_closed_at),
+);
 
 const historyLabel = (event: HistoryItem) => {
   const after = event.after_data || {};
@@ -153,6 +197,9 @@ const historyLabel = (event: HistoryItem) => {
   };
   if (event.action === 'CREATE_CASE') return 'Dossier créé';
   if (event.action === 'SYNC_MISSING_CASE') return 'Dossier créé automatiquement';
+  if (event.action === 'LINK_REQUEST_AND_INTERVENTION') return 'Demande et intervention associées';
+  if (event.action === 'RESOLVE_DUPLICATE') return 'Doublon résolu';
+  if (event.action === 'MERGED_AS_DUPLICATE') return 'Dossier archivé comme doublon';
   if (event.action === 'CREATE_PAYMENT') return 'Paiement reçu';
   if (event.action === 'UPDATE_PAYMENT') return 'Paiement corrigé';
   if (event.action === 'CREATE_STEP' || event.action === 'UPDATE_STEP') {
@@ -195,6 +242,7 @@ export default function FacturationPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -207,6 +255,7 @@ export default function FacturationPage() {
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm());
   const [newCaseOpen, setNewCaseOpen] = useState(false);
   const [newCaseForm, setNewCaseForm] = useState({ client: '', equipment: '', owner_username: '', currency: 'TND' });
+  const [duplicateDialog, setDuplicateDialog] = useState<DuplicateResolutionState | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,7 +264,13 @@ export default function FacturationPage() {
       const result = await billing.list();
       const typedResult = result as unknown as BillingCase[];
       setCases(typedResult);
-      setSelected(previous => previous ? typedResult.find(item => item.id === previous.id) || null : null);
+      const requestedCaseId = typeof window !== 'undefined'
+        ? Number(new URLSearchParams(window.location.search).get('case_id'))
+        : 0;
+      setSelected(previous => {
+        const targetId = previous?.id || requestedCaseId;
+        return targetId ? typedResult.find(item => item.id === targetId) || null : null;
+      });
     } catch (err: unknown) {
       setError(errorMessage(err, 'Impossible de charger le suivi de facturation.'));
     } finally {
@@ -278,6 +333,7 @@ export default function FacturationPage() {
   }, [responsibles, user?.username]);
 
   const openNewCase = () => {
+    setNotice('');
     setNewCaseForm(value => ({ ...value, currency: selectedCurrency }));
     setNewCaseOpen(true);
   };
@@ -381,12 +437,16 @@ export default function FacturationPage() {
   const createCase = async () => {
     setSaving(true);
     setError('');
+    setNotice('');
     try {
       const created = await billing.create(newCaseForm) as unknown as BillingCase;
       setCases(previous => [created, ...previous.filter(item => item.id !== created.id)]);
       setNewCaseOpen(false);
       setNewCaseForm({ client: '', equipment: '', owner_username: responsibles.find(item => item.username === user?.username)?.username || responsibles[0]?.username || '', currency: selectedCurrency });
       setSelected(created);
+      if (created.reused_existing_case) {
+        setNotice(`Le dossier #${created.id} était déjà en cours pour cet équipement : aucun nouveau dossier n'a été créé.`);
+      }
     } catch (err: unknown) {
       setError(errorMessage(err, 'Impossible de créer le dossier.'));
     } finally {
@@ -423,6 +483,57 @@ export default function FacturationPage() {
     }
   };
 
+  const openDuplicateResolution = (first: BillingCase, second: BillingCase) => {
+    const firstActivity = billingActivityCount(first);
+    const secondActivity = billingActivityCount(second);
+    const keepCase = firstActivity === secondActivity
+      ? (first.id < second.id ? first : second)
+      : (firstActivity > secondActivity ? first : second);
+    const interventionCase = interventionProgressScore(first) === interventionProgressScore(second)
+      ? keepCase
+      : (interventionProgressScore(first) > interventionProgressScore(second) ? first : second);
+    setDuplicateDialog({
+      first,
+      second,
+      keepCaseId: keepCase.id,
+      interventionCaseId: interventionCase.intervention_id ? interventionCase.id : keepCase.id,
+      reason: 'Deux dossiers ouverts pour la même intervention réelle',
+    });
+    setSelected(null);
+    setError('');
+  };
+
+  const resolveDuplicate = async () => {
+    if (!duplicateDialog) return;
+    const discarded = duplicateDialog.keepCaseId === duplicateDialog.first.id
+      ? duplicateDialog.second
+      : duplicateDialog.first;
+    if (billingActivityCount(discarded) > 0) {
+      setError('Le dossier à archiver contient des documents ou paiements. Choisissez-le comme dossier à conserver.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const updated = await billing.resolveDuplicate({
+        keep_case_id: duplicateDialog.keepCaseId,
+        duplicate_case_id: discarded.id,
+        intervention_case_id: duplicateDialog.interventionCaseId,
+        reason: duplicateDialog.reason,
+      }) as unknown as BillingCase;
+      setCases(previous => previous
+        .filter(item => item.id !== discarded.id)
+        .map(item => item.id === updated.id ? updated : item));
+      setSelected(updated);
+      setNotice(`Le dossier #${discarded.id} a été archivé comme doublon du dossier #${updated.id}.`);
+      setDuplicateDialog(null);
+    } catch (err: unknown) {
+      setError(errorMessage(err, 'Impossible de résoudre ce doublon.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const showHistory = async (item: BillingCase) => {
     setHistoryLoading(true);
     try {
@@ -437,6 +548,13 @@ export default function FacturationPage() {
   const primaryAction = (item: BillingCase) => {
     if (!item.next_step) return null;
     if (item.next_step === 'intervention' || item.next_step === 'intervention_close') {
+      if (!item.intervention_id) {
+        return (
+          <Link href={`/demandes?billing_case_id=${item.id}`} className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-3 py-2 text-xs font-bold text-violet-300 hover:bg-violet-500/20">
+            Créer la demande <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        );
+      }
       return (
         <Link href="/sav" className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-3 py-2 text-xs font-bold text-violet-300 hover:bg-violet-500/20">
           {NEXT_ACTION[item.next_step]} <ArrowRight className="h-3.5 w-3.5" />
@@ -467,6 +585,7 @@ export default function FacturationPage() {
       </div>
 
       {error && <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"><AlertTriangle className="h-4 w-4 shrink-0" />{error}<button onClick={() => setError('')} className="ml-auto"><X className="h-4 w-4" /></button></div>}
+      {notice && <div className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200"><CheckCircle2 className="h-4 w-4 shrink-0" />{notice}<button onClick={() => setNotice('')} className="ml-auto"><X className="h-4 w-4" /></button></div>}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[
@@ -524,7 +643,7 @@ export default function FacturationPage() {
       </div>
 
       <Modal isOpen={!!selected} onClose={() => { setSelected(null); setHistory([]); }} title={selected ? `Dossier de facturation #${selected.id}` : ''} size="xl">
-        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} />}
+        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} />}
       </Modal>
 
       <Modal isOpen={!!stepDialog} onClose={() => setStepDialog(null)} title={stepDialog ? STEP_META[stepDialog.type].label : ''} size="md">
@@ -562,8 +681,51 @@ export default function FacturationPage() {
           <div className="flex justify-end gap-2"><button onClick={() => setNewCaseOpen(false)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving || !newCaseForm.client.trim()} onClick={createCase} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Créer</button></div>
         </div>
       </Modal>
+
+      {duplicateDialog && <DuplicateResolutionDialog value={duplicateDialog} saving={saving} onChange={setDuplicateDialog} onClose={() => setDuplicateDialog(null)} onConfirm={resolveDuplicate} />}
     </div>
   );
+}
+
+function DuplicateResolutionDialog({ value, saving, onChange, onClose, onConfirm }: {
+  value: DuplicateResolutionState;
+  saving: boolean;
+  onChange: (value: DuplicateResolutionState) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const choices = [value.first, value.second];
+  const keepCase = choices.find(item => item.id === value.keepCaseId) || value.first;
+  const discardedCase = choices.find(item => item.id !== keepCase.id) || value.second;
+  const discardedActivity = billingActivityCount(discardedCase);
+  const interventionChoices = choices.filter(item => item.intervention_id);
+  const retainedInterventionCase = interventionChoices.find(item => item.id === value.interventionCaseId);
+  const cancelledInterventionCase = interventionChoices.find(item => item.id !== retainedInterventionCase?.id);
+  const cancelledHasVisibleWork = Boolean(cancelledInterventionCase && (
+    cancelledInterventionCase.intervention_started_at
+    || cancelledInterventionCase.intervention_closed_at
+    || Number(cancelledInterventionCase.intervention_duration_minutes || 0) > 0
+    || ['cours', 'atelier', 'clot', 'clôt', 'termin'].some(token => String(cancelledInterventionCase.intervention_status || '').toLocaleLowerCase('fr').includes(token))
+  ));
+  const blocked = discardedActivity > 0 || cancelledHasVisibleWork;
+
+  return <Modal isOpen onClose={onClose} title="Résoudre le doublon" size="lg">
+    <div className="space-y-5">
+      <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-sm text-savia-text-muted">Cette opération conserve un dossier visible, archive l&apos;autre et annule uniquement l&apos;intervention accidentelle sans travail technicien.</div>
+
+      <section><h3 className="mb-2 text-sm font-bold">1. Dossier de facturation à conserver</h3><div className="grid gap-3 md:grid-cols-2">{choices.map(candidate => {
+        const activity = billingActivityCount(candidate);
+        return <label key={candidate.id} className={`cursor-pointer rounded-xl border p-3 ${candidate.id === keepCase.id ? 'border-savia-accent bg-savia-accent/10' : 'border-savia-border'}`}><div className="flex items-start gap-2"><input type="radio" name="keep-case" checked={candidate.id === keepCase.id} onChange={() => onChange({ ...value, keepCaseId: candidate.id })} /><div><div className="font-bold">Dossier #{candidate.id}</div><div className="mt-1 text-xs text-savia-text-muted">Intervention #{candidate.intervention_id || '—'} · {activity} document/paiement</div><div className="mt-1 text-xs">{candidate.status_label}</div></div></div></label>;
+      })}</div>{discardedActivity > 0 && <p className="mt-2 text-xs font-semibold text-red-300">Le dossier #{discardedCase.id} contient {discardedActivity} élément(s). Choisissez-le comme dossier à conserver.</p>}</section>
+
+      {interventionChoices.length > 0 && <section><h3 className="mb-2 text-sm font-bold">2. Intervention réelle à conserver</h3><div className="grid gap-3 md:grid-cols-2">{interventionChoices.map(candidate => <label key={candidate.id} className={`cursor-pointer rounded-xl border p-3 ${candidate.id === value.interventionCaseId ? 'border-green-500/50 bg-green-500/10' : 'border-savia-border'}`}><div className="flex items-start gap-2"><input type="radio" name="keep-intervention" checked={candidate.id === value.interventionCaseId} onChange={() => onChange({ ...value, interventionCaseId: candidate.id })} /><div><div className="font-bold">Intervention #{candidate.intervention_id}</div><div className="mt-1 text-xs text-savia-text-muted">Dossier #{candidate.id} · {candidate.intervention_status || 'statut inconnu'}</div><div className="mt-1 text-xs">Début : {formatDateTime(candidate.intervention_started_at)}</div></div></div></label>)}</div>{cancelledHasVisibleWork && <p className="mt-2 text-xs font-semibold text-red-300">L&apos;intervention #{cancelledInterventionCase?.intervention_id} contient déjà du travail. Sélectionnez-la comme intervention à conserver.</p>}</section>}
+
+      <div><label className={LABEL}>Motif de résolution</label><input className={INPUT} value={value.reason} onChange={event => onChange({ ...value, reason: event.target.value })} /></div>
+
+      <div className="rounded-xl border border-savia-border bg-savia-surface-hover/50 p-3 text-xs text-savia-text-muted"><strong className="text-savia-text">Résultat :</strong> le dossier #{keepCase.id} restera visible. Le dossier #{discardedCase.id} sera archivé avec son historique. {cancelledInterventionCase?.intervention_id ? `L'intervention #${cancelledInterventionCase.intervention_id} sera annulée.` : ''}</div>
+      <div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button type="button" disabled={saving || blocked || !value.reason.trim()} onClick={onConfirm} className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 disabled:opacity-40">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Confirmer la résolution</button></div>
+    </div>
+  </Modal>;
 }
 
 function Progress({ item }: { item: BillingCase }) {
@@ -586,9 +748,56 @@ function DocumentStepRow({ item, type, onStep }: { item: BillingCase; type: Step
   return <button onClick={() => onStep(item, type)} className="flex w-full items-center gap-3 rounded-xl border border-savia-border p-3 text-left hover:border-savia-accent/50 hover:bg-savia-surface-hover"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${complete ? 'bg-green-500/15 text-green-300' : 'bg-savia-surface-hover text-savia-text-dim'}`}>{complete ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="font-semibold">{meta.label}</div><div className="mt-0.5 text-xs text-savia-text-muted">{complete ? (step?.not_required ? `Non requis · ${step.note}` : `${formatDate(step?.effective_date)} · ${step?.reference || 'sans référence'}${step?.amount !== null && step?.amount !== undefined ? ` · ${money(step.amount, item.currency)}` : ''}`) : 'À renseigner'}</div></div><ArrowRight className="h-4 w-4 text-savia-text-dim" /></button>;
 }
 
-function CaseDetail({ item, interventionOptions, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention }: {
+const durationLabel = (minutes?: number) => {
+  const total = Number(minutes || 0);
+  if (!total) return '—';
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return [hours ? `${hours} h` : '', rest ? `${rest} min` : ''].filter(Boolean).join(' ');
+};
+
+function InterventionPreview({ item }: { item: BillingCase }) {
+  const technicians = item.intervention_technicians || [];
+  const diagnosticBlocks = [
+    { label: 'Description', value: item.intervention_description, style: 'border-savia-border bg-savia-surface-hover/40' },
+    { label: 'Problème signalé', value: item.intervention_problem, style: 'border-red-500/15 bg-red-500/5' },
+    { label: 'Cause diagnostiquée', value: item.intervention_cause, style: 'border-orange-500/15 bg-orange-500/5' },
+    { label: 'Solution apportée', value: item.intervention_solution, style: 'border-green-500/15 bg-green-500/5' },
+  ].filter(block => Boolean(block.value));
+
+  return <div className="mt-4 space-y-4 border-t border-savia-border/70 pt-4">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      {[
+        ['Statut', item.intervention_status || '—'],
+        ['Date', formatDate(item.intervention_date)],
+        ['Type', item.intervention_type || '—'],
+        ['Priorité', item.intervention_priority || '—'],
+        ['Durée', durationLabel(item.intervention_duration_minutes)],
+        ['Déplacement', durationLabel(item.intervention_travel_minutes)],
+        ['Début déclaré', item.intervention_start_time || '—'],
+        ['Fin déclarée', item.intervention_end_time || '—'],
+      ].map(([label, value]) => <div key={label} className="rounded-lg bg-savia-surface-hover/60 p-2.5"><div className="text-[11px] text-savia-text-dim">{label}</div><div className="mt-1 text-sm font-semibold">{value}</div></div>)}
+    </div>
+
+    <div className="rounded-lg border border-savia-border p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-savia-text-muted"><Users className="h-3.5 w-3.5" /> Techniciens</div>
+      {technicians.length > 0 ? <div className="space-y-2">{technicians.map((technician, index) => <div key={`${technician.name}-${index}`} className="flex flex-wrap items-center justify-between gap-2 text-sm"><span className="font-semibold">{technician.name}</span><span className="text-xs text-savia-text-muted">{technician.status || '—'} · travail {durationLabel(technician.duration_minutes)} · déplacement {durationLabel(technician.travel_minutes)}</span></div>)}</div> : <div className="text-sm font-semibold">{item.technicien || 'Non assigné'}</div>}
+    </div>
+
+    {diagnosticBlocks.length > 0 && <div><div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-savia-text-muted"><FileText className="h-3.5 w-3.5" /> Diagnostic et travaux</div><div className="grid gap-2 md:grid-cols-2">{diagnosticBlocks.map(block => <div key={block.label} className={`rounded-lg border p-3 ${block.style}`}><div className="text-[11px] font-semibold text-savia-text-muted">{block.label}</div><p className="mt-1 whitespace-pre-wrap text-sm">{block.value}</p></div>)}</div></div>}
+
+    {(item.intervention_error_code || item.intervention_error_type) && <div className="rounded-lg border border-savia-border p-3 text-sm"><span className="text-savia-text-muted">Erreur : </span><strong className="font-mono text-savia-accent">{item.intervention_error_code || '—'}</strong>{item.intervention_error_type && <span className="ml-2 text-savia-text-muted">({item.intervention_error_type})</span>}</div>}
+    {item.pieces_utilisees && <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 p-3"><div className="text-[11px] font-semibold text-blue-300">Pièces utilisées</div><p className="mt-1 whitespace-pre-wrap text-sm">{item.pieces_utilisees}</p></div>}
+    {item.intervention_notes && <div className="rounded-lg border border-savia-border p-3"><div className="text-[11px] font-semibold text-savia-text-muted">Notes</div><p className="mt-1 whitespace-pre-wrap text-sm">{item.intervention_notes}</p></div>}
+
+  </div>;
+}
+
+function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate }: {
   item: BillingCase;
   interventionOptions: InterventionOption[];
+  duplicateCases: BillingCase[];
+  canResolveDuplicates: boolean;
   history: HistoryItem[];
   historyLoading: boolean;
   onStep: (item: BillingCase, type: StepType) => void;
@@ -596,22 +805,26 @@ function CaseDetail({ item, interventionOptions, history, historyLoading, onStep
   onHistory: (item: BillingCase) => void;
   onToggleBlocked: (item: BillingCase) => void;
   onLinkIntervention: (item: BillingCase, interventionId: number) => void;
+  onResolveDuplicate: (first: BillingCase, second: BillingCase) => void;
 }) {
+  const [interventionPreviewOpen, setInterventionPreviewOpen] = useState(false);
   const matchingInterventions = interventionOptions.filter(option =>
     option.client.toLowerCase() === item.client.toLowerCase()
     && (!item.equipment || option.machine.toLowerCase() === item.equipment.toLowerCase())
   );
   return <div className="max-h-[78vh] space-y-5 overflow-y-auto pr-1">
+    {item.reused_existing_case && <div className="flex items-start gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-200"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Ce dossier était déjà en cours pour cet équipement. Il a été ouvert à la place de créer un doublon.</span></div>}
+    {canResolveDuplicates && duplicateCases.map(duplicate => <div key={duplicate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><div><div className="text-sm font-bold text-amber-200">Doublon potentiel avec le dossier #{duplicate.id}</div><p className="mt-1 text-xs text-savia-text-muted">Même client et même équipement avec un cycle technique encore ouvert.</p></div><button type="button" onClick={() => onResolveDuplicate(item, duplicate)} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400">Résoudre le doublon</button></div>)}
     <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-savia-border bg-savia-surface-hover/50 p-4"><div><div className="flex items-center gap-2 font-bold"><Building2 className="h-4 w-4 text-savia-accent" />{item.client}</div><div className="mt-1 text-sm text-savia-text-muted">{item.equipment || 'Équipement non renseigné'} {item.intervention_id && `· Intervention #${item.intervention_id}`}</div><div className="mt-1 text-xs text-savia-text-dim">Responsable : {item.owner_username || 'non assigné'}</div></div><div className="text-right"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status]}`}>{item.status_label}</span>{item.block_reason && <div className="mt-2 max-w-xs text-xs text-red-300">{item.block_reason}</div>}</div></div>
 
     <div className="grid grid-cols-3 gap-3"><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Montant facturé</div><div className="mt-1 font-black">{money(item.invoice_amount, item.currency)}</div></div><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Reçu</div><div className="mt-1 font-black text-green-300">{money(item.paid_amount, item.currency)}</div></div><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Reste</div><div className="mt-1 font-black text-yellow-300">{money(item.remaining_amount, item.currency)}</div></div></div>
 
-    {!item.intervention_id && <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3"><label className="mb-2 block text-xs font-semibold text-blue-300">Associer ce dossier à une intervention SAV</label><select defaultValue="" onChange={event => { const id = Number(event.target.value); if (id) onLinkIntervention(item, id); }} className={INPUT}><option value="">Sélectionner une intervention compatible…</option>{matchingInterventions.map(option => <option key={option.id} value={option.id}>#{option.id} · {formatDate(option.date)} · {option.statut}</option>)}</select>{matchingInterventions.length === 0 && <p className="mt-2 text-xs text-savia-text-muted">Aucune intervention avec le même client et le même équipement.</p>}</div>}
+    {!item.intervention_id && <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-bold text-blue-200">Intervention à organiser</div><p className="mt-1 text-xs text-savia-text-muted">La demande sera associée à ce dossier et conservera le devis et le bon de commande déjà renseignés.</p></div><Link href={`/demandes?billing_case_id=${item.id}`} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-xs font-bold text-white hover:bg-blue-400"><Send className="h-3.5 w-3.5" /> Créer la demande d&apos;intervention</Link></div><details className="mt-3 border-t border-blue-500/15 pt-3"><summary className="cursor-pointer text-xs font-semibold text-savia-text-muted">Correction : associer une intervention existante</summary><div className="mt-2"><select defaultValue="" onChange={event => { const id = Number(event.target.value); if (id) onLinkIntervention(item, id); }} className={INPUT}><option value="">Sélectionner une intervention compatible…</option>{matchingInterventions.map(option => <option key={option.id} value={option.id}>#{option.id} · {formatDate(option.date)} · {option.statut}</option>)}</select>{matchingInterventions.length === 0 && <p className="mt-2 text-xs text-savia-text-muted">Aucune intervention avec le même client et le même équipement.</p>}</div></details></div>}
 
     <section><h3 className="mb-3 flex items-center gap-2 text-sm font-bold"><Calendar className="h-4 w-4 text-savia-accent" /> Chronologie du dossier</h3><div className="space-y-2">
       <DocumentStepRow item={item} type="quote" onStep={onStep} />
       <DocumentStepRow item={item} type="purchase_order" onStep={onStep} />
-      <div className="flex items-center gap-3 rounded-xl border border-savia-border p-3"><div className={`flex h-9 w-9 items-center justify-center rounded-full ${item.intervention_closed_at ? 'bg-green-500/15 text-green-300' : 'bg-violet-500/15 text-violet-300'}`}><Wrench className="h-4 w-4" /></div><div className="flex-1"><div className="font-semibold">Intervention SAV</div><div className="text-xs text-savia-text-muted">Début : {formatDate(item.intervention_started_at)} · Clôture : {formatDate(item.intervention_closed_at)}</div></div>{item.intervention_id && <Link href="/sav" className="text-xs font-semibold text-savia-accent">Ouvrir le SAV</Link>}</div>
+      <div className={`rounded-xl border p-3 ${item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) ? 'border-orange-500/30 bg-orange-500/5' : 'border-savia-border'}`}><div className="flex items-center gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-full ${item.intervention_closed_at ? 'bg-green-500/15 text-green-300' : 'bg-violet-500/15 text-violet-300'}`}><Wrench className="h-4 w-4" /></div><div className="flex-1"><div className="font-semibold">Intervention SAV</div><div className="text-xs text-savia-text-muted">Début : {formatDateTime(item.intervention_started_at)} · Clôture : {formatDateTime(item.intervention_closed_at)}</div></div>{item.intervention_id && <button type="button" onClick={() => setInterventionPreviewOpen(value => !value)} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500/10 px-3 py-2 text-xs font-bold text-teal-300 hover:bg-teal-500/20"><Eye className="h-3.5 w-3.5" /> {interventionPreviewOpen ? 'Masquer' : 'Aperçu'}</button>}</div>{item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) && <p className="mt-2 text-xs font-semibold text-orange-300">Intervention clôturée : vérifiez son compte rendu avant de renseigner l&apos;envoi de la facture.</p>}{interventionPreviewOpen && <InterventionPreview item={item} />}</div>
       {item.has_parts && <DocumentStepRow item={item} type="delivery_note" onStep={onStep} />}
       <DocumentStepRow item={item} type="invoice" onStep={onStep} />
     </div></section>

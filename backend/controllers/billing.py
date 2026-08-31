@@ -128,12 +128,12 @@ def _history(
 
 def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
     params: tuple[Any, ...] = ()
-    where = ""
+    where = "WHERE bc.merged_into_case_id IS NULL"
     if case_id is not None:
         where = "WHERE bc.id = %s"
         params = (case_id,)
     rows = conn.execute(
-        f"""SELECT bc.id, bc.intervention_id, bc.request_id,
+        f"""SELECT bc.id, bc.intervention_id, bc.request_id, bc.merged_into_case_id,
                    COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), e.client, '') AS client,
                    COALESCE(NULLIF(bc.equipment, ''), i.machine, '') AS equipment,
                    bc.owner_username, bc.currency, bc.case_state, bc.block_reason,
@@ -142,7 +142,32 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
                    i.date AS intervention_date,
                    i.date_debut_intervention AS intervention_started_at,
                    i.date_cloture AS intervention_closed_at,
+                   i.type_intervention AS intervention_type,
+                   i.description AS intervention_description,
+                   i.probleme AS intervention_problem,
+                   i.cause AS intervention_cause,
+                   i.solution AS intervention_solution,
+                   i.code_erreur AS intervention_error_code,
+                   i.type_erreur AS intervention_error_type,
+                   i.priorite AS intervention_priority,
+                   i.notes AS intervention_notes,
+                   COALESCE(i.duree_minutes, 0) AS intervention_duration_minutes,
+                   COALESCE(i.duree_deplacement, 0) AS intervention_travel_minutes,
+                   i.start_time::text AS intervention_start_time,
+                   i.end_time::text AS intervention_end_time,
                    i.pieces_utilisees, COALESCE(i.cout_pieces, 0) AS parts_amount,
+                   COALESCE((
+                       SELECT jsonb_agg(
+                           jsonb_build_object(
+                               'name', it.technicien_nom,
+                               'duration_minutes', COALESCE(it.duree_minutes_tech, 0),
+                               'travel_minutes', COALESCE(it.duree_deplacement_tech, 0),
+                               'status', it.statut
+                           ) ORDER BY it.technicien_nom
+                       )
+                       FROM interventions_techniciens it
+                       WHERE it.intervention_id = i.id
+                   ), '[]'::jsonb) AS intervention_technicians,
                    (COALESCE(i.cout_pieces, 0) > 0 OR
                     NULLIF(BTRIM(COALESCE(i.pieces_utilisees, '')), '') IS NOT NULL) AS has_parts
             FROM billing_cases bc
@@ -245,6 +270,17 @@ def _load_case(conn, case_id: int) -> dict[str, Any]:
 
 def _sync_missing_intervention_cases(conn) -> None:
     conn.execute(
+        """UPDATE billing_cases bc
+           SET request_id = d.id, updated_at = CURRENT_TIMESTAMP
+           FROM demandes_intervention d
+           WHERE d.intervention_id = bc.intervention_id
+             AND bc.request_id IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM billing_cases other
+                 WHERE other.request_id = d.id AND other.id <> bc.id
+             )"""
+    )
+    conn.execute(
         """WITH inserted AS (
                INSERT INTO billing_cases (
                    intervention_id, request_id, client, equipment, created_by, updated_by
@@ -343,6 +379,40 @@ def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_tok
             equipment = equipment or intervention["machine"]
         if not client:
             raise HTTPException(status_code=422, detail="Le client est obligatoire")
+        if equipment:
+            duplicate_key = f"{client.casefold()}::{equipment.casefold()}"
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (duplicate_key,))
+            existing_open_case = conn.execute(
+                """SELECT bc.id
+                   FROM billing_cases bc
+                   LEFT JOIN interventions i ON i.id = bc.intervention_id
+                   WHERE LOWER(BTRIM(bc.client)) = LOWER(BTRIM(%s))
+                     AND LOWER(BTRIM(bc.equipment)) = LOWER(BTRIM(%s))
+                     AND bc.merged_into_case_id IS NULL
+                     AND bc.case_state <> 'cancelled'
+                     AND (
+                         (
+                             bc.intervention_id IS NOT NULL
+                             AND i.date_cloture IS NULL
+                             AND COALESCE(i.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
+                         )
+                         OR (
+                             bc.intervention_id IS NULL
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM billing_steps bs
+                                 WHERE bs.case_id = bc.id AND bs.step_type = 'invoice'
+                             )
+                         )
+                     )
+                   ORDER BY bc.updated_at DESC, bc.id DESC
+                   LIMIT 1
+                   FOR UPDATE OF bc""",
+                (client, equipment),
+            ).fetchone()
+            if existing_open_case:
+                existing = _load_case(conn, existing_open_case["id"])
+                existing["reused_existing_case"] = True
+                return existing
         owner_username = str(body.get("owner_username") or actor).strip()
         _validate_owner(conn, owner_username)
         row = conn.execute(
@@ -376,11 +446,12 @@ def update_billing_case(case_id: int, body: dict = Body(...), user: dict = Depen
             if intervention_id:
                 intervention_details = conn.execute(
                     """SELECT i.id, COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
-                              i.machine
+                              i.machine, d.id AS request_id
                        FROM interventions i
                        LEFT JOIN equipements e
                          ON LOWER(e.nom) = LOWER(i.machine)
                         AND LOWER(e.client) = LOWER(i.client)
+                       LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
                        WHERE i.id=%s""",
                     (intervention_id,),
                 ).fetchone()
@@ -407,6 +478,7 @@ def update_billing_case(case_id: int, body: dict = Body(...), user: dict = Depen
             "client": str(body.get("client", intervention_details["client"] if intervention_details else before["client"])).strip(),
             "equipment": str(body.get("equipment", intervention_details["machine"] if intervention_details else before["equipment"])).strip(),
             "intervention_id": intervention_id,
+            "request_id": intervention_details["request_id"] if intervention_details else (before.get("request_id") if intervention_id else None),
             "owner_username": str(body.get("owner_username", before["owner_username"])).strip(),
             "currency": str(body.get("currency", before["currency"])).strip().upper(),
             "case_state": str(body.get("case_state", before["case_state"])).strip(),
@@ -426,7 +498,7 @@ def update_billing_case(case_id: int, body: dict = Body(...), user: dict = Depen
             raise HTTPException(status_code=422, detail="Le motif de modification est obligatoire")
         conn.execute(
             """UPDATE billing_cases SET
-                   client=%s, equipment=%s, intervention_id=%s, owner_username=%s, currency=%s,
+                   client=%s, equipment=%s, intervention_id=%s, request_id=%s, owner_username=%s, currency=%s,
                    case_state=%s, block_reason=%s, updated_by=%s,
                    updated_at=CURRENT_TIMESTAMP
                WHERE id=%s""",
@@ -436,6 +508,196 @@ def update_billing_case(case_id: int, body: dict = Body(...), user: dict = Depen
         if changed:
             _history(conn, case_id, "UPDATE_CASE", "case", case_id, actor, before=before, after=after, reason=reason)
     return after
+
+
+@app.post("/api/billing/cases/resolve-duplicate")
+def resolve_duplicate_billing_case(body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Archive an empty duplicate case and cancel its accidental intervention."""
+    require_roles(user, "Admin", "Manager")
+    actor = _username(user)
+    try:
+        keep_case_id = int(body.get("keep_case_id"))
+        duplicate_case_id = int(body.get("duplicate_case_id"))
+        intervention_case_id = int(body.get("intervention_case_id") or keep_case_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Identifiants de dossiers invalides")
+    if keep_case_id <= 0 or duplicate_case_id <= 0 or keep_case_id == duplicate_case_id:
+        raise HTTPException(status_code=422, detail="Deux dossiers distincts sont obligatoires")
+    if intervention_case_id not in {keep_case_id, duplicate_case_id}:
+        raise HTTPException(status_code=422, detail="L'intervention à conserver doit appartenir à l'un des dossiers")
+
+    reason = str(body.get("reason") or "Doublon confirmé").strip()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, request_id, intervention_id, client, equipment, case_state,
+                      merged_into_case_id
+               FROM billing_cases
+               WHERE id = ANY(%s)
+               ORDER BY id
+               FOR UPDATE""",
+            ([keep_case_id, duplicate_case_id],),
+        ).fetchall()
+        cases = {row["id"]: row for row in rows}
+        if len(cases) != 2:
+            raise HTTPException(status_code=404, detail="Un des dossiers est introuvable")
+        keep_case = cases[keep_case_id]
+        duplicate_case = cases[duplicate_case_id]
+        if keep_case.get("merged_into_case_id") or duplicate_case.get("merged_into_case_id"):
+            raise HTTPException(status_code=409, detail="Un des dossiers a déjà été fusionné")
+        if str(keep_case.get("client") or "").strip().casefold() != str(duplicate_case.get("client") or "").strip().casefold():
+            raise HTTPException(status_code=409, detail="Les dossiers ne concernent pas le même client")
+        if str(keep_case.get("equipment") or "").strip().casefold() != str(duplicate_case.get("equipment") or "").strip().casefold():
+            raise HTTPException(status_code=409, detail="Les dossiers ne concernent pas le même équipement")
+
+        duplicate_activity = conn.execute(
+            """SELECT
+                   (SELECT COUNT(*) FROM billing_steps WHERE case_id = %s) AS steps,
+                   (SELECT COUNT(*) FROM billing_payments WHERE case_id = %s) AS payments""",
+            (duplicate_case_id, duplicate_case_id),
+        ).fetchone()
+        if duplicate_activity["steps"] or duplicate_activity["payments"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Le dossier à archiver contient des documents ou paiements. "
+                    "Choisissez-le comme dossier à conserver pour éviter toute perte."
+                ),
+            )
+
+        intervention_source = cases[intervention_case_id]
+        retained_request_id = intervention_source.get("request_id")
+        retained_intervention_id = intervention_source.get("intervention_id")
+        cancelled_source = duplicate_case if intervention_case_id == keep_case_id else keep_case
+        cancelled_request_id = cancelled_source.get("request_id")
+        cancelled_intervention_id = cancelled_source.get("intervention_id")
+
+        cancelled_intervention = None
+        if cancelled_intervention_id:
+            cancelled_intervention = conn.execute(
+                """SELECT id, statut, planning_id, date_debut_intervention, date_cloture,
+                          duree_minutes, duree_deplacement, cause, solution, pieces_utilisees,
+                          (SELECT COUNT(*) FROM interventions_techniciens it
+                           WHERE it.intervention_id = i.id
+                             AND (
+                                 COALESCE(it.duree_minutes_tech, 0) > 0
+                                 OR COALESCE(it.duree_deplacement_tech, 0) > 0
+                                 OR NULLIF(BTRIM(COALESCE(it.probleme_tech, '')), '') IS NOT NULL
+                                 OR NULLIF(BTRIM(COALESCE(it.cause_tech, '')), '') IS NOT NULL
+                                 OR NULLIF(BTRIM(COALESCE(it.solution_tech, '')), '') IS NOT NULL
+                             )) AS technician_work_count
+                   FROM interventions i
+                   WHERE i.id = %s
+                   FOR UPDATE""",
+                (cancelled_intervention_id,),
+            ).fetchone()
+            has_work = bool(cancelled_intervention and (
+                cancelled_intervention.get("date_debut_intervention")
+                or cancelled_intervention.get("date_cloture")
+                or int(cancelled_intervention.get("duree_minutes") or 0) > 0
+                or int(cancelled_intervention.get("duree_deplacement") or 0) > 0
+                or str(cancelled_intervention.get("cause") or "").strip()
+                or str(cancelled_intervention.get("solution") or "").strip()
+                or str(cancelled_intervention.get("pieces_utilisees") or "").strip()
+                or int(cancelled_intervention.get("technician_work_count") or 0) > 0
+                or any(token in str(cancelled_intervention.get("statut") or "").casefold()
+                       for token in ("cours", "atelier", "clot", "clôt", "termin"))
+            ))
+            if has_work:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "L'intervention qui serait annulée contient déjà du travail technicien. "
+                        "Sélectionnez cette intervention comme intervention à conserver."
+                    ),
+                )
+
+        before_keep = _load_case(conn, keep_case_id)
+        before_duplicate = _load_case(conn, duplicate_case_id)
+
+        # Clear both unique links first, then assign the retained pair to the
+        # master case and the cancelled pair to the archived case.
+        conn.execute(
+            "UPDATE billing_cases SET request_id = NULL, intervention_id = NULL WHERE id = ANY(%s)",
+            ([keep_case_id, duplicate_case_id],),
+        )
+        conn.execute(
+            """UPDATE billing_cases
+               SET request_id = %s, intervention_id = %s,
+                   updated_by = %s, updated_at = CURRENT_TIMESTAMP
+               WHERE id = %s""",
+            (retained_request_id, retained_intervention_id, actor, keep_case_id),
+        )
+        conn.execute(
+            """UPDATE billing_cases
+               SET request_id = %s, intervention_id = %s,
+                   case_state = 'cancelled', block_reason = %s,
+                   merged_into_case_id = %s,
+                   updated_by = %s, updated_at = CURRENT_TIMESTAMP
+               WHERE id = %s""",
+            (
+                cancelled_request_id,
+                cancelled_intervention_id,
+                f"Doublon résolu dans le dossier #{keep_case_id}",
+                keep_case_id,
+                actor,
+                duplicate_case_id,
+            ),
+        )
+
+        if cancelled_request_id:
+            conn.execute(
+                """UPDATE demandes_intervention
+                   SET statut = 'Annulée', date_traitement = CURRENT_TIMESTAMP,
+                       notes_traitement = CONCAT(COALESCE(notes_traitement, ''), %s)
+                   WHERE id = %s""",
+                (f"\n[DOUBLON] Regroupée dans le dossier #{keep_case_id}", cancelled_request_id),
+            )
+        if cancelled_intervention_id:
+            conn.execute(
+                """UPDATE interventions
+                   SET statut = 'Annulée',
+                       notes = CONCAT(COALESCE(notes, ''), %s)
+                   WHERE id = %s""",
+                (f"\n[DOUBLON] Regroupée dans le dossier #{keep_case_id}", cancelled_intervention_id),
+            )
+            conn.execute(
+                """UPDATE interventions_techniciens
+                   SET statut = 'Refusé', updated_at = CURRENT_TIMESTAMP
+                   WHERE intervention_id = %s""",
+                (cancelled_intervention_id,),
+            )
+            planning_id = cancelled_intervention.get("planning_id") if cancelled_intervention else None
+            if planning_id:
+                conn.execute(
+                    # planning_maintenance currently permits only its
+                    # historical terminal value "Cloturee" (not "Annulée").
+                    "UPDATE planning_maintenance SET statut = 'Cloturee', notes = CONCAT(COALESCE(notes, ''), %s) WHERE id = %s",
+                    (f"\n[DOUBLON] Intervention annulée et regroupée dans le dossier #{keep_case_id}", planning_id),
+                )
+
+        after_keep = _load_case(conn, keep_case_id)
+        after_duplicate = _load_case(conn, duplicate_case_id)
+        _history(
+            conn, keep_case_id, "RESOLVE_DUPLICATE", "case", duplicate_case_id, actor,
+            before=before_keep, after=after_keep, reason=reason,
+        )
+        _history(
+            conn, duplicate_case_id, "MERGED_AS_DUPLICATE", "case", duplicate_case_id, actor,
+            before=before_duplicate, after=after_duplicate, reason=reason,
+        )
+
+    log_audit(
+        actor,
+        "RESOLVE_BILLING_DUPLICATE",
+        json.dumps({
+            "keep_case_id": keep_case_id,
+            "duplicate_case_id": duplicate_case_id,
+            "retained_intervention_id": retained_intervention_id,
+            "cancelled_intervention_id": cancelled_intervention_id,
+        }, ensure_ascii=False),
+        "facturation",
+    )
+    return after_keep
 
 
 def _validate_step_dates(conn, case_id: int, step_type: str, effective_date: date | None, due_date: date | None) -> None:
