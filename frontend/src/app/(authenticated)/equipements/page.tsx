@@ -732,7 +732,22 @@ export default function EquipementsPage() {
   const executeDeleteClient = async (c: ClientRecord) => {
     setConfirmDeleteClient(null);
     try { await clientsApi.delete(c.id); await loadClients(); }
-    catch (err) { console.error('Delete client failed', err); }
+    catch (err: any) {
+      console.error('Delete client failed', err);
+      window.alert(err?.message || "Impossible de supprimer ce client.");
+    }
+  };
+
+  const requestDeleteClient = (c: ClientRecord) => {
+    if (c.nb_equipements > 0) {
+      const plural = c.nb_equipements > 1;
+      window.alert(
+        `Impossible de supprimer « ${c.nom} ». Ce client possède encore ${c.nb_equipements} équipement${plural ? 's' : ''}. ` +
+        `Supprimez d'abord ${plural ? 'ses équipements' : 'son équipement'} avant de supprimer le client.`
+      );
+      return;
+    }
+    setConfirmDeleteClient(c);
   };
 
   const openStatusHistory = async (eq: Equipment) => {
@@ -895,7 +910,10 @@ export default function EquipementsPage() {
   const executeDelete = async (eq: Equipment) => {
     setConfirmDelete(null);
     try { await equipements.delete(Number(eq.id)); await loadData(); }
-    catch (err) { console.error("Delete failed", err); }
+    catch (err: any) {
+      console.error("Delete failed", err);
+      window.alert(err?.message || "Impossible de supprimer cet équipement.");
+    }
   };
 
   const handleFileDrop = (e: React.DragEvent) => { e.preventDefault(); setDocFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]); };
@@ -2146,7 +2164,7 @@ export default function EquipementsPage() {
                       {!isLecteur && (
                         <>
                           <button onClick={() => startEditClient(c)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => setConfirmDeleteClient(c)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => requestDeleteClient(c)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                         </>
                       )}
                     </div>
@@ -2275,7 +2293,7 @@ export default function EquipementsPage() {
               <AlertTriangle className="w-5 h-5 text-red-400" /> Confirmer la suppression
             </h3>
             <p className="text-savia-text-muted text-sm mb-4">
-              Voulez-vous supprimer <strong className="text-savia-text">{confirmDelete.nom}</strong> ? Cette action est irréversible.
+              Voulez-vous supprimer <strong className="text-savia-text">{confirmDelete.nom}</strong> ? Ses documents techniques et ses rattachements aux contrats doivent être supprimés au préalable. Cette action est irréversible.
             </p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirmDelete(null)}
@@ -2295,7 +2313,7 @@ export default function EquipementsPage() {
               <AlertTriangle className="w-5 h-5 text-red-400" /> Supprimer le client
             </h3>
             <p className="text-savia-text-muted text-sm mb-4">
-              Voulez-vous supprimer <strong className="text-savia-text">{confirmDeleteClient.nom}</strong> ? Les équipements associés ne seront pas supprimés.
+              Voulez-vous supprimer <strong className="text-savia-text">{confirmDeleteClient.nom}</strong> ? Cette action est irréversible.
             </p>
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirmDeleteClient(null)}

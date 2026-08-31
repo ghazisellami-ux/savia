@@ -44,6 +44,7 @@ from services.observability import (
 
 from db_engine import (
     init_db, get_db, read_sql, _trigger_backup,
+    ClientHasEquipmentsError, EquipmentHasTechnicalDocumentsError, EquipmentLinkedToContractsError,
     lire_equipements, ajouter_equipement, modifier_equipement, supprimer_equipement,
     lire_historique_statut_equipement, remettre_equipement_en_service,
     lire_interventions, ajouter_intervention, update_intervention_statut, cloturer_intervention,
