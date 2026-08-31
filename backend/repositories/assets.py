@@ -18,6 +18,9 @@ from repositories.equipment_status import (
 )
 
 __all__ = [
+    "ClientHasEquipmentsError",
+    "EquipmentHasTechnicalDocumentsError",
+    "EquipmentLinkedToContractsError",
     "lire_clients",
     "ajouter_client",
     "modifier_client",
@@ -61,6 +64,42 @@ __all__ = [
 ]
 
 # Historique supprimé au profit de la table interventions.
+
+
+class ClientHasEquipmentsError(ValueError):
+    """Raised when a client still owns equipment and cannot be deleted."""
+
+    def __init__(self, client_name, equipment_count):
+        self.client_name = str(client_name or "").strip()
+        self.equipment_count = int(equipment_count or 0)
+        super().__init__(
+            f"Le client {self.client_name} possède encore "
+            f"{self.equipment_count} équipement(s)."
+        )
+
+
+class EquipmentLinkedToContractsError(ValueError):
+    """Raised when an equipment is still covered by one or more contracts."""
+
+    def __init__(self, equipment_name, contract_count):
+        self.equipment_name = str(equipment_name or "").strip()
+        self.contract_count = int(contract_count or 0)
+        super().__init__(
+            f"L'équipement {self.equipment_name} est encore rattaché à "
+            f"{self.contract_count} contrat(s)."
+        )
+
+
+class EquipmentHasTechnicalDocumentsError(ValueError):
+    """Raised when technical documents must be removed before equipment."""
+
+    def __init__(self, equipment_name, document_count):
+        self.equipment_name = str(equipment_name or "").strip()
+        self.document_count = int(document_count or 0)
+        super().__init__(
+            f"L'équipement {self.equipment_name} possède encore "
+            f"{self.document_count} document(s) technique(s)."
+        )
 
 
 COUNTRY_NAMES = {
@@ -291,8 +330,26 @@ def modifier_client(client_id, client_dict):
 
 
 def supprimer_client(client_id):
-    """Supprime un client par son ID."""
+    """Delete a client only after all of its equipment has been removed."""
     with get_db() as conn:
+        client = conn.execute(
+            "SELECT id, nom FROM clients WHERE id = %s FOR UPDATE",
+            (client_id,),
+        ).fetchone()
+        if not client:
+            return False
+
+        client_name = dict(client).get("nom", "")
+        equipment_row = conn.execute(
+            """SELECT COUNT(*) AS cnt
+               FROM equipements
+               WHERE LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s))""",
+            (client_name,),
+        ).fetchone()
+        equipment_count = int(dict(equipment_row).get("cnt", 0)) if equipment_row else 0
+        if equipment_count:
+            raise ClientHasEquipmentsError(client_name, equipment_count)
+
         conn.execute("DELETE FROM clients WHERE id = %s", (client_id,))
     _trigger_backup()
     return True
@@ -435,8 +492,36 @@ def ajouter_equipement(equipement_dict):
 
 
 def supprimer_equipement(equip_id):
-    """Supprime un équipement par son ID."""
+    """Delete equipment only after dependent business data is removed.
+
+    Technical documents and contract coverage must both be removed explicitly
+    so that deleting an equipment never silently destroys related records.
+    """
     with get_db() as conn:
+        equipment = conn.execute(
+            "SELECT id, nom FROM equipements WHERE id = %s FOR UPDATE",
+            (equip_id,),
+        ).fetchone()
+        if not equipment:
+            return None
+
+        equipment_name = dict(equipment).get("nom", "")
+        document_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM documents_techniques WHERE equipement_id = %s",
+            (equip_id,),
+        ).fetchone()
+        document_count = int(dict(document_row).get("cnt", 0)) if document_row else 0
+        if document_count:
+            raise EquipmentHasTechnicalDocumentsError(equipment_name, document_count)
+
+        contract_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM contrats_equipements WHERE equipement_id = %s",
+            (equip_id,),
+        ).fetchone()
+        contract_count = int(dict(contract_row).get("cnt", 0)) if contract_row else 0
+        if contract_count:
+            raise EquipmentLinkedToContractsError(equipment_name, contract_count)
+
         conn.execute("DELETE FROM equipements WHERE id = %s", (equip_id,))
     _trigger_backup()
     return True

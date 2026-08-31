@@ -8,6 +8,7 @@ from api.runtime import (
     UploadFile,
     ajouter_client,
     app,
+    ClientHasEquipmentsError,
     db_lire_clients,
     detect_and_fix_encoding,
     get_db,
@@ -749,10 +750,23 @@ def update_client_api(client_id: int, body: dict, user: dict = Depends(_verify_t
 
 @app.delete("/api/clients/{client_id}")
 def delete_client_api(client_id: int, user: dict = Depends(_verify_token)):
-    """Delete a client."""
+    """Delete a client after its equipment has been removed."""
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
-    supprimer_client(client_id)
+    try:
+        deleted = supprimer_client(client_id)
+    except ClientHasEquipmentsError as exc:
+        plural = "s" if exc.equipment_count > 1 else ""
+        equipment_reference = "ses équipements" if exc.equipment_count > 1 else "son équipement"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Impossible de supprimer ce client : {exc.equipment_count} équipement{plural} "
+                f"lui est encore associé. Supprimez d'abord {equipment_reference}."
+            ),
+        )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Client introuvable")
     return {"ok": True}
 
 

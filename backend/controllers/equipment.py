@@ -14,6 +14,8 @@ from api.runtime import (
     ajouter_type_intervention_custom,
     app,
     db_lire_clients,
+    EquipmentHasTechnicalDocumentsError,
+    EquipmentLinkedToContractsError,
     get_db,
     lire_equipements,
     lire_fabricants,
@@ -340,7 +342,29 @@ def delete_equipement(equip_id: int, user: dict = Depends(_verify_token)):
     except:
         equip_name = "Unknown"
     
-    supprimer_equipement(equip_id)
+    try:
+        deleted = supprimer_equipement(equip_id)
+    except EquipmentHasTechnicalDocumentsError as exc:
+        plural = "s" if exc.document_count > 1 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Impossible de supprimer cet équipement : {exc.document_count} document{plural} "
+                f"technique{plural} lui est encore associé. Supprimez d'abord "
+                "ses documents techniques."
+            ),
+        )
+    except EquipmentLinkedToContractsError as exc:
+        plural = "s" if exc.contract_count > 1 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Impossible de supprimer cet équipement : il est encore rattaché à "
+                f"{exc.contract_count} contrat{plural}. Retirez-le d'abord des contrats concernés."
+            ),
+        )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Équipement introuvable")
     
     # Log audit
     username = user.get("sub", "unknown")
