@@ -188,6 +188,7 @@ export default function EquipementsPage() {
   const [editingEquip, setEditingEquip] = useState<Equipment | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
+  const clientFormRef = useRef<HTMLDivElement>(null);
 
   // Documents state
   const [docs, setDocs] = useState<DocTechnique[]>([]);
@@ -716,6 +717,7 @@ export default function EquipementsPage() {
     setCustomClientTypeValue('');
     setCustomClientTypeError('');
     setShowClientForm(true);
+    setTimeout(() => { clientFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
   const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1794,7 +1796,7 @@ export default function EquipementsPage() {
 
           {/* Add/Edit Client Form */}
           {canCreate && (
-            <div className="glass rounded-xl overflow-hidden">
+            <div ref={clientFormRef} className="glass rounded-xl overflow-hidden">
               <button
                 onClick={() => { 
                   if (showClientForm) { 
