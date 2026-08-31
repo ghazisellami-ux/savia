@@ -87,3 +87,17 @@ def test_billing_schema_migration_is_registered():
 
     assert len(billing_migrations) == 1
     assert "billing" in billing_migrations[0][1]
+
+
+def test_billing_request_uniqueness_migration_is_registered():
+    request_link_migrations = [migration for migration in MIGRATIONS if migration[0] == "012"]
+
+    assert len(request_link_migrations) == 1
+    assert "billing case" in request_link_migrations[0][1]
+
+
+def test_merged_billing_cases_migration_is_registered():
+    merged_case_migrations = [migration for migration in MIGRATIONS if migration[0] == "013"]
+
+    assert len(merged_case_migrations) == 1
+    assert "merged billing cases" in merged_case_migrations[0][1]

@@ -274,7 +274,7 @@ export const demandes = {
     return request<Array<Record<string, unknown>>>(`/api/demandes${qs}`);
   },
   create: (body: Record<string, unknown>) =>
-    request<{ success: boolean }>('/api/demandes', { method: 'POST', body }),
+    request<{ success: boolean; demande_id: number; intervention_id: number; billing_case_id?: number | null }>('/api/demandes', { method: 'POST', body }),
   updateStatut: (id: number, body: Record<string, unknown>) =>
     request<{ success: boolean }>(`/api/demandes/${id}/statut`, { method: 'PUT', body }),
   delete: (id: number) =>
@@ -530,6 +530,8 @@ export const billing = {
     request<Record<string, unknown>>('/api/billing/cases', { method: 'POST', body: data }),
   updateCase: (caseId: number, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}`, { method: 'PATCH', body: data }),
+  resolveDuplicate: (data: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/billing/cases/resolve-duplicate', { method: 'POST', body: data }),
   saveStep: (caseId: number, stepType: string, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}/steps/${encodeURIComponent(stepType)}`, { method: 'PUT', body: data }),
   addPayment: (caseId: number, data: Record<string, unknown>) =>

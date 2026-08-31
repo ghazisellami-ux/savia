@@ -529,6 +529,42 @@ def _migration_011_workshop_transfer_status(conn) -> None:
     )
 
 
+def _migration_012_unique_billing_request(conn) -> None:
+    """Ensure one intervention request belongs to at most one billing case."""
+    conn.execute(
+        """WITH ranked AS (
+               SELECT id,
+                      ROW_NUMBER() OVER (PARTITION BY request_id ORDER BY id) AS position
+               FROM billing_cases
+               WHERE request_id IS NOT NULL
+           )
+           UPDATE billing_cases bc
+           SET request_id = NULL,
+               updated_at = CURRENT_TIMESTAMP,
+               updated_by = 'system-migration'
+           FROM ranked
+           WHERE bc.id = ranked.id AND ranked.position > 1"""
+    )
+
+
+def _migration_013_merged_billing_cases(conn) -> None:
+    """Keep duplicate billing cases auditable while hiding them from active tracking."""
+    conn.execute(
+        """ALTER TABLE billing_cases
+           ADD COLUMN IF NOT EXISTS merged_into_case_id BIGINT NULL
+           REFERENCES billing_cases(id) ON DELETE SET NULL"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_billing_cases_merged_into
+           ON billing_cases(merged_into_case_id)"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_cases_request
+           ON billing_cases(request_id)
+           WHERE request_id IS NOT NULL"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -541,6 +577,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("009", "distributed login rate limits", _migration_009_distributed_login_rate_limits),
     ("010", "auditable billing tracking", _migration_010_billing_tracking),
     ("011", "workshop transfer technician status", _migration_011_workshop_transfer_status),
+    ("012", "one billing case per intervention request", _migration_012_unique_billing_request),
+    ("013", "archive merged billing cases", _migration_013_merged_billing_cases),
 )
 
 

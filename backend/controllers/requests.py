@@ -100,7 +100,26 @@ def get_demandes(
     if statuts and not df.empty and "statut" in df.columns:
         lst = [s.strip() for s in statuts.split(",")]
         df = df[df["statut"].isin(lst)]
-    return _df_to_records(df)
+    records = _df_to_records(df)
+    request_ids = [record.get("id") for record in records if record.get("id") is not None]
+    if request_ids:
+        with get_db() as conn:
+            case_rows = conn.execute(
+                """SELECT d.id AS request_id,
+                          COALESCE(
+                              (SELECT bc.id FROM billing_cases bc
+                               WHERE bc.request_id = d.id ORDER BY bc.id LIMIT 1),
+                              (SELECT bc.id FROM billing_cases bc
+                               WHERE bc.intervention_id = d.intervention_id ORDER BY bc.id LIMIT 1)
+                          ) AS billing_case_id
+                   FROM demandes_intervention d
+                   WHERE d.id = ANY(%s)""",
+                (request_ids,),
+            ).fetchall()
+        case_by_request = {row["request_id"]: row.get("billing_case_id") for row in case_rows}
+        for record in records:
+            record["billing_case_id"] = case_by_request.get(record.get("id"))
+    return records
 
 
 @app.post("/api/demandes")
@@ -109,8 +128,20 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     Crée une demande d'intervention avec support multi-techniciens.
     Crée 1 intervention PARENT visible + N interventions ENFANTS temporaires (1 par technicien).
     """
-    # Check permission - Lecteurs (clients) peuvent créer des demandes
-    if not _check_create_demande_permission(user):
+    billing_case_id = None
+    if body.get("billing_case_id") not in (None, ""):
+        try:
+            billing_case_id = int(body["billing_case_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Identifiant de dossier de facturation invalide")
+        if billing_case_id <= 0:
+            raise HTTPException(status_code=422, detail="Identifiant de dossier de facturation invalide")
+
+    # Les gestionnaires peuvent initier une demande uniquement depuis un
+    # dossier de facturation existant. Les autres règles restent inchangées.
+    normalized_role = " ".join(str(user.get("role") or "").split()).casefold()
+    can_create_from_billing = billing_case_id is not None and normalized_role == "gestionnaire"
+    if not (_check_create_demande_permission(user) or can_create_from_billing):
         raise HTTPException(
             status_code=403,
             detail="Vous n'avez pas le droit de créer une demande d'intervention"
@@ -159,24 +190,90 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     parent_intervention_id = None
 
     with get_db() as conn:
+        billing_case = None
+        if billing_case_id is not None:
+            billing_case = conn.execute(
+                """SELECT id, request_id, intervention_id, client, equipment, case_state
+                   FROM billing_cases
+                   WHERE id = %s
+                   FOR UPDATE""",
+                (billing_case_id,),
+            ).fetchone()
+            if not billing_case:
+                raise HTTPException(status_code=404, detail="Dossier de facturation introuvable")
+            if billing_case.get("case_state") != "active":
+                raise HTTPException(status_code=409, detail="Le dossier de facturation n'est pas actif")
+            if billing_case.get("request_id") or billing_case.get("intervention_id"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Ce dossier possède déjà une demande ou une intervention",
+                )
+
+            case_client = str(billing_case.get("client") or "").strip()
+            case_equipment = str(billing_case.get("equipment") or "").strip()
+            client = client or case_client
+            equipement = equipement or case_equipment
+            if case_client and client.casefold() != case_client.casefold():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Le client de la demande doit correspondre au dossier de facturation",
+                )
+            if case_equipment and equipement.casefold() != case_equipment.casefold():
+                raise HTTPException(
+                    status_code=409,
+                    detail="L'équipement de la demande doit correspondre au dossier de facturation",
+                )
+
+        # One equipment cannot have two simultaneous intervention requests.
+        # The transaction-scoped advisory lock also closes the race between
+        # two users submitting the same request at nearly the same time.
+        if client.strip() and equipement.strip():
+            duplicate_key = f"{client.strip().casefold()}::{equipement.strip().casefold()}"
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (duplicate_key,))
+            existing_request = conn.execute(
+                """SELECT d.id, d.intervention_id, d.statut,
+                          COALESCE(
+                              (SELECT bc.id FROM billing_cases bc
+                               WHERE bc.request_id = d.id ORDER BY bc.id LIMIT 1),
+                              (SELECT bc.id FROM billing_cases bc
+                               WHERE bc.intervention_id = d.intervention_id ORDER BY bc.id LIMIT 1)
+                          ) AS billing_case_id
+                   FROM demandes_intervention d
+                   LEFT JOIN interventions i ON i.id = d.intervention_id
+                   WHERE LOWER(BTRIM(d.client)) = LOWER(BTRIM(%s))
+                     AND LOWER(BTRIM(d.equipement)) = LOWER(BTRIM(%s))
+                     AND COALESCE(d.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
+                     AND COALESCE(i.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
+                   ORDER BY d.id DESC
+                   LIMIT 1""",
+                (client, equipement),
+            ).fetchone()
+            if existing_request:
+                existing_case = existing_request.get("billing_case_id")
+                case_suffix = f" dans le dossier #{existing_case}" if existing_case else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Une demande active #{existing_request['id']} existe déjà pour cet équipement"
+                        f"{case_suffix}. Utilisez la demande existante pour éviter un doublon."
+                    ),
+                )
+
         # Create the DEMAND
-        conn.execute(f"""
+        new_demande = conn.execute(f"""
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence, priorite,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne, date_planifiee)
             VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            RETURNING id
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence, priorite,
             description, code_erreur, contact_nom, contact_tel,
             statut, ", ".join(techniciens_fullnames), date_planifiee,  # All techs in the demand
-        ))
-        
-        # Get the newly created demand ID
-        new_demande = conn.execute(
-            "SELECT id FROM demandes_intervention ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        )).fetchone()
+
         demande_id = new_demande["id"] if new_demande else None
 
         # A demand is visible in the maintenance planning as soon as it is
@@ -247,6 +344,56 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                 f"UPDATE demandes_intervention SET intervention_id = {ph} WHERE id = {ph}",
                 (intervention_id, demande_id)
             )
+
+            # The intervention trigger creates a traceability case immediately.
+            # When the request originates from a manual billing case, discard
+            # that brand-new empty shell and attach the intervention to the
+            # original case so its quote/order history and identifier survive.
+            automatic_case = conn.execute(
+                "SELECT id FROM billing_cases WHERE intervention_id = %s FOR UPDATE",
+                (intervention_id,),
+            ).fetchone()
+            if billing_case_id is not None:
+                if automatic_case and automatic_case["id"] != billing_case_id:
+                    conn.execute("DELETE FROM billing_cases WHERE id = %s", (automatic_case["id"],))
+                conn.execute(
+                    """UPDATE billing_cases
+                       SET request_id = %s, intervention_id = %s,
+                           client = %s, equipment = %s,
+                           updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (
+                        demande_id,
+                        intervention_id,
+                        client,
+                        equipement,
+                        user.get("sub") or user.get("nom") or "unknown",
+                        billing_case_id,
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO billing_history (
+                           case_id, action, entity_type, entity_id, after_data, actor_username
+                       ) VALUES (
+                           %s, 'LINK_REQUEST_AND_INTERVENTION', 'case', %s,
+                           jsonb_build_object('request_id', %s, 'intervention_id', %s), %s
+                       )""",
+                    (
+                        billing_case_id,
+                        billing_case_id,
+                        demande_id,
+                        intervention_id,
+                        user.get("sub") or user.get("nom") or "unknown",
+                    ),
+                )
+            elif automatic_case:
+                conn.execute(
+                    """UPDATE billing_cases
+                       SET request_id = %s, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = %s""",
+                    (demande_id, automatic_case["id"]),
+                )
+                billing_case_id = automatic_case["id"]
         
         # --- Populate interventions_techniciens table: one row per technician ---
         # This table tracks per-technician data (hours, solution, statut)
@@ -295,7 +442,12 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     
     logger.info(f"Demande #{demande_id} créée avec {len(techniciens_fullnames)} techniciens → Intervention PARTAGÉE #{intervention_id}")
     
-    return {"success": True, "demande_id": demande_id, "intervention_id": intervention_id}
+    return {
+        "success": True,
+        "demande_id": demande_id,
+        "intervention_id": intervention_id,
+        "billing_case_id": billing_case_id,
+    }
 
 
 @app.delete("/api/demandes/{demande_id}")

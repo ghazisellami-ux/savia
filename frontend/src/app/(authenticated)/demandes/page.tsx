@@ -1,11 +1,12 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Plus, Search, Clock, Calendar, CheckCircle, AlertTriangle, X,
   Loader2, ClipboardList, User, Phone, Building2, Server,
   Zap, FileText, Tag, Edit, Send, UserCheck, Lock, Users, Trash2
 } from 'lucide-react';
-import { demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
+import { billing, demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 interface Demande {
@@ -23,6 +24,8 @@ interface Demande {
   contact_tel: string;
   technicien_assigne: string;
   notes_traitement: string;
+  intervention_id?: number | null;
+  billing_case_id?: number | null;
 }
 
 // === 3 statuts officiels ===
@@ -31,8 +34,9 @@ type Statut = typeof STATUTS[number];
 
 /** Normalise les anciens statuts vers les 3 officiels */
 function normalizeStatut(s: string): Statut {
-  if (s === 'Planifiée' || s === 'En cours' || s === 'Assignée') return 'Assignée';
-  if (s === 'Résolue' || s === 'Clôturée') return 'Clôturée';
+  const normalized = String(s || '').toLocaleLowerCase('fr');
+  if (['résol', 'resol', 'réalis', 'realis', 'clôt', 'clot', 'termin', 'annul'].some(token => normalized.includes(token))) return 'Clôturée';
+  if (['planif', 'cours', 'assign'].some(token => normalized.includes(token))) return 'Assignée';
   return 'En attente'; // 'Nouvelle', '', undefined → En attente
 }
 
@@ -88,9 +92,14 @@ const todayIso = (): string => {
 };
 
 export default function DemandesPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const isLecteur = user?.role === 'Lecteur';
-  const canCreate = user?.role && ['Admin', 'Manager', 'Responsable Technique', 'Lecteur'].includes(user.role);
+  const [billingSource, setBillingSource] = useState<{ id: number; client: string; equipment: string } | null>(null);
+  const canCreate = Boolean(user?.role && (
+    ['Admin', 'Manager', 'Responsable Technique', 'Lecteur'].includes(user.role)
+    || (user.role === 'Gestionnaire' && billingSource)
+  ));
   const canAssignTech = user?.role === 'Manager' || user?.role === 'Responsable Technique' || user?.role === 'Admin';
   const canDelete = user?.role === 'Admin' || user?.role === 'Manager';
   const clientNom = user?.client || '';
@@ -151,6 +160,8 @@ export default function DemandesPage() {
         contact_tel: item.contact_tel || '',
         technicien_assigne: item.technicien_assigne || '',
         notes_traitement: item.notes_traitement || '',
+        intervention_id: item.intervention_id ? Number(item.intervention_id) : null,
+        billing_case_id: item.billing_case_id ? Number(item.billing_case_id) : null,
       }));
       setData(mapped);
 
@@ -169,6 +180,32 @@ export default function DemandesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const rawCaseId = new URLSearchParams(window.location.search).get('billing_case_id');
+    const caseId = Number(rawCaseId);
+    if (!Number.isInteger(caseId) || caseId <= 0) return;
+
+    billing.get(caseId)
+      .then((item: Record<string, unknown>) => {
+        const source = {
+          id: Number(item.id),
+          client: String(item.client || ''),
+          equipment: String(item.equipment || ''),
+        };
+        setBillingSource(source);
+        setForm(value => ({
+          ...value,
+          client: source.client,
+          equipement: source.equipment,
+        }));
+        setShowNewModal(true);
+      })
+      .catch((error) => {
+        console.error('Failed to load billing case', error);
+        alert("Impossible de charger le dossier de facturation demandé.");
+      });
+  }, []);
 
   useEffect(() => {
     if (!isLecteur) return;
@@ -194,7 +231,27 @@ export default function DemandesPage() {
       .finally(() => setEquipsLoading(false));
   }, [form.client, isLecteur]);
 
-  const openNewModal = () => { setForm({ ...emptyForm }); setShowNewModal(true); };
+  const duplicateRequest = useMemo(() => {
+    const client = form.client.trim().toLocaleLowerCase('fr');
+    const equipment = form.equipement.trim().toLocaleLowerCase('fr');
+    if (!client || !equipment) return null;
+    return data.find(item => (
+      item.statut !== 'Clôturée'
+      && item.client.trim().toLocaleLowerCase('fr') === client
+      && item.machine.trim().toLocaleLowerCase('fr') === equipment
+    )) || null;
+  }, [data, form.client, form.equipement]);
+
+  const openNewModal = () => {
+    setBillingSource(null);
+    setForm({ ...emptyForm });
+    setShowNewModal(true);
+  };
+
+  const closeNewModal = () => {
+    setShowNewModal(false);
+    if (billingSource) router.push(`/facturation?case_id=${billingSource.id}`);
+  };
 
   const handleCreate = async () => {
     const formToSend = isLecteur
@@ -208,12 +265,20 @@ export default function DemandesPage() {
       alert('Veuillez remplir le champ Demandeur');
       return;
     }
-    const payload = { ...formToSend, date_planifiee: formToSend.date_planifiee || todayIso() };
+    const payload = {
+      ...formToSend,
+      date_planifiee: formToSend.date_planifiee || todayIso(),
+      ...(billingSource ? { billing_case_id: billingSource.id } : {}),
+    };
     setIsSaving(true);
     try {
-      await demandes.create(payload as any);
+      const created = await demandes.create(payload as any);
       setShowNewModal(false);
-      await loadData();
+      if (billingSource) {
+        router.push(`/facturation?case_id=${created.billing_case_id || billingSource.id}`);
+      } else {
+        await loadData();
+      }
     } catch (err) {
       console.error(err);
       const message = err instanceof Error && err.message
@@ -411,8 +476,9 @@ export default function DemandesPage() {
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <Plus className="w-5 h-5 text-savia-accent" /> Nouvelle demande d&apos;intervention
                 {isLecteur && <span className="ml-2 text-xs font-normal text-savia-accent bg-savia-accent/10 px-2 py-0.5 rounded-full">{clientNom}</span>}
+                {billingSource && <span className="ml-2 text-xs font-normal text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-full">Dossier #{billingSource.id}</span>}
               </h2>
-              <button onClick={() => setShowNewModal(false)} className="p-2 rounded-lg hover:bg-savia-surface-hover cursor-pointer">
+              <button onClick={closeNewModal} className="p-2 rounded-lg hover:bg-savia-surface-hover cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -461,8 +527,8 @@ export default function DemandesPage() {
                   <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                     <Building2 className="w-3.5 h-3.5" /> Client / Établissement
                   </label>
-                  {isLecteur ? (
-                    <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">{clientNom}</div>
+                  {isLecteur || billingSource ? (
+                    <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">{billingSource?.client || clientNom}</div>
                   ) : (
                     <select className={INPUT_CLS} value={form.client} onChange={e => setForm({ ...form, client: e.target.value, equipement: '' })}>
                       <option value="">— Sélectionner un client —</option>
@@ -477,7 +543,7 @@ export default function DemandesPage() {
                   </label>
                   <select className={INPUT_CLS} value={form.equipement}
                     onChange={e => setForm({...form, equipement: e.target.value})}
-                    disabled={(!isLecteur && !form.client) || equipsLoading}>
+                    disabled={Boolean(billingSource?.equipment) || (!isLecteur && !form.client) || equipsLoading}>
                     <option value="">
                       {equipsLoading ? 'Chargement...' : (!isLecteur && !form.client) ? "← Choisir un client d'abord" : '— Sélectionner un équipement —'}
                     </option>
@@ -490,6 +556,8 @@ export default function DemandesPage() {
                   )}
                 </div>
               </div>
+
+              {duplicateRequest && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"><div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" /><div className="flex-1"><div className="font-bold text-amber-200">Une demande active existe déjà</div><p className="mt-1 text-sm text-savia-text-muted">Demande #{duplicateRequest.id} · {duplicateRequest.statut}. Utilisez cette demande pour éviter de créer une seconde intervention pour le même équipement.</p>{duplicateRequest.billing_case_id && <button type="button" onClick={() => router.push(`/facturation?case_id=${duplicateRequest.billing_case_id}`)} className="mt-3 rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400">Ouvrir le dossier #{duplicateRequest.billing_case_id}</button>}</div></div></div>}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -559,11 +627,11 @@ export default function DemandesPage() {
               </div>
             </div>
             <div className="flex justify-end gap-3 p-5 border-t border-savia-border">
-              <button onClick={() => setShowNewModal(false)}
+              <button onClick={closeNewModal}
                 className="px-4 py-2 rounded-lg border border-savia-border text-savia-text-muted hover:bg-savia-surface-hover cursor-pointer transition-colors">
                 Annuler
               </button>
-              <button onClick={handleCreate} disabled={isSaving}
+              <button onClick={handleCreate} disabled={isSaving || Boolean(duplicateRequest)}
                 className="flex items-center gap-2 px-6 py-2 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 cursor-pointer transition-all">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Envoyer la demande
