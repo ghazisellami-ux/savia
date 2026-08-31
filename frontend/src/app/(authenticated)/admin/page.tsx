@@ -9,7 +9,7 @@ import {
   Wrench, BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   ClipboardList, CalendarDays, Cog, FileText, ClipboardCheck, Settings,
   Star, Radio, Upload, Building2, Globe, Check, DollarSign, MapPin, ShieldCheck,
-  ChevronDown, Brain, Receipt,
+  ChevronDown, Brain, Receipt, Landmark,
 } from 'lucide-react';
 import { admin, techniciens, clients, paysCustom as paysCustomApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -28,6 +28,7 @@ const ALL_PAGES: {key: string; label: string; icon: any}[] = [
   { key: 'base_connaissances', label: 'Base de Connaissances',  icon: BookOpen       },
   { key: 'sav',                label: 'SAV & Interventions',    icon: Wrench         },
   { key: 'facturation',        label: 'Suivi Facturation',      icon: Receipt        },
+  { key: 'marches',            label: 'Suivi des marchés',      icon: Landmark       },
   { key: 'demandes',           label: "Demandes d'intervention", icon: ClipboardList  },
   { key: 'planning',           label: 'Planning',               icon: CalendarDays   },
   { key: 'pieces',             label: 'Pièces de Rechange',     icon: Cog            },
@@ -67,7 +68,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-blue-500/10',
     border: 'border-blue-500/30',
     description: 'SAV, planning, équipements, rapports et administration technique',
-    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'facturation', 'demandes', 'planning', 'reports', 'base_connaissances', 'admin'],
+    pages: ['dashboard', 'supervision', 'equipements', 'sav', 'facturation', 'marches', 'demandes', 'planning', 'reports', 'base_connaissances', 'admin'],
   },
   {
     id: 'gestionnaire_stock',
@@ -76,7 +77,7 @@ const DEFAULT_PROFILES: Profile[] = [
     bg: 'bg-amber-500/10',
     border: 'border-amber-500/30',
     description: 'Pièces de rechange, prédictions, commandes',
-    pages: ['dashboard', 'pieces', 'predictions', 'facturation', 'reports'],
+    pages: ['dashboard', 'pieces', 'predictions', 'facturation', 'marches', 'reports'],
   },
   {
     id: 'technicien',

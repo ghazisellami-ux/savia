@@ -32,6 +32,7 @@ from controllers.pdf_attestation import *
 from controllers.pdf_contract import *
 from controllers.finance import *
 from controllers.billing import *
+from controllers.public_markets import *
 
 import controllers.ai as _ai_controller
 import controllers.finance as _finance_controller

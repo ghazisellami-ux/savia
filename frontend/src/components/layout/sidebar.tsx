@@ -12,7 +12,7 @@ import {
   BarChart3, Monitor, Hospital, TrendingUp, BookOpen,
   Wrench, ClipboardList, CalendarDays, Cog, FileText,
   ClipboardCheck, Settings, LogOut, SlidersHorizontal,
-  ChevronLeft, ChevronRight, DollarSign, MapPin, ShieldCheck, Receipt,
+  ChevronLeft, ChevronRight, DollarSign, MapPin, ShieldCheck, Receipt, Landmark,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { key: 'base_connaissances', label: 'Base de Connaissances',  href: '/knowledge',   icon: BookOpen       },
   { key: 'sav',                label: 'SAV & Interventions',    href: '/sav',         icon: Wrench         },
   { key: 'facturation',        label: 'Suivi Facturation',      href: '/facturation', icon: Receipt        },
+  { key: 'marches',            label: 'Suivi des marchés',      href: '/marches',     icon: Landmark       },
   { key: 'demandes',           label: "Demandes d'Intervention", href: '/demandes',   icon: ClipboardList  },
   { key: 'planning',           label: 'Planning',               href: '/planning',    icon: CalendarDays   },
   { key: 'pieces',             label: 'Pièces de Rechange',     href: '/pieces',      icon: Cog            },

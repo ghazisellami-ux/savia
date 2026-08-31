@@ -542,8 +542,28 @@ export const billing = {
     request<Array<Record<string, unknown>>>(`/api/billing/cases/${caseId}/history`),
 };
 
+// --- Suivi des marchés publics ---
+export const publicMarkets = {
+  responsibles: () => request<Array<Record<string, unknown>>>('/api/public-markets/responsibles'),
+  list: (filters?: { status?: string; client?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.client) params.set('client', filters.client);
+    if (filters?.search) params.set('search', filters.search);
+    const qs = params.toString();
+    return request<Array<Record<string, unknown>>>(`/api/public-markets/cases${qs ? `?${qs}` : ''}`);
+  },
+  get: (caseId: number) => request<Record<string, unknown>>(`/api/public-markets/cases/${caseId}`),
+  create: (data: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/public-markets/cases', { method: 'POST', body: data }),
+  update: (caseId: number, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/public-markets/cases/${caseId}`, { method: 'PATCH', body: data }),
+  history: (caseId: number) =>
+    request<Array<Record<string, unknown>>>(`/api/public-markets/cases/${caseId}/history`),
+};
+
 export { ApiError };
 
 // Default export for backward compatibility
-const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, billing, mapApi, sla, typesIntervention, typesClient, villesCustom, paysCustom, settings };
+const apiClient = { auth, dashboard, interventions, equipements, documentsTechniques, techniciens, pieces, piecesDemandees, notifications, demandes, contrats, conformite, planning, knowledge, clients, admin, ai, logs, finances, billing, publicMarkets, mapApi, sla, typesIntervention, typesClient, villesCustom, paysCustom, settings };
 export default apiClient;
