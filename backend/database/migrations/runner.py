@@ -565,6 +565,79 @@ def _migration_013_merged_billing_cases(conn) -> None:
     )
 
 
+def _migration_014_public_market_tracking(conn) -> None:
+    """Create persistent public-market milestones and deadline settings."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS public_market_cases (
+               id BIGSERIAL PRIMARY KEY,
+               client TEXT NOT NULL,
+               market_number TEXT NOT NULL,
+               market_object TEXT NOT NULL DEFAULT '',
+               owner_username TEXT NOT NULL DEFAULT '',
+               signature_date DATE NULL,
+               execution_delay_days INTEGER NULL
+                   CHECK (execution_delay_days IS NULL OR execution_delay_days >= 0),
+               equipment_reception_date DATE NULL,
+               equipment_reception_note TEXT NOT NULL DEFAULT '',
+               delivery_note_date DATE NULL,
+               delivery_note_reference TEXT NOT NULL DEFAULT '',
+               provisional_acceptance_date DATE NULL,
+               provisional_acceptance_reference TEXT NOT NULL DEFAULT '',
+               warranty_retention_days INTEGER NULL
+                   CHECK (warranty_retention_days IS NULL OR warranty_retention_days >= 0),
+               final_acceptance_date DATE NULL,
+               final_acceptance_reference TEXT NOT NULL DEFAULT '',
+               case_state TEXT NOT NULL DEFAULT 'active'
+                   CHECK (case_state IN ('active', 'blocked', 'cancelled')),
+               block_reason TEXT NOT NULL DEFAULT '',
+               notes TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL DEFAULT 'system',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL DEFAULT 'system',
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_public_market_number
+           ON public_market_cases (LOWER(BTRIM(market_number)))"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_public_market_client_updated
+           ON public_market_cases (client, updated_at DESC)"""
+    )
+
+
+def _migration_015_public_market_history(conn) -> None:
+    """Add an immutable action history to public-market cases."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS public_market_history (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES public_market_cases(id) ON DELETE CASCADE,
+               action TEXT NOT NULL,
+               before_data JSONB NULL,
+               after_data JSONB NULL,
+               actor_username TEXT NOT NULL,
+               occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_public_market_history_case_date
+           ON public_market_history (case_id, occurred_at DESC, id DESC)"""
+    )
+    # Preserve a reliable starting point for dossiers created before this
+    # history table existed. Earlier individual edits cannot be reconstructed.
+    conn.execute(
+        """INSERT INTO public_market_history (
+               case_id, action, after_data, actor_username, occurred_at
+           )
+           SELECT pm.id, 'IMPORT_CASE', to_jsonb(pm), pm.created_by, pm.created_at
+           FROM public_market_cases pm
+           WHERE NOT EXISTS (
+               SELECT 1 FROM public_market_history history WHERE history.case_id=pm.id
+           )"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -579,6 +652,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("011", "workshop transfer technician status", _migration_011_workshop_transfer_status),
     ("012", "one billing case per intervention request", _migration_012_unique_billing_request),
     ("013", "archive merged billing cases", _migration_013_merged_billing_cases),
+    ("014", "public market tracking and deadlines", _migration_014_public_market_tracking),
+    ("015", "public market action history", _migration_015_public_market_history),
 )
 
 

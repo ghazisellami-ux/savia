@@ -13,6 +13,7 @@ from api.security import (
 )
 from controllers.requests import _INTERVENTION_ACTION_ROLES
 from controllers.billing import BILLING_ROLES
+from controllers.public_markets import PUBLIC_MARKET_ROLES
 
 
 ALL_ROLES = (
@@ -33,6 +34,7 @@ ROLE_POLICY_MATRIX = {
     "read_stock": {"Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire"},
     "create_piece": {"Admin", "Manager", "Responsable Technique", "Gestionnaire"},
     "billing_tracking": set(BILLING_ROLES),
+    "public_market_tracking": set(PUBLIC_MARKET_ROLES),
 }
 
 
