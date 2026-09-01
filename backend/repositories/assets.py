@@ -33,6 +33,8 @@ __all__ = [
     "modifier_equipement",
     "lire_fabricants",
     "ajouter_fabricant",
+    "lire_modeles_equipement",
+    "ajouter_modele_equipement",
     "lire_fournisseurs",
     "ajouter_fournisseur",
     "lire_types_equipement_custom",
@@ -655,6 +657,37 @@ def ajouter_fabricant(nom):
     """Ajoute un fabricant. Ignore si déjà existant."""
     with get_db() as conn:
         conn.execute("INSERT INTO fabricants (nom) VALUES (%s) ON CONFLICT DO NOTHING", (nom.strip(),))
+    return True
+
+
+def lire_modeles_equipement(domaine="", type_equipement="", fabricant=""):
+    """Retourne les modèles associés au contexte domaine/type/fabricant."""
+    clauses = []
+    params = []
+    for column, value in (("domaine", domaine), ("type_equipement", type_equipement), ("fabricant", fabricant)):
+        value = str(value or "").strip()
+        if value:
+            clauses.append(f"LOWER(BTRIM({column})) = LOWER(BTRIM(%s))")
+            params.append(value)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT id, nom, domaine, type_equipement, fabricant FROM modeles_equipement{where} ORDER BY nom",
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_modele_equipement(nom, domaine, type_equipement, fabricant):
+    """Ajoute un modèle dans son contexte de classification, sans doublon."""
+    values = tuple(str(value or "").strip() for value in (nom, domaine, type_equipement, fabricant))
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO modeles_equipement (nom, domaine, type_equipement, fabricant)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT DO NOTHING""",
+            values,
+        )
     return True
 
 

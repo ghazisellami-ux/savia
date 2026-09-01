@@ -379,6 +379,19 @@ export const fabricants = {
   create: (nom: string) => request<{ ok: boolean }>('/api/fabricants', { method: 'POST', body: { nom } }),
 };
 
+export const modelesEquipement = {
+  list: (filters?: { domaine?: string; type?: string; fabricant?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.domaine) params.set('domaine', filters.domaine);
+    if (filters?.type) params.set('type', filters.type);
+    if (filters?.fabricant) params.set('fabricant', filters.fabricant);
+    const qs = params.toString();
+    return request<Array<{ id: number; nom: string; domaine: string; type_equipement: string; fabricant: string }>>(`/api/modeles-equipement${qs ? `?${qs}` : ''}`);
+  },
+  create: (data: { nom: string; domaine: string; type: string; fabricant: string }) =>
+    request<{ ok: boolean }>('/api/modeles-equipement', { method: 'POST', body: data }),
+};
+
 export const typesEquipement = {
   list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
   create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
