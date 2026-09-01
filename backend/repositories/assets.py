@@ -449,23 +449,20 @@ def chercher_client_par_matricule(matricule_fiscale):
 
 
 def ajouter_equipement(equipement_dict):
-    """Ajoute un équipement au parc. Unique par combinaison (nom + client)."""
+    """Ajoute un équipement au parc et retourne son identifiant.
+
+    Le nom n'est pas une identité métier fiable : un même client peut posséder
+    plusieurs appareils du même type/nom. L'identifiant technique ``id`` reste
+    la clé de référence ; le numéro de série peut compléter l'identification.
+    """
     with get_db() as conn:
-        conn.execute("""
+        row = conn.execute("""
             INSERT INTO equipements (nom, type, fabricant, modele, num_serie,
                                      date_installation, derniere_maintenance, statut, notes,
                                      client, matricule_fiscale, document_technique,
                                      domaine, est_annexe, garantie_debut, garantie_duree, ville, region, service)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(nom, client) DO UPDATE SET
-                type=excluded.type, fabricant=excluded.fabricant, modele=excluded.modele,
-                num_serie=excluded.num_serie, date_installation=excluded.date_installation,
-                derniere_maintenance=excluded.derniere_maintenance, statut=excluded.statut,
-                notes=excluded.notes, matricule_fiscale=excluded.matricule_fiscale,
-                document_technique=excluded.document_technique,
-                domaine=excluded.domaine, est_annexe=excluded.est_annexe,
-                garantie_debut=excluded.garantie_debut, garantie_duree=excluded.garantie_duree,
-                ville=excluded.ville, region=excluded.region, service=excluded.service
+            RETURNING id
         """, (
             equipement_dict.get("Nom", ""),
             equipement_dict.get("Type", ""),
@@ -486,9 +483,9 @@ def ajouter_equipement(equipement_dict):
             equipement_dict.get("Ville", ""),
             equipement_dict.get("Region", ""),
             equipement_dict.get("Service", ""),
-        ))
+        )).fetchone()
     _trigger_backup()
-    return True
+    return int(row["id"]) if row else None
 
 
 def supprimer_equipement(equip_id):

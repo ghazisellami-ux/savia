@@ -563,8 +563,7 @@ def init_db():
             derniere_maintenance TEXT DEFAULT '',
             statut TEXT DEFAULT 'Opérationnel',
             notes TEXT DEFAULT '',
-            client TEXT DEFAULT 'Centre Principal',
-            UNIQUE(nom, client)
+            client TEXT DEFAULT 'Centre Principal'
         );
 
         -- Interventions de maintenance

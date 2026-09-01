@@ -638,6 +638,21 @@ def _migration_015_public_market_history(conn) -> None:
     )
 
 
+def _migration_016_allow_duplicate_equipment_names(conn) -> None:
+    """Use the equipment ID, rather than name/client, as the identity key."""
+    constraints = conn.execute(
+        """SELECT c.conname
+           FROM pg_constraint c
+           JOIN pg_class t ON t.oid = c.conrelid
+           WHERE t.relname='equipements' AND c.contype='u'
+             AND pg_get_constraintdef(c.oid) ILIKE '%(nom, client)%'"""
+    ).fetchall()
+    for row in constraints:
+        name = row.get("conname") if hasattr(row, "get") else row[0]
+        if name:
+            conn.execute(f'ALTER TABLE equipements DROP CONSTRAINT IF EXISTS "{name}"')
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -654,6 +669,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("013", "archive merged billing cases", _migration_013_merged_billing_cases),
     ("014", "public market tracking and deadlines", _migration_014_public_market_tracking),
     ("015", "public market action history", _migration_015_public_market_history),
+    ("016", "allow duplicate equipment names", _migration_016_allow_duplicate_equipment_names),
 )
 
 

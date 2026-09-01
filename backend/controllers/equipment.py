@@ -254,16 +254,11 @@ def create_equipement(body: dict, user: dict = Depends(_verify_token)):
             detail="Cette action est réservée aux Responsables, Managers et Admins"
         )
     
-    ajouter_equipement(body)
-    # Return the ID of the created/upserted equipment
+    # A new row is always inserted. The repository returns the generated ID;
+    # never resolve it again by (nom, client), because duplicate names are valid.
+    equip_id = ajouter_equipement(body)
     nom = body.get("Nom", "")
     client = body.get("Client", "Centre Principal")
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT id FROM equipements WHERE nom = %s AND client = %s",
-            (nom, client)
-        ).fetchone()
-    equip_id = dict(row)["id"] if row else None
     
     # Log audit
     username = user.get("sub", "unknown")
