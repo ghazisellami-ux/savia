@@ -19,6 +19,8 @@ from api.runtime import (
     get_db,
     lire_equipements,
     lire_fabricants,
+    lire_modeles_equipement,
+    ajouter_modele_equipement,
     lire_types_equipement_custom,
     lire_types_intervention_custom,
     log_audit,
@@ -147,14 +149,16 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
                     "type": value(row, "Type", "type"),
                     "domaine": value(row, "Domaine", "domaine"),
                     "modele": " - ".join(filter(None, [value(row, "Fabricant", "fabricant"), value(row, "Modele", "modele")])),
+                    "modele_filtre": value(row, "Modele", "modele"),
                     "statut": value(row, "Statut", "statut"),
                     "service": value(row, "Service", "service"),
                 }
                 if client_scope and item["client"].casefold() != client_scope.casefold():
                     continue
-                for field in ("type", "domaine", "statut", "service", "client"):
+                for field in ("type", "domaine", "modele", "statut", "service", "client"):
                     selected = body.get(field)
-                    if selected not in (None, "", "Tous") and item[field] != selected:
+                    candidate = item["modele_filtre"] if field == "modele" else item[field]
+                    if selected not in (None, "", "Tous") and candidate != selected:
                         break
                 else:
                     search = str(body.get("search") or "").strip().casefold()
@@ -166,7 +170,7 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
             keys = ("client", "equipement", "type", "domaine", "modele", "statut", "service")
             max_chars = [28, 30, 23, 23, 24, 18, 15]
             title = "LISTE DES EQUIPEMENTS"
-            filter_pairs = (("Recherche", "search"), ("Domaine", "domaine"), ("Type", "type"), ("Statut", "statut"), ("Service", "service"), ("Client", "client"))
+            filter_pairs = (("Recherche", "search"), ("Domaine", "domaine"), ("Type", "type"), ("Modele", "modele"), ("Statut", "statut"), ("Service", "service"), ("Client", "client"))
             report_filename = "equipements"
 
         if not rows:
@@ -468,6 +472,30 @@ def post_fabricant(payload: dict = Body(...), user: dict = Depends(_verify_token
     return {"ok": True}
 
 
+@app.get("/api/modeles-equipement")
+def get_modeles_equipement(
+    domaine: str = Query(""),
+    type: str = Query(""),
+    fabricant: str = Query(""),
+    user: dict = Depends(_verify_token),
+):
+    return lire_modeles_equipement(domaine, type, fabricant)
+
+
+@app.post("/api/modeles-equipement")
+def post_modele_equipement(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    nom = str(payload.get("nom") or "").strip()
+    domaine = str(payload.get("domaine") or "").strip()
+    type_equipement = str(payload.get("type") or payload.get("type_equipement") or "").strip()
+    fabricant = str(payload.get("fabricant") or "").strip()
+    if not all((nom, domaine, type_equipement, fabricant)):
+        raise HTTPException(400, "Nom, domaine, type et fabricant requis")
+    ajouter_modele_equipement(nom, domaine, type_equipement, fabricant)
+    return {"ok": True}
+
+
 @app.get("/api/types-equipement-custom")
 def get_types_equipement_custom(domaine: str = Query(""), user: dict = Depends(_verify_token)):
     return lire_types_equipement_custom(domaine)
@@ -648,6 +676,8 @@ __all__ = [
     "sync_region_ville",
     "get_fabricants",
     "post_fabricant",
+    "get_modeles_equipement",
+    "post_modele_equipement",
     "get_types_equipement_custom",
     "post_type_equipement_custom",
     "get_types_intervention_custom",

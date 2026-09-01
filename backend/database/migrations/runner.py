@@ -653,6 +653,37 @@ def _migration_016_allow_duplicate_equipment_names(conn) -> None:
             conn.execute(f'ALTER TABLE equipements DROP CONSTRAINT IF EXISTS "{name}"')
 
 
+def _migration_017_equipment_model_catalog(conn) -> None:
+    """Persist equipment models and associate them with classification context."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS modeles_equipement (
+               id BIGSERIAL PRIMARY KEY,
+               nom TEXT NOT NULL,
+               domaine TEXT NOT NULL DEFAULT '',
+               type_equipement TEXT NOT NULL DEFAULT '',
+               fabricant TEXT NOT NULL DEFAULT '',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_modeles_equipement_context
+           ON modeles_equipement (
+               LOWER(BTRIM(nom)), LOWER(BTRIM(domaine)),
+               LOWER(BTRIM(type_equipement)), LOWER(BTRIM(fabricant))
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO modeles_equipement (nom, domaine, type_equipement, fabricant)
+           SELECT DISTINCT BTRIM(modele), BTRIM(domaine), BTRIM(type), BTRIM(fabricant)
+           FROM equipements
+           WHERE NULLIF(BTRIM(modele), '') IS NOT NULL
+             AND NULLIF(BTRIM(domaine), '') IS NOT NULL
+             AND NULLIF(BTRIM(type), '') IS NOT NULL
+             AND NULLIF(BTRIM(fabricant), '') IS NOT NULL
+           ON CONFLICT DO NOTHING"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -670,6 +701,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("014", "public market tracking and deadlines", _migration_014_public_market_tracking),
     ("015", "public market action history", _migration_015_public_market_history),
     ("016", "allow duplicate equipment names", _migration_016_allow_duplicate_equipment_names),
+    ("017", "equipment model catalog", _migration_017_equipment_model_catalog),
 )
 
 

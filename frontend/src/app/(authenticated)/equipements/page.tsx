@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal, History,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, modelesEquipement as modelesApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 import { COUNTRIES, DEFAULT_COUNTRY, cityCoordinates, countryCities, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
@@ -171,6 +171,7 @@ export default function EquipementsPage() {
   const [activeTab, setActiveTab] = useState<'equipements' | 'clients' | 'documents'>(isLecteur ? 'equipements' : 'clients');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('Tous');
+  const [filterModele, setFilterModele] = useState('Tous');
   const [filterClient, setFilterClient] = useState('Tous');
   const [filterDomaine, setFilterDomaine] = useState('Tous');
   const [filterStatut, setFilterStatut] = useState('Tous');
@@ -210,6 +211,9 @@ export default function EquipementsPage() {
   const [form, setForm] = useState(emptyForm);
   const [fabricantsList, setFabricantsList] = useState<string[]>([]);
   const [customFabricant, setCustomFabricant] = useState(false);
+  const [modelesList, setModelesList] = useState<string[]>([]);
+  const [customModele, setCustomModele] = useState(false);
+  const [modelesLoading, setModelesLoading] = useState(false);
   const [customAnnexeTypes, setCustomAnnexeTypes] = useState<string[]>([]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
@@ -220,6 +224,10 @@ export default function EquipementsPage() {
   const [customDomaineError, setCustomDomaineError] = useState('');
   const [customDomaines, setCustomDomaines] = useState<string[]>([]);
   const [typeToDelete, setTypeToDelete] = useState<{ id: number; nom: string; domaine: string } | null>(null);
+
+  const modeleDomaine = form.Domaine === 'Autre' && customDomaineValue.trim()
+    ? customDomaineValue.trim()
+    : form.Domaine;
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
 
@@ -246,6 +254,14 @@ export default function EquipementsPage() {
     return base;
   }, [form.Domaine, form.EstAnnexe, customTypesForDomain]);
 
+  const availableModeles = useMemo(() => {
+    const options = [...modelesList];
+    // Keep a legacy value visible while editing an equipment created before
+    // the model catalogue was introduced.
+    if (editingEquip?.modele && form.Modele === editingEquip.modele && !options.includes(editingEquip.modele)) options.push(editingEquip.modele);
+    return options.sort((a, b) => a.localeCompare(b));
+  }, [modelesList, editingEquip, form.Modele]);
+
   const dynamicDomaines = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.domaine).filter(Boolean)))], [data]);
   
   // Filter types based on selected domain
@@ -259,6 +275,15 @@ export default function EquipementsPage() {
       .filter(Boolean);
     return ['Tous', ...Array.from(new Set(typesInDomain))];
   }, [data, filterDomaine]);
+
+  const dynamicModeles = useMemo(() => {
+    const models = data
+      .filter(d => filterDomaine === 'Tous' || d.domaine === filterDomaine)
+      .filter(d => filterType === 'Tous' || d.type === filterType)
+      .map(d => d.modele)
+      .filter(Boolean);
+    return ['Tous', ...Array.from(new Set(models)).sort()];
+  }, [data, filterDomaine, filterType]);
 
   // Filter clients based on selected domain
   const dynamicClients = useMemo(() => {
@@ -477,6 +502,26 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadModeles = useCallback(async (domaine: string, type: string, fabricant: string) => {
+    if (!domaine.trim() || !type.trim() || !fabricant.trim()) {
+      setModelesList([]);
+      return;
+    }
+    setModelesLoading(true);
+    try {
+      const res = await modelesApi.list({ domaine, type, fabricant });
+      setModelesList(res.map(model => model.nom).filter(Boolean));
+    } catch {
+      setModelesList([]);
+    } finally {
+      setModelesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadModeles(modeleDomaine, form.Type, form.Fabricant);
+  }, [loadModeles, modeleDomaine, form.Type, form.Fabricant]);
+
   const loadCustomDomaines = useCallback(async () => {
     try {
       const customDomainesRes = await domaines_custom.list();
@@ -543,7 +588,7 @@ export default function EquipementsPage() {
 
       // Update the local catalogue immediately. The follow-up reload is best-effort.
       setCustomDomaines(prev => Array.from(new Set([...prev, domaineName])).sort());
-      setForm(prev => ({ ...prev, Domaine: domaineName, Type: '', EstAnnexe: false }));
+      setForm(prev => ({ ...prev, Domaine: domaineName, Type: '', EstAnnexe: false, Modele: '' }));
       setCustomDomaineValue('');
       setCustomDomaineMode(false);
       setCustomTypeMode(true);
@@ -807,6 +852,7 @@ export default function EquipementsPage() {
       setCustomDomaineMode(false);
       setCustomDomaineValue('');
     }
+    setCustomModele(false);
     
     // If fabricant not in list, enable custom mode
     if (eq.marque && !fabricantsList.includes(eq.marque)) {
@@ -818,7 +864,7 @@ export default function EquipementsPage() {
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
-  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); };
+  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); setCustomModele(false); };
 
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -873,6 +919,21 @@ export default function EquipementsPage() {
       
       if (docFiles.length > 0) payload.DocumentTechnique = docFiles.map(f => f.name).join(', ');
 
+      // Keep manually entered models in the catalogue as well, so they are
+      // available for the next equipment with the same classification.
+      if (form.Modele.trim() && String(payload.Domaine || '').trim() && form.Type.trim() && form.Fabricant.trim()) {
+        try {
+          await modelesApi.create({
+            nom: form.Modele.trim(),
+            domaine: String(payload.Domaine).trim(),
+            type: form.Type.trim(),
+            fabricant: form.Fabricant.trim(),
+          });
+        } catch (err) {
+          console.error('Erreur sauvegarde modèle:', err);
+        }
+      }
+
       let targetEquipId: number | null = null;
       if (editingEquip) {
         await equipements.update(Number(editingEquip.id), payload);
@@ -893,6 +954,7 @@ export default function EquipementsPage() {
 
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
+      setCustomModele(false);
       setCustomTypeMode(false); setCustomTypeValue('');
       setCustomDomaineMode(false); setCustomDomaineValue('');
       // Auto-save fabricant if new
@@ -978,6 +1040,7 @@ export default function EquipementsPage() {
   const handleExportEquipementsPdf = () => handleExportPdf('equipements', {
     search,
     type: filterType,
+    modele: filterModele,
     client: filterClient,
     domaine: filterDomaine,
     statut: filterStatut,
@@ -995,6 +1058,7 @@ export default function EquipementsPage() {
     // Lecteur: show only their own client's equipment
     if (isLecteur && user?.client && eq.client !== user.client) return false;
     if (filterType !== 'Tous' && eq.type !== filterType) return false;
+    if (filterModele !== 'Tous' && eq.modele !== filterModele) return false;
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
     if (filterDomaine !== 'Tous' && eq.domaine !== filterDomaine) return false;
     if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
@@ -1002,7 +1066,7 @@ export default function EquipementsPage() {
     if (search && !eq.nom.toLowerCase().includes(search.toLowerCase()) &&
         !eq.numSerie.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  }), [search, filterType, filterClient, filterDomaine, filterStatut, filterService, data, isLecteur, user]);
+  }), [search, filterType, filterModele, filterClient, filterDomaine, filterStatut, filterService, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
     if (docFilterEquip !== 'Tous' && doc.equipement_nom !== docFilterEquip) return false;
@@ -1151,7 +1215,7 @@ export default function EquipementsPage() {
                         {DOMAINES.map(d => (
                           <button key={d} type="button"
                             onClick={() => {
-                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0] });
+                              setForm({ ...form, Domaine: d, EstAnnexe: false, Type: TYPES_PAR_DOMAINE[d][0], Modele: '' });
                               if (d === 'Autre') {
                                 setCustomDomaineMode(true);
                               } else {
@@ -1176,7 +1240,7 @@ export default function EquipementsPage() {
                             <button type="button"
                               onClick={() => {
                                 const firstType = customTypesForDomain[d] && customTypesForDomain[d].length > 0 ? customTypesForDomain[d][0].nom : 'Autre';
-                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: firstType });
+                                setForm({ ...form, Domaine: d, EstAnnexe: false, Type: firstType, Modele: '' });
                                 setCustomDomaineMode(false);
                                 setCustomDomaineValue('');
                               }}
@@ -1201,7 +1265,7 @@ export default function EquipementsPage() {
                                     await loadCustomDomaines();
                                     // If the deleted domain was selected, reset to "Autre"
                                     if (form.Domaine === d) {
-                                      setForm({ ...form, Domaine: 'Autre', Type: 'Autre', EstAnnexe: false });
+                                      setForm({ ...form, Domaine: 'Autre', Type: 'Autre', EstAnnexe: false, Modele: '' });
                                       setCustomDomaineMode(true);
                                     }
                                   } catch (err) {
@@ -1231,6 +1295,7 @@ export default function EquipementsPage() {
                               value={customDomaineValue}
                               onChange={e => {
                                 setCustomDomaineValue(e.target.value);
+                                setForm(current => ({ ...current, Modele: '' }));
                                 if (customDomaineError) setCustomDomaineError('');
                               }}
                               className={INPUT_CLS}
@@ -1270,6 +1335,7 @@ export default function EquipementsPage() {
                             onChange={e => setForm({
                               ...form,
                               EstAnnexe: e.target.checked,
+                              Modele: '',
                               Type: e.target.checked ? TYPES_ANNEXES_RADIOLOGIE[0] : TYPES_PAR_DOMAINE['Radiologie'][0],
                             })}
                             className="w-4 h-4 mt-0.5 accent-amber-500 cursor-pointer flex-shrink-0"
@@ -1315,7 +1381,7 @@ export default function EquipementsPage() {
                                     try {
                                       await typesEquipApi.create(typeValue, domKey);
                                       await loadCustomTypes();
-                                      setForm({ ...form, Type: typeValue });
+                                      setForm({ ...form, Type: typeValue, Modele: '' });
                                       setCustomTypeMode(false);
                                       setCustomTypeValue('');
                                     } catch (err) {
@@ -1342,7 +1408,7 @@ export default function EquipementsPage() {
                                   try {
                                     await typesEquipApi.create(typeValue, domKey);
                                     await loadCustomTypes();
-                                    setForm({ ...form, Type: typeValue });
+                                    setForm({ ...form, Type: typeValue, Modele: '' });
                                     setCustomTypeMode(false);
                                     setCustomTypeValue('');
                                   } catch (err) {
@@ -1377,7 +1443,7 @@ export default function EquipementsPage() {
                               setCustomTypeMode(true);
                               setCustomTypeValue('');
                             }
-                            else setForm({ ...form, Type: e.target.value });
+                            else setForm({ ...form, Type: e.target.value, Modele: '' });
                           }}>
                             {availableTypes.map(t => <option key={t} value={t}>{t}</option>)}
                             <option value="__autre_type__">+ Autre (saisie manuelle)</option>
@@ -1445,7 +1511,7 @@ export default function EquipementsPage() {
                         {customFabricant ? (
                           <div className="flex gap-2">
                             <input className={INPUT_CLS} placeholder="Nom du fabricant..." value={form.Fabricant}
-                              onChange={e => setForm({ ...form, Fabricant: e.target.value })} />
+                              onChange={e => setForm({ ...form, Fabricant: e.target.value, Modele: '' })} />
                             <button type="button" onClick={async () => {
                               if (form.Fabricant.trim()) { await fabricantsApi.create(form.Fabricant.trim()); await loadFabricants(); }
                               setCustomFabricant(false);
@@ -1455,8 +1521,8 @@ export default function EquipementsPage() {
                           </div>
                         ) : (
                           <select className={INPUT_CLS} value={form.Fabricant} onChange={e => {
-                            if (e.target.value === '__autre__') { setCustomFabricant(true); setForm({ ...form, Fabricant: '' }); }
-                            else setForm({ ...form, Fabricant: e.target.value });
+                            if (e.target.value === '__autre__') { setCustomFabricant(true); setForm({ ...form, Fabricant: '', Modele: '' }); }
+                            else setForm({ ...form, Fabricant: e.target.value, Modele: '' });
                           }}>
                             <option value="">— Sélectionner —</option>
                             {fabricantsList.map(f => <option key={f} value={f}>{f}</option>)}
@@ -1468,8 +1534,50 @@ export default function EquipementsPage() {
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <ClipboardList className="w-3.5 h-3.5" /> Modèle *
                         </label>
-                        <input className={INPUT_CLS} placeholder="Ex: SOMATOM go.Up" value={form.Modele}
-                          onChange={e => setForm({ ...form, Modele: e.target.value })} />
+                        {customModele ? (
+                          <div className="flex gap-2">
+                            <input className={INPUT_CLS} placeholder="Nom du modèle..." value={form.Modele}
+                              onChange={e => setForm({ ...form, Modele: e.target.value })}
+                              autoFocus />
+                            <button type="button" disabled={!form.Modele.trim() || !modeleDomaine.trim() || !form.Type.trim() || !form.Fabricant.trim()}
+                              onClick={async () => {
+                                const nom = form.Modele.trim();
+                                if (!nom || !modeleDomaine.trim() || !form.Type.trim() || !form.Fabricant.trim()) return;
+                                try {
+                                  await modelesApi.create({ nom, domaine: modeleDomaine.trim(), type: form.Type.trim(), fabricant: form.Fabricant.trim() });
+                                  await loadModeles(modeleDomaine, form.Type, form.Fabricant);
+                                  setForm(current => ({ ...current, Modele: nom }));
+                                  setCustomModele(false);
+                                } catch (err) {
+                                  console.error('Erreur sauvegarde modèle:', err);
+                                }
+                              }}
+                              className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 disabled:opacity-50 cursor-pointer">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                            <button type="button" onClick={() => { setCustomModele(false); setForm(current => ({ ...current, Modele: '' })); }}
+                              className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <select className={INPUT_CLS} value={form.Modele} disabled={!form.Fabricant || !form.Type || !modeleDomaine || modelesLoading}
+                            onChange={e => {
+                              if (e.target.value === '__autre_modele__') {
+                                setCustomModele(true);
+                                setForm(current => ({ ...current, Modele: '' }));
+                              } else {
+                                setForm(current => ({ ...current, Modele: e.target.value }));
+                              }
+                            }}>
+                            <option value="">{modelesLoading ? 'Chargement…' : !form.Fabricant ? '— Sélectionner un fabricant —' : '— Sélectionner —'}</option>
+                            {availableModeles.map(modele => <option key={modele} value={modele}>{modele}</option>)}
+                            <option value="__autre_modele__">+ Autre (saisie manuelle)</option>
+                          </select>
+                        )}
+                        {!customModele && form.Fabricant && form.Type && modeleDomaine && availableModeles.length === 0 && !modelesLoading && (
+                          <p className="text-xs text-savia-text-dim mt-1.5">Aucun modèle enregistré pour ce domaine, type et fabricant. Choisissez « + Autre » pour l’ajouter.</p>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -1629,12 +1737,16 @@ export default function EquipementsPage() {
               setFilterDomaine(e.target.value);
               // Reset type and client filters when domain changes
               setFilterType('Tous');
+              setFilterModele('Tous');
               setFilterClient('Tous');
             }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicDomaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
             </select>
-            <select value={filterType} onChange={e => setFilterType(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+            <select value={filterType} onChange={e => { setFilterType(e.target.value); setFilterModele('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
+            </select>
+            <select value={filterModele} onChange={e => setFilterModele(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {dynamicModeles.map(modele => <option key={modele} value={modele}>{modele === 'Tous' ? 'Tous les modèles' : modele}</option>)}
             </select>
             <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {dynamicStatuts.map(s => <option key={s} value={s}>{s === 'Tous' ? 'Tous les statuts' : s}</option>)}
