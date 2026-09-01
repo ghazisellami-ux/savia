@@ -78,3 +78,9 @@ def test_public_market_history_migration_is_registered():
     migrations = [migration for migration in MIGRATIONS if migration[0] == "015"]
     assert len(migrations) == 1
     assert "history" in migrations[0][1]
+
+
+def test_duplicate_equipment_names_migration_is_registered():
+    migrations = [migration for migration in MIGRATIONS if migration[0] == "016"]
+    assert len(migrations) == 1
+    assert "duplicate equipment names" in migrations[0][1]
