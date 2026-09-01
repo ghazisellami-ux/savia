@@ -21,6 +21,8 @@ from api.runtime import (
     lire_fabricants,
     lire_modeles_equipement,
     ajouter_modele_equipement,
+    lire_services_equipement,
+    ajouter_service_equipement,
     lire_types_equipement_custom,
     lire_types_intervention_custom,
     log_audit,
@@ -496,6 +498,22 @@ def post_modele_equipement(payload: dict = Body(...), user: dict = Depends(_veri
     return {"ok": True}
 
 
+@app.get("/api/services-equipement")
+def get_services_equipement(user: dict = Depends(_verify_token)):
+    return lire_services_equipement()
+
+
+@app.post("/api/services-equipement")
+def post_service_equipement(payload: dict = Body(...), user: dict = Depends(_verify_token)):
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    nom = str(payload.get("nom") or "").strip()
+    if not nom:
+        raise HTTPException(400, "Nom requis")
+    ajouter_service_equipement(nom)
+    return {"ok": True}
+
+
 @app.get("/api/types-equipement-custom")
 def get_types_equipement_custom(domaine: str = Query(""), user: dict = Depends(_verify_token)):
     return lire_types_equipement_custom(domaine)
@@ -678,6 +696,8 @@ __all__ = [
     "post_fabricant",
     "get_modeles_equipement",
     "post_modele_equipement",
+    "get_services_equipement",
+    "post_service_equipement",
     "get_types_equipement_custom",
     "post_type_equipement_custom",
     "get_types_intervention_custom",

@@ -392,6 +392,11 @@ export const modelesEquipement = {
     request<{ ok: boolean }>('/api/modeles-equipement', { method: 'POST', body: data }),
 };
 
+export const servicesEquipement = {
+  list: () => request<Array<{ id: number; nom: string }>>('/api/services-equipement'),
+  create: (nom: string) => request<{ ok: boolean }>('/api/services-equipement', { method: 'POST', body: { nom } }),
+};
+
 export const typesEquipement = {
   list: (domaine: string) => request<Array<{ id: number; nom: string; domaine: string }>>(`/api/types-equipement-custom?domaine=${encodeURIComponent(domaine)}`),
   create: (nom: string, domaine: string) => request<{ ok: boolean }>('/api/types-equipement-custom', { method: 'POST', body: { nom, domaine } }),
