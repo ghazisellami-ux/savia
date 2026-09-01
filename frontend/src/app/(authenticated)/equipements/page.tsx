@@ -204,8 +204,8 @@ export default function EquipementsPage() {
     Client: '', MatriculeFiscale: '', Notes: '', Statut: 'Opérationnel',
     Ville: '', Region: '', Service: '',
     GarantieDebut: '', GarantieDuree: 0,
-    DateInstallation: new Date().toISOString().split('T')[0],
-    DernieresMaintenance: new Date().toISOString().split('T')[0],
+    DateInstallation: '',
+    DernieresMaintenance: '',
   };
   const [form, setForm] = useState(emptyForm);
   const [fabricantsList, setFabricantsList] = useState<string[]>([]);
@@ -791,8 +791,8 @@ export default function EquipementsPage() {
       Ville: eq.ville || '',
       Region: eq.region || '',
       Statut: eq.statut || 'Opérationnel',
-      DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : new Date().toISOString().split('T')[0],
-      DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : new Date().toISOString().split('T')[0],
+      DateInstallation: eq.dateInstallation !== 'N/A' ? eq.dateInstallation : '',
+      DernieresMaintenance: eq.derniereMaintenance !== 'N/A' ? eq.derniereMaintenance : '',
       GarantieDebut: eq.garantieDebut || '',
       GarantieDuree: eq.garantieDuree || 0,
       Service: eq.service || '',
@@ -849,8 +849,6 @@ export default function EquipementsPage() {
       form.NumSerie.trim() &&
       form.Statut.trim() &&
       form.Service.trim() &&
-      form.DateInstallation &&
-      form.DernieresMaintenance &&
       (form.GarantieDuree === 0 || (form.GarantieDuree > 0 && Boolean(form.GarantieDebut)))
     );
   };
@@ -1482,14 +1480,14 @@ export default function EquipementsPage() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Calendar className="w-3.5 h-3.5" /> Date d&apos;installation *
+                          <Calendar className="w-3.5 h-3.5" /> Date d&apos;installation
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.DateInstallation}
                           onChange={e => setForm({ ...form, DateInstallation: e.target.value })} />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Settings className="w-3.5 h-3.5" /> Dernière maintenance *
+                          <Settings className="w-3.5 h-3.5" /> Dernière maintenance
                         </label>
                         <input type="date" className={INPUT_CLS} value={form.DernieresMaintenance}
                           onChange={e => setForm({ ...form, DernieresMaintenance: e.target.value })} />
