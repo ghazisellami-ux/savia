@@ -35,6 +35,8 @@ __all__ = [
     "ajouter_fabricant",
     "lire_modeles_equipement",
     "ajouter_modele_equipement",
+    "lire_services_equipement",
+    "ajouter_service_equipement",
     "lire_fournisseurs",
     "ajouter_fournisseur",
     "lire_types_equipement_custom",
@@ -688,6 +690,20 @@ def ajouter_modele_equipement(nom, domaine, type_equipement, fabricant):
                ON CONFLICT DO NOTHING""",
             values,
         )
+    return True
+
+
+def lire_services_equipement():
+    """Retourne les services personnalisés enregistrés."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, nom FROM services_equipement ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+def ajouter_service_equipement(nom):
+    """Ajoute un service au catalogue, sans doublon."""
+    with get_db() as conn:
+        conn.execute("INSERT INTO services_equipement (nom) VALUES (%s) ON CONFLICT DO NOTHING", (str(nom or "").strip(),))
     return True
 
 

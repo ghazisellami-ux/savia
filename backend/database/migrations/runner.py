@@ -684,6 +684,25 @@ def _migration_017_equipment_model_catalog(conn) -> None:
     )
 
 
+def _migration_018_equipment_service_catalog(conn) -> None:
+    """Persist custom equipment services for reuse in the equipment form."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS services_equipement (
+               id BIGSERIAL PRIMARY KEY,
+               nom TEXT NOT NULL UNIQUE,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO services_equipement (nom)
+           SELECT DISTINCT BTRIM(service)
+           FROM equipements
+           WHERE NULLIF(BTRIM(service), '') IS NOT NULL
+             AND LOWER(BTRIM(service)) <> 'autre'
+           ON CONFLICT DO NOTHING"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -702,6 +721,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("015", "public market action history", _migration_015_public_market_history),
     ("016", "allow duplicate equipment names", _migration_016_allow_duplicate_equipment_names),
     ("017", "equipment model catalog", _migration_017_equipment_model_catalog),
+    ("018", "equipment service catalog", _migration_018_equipment_service_catalog),
 )
 
 

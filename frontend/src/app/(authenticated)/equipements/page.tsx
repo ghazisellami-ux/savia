@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal, History,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, modelesEquipement as modelesApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
+import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, modelesEquipement as modelesApi, servicesEquipement as servicesApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 import { COUNTRIES, DEFAULT_COUNTRY, cityCoordinates, countryCities, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
@@ -211,6 +211,8 @@ export default function EquipementsPage() {
   const [form, setForm] = useState(emptyForm);
   const [fabricantsList, setFabricantsList] = useState<string[]>([]);
   const [customFabricant, setCustomFabricant] = useState(false);
+  const [servicesList, setServicesList] = useState<string[]>([]);
+  const [customService, setCustomService] = useState(false);
   const [modelesList, setModelesList] = useState<string[]>([]);
   const [customModele, setCustomModele] = useState(false);
   const [modelesLoading, setModelesLoading] = useState(false);
@@ -230,6 +232,14 @@ export default function EquipementsPage() {
     : form.Domaine;
 
   const SERVICES = ['Réanimation', 'Urgence', 'Radiologie', 'Bloc opératoire', 'Laboratoire', 'Cardiologie', 'Maternité', 'Autre'];
+  const serviceOptions = useMemo(
+    () => Array.from(new Set([
+      ...SERVICES.filter(service => service !== 'Autre'),
+      ...servicesList,
+      ...(editingEquip?.service ? [editingEquip.service] : []),
+    ])).sort(),
+    [servicesList, editingEquip],
+  );
 
   // Types list based on domain + annexe state + custom types
   const availableTypes = useMemo(() => {
@@ -502,6 +512,13 @@ export default function EquipementsPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadServices = useCallback(async () => {
+    try {
+      const res = await servicesApi.list();
+      setServicesList(res.map(service => service.nom).filter(Boolean));
+    } catch { /* ignore */ }
+  }, []);
+
   const loadModeles = useCallback(async (domaine: string, type: string, fabricant: string) => {
     if (!domaine.trim() || !type.trim() || !fabricant.trim()) {
       setModelesList([]);
@@ -620,6 +637,7 @@ export default function EquipementsPage() {
     const init = async () => {
       await loadData();
       await loadFabricants();
+      await loadServices();
       await loadCustomDomaines();
       await loadCustomTypes();
     };
@@ -853,6 +871,7 @@ export default function EquipementsPage() {
       setCustomDomaineValue('');
     }
     setCustomModele(false);
+    setCustomService(false);
     
     // If fabricant not in list, enable custom mode
     if (eq.marque && !fabricantsList.includes(eq.marque)) {
@@ -864,7 +883,7 @@ export default function EquipementsPage() {
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
-  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); setCustomModele(false); };
+  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); setCustomModele(false); setCustomService(false); };
 
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -933,6 +952,11 @@ export default function EquipementsPage() {
           console.error('Erreur sauvegarde modèle:', err);
         }
       }
+      if (form.Service.trim() && !SERVICES.includes(form.Service.trim())) {
+        try { await servicesApi.create(form.Service.trim()); await loadServices(); } catch (err) {
+          console.error('Erreur sauvegarde service:', err);
+        }
+      }
 
       let targetEquipId: number | null = null;
       if (editingEquip) {
@@ -955,6 +979,7 @@ export default function EquipementsPage() {
       setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
       setCustomModele(false);
+      setCustomService(false);
       setCustomTypeMode(false); setCustomTypeValue('');
       setCustomDomaineMode(false); setCustomDomaineValue('');
       // Auto-save fabricant if new
@@ -1613,10 +1638,45 @@ export default function EquipementsPage() {
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Stethoscope className="w-3.5 h-3.5" /> Service *
                         </label>
-                        <select className={INPUT_CLS} value={form.Service} onChange={e => setForm({ ...form, Service: e.target.value })}>
-                          <option value="">— Sélectionner —</option>
-                          {SERVICES.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
+                        {customService ? (
+                          <div className="flex gap-2">
+                            <input className={INPUT_CLS} placeholder="Nom du service..." value={form.Service}
+                              onChange={e => setForm({ ...form, Service: e.target.value })} autoFocus />
+                            <button type="button" disabled={!form.Service.trim()}
+                              onClick={async () => {
+                                const service = form.Service.trim();
+                                if (!service) return;
+                                try {
+                                  await servicesApi.create(service);
+                                  await loadServices();
+                                  setForm(current => ({ ...current, Service: service }));
+                                  setCustomService(false);
+                                } catch (err) {
+                                  console.error('Erreur sauvegarde service:', err);
+                                }
+                              }}
+                              className="px-3 py-2 rounded-lg bg-savia-accent/20 text-savia-accent text-xs whitespace-nowrap hover:bg-savia-accent/30 disabled:opacity-50 cursor-pointer">
+                              <Save className="w-3.5 h-3.5" />
+                            </button>
+                            <button type="button" onClick={() => { setCustomService(false); setForm(current => ({ ...current, Service: '' })); }}
+                              className="px-3 py-2 rounded-lg bg-red-600/20 text-red-400 text-xs whitespace-nowrap hover:bg-red-600/30 cursor-pointer">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <select className={INPUT_CLS} value={form.Service} onChange={e => {
+                            if (e.target.value === '__autre_service__') {
+                              setCustomService(true);
+                              setForm(current => ({ ...current, Service: '' }));
+                            } else {
+                              setForm(current => ({ ...current, Service: e.target.value }));
+                            }
+                          }}>
+                            <option value="">— Sélectionner —</option>
+                            {serviceOptions.map(service => <option key={service} value={service}>{service}</option>)}
+                            <option value="__autre_service__">+ Autre (saisie manuelle)</option>
+                          </select>
+                        )}
                       </div>
                       <div className="md:col-span-2">
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
