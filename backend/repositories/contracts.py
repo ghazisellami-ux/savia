@@ -7,7 +7,12 @@ from datetime import datetime
 import pandas as pd
 
 from database.core import _trigger_backup, get_db, read_sql
-from repositories.equipment_status import WORKSHOP_TRANSFER_STATUS, synchroniser_statut_equipement
+from repositories.equipment_status import (
+    WORKSHOP_TRANSFER_STATUS,
+    retour_site_confirmation_requise,
+    synchroniser_statut_equipement,
+)
+from services.contract_billing import assess_intervention_contract_coverage_in_savepoint
 
 logger = logging.getLogger("db_engine")
 
@@ -624,15 +629,16 @@ def cloturer_intervention(
 
     with get_db() as conn:
         intervention_state = conn.execute(
-            """SELECT date_transfert_atelier, retour_site_confirme
+            """SELECT statut, date_transfert_atelier, retour_site_confirme
                FROM interventions WHERE id = %s FOR UPDATE""",
             (intervention_id,),
         ).fetchone()
         if not intervention_state:
             return False, "Intervention non trouvée."
 
-        retour_requis = bool(intervention_state.get("date_transfert_atelier")) and not bool(
-            intervention_state.get("retour_site_confirme")
+        retour_requis = retour_site_confirmation_requise(
+            intervention_state.get("statut"),
+            intervention_state.get("retour_site_confirme"),
         )
         if retour_requis and retour_site_confirme is not True:
             return False, (
@@ -754,6 +760,15 @@ def cloturer_intervention(
         synchroniser_statut_equipement(conn, intervention_id, "Cloturee")
 
         _mark_linked_planning_closed(conn, intervention_id, date_cloture[:10])
+
+        # Preserve the technical cost while deciding the customer-billable
+        # share from the contract linked to this scheduled intervention.
+        try:
+            assess_intervention_contract_coverage_in_savepoint(conn, intervention_id)
+        except Exception as exc:
+            # Contract assessment must never prevent the operational closure;
+            # unresolved cases are assessed again when billing is opened.
+            logger.exception("Contract coverage assessment failed for intervention #%s: %s", intervention_id, exc)
 
         # 3. Récupérer le code erreur associé pour l'auto-apprentissage
         row = conn.execute(f"SELECT code_erreur, type_intervention, type_erreur FROM interventions WHERE id={ph}", (intervention_id,)).fetchone()

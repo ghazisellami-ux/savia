@@ -619,7 +619,13 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        "SELECT machine, technicien, probleme, cause, solution, duree_minutes, duree_deplacement, notes, pieces_utilisees FROM interventions WHERE id = %s",
+                        """SELECT i.machine, i.technicien, i.probleme, i.cause, i.solution,
+                                  i.duree_minutes, i.duree_deplacement, i.notes, i.pieces_utilisees,
+                                  bc.coverage_status, bc.coverage_reason,
+                                  bc.contract_id
+                           FROM interventions i
+                           LEFT JOIN billing_cases bc ON bc.intervention_id=i.id
+                           WHERE i.id = %s""",
                         (intervention_id,)
                     ).fetchone()
                 if row:
@@ -672,17 +678,28 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
                     send_telegram_reliably("telegram", msg_tg, operation_id)
-                    # Notification SAV : intervention clôturée → à facturer
+                    coverage_status = str(d.get('coverage_status') or 'unassessed')
+                    coverage_meta = {
+                        'covered': ('Couvert par contrat — aucune facture', '✅'),
+                        'partial': ('Partiellement facturable', '🟠'),
+                        'billable': ('À facturer', '📋'),
+                        'review': ('Couverture contractuelle à vérifier', '⚠️'),
+                        'unassessed': ('Couverture à évaluer', '⚠️'),
+                    }
+                    coverage_label, coverage_icon = coverage_meta.get(coverage_status, coverage_meta['unassessed'])
+                    contract_line = f"\n📄 Contrat : <b>#{d.get('contract_id')}</b>" if d.get('contract_id') else ""
+                    # Notification SAV alignée sur la décision contractuelle.
                     msg_sav = (
-                        f"📋 <b>Intervention Clôturée — À facturer</b>\n\n"
+                        f"{coverage_icon} <b>Intervention clôturée — {coverage_label}</b>\n\n"
                         f"🔧 Intervention <b>#{intervention_id}</b>\n"
                         f"🏥 Machine : <b>{d.get('machine', '')}</b>"
                         f"{client_line}\n"
                         f"👷 Technicien : {d.get('technicien', '')}\n"
                         f"⏱️ Durée : {duree_h}h"
                         f"\n\U0001f697 D\u00e9placement : {deplacement_h}h"
-                        f"{pieces_line}\n\n"
-                        f"💰 <i>Dossier disponible dans le module Suivi Facturation</i>\n"
+                        f"{pieces_line}"
+                        f"{contract_line}\n"
+                        f"ℹ️ <i>{d.get('coverage_reason') or 'Dossier disponible dans le module Suivi Facturation'}</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
                     send_telegram_reliably("telegram_sav", msg_sav, operation_id)

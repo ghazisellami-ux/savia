@@ -3,6 +3,7 @@ from repositories.equipment_status import (
     EQUIPMENT_OPERATIONAL,
     EQUIPMENT_WORKSHOP,
     calculer_nouveau_statut_equipement,
+    retour_site_confirmation_requise,
 )
 
 
@@ -60,3 +61,14 @@ def test_manual_out_of_service_status_is_never_overridden_automatically():
         calculer_nouveau_statut_equipement("Hors Service", "Cloturee")
         == "Hors Service"
     )
+
+
+def test_site_return_confirmation_is_required_only_from_workshop_transfer():
+    assert retour_site_confirmation_requise("Transfert vers l'atelier") is True
+    assert retour_site_confirmation_requise("En cours") is False
+    assert retour_site_confirmation_requise("En attente de piece") is False
+    assert retour_site_confirmation_requise("Cloturee") is False
+
+
+def test_site_return_confirmation_is_not_repeated_once_confirmed():
+    assert retour_site_confirmation_requise("Transfert vers l'atelier", True) is False

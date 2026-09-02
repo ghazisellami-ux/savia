@@ -18,6 +18,10 @@ from services.billing_tracking import (
     current_stage_age_days,
     invoice_is_overdue,
 )
+from services.contract_billing import (
+    COVERAGE_LABELS,
+    assess_intervention_contract_coverage,
+)
 
 
 BILLING_ROLES = ("Admin", "Manager", "Responsable Technique", "Gestionnaire")
@@ -137,6 +141,11 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
                    COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), e.client, '') AS client,
                    COALESCE(NULLIF(bc.equipment, ''), i.machine, '') AS equipment,
                    bc.owner_username, bc.currency, bc.case_state, bc.block_reason,
+                   bc.contract_id, bc.coverage_status, bc.coverage_reason,
+                   COALESCE(bc.uncovered_labor_cost, 0) AS uncovered_labor_cost,
+                   COALESCE(bc.uncovered_parts_cost, 0) AS uncovered_parts_cost,
+                   COALESCE(bc.uncovered_total_cost, 0) AS uncovered_total_cost,
+                   bc.coverage_details, bc.coverage_assessed_at,
                    bc.created_by, bc.created_at, bc.updated_by, bc.updated_at,
                    i.statut AS intervention_status, i.technicien,
                    i.date AS intervention_date,
@@ -156,6 +165,8 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
                    i.start_time::text AS intervention_start_time,
                    i.end_time::text AS intervention_end_time,
                    i.pieces_utilisees, COALESCE(i.cout_pieces, 0) AS parts_amount,
+                   COALESCE(i.cout, 0) AS labor_amount,
+                   c.type_contrat AS contract_type,
                    COALESCE((
                        SELECT jsonb_agg(
                            jsonb_build_object(
@@ -174,6 +185,7 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
             LEFT JOIN interventions i ON i.id = bc.intervention_id
             LEFT JOIN equipements e
               ON LOWER(e.nom) = LOWER(i.machine) AND LOWER(e.client) = LOWER(i.client)
+            LEFT JOIN contrats c ON c.id=bc.contract_id
             {where}
             ORDER BY bc.updated_at DESC, bc.id DESC""",
         params,
@@ -225,6 +237,7 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             intervention_closed_at=item.get("intervention_closed_at"),
             intervention_status=item.get("intervention_status") or "",
             has_parts=bool(item.get("has_parts")),
+            coverage_status=item.get("coverage_status") or "unassessed",
         )
         overdue = invoice_is_overdue(invoice, remaining, today)
         due_date = _parse_date((invoice or {}).get("due_date"), "date d'échéance")
@@ -236,6 +249,10 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "remaining_amount": float(remaining),
             "status": status,
             "status_label": STATUS_LABELS[status],
+            "coverage_status_label": COVERAGE_LABELS.get(
+                item.get("coverage_status") or "unassessed",
+                COVERAGE_LABELS["unassessed"],
+            ),
             "next_step": NEXT_STEP[status],
             "overdue": overdue,
             "overdue_days": (today - due_date).days if overdue and due_date else 0,
@@ -309,6 +326,22 @@ def _sync_missing_intervention_cases(conn) -> None:
     )
 
 
+def _sync_contract_coverage(conn) -> None:
+    """Assess legacy and unresolved closed interventions lazily and safely."""
+    rows = conn.execute(
+        """SELECT bc.intervention_id
+           FROM billing_cases bc
+           JOIN interventions i ON i.id=bc.intervention_id
+           WHERE i.statut IN ('Cloturee', 'Clôturée')
+             AND bc.merged_into_case_id IS NULL
+             AND (bc.coverage_assessed_at IS NULL OR bc.coverage_status IN ('unassessed', 'review'))
+           ORDER BY i.date_cloture DESC NULLS LAST
+           LIMIT 500"""
+    ).fetchall()
+    for row in rows:
+        assess_intervention_contract_coverage(conn, int(row["intervention_id"]))
+
+
 @app.get("/api/billing/cases")
 def list_billing_cases(
     status: Optional[str] = None,
@@ -319,6 +352,7 @@ def list_billing_cases(
     require_roles(user, *BILLING_ROLES)
     with get_db() as conn:
         _sync_missing_intervention_cases(conn)
+        _sync_contract_coverage(conn)
         cases = _hydrate_cases(conn, _load_rows(conn))
     if status:
         cases = [item for item in cases if item["status"] == status]
@@ -343,6 +377,21 @@ def get_billing_case(case_id: int, user: dict = Depends(_verify_token)):
     require_roles(user, *BILLING_ROLES)
     with get_db() as conn:
         return _load_case(conn, case_id)
+
+
+@app.post("/api/billing/cases/{case_id}/reassess-coverage")
+def reassess_billing_coverage(case_id: int, user: dict = Depends(_verify_token)):
+    """Recalculate coverage after a contract or intervention correction."""
+    require_roles(user, *BILLING_ROLES)
+    actor = _username(user)
+    with get_db() as conn:
+        case = _load_case(conn, case_id)
+        if not case.get("intervention_id"):
+            raise HTTPException(status_code=409, detail="Associez d'abord une intervention au dossier")
+        assess_intervention_contract_coverage(conn, int(case["intervention_id"]), actor=actor)
+        result = _load_case(conn, case_id)
+    log_audit(actor, "REASSESS_CONTRACT_COVERAGE", json.dumps({"case_id": case_id}), "facturation")
+    return result
 
 
 @app.post("/api/billing/cases")
@@ -757,7 +806,11 @@ def upsert_billing_step(case_id: int, step_type: str, body: dict = Body(...), us
     reference = str(body.get("reference") or "").strip()
     reason = str(body.get("change_reason") or "").strip()
     with get_db() as conn:
-        _load_case(conn, case_id)
+        case = _load_case(conn, case_id)
+        if step_type == "invoice" and case.get("coverage_status") == "covered":
+            raise HTTPException(status_code=409, detail="Cette intervention est entièrement couverte par le contrat")
+        if step_type == "invoice" and case.get("coverage_status") == "review":
+            raise HTTPException(status_code=409, detail="Vérifiez la couverture contractuelle avant de facturer")
         _validate_step_dates(conn, case_id, step_type, effective_date, due_date)
         existing_row = conn.execute(
             "SELECT * FROM billing_steps WHERE case_id=%s AND step_type=%s",
@@ -928,6 +981,7 @@ __all__ = [
     "list_billing_responsibles",
     "list_billing_cases",
     "get_billing_case",
+    "reassess_billing_coverage",
     "create_billing_case",
     "update_billing_case",
     "upsert_billing_step",

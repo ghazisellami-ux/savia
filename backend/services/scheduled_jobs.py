@@ -417,15 +417,17 @@ def check_facturation_reminders():
         with get_db() as conn:
             # Interventions clôturées avec date_cloture, non encore facturées
             rows = conn.execute(
-                """SELECT id, machine, technicien, type_intervention,
-                          date_cloture, notes,
-                          COALESCE(facture_envoyee, FALSE) as facture_envoyee,
-                          COALESCE(rappel_facture_envoye, 0) as rappel_facture_envoye
-                   FROM interventions
-                   WHERE statut = 'Cloturee'
-                     AND date_cloture IS NOT NULL
-                     AND COALESCE(facture_envoyee, FALSE) = FALSE
-                   ORDER BY date_cloture ASC"""
+                """SELECT i.id, i.machine, i.technicien, i.type_intervention,
+                          i.date_cloture, i.notes,
+                          COALESCE(i.facture_envoyee, FALSE) as facture_envoyee,
+                          COALESCE(i.rappel_facture_envoye, 0) as rappel_facture_envoye
+                   FROM interventions i
+                   LEFT JOIN billing_cases bc ON bc.intervention_id=i.id
+                   WHERE i.statut = 'Cloturee'
+                     AND i.date_cloture IS NOT NULL
+                     AND COALESCE(i.facture_envoyee, FALSE) = FALSE
+                     AND COALESCE(bc.coverage_status, 'unassessed') IN ('unassessed', 'partial', 'billable')
+                   ORDER BY i.date_cloture ASC"""
             ).fetchall()
 
         for row in rows:

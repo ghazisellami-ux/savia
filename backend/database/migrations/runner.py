@@ -703,6 +703,34 @@ def _migration_018_equipment_service_catalog(conn) -> None:
     )
 
 
+def _migration_019_contract_billing_coverage(conn) -> None:
+    """Persist the contractual share of every intervention billing case."""
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS contract_id INTEGER NULL REFERENCES contrats(id) ON DELETE SET NULL")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS coverage_status TEXT NOT NULL DEFAULT 'unassessed'")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS coverage_reason TEXT NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS uncovered_labor_cost NUMERIC(14, 3) NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS uncovered_parts_cost NUMERIC(14, 3) NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS uncovered_total_cost NUMERIC(14, 3) NOT NULL DEFAULT 0")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS coverage_details JSONB NOT NULL DEFAULT '{}'::jsonb")
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS coverage_assessed_at TIMESTAMPTZ NULL")
+    _add_check_constraint(
+        conn,
+        "billing_cases_coverage_status_check",
+        """ALTER TABLE billing_cases
+           ADD CONSTRAINT billing_cases_coverage_status_check
+           CHECK (coverage_status IN ('unassessed', 'covered', 'partial', 'billable', 'review')) NOT VALID""",
+    )
+    _add_check_constraint(
+        conn,
+        "billing_cases_uncovered_costs_check",
+        """ALTER TABLE billing_cases
+           ADD CONSTRAINT billing_cases_uncovered_costs_check
+           CHECK (uncovered_labor_cost >= 0 AND uncovered_parts_cost >= 0 AND uncovered_total_cost >= 0) NOT VALID""",
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_cases_contract ON billing_cases(contract_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_cases_coverage ON billing_cases(coverage_status, updated_at DESC)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -722,6 +750,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("016", "allow duplicate equipment names", _migration_016_allow_duplicate_equipment_names),
     ("017", "equipment model catalog", _migration_017_equipment_model_catalog),
     ("018", "equipment service catalog", _migration_018_equipment_service_catalog),
+    ("019", "contract billing coverage", _migration_019_contract_billing_coverage),
 )
 
 

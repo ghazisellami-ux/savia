@@ -18,6 +18,7 @@ def status(**overrides):
         "intervention_closed_at": None,
         "intervention_status": "",
         "has_parts": False,
+        "coverage_status": "unassessed",
     }
     values.update(overrides)
     return compute_case_status(**values)
@@ -44,6 +45,12 @@ def test_blocked_and_cancelled_cases_override_progress():
     invoice = {"id": 3, "amount": 1000}
     assert status(case_state="blocked", steps={"invoice": invoice}, paid_amount=1000) == "blocked"
     assert status(case_state="cancelled") == "cancelled"
+
+
+def test_contract_coverage_stops_the_invoice_workflow_until_resolved():
+    assert status(intervention_closed_at="2026-08-03", coverage_status="covered") == "covered_by_contract"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="review") == "coverage_review"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="partial") == "invoice_pending"
 
 
 def test_lead_times_cover_the_full_quote_to_payment_cycle():
@@ -101,3 +108,10 @@ def test_merged_billing_cases_migration_is_registered():
 
     assert len(merged_case_migrations) == 1
     assert "merged billing cases" in merged_case_migrations[0][1]
+
+
+def test_contract_billing_coverage_migration_is_registered():
+    coverage_migrations = [migration for migration in MIGRATIONS if migration[0] == "019"]
+
+    assert len(coverage_migrations) == 1
+    assert "contract billing coverage" in coverage_migrations[0][1]

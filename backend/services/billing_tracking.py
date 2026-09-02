@@ -19,6 +19,8 @@ STATUS_LABELS = {
     "payment_pending": "Facture envoyée — paiement attendu",
     "partial_payment": "Paiement partiel",
     "paid": "Payé",
+    "covered_by_contract": "Couvert par contrat",
+    "coverage_review": "Couverture à vérifier",
     "blocked": "Bloqué",
     "cancelled": "Annulé",
 }
@@ -33,6 +35,8 @@ NEXT_STEP = {
     "payment_pending": "payment",
     "partial_payment": "payment",
     "paid": None,
+    "covered_by_contract": None,
+    "coverage_review": None,
     "blocked": None,
     "cancelled": None,
 }
@@ -71,6 +75,7 @@ def compute_case_status(
     intervention_closed_at: Any,
     intervention_status: str,
     has_parts: bool,
+    coverage_status: str = "unassessed",
 ) -> str:
     """Return the furthest reliable business state without trusting UI input."""
     if case_state == "blocked":
@@ -87,6 +92,11 @@ def compute_case_status(
         if paid > 0:
             return "partial_payment"
         return "payment_pending"
+
+    if coverage_status == "covered":
+        return "covered_by_contract"
+    if coverage_status == "review":
+        return "coverage_review"
 
     closed = bool(_as_date(intervention_closed_at)) or any(
         token in str(intervention_status or "").casefold()

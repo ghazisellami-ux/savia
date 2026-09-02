@@ -544,6 +544,8 @@ export const billing = {
     return request<Array<Record<string, unknown>>>(`/api/billing/cases${qs ? `?${qs}` : ''}`);
   },
   get: (caseId: number) => request<Record<string, unknown>>(`/api/billing/cases/${caseId}`),
+  reassessCoverage: (caseId: number) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/reassess-coverage`, { method: 'POST' }),
   create: (data: Record<string, unknown>) =>
     request<Record<string, unknown>>('/api/billing/cases', { method: 'POST', body: data }),
   updateCase: (caseId: number, data: Record<string, unknown>) =>
