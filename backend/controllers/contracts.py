@@ -68,9 +68,11 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
             try:
                 equipements = get_contract_equipements(contrat_id)
                 record["equipements"] = equipements if equipements else []
+                record["equipement_ids"] = [equipment["id"] for equipment in equipements]
             except Exception as e:
                 logger.debug(f"Could not get equipements for contract {contrat_id}: {e}")
                 record["equipements"] = []
+                record["equipement_ids"] = []
     
     return records
 

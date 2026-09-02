@@ -162,7 +162,7 @@ def lire_contrats(client=None):
     return df
 
 def get_contract_equipements(contrat_id):
-    """Récupère tous les équipements d'un contrat (utilise equipement_id)."""
+    """Récupère les équipements d'un contrat avec leurs détails d'identification."""
     with get_db() as conn:
         ph = "%s"
         
@@ -171,7 +171,8 @@ def get_contract_equipements(contrat_id):
             contrat_id = int(contrat_id)
             
             rows = conn.execute(
-                f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                f"""SELECT e.id, e.nom, e.type, e.fabricant, e.modele, e.num_serie
+                    FROM contrats_equipements ce
                     JOIN equipements e ON ce.equipement_id = e.id
                     WHERE ce.contrat_id = {ph}
                     ORDER BY ce.id""",
@@ -179,7 +180,18 @@ def get_contract_equipements(contrat_id):
             ).fetchall()
             
             if rows:
-                equipements = [dict(row)["equipement_nom"] for row in rows if dict(row).get("equipement_nom")]
+                equipements = [
+                    {
+                        "id": row["id"],
+                        "nom": row["nom"],
+                        "type": row.get("type") or "",
+                        "fabricant": row.get("fabricant") or "",
+                        "modele": row.get("modele") or "",
+                        "num_serie": row.get("num_serie") or "",
+                    }
+                    for row in rows
+                    if row.get("nom")
+                ]
                 logger.debug(f"Retrieved {len(equipements)} equipment(s) for contract {contrat_id}")
                 return equipements
             
@@ -188,6 +200,63 @@ def get_contract_equipements(contrat_id):
         except Exception as e:
             logger.error(f"Error retrieving equipements for contract {contrat_id}: {e}")
             return []
+
+def _contract_equipment_ids(values):
+    """Parse equipment IDs sent by the current UI while tolerating legacy payloads."""
+    if isinstance(values, (str, int)):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+    result = []
+    for value in values:
+        try:
+            equipment_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if equipment_id > 0 and equipment_id not in result:
+            result.append(equipment_id)
+    return result
+
+
+def _resolve_contract_equipment_rows(conn, contrat_dict):
+    """Resolve exact equipment IDs, with name-based fallback for old clients."""
+    equipment_ids = _contract_equipment_ids(contrat_dict.get("equipement_ids"))
+    client = str(contrat_dict.get("client") or "").strip()
+    if equipment_ids:
+        rows = conn.execute(
+            """SELECT id, nom FROM equipements
+               WHERE id = ANY(%s)
+                 AND LOWER(TRIM(client)) = LOWER(TRIM(%s))""",
+            (equipment_ids, client),
+        ).fetchall()
+        rows_by_id = {int(row["id"]): row for row in rows}
+        missing = [equipment_id for equipment_id in equipment_ids if equipment_id not in rows_by_id]
+        if missing:
+            raise ValueError(f"Équipement(s) introuvable(s) pour ce client : {', '.join(map(str, missing))}")
+        return [(equipment_id, rows_by_id[equipment_id]["nom"]) for equipment_id in equipment_ids]
+
+    names = contrat_dict.get("equipements", [])
+    if isinstance(names, str):
+        names = [names] if names else []
+    elif not isinstance(names, list):
+        names = []
+    if not names:
+        single_name = contrat_dict.get("equipement", "")
+        if single_name:
+            names = [single_name]
+
+    resolved = []
+    for name in names:
+        if not name:
+            continue
+        row = conn.execute(
+            """SELECT id, nom FROM equipements
+               WHERE nom = %s AND LOWER(TRIM(client)) = LOWER(TRIM(%s))
+               ORDER BY id LIMIT 1""",
+            (name, client),
+        ).fetchone()
+        resolved.append((int(row["id"]) if row else None, name))
+    return resolved
 
 def ajouter_contrat(contrat_dict):
     """
@@ -200,18 +269,8 @@ def ajouter_contrat(contrat_dict):
     Stocke aussi les pièces incluses en JSON si avec_pieces=true
     """
     with get_db() as conn:
-        # Extract equipments (support both single and multiple)
-        equipements = contrat_dict.get("equipements", [])
-        if isinstance(equipements, str):
-            equipements = [equipements] if equipements else []
-        elif not isinstance(equipements, list):
-            equipements = []
-        
-        # For backward compatibility, also check for singular "equipement"
-        if not equipements:
-            single_eq = contrat_dict.get("equipement", "")
-            if single_eq:
-                equipements = [single_eq]
+        equipment_rows = _resolve_contract_equipment_rows(conn, contrat_dict)
+        equipements = [name for _, name in equipment_rows]
         
         # Store first equipment in main table for backward compatibility
         first_equipment = equipements[0] if equipements else ""
@@ -270,21 +329,12 @@ def ajouter_contrat(contrat_dict):
         # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
         logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
         
-        for eq in equipements:
+        for eq_id, eq in equipment_rows:
             if eq:  # Only insert non-empty equipments
                 try:
-                    ph = "%s"
-                    
-                    # Get equipement ID from equipements table
-                    eq_row = conn.execute(
-                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
-                        (eq,)
-                    ).fetchone()
-                    eq_id = eq_row["id"] if eq_row else None
-                    
                     if eq_id:
                         conn.execute(
-                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            "INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (contrat_id, eq_id)
                         )
                         logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")
@@ -432,18 +482,8 @@ def generer_planning_from_contrat(contrat_id):
 def modifier_contrat(contrat_id, contrat_dict):
     """Modifie un contrat existant et ses équipements."""
     with get_db() as conn:
-        # Extract equipments (support both single and multiple)
-        equipements = contrat_dict.get("equipements", [])
-        if isinstance(equipements, str):
-            equipements = [equipements] if equipements else []
-        elif not isinstance(equipements, list):
-            equipements = []
-        
-        # For backward compatibility, also check for singular "equipement"
-        if not equipements:
-            single_eq = contrat_dict.get("equipement", "")
-            if single_eq:
-                equipements = [single_eq]
+        equipment_rows = _resolve_contract_equipment_rows(conn, contrat_dict)
+        equipements = [name for _, name in equipment_rows]
         
         # Store first equipment in main table for backward compatibility
         first_equipment = equipements[0] if equipements else ""
@@ -485,21 +525,12 @@ def modifier_contrat(contrat_id, contrat_dict):
         # PostgreSQL only: contrats_equipements(contrat_id, equipement_id)
         logger.info(f"Inserting {len(equipements)} equipment(s) for contrat {contrat_id}: {equipements}")
         
-        for eq in equipements:
+        for eq_id, eq in equipment_rows:
             if eq:  # Only insert non-empty equipments
                 try:
-                    ph = "%s"
-                    
-                    # Get equipement ID from equipements table
-                    eq_row = conn.execute(
-                        f"SELECT id FROM equipements WHERE nom = {ph} LIMIT 1",
-                        (eq,)
-                    ).fetchone()
-                    eq_id = eq_row["id"] if eq_row else None
-                    
                     if eq_id:
                         conn.execute(
-                            f"INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES ({ph}, {ph}) ON CONFLICT DO NOTHING",
+                            "INSERT INTO contrats_equipements (contrat_id, equipement_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (contrat_id, eq_id)
                         )
                         logger.info(f"✅ Equipment '{eq}' (ID: {eq_id}) inserted for contrat {contrat_id}")

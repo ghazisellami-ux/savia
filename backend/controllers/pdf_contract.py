@@ -39,6 +39,7 @@ from controllers.report_helpers import (
     SaviaPDF,
     _sanitize,
 )
+from repositories.contracts import get_contract_equipements
 
 @app.post("/api/contrats/{contrat_id}/contrat-pdf")
 def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
@@ -129,24 +130,31 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             except Exception as e:
                 logger.debug(f"Client lookup failed: {e}")
 
-        # ── Equipment details (optional) ──
-        equip_marque = ""
-        equip_modele = ""
-        equip_serie = ""
-        equip_type = ""
-        if equipement:
+        # ── Equipment details (including all equipment linked to the contract) ──
+        equipements_contrat = []
+        try:
+            equipements_contrat = get_contract_equipements(contrat_id)
+        except Exception as e:
+            logger.debug(f"Contract equipment lookup failed: {e}")
+        if not equipements_contrat and equipement:
+            # Legacy contracts may only have the denormalized name column.
             try:
                 df_equip = lire_equipements()
                 if not df_equip.empty and "Nom" in df_equip.columns:
-                    eq_match = df_equip[df_equip["Nom"].str.strip() == equipement.strip()]
+                    eq_match = df_equip[df_equip["Nom"].astype(str).str.strip() == equipement.strip()]
                     if not eq_match.empty:
                         eq = eq_match.iloc[0].to_dict()
-                        equip_marque = str(eq.get("Marque", "") or eq.get("marque", "") or "")
-                        equip_modele = str(eq.get("Modele", "") or eq.get("modele", "") or "")
-                        equip_serie = str(eq.get("NumSerie", "") or eq.get("num_serie", "") or "")
-                        equip_type = str(eq.get("Type", "") or eq.get("type", "") or "")
+                        equipements_contrat = [{
+                            "nom": equipement,
+                            "fabricant": eq.get("Marque", "") or eq.get("marque", ""),
+                            "modele": eq.get("Modele", "") or eq.get("modele", ""),
+                            "num_serie": eq.get("NumSerie", "") or eq.get("num_serie", ""),
+                            "type": eq.get("Type", "") or eq.get("type", ""),
+                        }]
             except Exception as e:
                 logger.debug(f"Equipment lookup failed: {e}")
+        if equipements_contrat:
+            equipement = str(equipements_contrat[0].get("nom", "") or equipement)
 
         # ── Company / prestataire info ──
         company_name = body.get("company_name", "SAVIA") or "SAVIA"
@@ -315,20 +323,41 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
             f"le Prestataire assure, au profit du Client, la maintenance de type \u00ab {type_contrat} \u00bb"
         )
         if equipement:
-            intro_obj += " portant sur l'\u00e9quipement d\u00e9sign\u00e9 ci-dessous."
+            intro_obj += (
+                " portant sur les \u00e9quipements d\u00e9sign\u00e9s ci-dessous."
+                if len(equipements_contrat) > 1
+                else " portant sur l'\u00e9quipement d\u00e9sign\u00e9 ci-dessous."
+            )
         else:
             intro_obj += " sur l'ensemble des \u00e9quipements d\u00e9clar\u00e9s par le Client."
         body_text(intro_obj)
 
         if equipement:
             pdf.ln(1)
-            kv_line("D\u00e9signation", equipement)
-            if equip_type:
-                kv_line("Type", equip_type)
-            if equip_marque or equip_modele:
-                kv_line("Marque / Mod\u00e8le", f"{equip_marque} {equip_modele}".strip() or "-")
-            if equip_serie:
-                kv_line("N\u00b0 de s\u00e9rie", equip_serie)
+            for index, equipment in enumerate(equipements_contrat or [{"nom": equipement}]):
+                equipment_name = str(equipment.get("nom", "") or equipement)
+                equipment_type = str(equipment.get("type", "") or equipment.get("Type", "") or "")
+                equipment_manufacturer = str(
+                    equipment.get("fabricant", "") or equipment.get("Marque", "") or ""
+                )
+                equipment_model = str(equipment.get("modele", "") or equipment.get("Modele", "") or "")
+                equipment_serial = str(
+                    equipment.get("num_serie", "") or equipment.get("NumSerie", "") or ""
+                )
+                if index > 0:
+                    pdf.ln(1)
+                if len(equipements_contrat) > 1:
+                    pdf.set_font("Helvetica", "B", 9)
+                    pdf.set_text_color(15, 118, 110)
+                    pdf.cell(W, 5, _sanitize(f"\u00c9quipement {index + 1}"))
+                    pdf.ln(5)
+                kv_line("D\u00e9signation", equipment_name)
+                if equipment_type:
+                    kv_line("Type", equipment_type)
+                if equipment_manufacturer or equipment_model:
+                    kv_line("Marque / Mod\u00e8le", f"{equipment_manufacturer} {equipment_model}".strip() or "-")
+                if equipment_serial:
+                    kv_line("N\u00b0 de s\u00e9rie", equipment_serial)
         pdf.ln(3)
 
         # ARTICLE 2 - DUREE
