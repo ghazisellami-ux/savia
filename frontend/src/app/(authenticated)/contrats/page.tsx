@@ -24,6 +24,8 @@ interface Contrat {
   client: string;
   equipement: string;
   equipements?: string[];
+  equipement_ids?: number[];
+  equipement_details?: ContractEquipment[];
   type_contrat: string;
   date_debut: string;
   date_fin: string;
@@ -42,10 +44,19 @@ interface Contrat {
   has_fichier?: boolean;
 }
 
+interface ContractEquipment {
+  id: number;
+  nom: string;
+  fabricant?: string;
+  modele?: string;
+  num_serie?: string;
+}
+
 const emptyForm = () => ({
   client: '',
   equipement: '',
   equipements: [] as string[],
+  equipement_ids: [] as number[],
   type_contrat: TYPES_CONTRAT[0],
   date_debut: new Date().toISOString().substring(0, 10),
   date_fin: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
@@ -64,11 +75,41 @@ const emptyForm = () => ({
 });
 
 const normalizeContractEquipments = (item: any): string[] => {
-  const names = [
-    ...(Array.isArray(item.equipements) ? item.equipements : []),
-    item.equipement,
-  ].filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
-  return [...new Set(names.map(name => name.trim()))];
+  const source = Array.isArray(item.equipements) && item.equipements.length > 0
+    ? item.equipements
+    : [item.equipement];
+  const names = source.map((value: any) => typeof value === 'string' ? value : value?.nom)
+    .filter((name: any): name is string => typeof name === 'string' && name.trim().length > 0);
+  return names.map((name: string) => name.trim());
+};
+
+const normalizeContractEquipmentDetails = (item: any): ContractEquipment[] => (
+  Array.isArray(item.equipements) ? item.equipements : []
+)
+  .filter((equipment: any): equipment is Record<string, unknown> => equipment && typeof equipment === 'object')
+  .map((equipment: Record<string, unknown>): ContractEquipment => ({
+    id: Number(equipment.id || equipment.equipement_id),
+    nom: String(equipment.nom || equipment.equipement_nom || '').trim(),
+    fabricant: String(equipment.fabricant || '').trim(),
+    modele: String(equipment.modele || '').trim(),
+    num_serie: String(equipment.num_serie || '').trim(),
+  }))
+  .filter((equipment: ContractEquipment) => equipment.id > 0 && equipment.nom);
+
+const contractEquipmentItems = (contract: Contrat): Array<ContractEquipment | string> => (
+  contract.equipement_details && contract.equipement_details.length > 0
+    ? contract.equipement_details
+    : normalizeContractEquipments(contract)
+);
+
+const contractEquipmentLabel = (equipment: ContractEquipment | string): string => (
+  typeof equipment === 'string' ? equipment : equipment.nom
+);
+
+const contractEquipmentMeta = (equipment: ContractEquipment | string): string => {
+  if (typeof equipment === 'string') return '';
+  const manufacturerModel = [equipment.fabricant, equipment.modele].filter(Boolean).join(' · ');
+  return [manufacturerModel, equipment.num_serie ? `SN: ${equipment.num_serie}` : ''].filter(Boolean).join(' · ');
 };
 
 export default function ContratsPage() {
@@ -103,11 +144,17 @@ export default function ContratsPage() {
       // are only needed by the internal create/edit form; /api/pieces is
       // deliberately forbidden for Lecteur and must not hide valid contracts.
       const ctrs = await contrats.list();
-      setData((ctrs as any[]).map((item: any) => ({
+      setData((ctrs as any[]).map((item: any) => {
+        const equipmentDetails = normalizeContractEquipmentDetails(item);
+        return {
         id: String(item.id || ''),
         client: item.client || item.Client || '',
         equipement: item.equipement || normalizeContractEquipments(item)[0] || '',
         equipements: normalizeContractEquipments(item),
+        equipement_ids: Array.isArray(item.equipement_ids) && item.equipement_ids.length > 0
+          ? item.equipement_ids.map((id: any) => Number(id)).filter((id: number) => id > 0)
+          : equipmentDetails.map(equipment => equipment.id),
+        equipement_details: equipmentDetails,
         type_contrat: item.type_contrat || 'Standard',
         date_debut: (item.date_debut || '').substring(0, 10),
         date_fin: (item.date_fin || '').substring(0, 10),
@@ -124,7 +171,8 @@ export default function ContratsPage() {
         fichier_contrat: item.fichier_contrat || '',
         fichier_content_type: item.fichier_content_type || '',
         has_fichier: Boolean(item.has_fichier),
-      })));
+        };
+      }));
 
       if (!canEdit) return;
 
@@ -160,9 +208,16 @@ export default function ContratsPage() {
 
   // Derived lists
   const clientsList = clients.map((c: any) => c.nom).sort();
+  const contractedEquipmentIds = new Set(
+    data.flatMap(contract => contract.equipement_ids || [])
+  );
+  const hasLegacyContractEquipment = data.some(contract =>
+    normalizeContractEquipments(contract).length > 0 && !(contract.equipement_ids || []).length
+  );
   const contractedEquipmentNames = new Set(
     data.flatMap(contract => normalizeContractEquipments(contract))
   );
+  const currentContractEquipmentIds = new Set(editingContrat?.equipement_ids || []);
   const currentContractEquipmentNames = new Set(
     editingContrat ? normalizeContractEquipments(editingContrat) : []
   );
@@ -170,8 +225,12 @@ export default function ContratsPage() {
     ? equips.filter((e: any) => e.Client === form.client)
     : [];
   const equipsByClient = allEquipsByClient.filter((e: any) => {
+    const equipmentId = Number(e.id);
     const equipmentName = String(e.Nom || e.nom || '').trim();
-    return !contractedEquipmentNames.has(equipmentName) || currentContractEquipmentNames.has(equipmentName);
+    const isCurrent = currentContractEquipmentIds.has(equipmentId) || currentContractEquipmentNames.has(equipmentName);
+    const isAlreadyContracted = contractedEquipmentIds.has(equipmentId) ||
+      (hasLegacyContractEquipment && contractedEquipmentNames.has(equipmentName));
+    return isCurrent || !isAlreadyContracted;
   });
 
   // Filter pieces — use designation + equipement_type (correct DB fields)
@@ -237,6 +296,7 @@ export default function ContratsPage() {
       const payload = {
         client: form.client,
         equipements: form.equipements,
+        equipement_ids: form.equipement_ids,
         equipement: form.equipements[0] || '', // Keep for backward compatibility
         type_contrat: form.type_contrat,
         date_debut: form.date_debut,
@@ -315,6 +375,9 @@ export default function ContratsPage() {
       client: c.client,
       equipement: c.equipement,
       equipements: c.equipements || (c.equipement ? [c.equipement] : []),
+      equipement_ids: c.equipement_ids?.length
+        ? c.equipement_ids
+        : (c.equipement_details || []).map(equipment => equipment.id),
       type_contrat: c.type_contrat,
       date_debut: c.date_debut,
       date_fin: c.date_fin,
@@ -371,19 +434,36 @@ export default function ContratsPage() {
   }));
 
   // Equipment multi-select handlers
-  const toggleEquipment = (equipmentName: string) => {
-    setForm(f => ({
-      ...f,
-      equipements: f.equipements.includes(equipmentName)
-        ? f.equipements.filter(e => e !== equipmentName)
-        : [...f.equipements, equipmentName],
-    }));
+  const toggleEquipment = (equipment: any) => {
+    const equipmentId = Number(equipment.id);
+    const equipmentName = String(equipment.Nom || equipment.nom || '').trim();
+    setForm(f => {
+      if (!equipmentName) return f;
+      const selectedIndex = equipmentId > 0 ? f.equipement_ids.indexOf(equipmentId) : -1;
+      if (selectedIndex >= 0) {
+        return {
+          ...f,
+          equipement_ids: f.equipement_ids.filter(id => id !== equipmentId),
+          equipements: f.equipements.filter((_, index) => index !== selectedIndex),
+        };
+      }
+      const nameIndex = f.equipements.indexOf(equipmentName);
+      if (equipmentId <= 0 && nameIndex >= 0) {
+        return { ...f, equipements: f.equipements.filter((_, index) => index !== nameIndex) };
+      }
+      return {
+        ...f,
+        equipement_ids: equipmentId > 0 ? [...f.equipement_ids, equipmentId] : f.equipement_ids,
+        equipements: [...f.equipements, equipmentName],
+      };
+    });
   };
 
-  const removeEquipment = (equipmentName: string) => {
+  const removeEquipment = (index: number) => {
     setForm(f => ({
       ...f,
-      equipements: f.equipements.filter(e => e !== equipmentName),
+      equipement_ids: f.equipement_ids.filter((_, equipmentIndex) => equipmentIndex !== index),
+      equipements: f.equipements.filter((_, equipmentIndex) => equipmentIndex !== index),
     }));
   };
 
@@ -596,11 +676,15 @@ export default function ContratsPage() {
                   <div key={c.id} className="flex items-center gap-2 text-sm text-amber-700">
                     <span className="font-mono text-xs bg-amber-100 px-1.5 py-0.5 rounded">#{c.id}</span>
                     <span className="font-semibold">{c.client}</span>
-                    {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string, idx: number) => (
-                      <span key={idx} className="text-amber-500">
-                        {idx === 0 ? '— ' : ', '}{eq}
-                      </span>
-                    ))}
+                    {contractEquipmentItems(c).map((equipment, idx) => {
+                      const label = contractEquipmentLabel(equipment);
+                      const meta = contractEquipmentMeta(equipment);
+                      return (
+                        <span key={typeof equipment === 'string' ? `${label}-${idx}` : equipment.id} className="text-amber-500">
+                          {idx === 0 ? '— ' : ', '}{label}{meta && <span className="text-amber-600/80"> ({meta})</span>}
+                        </span>
+                      );
+                    })}
                     <span className="ml-auto font-bold">{daysLeft}j restant(s)</span>
                     <span className="text-amber-500">• {c.date_fin}</span>
                   </div>
@@ -678,13 +762,18 @@ export default function ContratsPage() {
                     <span className="font-bold">{c.client}</span>
                   </div>
                   {/* Display equipments */}
-                  {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).length > 0 && (
+                  {contractEquipmentItems(c).length > 0 && (
                     <div className="flex flex-wrap gap-1">
-                      {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string) => (
-                        <span key={eq} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-savia-accent/10 text-savia-accent text-xs font-medium border border-savia-accent/20">
-                          <Wrench className="w-2.5 h-2.5" /> {eq}
-                        </span>
-                      ))}
+                      {contractEquipmentItems(c).map((equipment, index) => {
+                        const label = contractEquipmentLabel(equipment);
+                        const meta = contractEquipmentMeta(equipment);
+                        return (
+                          <span key={typeof equipment === 'string' ? `${label}-${index}` : equipment.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-savia-accent/10 text-savia-accent text-xs font-medium border border-savia-accent/20">
+                            <Wrench className="w-2.5 h-2.5" /> {label}
+                            {meta && <span className="text-savia-text-muted font-normal">({meta})</span>}
+                          </span>
+                        );
+                      })}
                     </div>
                   )}
                   <div className="flex items-center gap-3 text-xs text-savia-text-muted flex-wrap">
@@ -822,15 +911,23 @@ export default function ContratsPage() {
                 </div>
                 
                 {/* Equipments List */}
-                {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).length > 0 && (
+                {contractEquipmentItems(c).length > 0 && (
                   <div className="bg-savia-surface-hover/40 rounded-xl p-4">
                     <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Wrench className="w-3.5 h-3.5 text-savia-accent" /> Équipements</p>
-                    <div className="flex flex-wrap gap-2">
-                      {(c.equipements && c.equipements.length > 0 ? c.equipements : [c.equipement]).filter(Boolean).map((eq: string) => (
-                        <span key={eq} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-savia-accent text-sm font-semibold">
-                          <Wrench className="w-3.5 h-3.5" /> {eq}
-                        </span>
-                      ))}
+                    <div className="space-y-2">
+                      {contractEquipmentItems(c).map((equipment, index) => {
+                        const label = contractEquipmentLabel(equipment);
+                        const meta = contractEquipmentMeta(equipment);
+                        return (
+                          <div key={typeof equipment === 'string' ? `${label}-${index}` : equipment.id} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-savia-accent/10 border border-savia-accent/30 text-savia-accent">
+                            <Wrench className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold">{label}</p>
+                              {meta && <p className="text-xs font-normal text-savia-text-muted mt-0.5">{meta}</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -935,7 +1032,7 @@ export default function ContratsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={LABEL}>Client *</label>
-                    <select className={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('equipements', []); }}>
+                    <select className={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('equipements', []); set('equipement_ids', []); }}>
                       <option value="">— Sélectionner un client —</option>
                       {clientsList.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
@@ -980,18 +1077,21 @@ export default function ContratsPage() {
                                 <label
                                   key={e.id}
                                   className={`flex items-center gap-3 cursor-pointer px-4 py-3 hover:bg-savia-surface-hover transition-colors ${
-                                    form.equipements.includes(e.Nom) ? 'bg-savia-accent/10' : ''
+                                    form.equipement_ids.includes(Number(e.id)) ? 'bg-savia-accent/10' : ''
                                   }`}
                                 >
                                   <input
                                     type="checkbox"
                                     className="accent-cyan-400 w-4 h-4 shrink-0"
-                                    checked={form.equipements.includes(e.Nom)}
-                                    onChange={() => toggleEquipment(e.Nom)}
+                                    checked={form.equipement_ids.includes(Number(e.id))}
+                                    onChange={() => toggleEquipment(e)}
                                   />
                                   <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-semibold text-savia-text">{e.Nom}</div>
-                                    <div className="text-xs text-savia-text-muted">{e.Type_Equipement || e.type || ''}</div>
+                                    <div className="text-sm font-semibold text-savia-text">{e.Nom || e.nom}</div>
+                                    <div className="text-xs text-savia-text-muted">
+                                      {[e.Fabricant || e.fabricant, e.Modele || e.modele, e.NumSerie || e.Num_Serie || e.num_serie ? `SN: ${e.NumSerie || e.Num_Serie || e.num_serie}` : '']
+                                        .filter(Boolean).join(' · ')}
+                                    </div>
                                   </div>
                                 </label>
                               ))
@@ -1004,21 +1104,33 @@ export default function ContratsPage() {
                     {/* Selected Equipment Badges */}
                     {form.equipements.length > 0 && (
                       <div className="flex flex-wrap gap-2 mt-3">
-                        {form.equipements.map(equip => (
-                          <div
-                            key={equip}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-sm font-semibold text-savia-accent"
-                          >
-                            <span>{equip}</span>
-                            <button
-                              type="button"
-                              onClick={() => removeEquipment(equip)}
-                              className="flex items-center justify-center w-4 h-4 rounded-full hover:bg-savia-accent/20 transition-colors"
+                        {form.equipements.map((equip, index) => {
+                          const selectedEquipment = equips.find(e => Number(e.id) === form.equipement_ids[index]);
+                          const selectedMeta = selectedEquipment
+                            ? [selectedEquipment.Fabricant || selectedEquipment.fabricant, selectedEquipment.Modele || selectedEquipment.modele,
+                              selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie
+                                ? `SN: ${selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie}` : '']
+                                .filter(Boolean).join(' · ')
+                            : '';
+                          return (
+                            <div
+                              key={`${equip}-${form.equipement_ids[index] || index}`}
+                              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-sm font-semibold text-savia-accent"
                             >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
+                              <span>
+                                {equip}
+                                {selectedMeta && <span className="ml-1 text-xs font-normal text-savia-text-muted">({selectedMeta})</span>}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => removeEquipment(index)}
+                                className="flex items-center justify-center w-4 h-4 rounded-full hover:bg-savia-accent/20 transition-colors"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                     
