@@ -31,6 +31,17 @@ CLOSED_INTERVENTION_STATUSES = (
 )
 
 
+def retour_site_confirmation_requise(
+    current_intervention_status: Any,
+    retour_site_confirme: Any = False,
+) -> bool:
+    """Require confirmation only for a direct workshop-to-closed transition."""
+    return (
+        str(current_intervention_status or "").strip() == WORKSHOP_TRANSFER_STATUS
+        and not bool(retour_site_confirme)
+    )
+
+
 def _is_out_of_service(status: Any) -> bool:
     """Return True for all historical spellings of the manual status."""
     value = str(status or "").strip().casefold()

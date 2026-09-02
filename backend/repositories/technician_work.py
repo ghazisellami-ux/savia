@@ -5,7 +5,8 @@ from datetime import datetime
 
 from database.core import _trigger_backup, get_db, logger, read_sql
 from repositories.knowledge import _fix_df_text
-from repositories.equipment_status import synchroniser_statut_equipement
+from repositories.equipment_status import retour_site_confirmation_requise, synchroniser_statut_equipement
+from services.contract_billing import assess_intervention_contract_coverage_in_savepoint
 
 __all__ = [
     "get_or_create_interventions_techniciens",
@@ -626,15 +627,17 @@ def finalize_intervention_from_techniciens(intervention_id):
         # Serialize finalization for a shared intervention. Two technicians
         # may submit their closure at nearly the same time.
         parent_state = conn.execute(
-            """SELECT id, date_transfert_atelier, retour_site_confirme
+            """SELECT id, statut, date_transfert_atelier, retour_site_confirme
                FROM interventions WHERE id = %s FOR UPDATE""",
             (intervention_id,),
         ).fetchone()
 
         if (
             parent_state
-            and parent_state.get("date_transfert_atelier")
-            and not parent_state.get("retour_site_confirme")
+            and retour_site_confirmation_requise(
+                parent_state.get("statut"),
+                parent_state.get("retour_site_confirme"),
+            )
         ):
             return {
                 'success': False,
@@ -804,6 +807,11 @@ def finalize_intervention_from_techniciens(intervention_id):
                 WHERE id = {ph} AND statut != {ph}
             """, ('Cloturee', date_cloture[:10], planning_id, 'Cloturee'))
             logger.info(f"✅ Planning #{planning_id} marked as Cloturee (intervention #{intervention_id} auto-closed)")
+
+        try:
+            assess_intervention_contract_coverage_in_savepoint(conn, intervention_id)
+        except Exception as exc:
+            logger.exception("Contract coverage assessment failed for intervention #%s: %s", intervention_id, exc)
         
         logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {total_count} technicians completed")
         

@@ -54,6 +54,7 @@ from services.idempotency import (
     operation_id_from_request,
     save_idempotent_response,
 )
+from repositories.equipment_status import retour_site_confirmation_requise
 
 
 _INTERVENTION_ACTION_ROLES = (
@@ -680,19 +681,10 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
             # Extract intervention data
             machine = intervention.get("machine", "")
             technicien = intervention.get("technicien", "")
-            retour_site_requis = bool(intervention.get("date_transfert_atelier")) and not bool(
-                intervention.get("retour_site_confirme")
+            retour_site_requis = retour_site_confirmation_requise(
+                intervention.get("statut"),
+                intervention.get("retour_site_confirme"),
             )
-
-            if (
-                body.get("statut") == "Cloturee"
-                and retour_site_requis
-                and body.get("retour_site_confirme") is not True
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Confirmez que l'équipement a bien été transféré sur site avant de clôturer l'intervention.",
-                )
             
             # Get client from equipements table (joined by machine name)
             try:
@@ -758,6 +750,15 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                         detail="Cette affectation est déjà clôturée. Aucune nouvelle mise à jour de statut n'est autorisée depuis le PWA."
                     )
 
+                # In multi-technician mode, the transition source is the
+                # current technician assignment rather than a historical
+                # transfer date on the shared parent intervention.
+                if current_tech_status:
+                    retour_site_requis = retour_site_confirmation_requise(
+                        current_tech_status,
+                        intervention.get("retour_site_confirme"),
+                    )
+
                 requested_fiche_validation = body.get("fiche_validation")
                 if requested_fiche_validation:
                     if requested_fiche_validation not in {"En attente", "Validée"}:
@@ -772,6 +773,16 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                             status_code=403,
                             detail="Fiche déjà validée — aucune modification possible"
                         )
+
+            if (
+                body.get("statut") == "Cloturee"
+                and retour_site_requis
+                and body.get("retour_site_confirme") is not True
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Confirmez que l'équipement a bien été transféré sur site avant de clôturer l'intervention.",
+                )
         
         # Get or create entry for this technician
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")

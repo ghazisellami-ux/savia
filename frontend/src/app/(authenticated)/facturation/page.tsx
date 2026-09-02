@@ -52,6 +52,17 @@ interface BillingCase {
   currency: string;
   case_state: 'active' | 'blocked' | 'cancelled';
   block_reason: string;
+  contract_id?: number | null;
+  contract_type?: string;
+  coverage_status: 'unassessed' | 'covered' | 'partial' | 'billable' | 'review';
+  coverage_status_label: string;
+  coverage_reason?: string;
+  labor_amount?: number;
+  parts_amount?: number;
+  uncovered_labor_cost: number;
+  uncovered_parts_cost: number;
+  uncovered_total_cost: number;
+  coverage_assessed_at?: string | null;
   intervention_status?: string;
   technicien?: string;
   intervention_date?: string | null;
@@ -152,6 +163,8 @@ const STATUS_STYLE: Record<string, string> = {
   payment_pending: 'bg-teal-500/15 text-teal-300 border-teal-500/25',
   partial_payment: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/25',
   paid: 'bg-green-500/15 text-green-300 border-green-500/25',
+  covered_by_contract: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25',
+  coverage_review: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/25',
   blocked: 'bg-red-500/15 text-red-300 border-red-500/25',
   cancelled: 'bg-slate-500/15 text-slate-400 border-slate-500/25',
 };
@@ -201,6 +214,7 @@ const historyLabel = (event: HistoryItem) => {
   if (event.action === 'RESOLVE_DUPLICATE') return 'Doublon résolu';
   if (event.action === 'MERGED_AS_DUPLICATE') return 'Dossier archivé comme doublon';
   if (event.action === 'CREATE_PAYMENT') return 'Paiement reçu';
+  if (event.action === 'ASSESS_CONTRACT_COVERAGE') return 'Couverture contractuelle évaluée';
   if (event.action === 'UPDATE_PAYMENT') return 'Paiement corrigé';
   if (event.action === 'CREATE_STEP' || event.action === 'UPDATE_STEP') {
     const label = stepLabels[stepType] || 'Étape';
@@ -368,6 +382,8 @@ export default function FacturationPage() {
     overdue: cases.filter(item => item.overdue).length,
     receivable: cases.reduce((sum, item) => sum + item.remaining_amount, 0),
     paid: cases.filter(item => item.status === 'paid').length,
+    covered: cases.filter(item => item.coverage_status === 'covered').length,
+    review: cases.filter(item => item.coverage_status === 'review').length,
   }), [cases]);
 
   const openStep = (item: BillingCase, type: StepType) => {
@@ -545,6 +561,21 @@ export default function FacturationPage() {
     }
   };
 
+  const reassessCoverage = async (item: BillingCase) => {
+    setSaving(true);
+    setError('');
+    try {
+      const updated = await billing.reassessCoverage(item.id) as unknown as BillingCase;
+      setCases(previous => previous.map(candidate => candidate.id === updated.id ? updated : candidate));
+      setSelected(updated);
+      setNotice('Couverture contractuelle recalculée.');
+    } catch (err) {
+      setError(errorMessage(err, 'Impossible de recalculer la couverture contractuelle.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const primaryAction = (item: BillingCase) => {
     if (!item.next_step) return null;
     if (item.next_step === 'intervention' || item.next_step === 'intervention_close') {
@@ -587,13 +618,15 @@ export default function FacturationPage() {
       {error && <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"><AlertTriangle className="h-4 w-4 shrink-0" />{error}<button onClick={() => setError('')} className="ml-auto"><X className="h-4 w-4" /></button></div>}
       {notice && <div className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-200"><CheckCircle2 className="h-4 w-4 shrink-0" />{notice}<button onClick={() => setNotice('')} className="ml-auto"><X className="h-4 w-4" /></button></div>}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">
         {[
           { label: 'À facturer', value: kpis.toInvoice, icon: Receipt, color: 'text-orange-300', filter: 'to_invoice' },
           { label: 'Paiement attendu', value: kpis.waitingPayment, icon: Clock3, color: 'text-teal-300', filter: 'waiting_payment' },
           { label: 'En retard', value: kpis.overdue, icon: AlertTriangle, color: 'text-red-300', filter: 'overdue' },
           { label: 'Reste à encaisser', value: money(kpis.receivable, cases[0]?.currency || 'TND'), icon: Banknote, color: 'text-yellow-300', filter: '' },
           { label: 'Dossiers payés', value: kpis.paid, icon: CheckCircle2, color: 'text-green-300', filter: 'paid' },
+          { label: 'Couverts contrat', value: kpis.covered, icon: CheckCircle2, color: 'text-emerald-300', filter: 'covered_by_contract' },
+          { label: 'À vérifier', value: kpis.review, icon: AlertTriangle, color: 'text-fuchsia-300', filter: 'coverage_review' },
         ].map(card => (
           <button key={card.label} onClick={() => card.filter && setStatusFilter(current => current === card.filter ? '' : card.filter)} className={`glass rounded-xl p-4 text-left transition hover:-translate-y-0.5 ${statusFilter === card.filter && card.filter ? 'ring-2 ring-savia-accent' : ''}`}>
             <card.icon className={`mb-2 h-5 w-5 ${card.color}`} />
@@ -629,7 +662,7 @@ export default function FacturationPage() {
                   <td className="px-3 py-3"><button onClick={() => setSelected(item)} className="font-mono font-bold text-savia-accent">#{item.id}</button><div className="mt-1 text-[11px] text-savia-text-dim">{item.intervention_id ? `Interv. #${item.intervention_id}` : 'Avant intervention'}</div></td>
                   <td className="px-3 py-3"><div className="font-semibold">{item.client}</div><div className="mt-0.5 text-xs text-savia-text-muted">{item.equipment || 'Équipement non renseigné'}</div></td>
                   <td className="px-3 py-3"><Progress item={item} /></td>
-                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status] || STATUS_STYLE.quote_pending}`}>{item.status_label}</span>{item.overdue && <div className="mt-1 text-xs font-bold text-red-300">{item.overdue_days} j de retard</div>}{!item.overdue && item.stage_age_days !== null && item.stage_age_days !== undefined && <div className="mt-1 text-[11px] text-savia-text-muted">Depuis {item.stage_age_days} jour{item.stage_age_days === 1 ? '' : 's'}</div>}{item.data_incomplete && <div className="mt-1 text-[11px] text-amber-300">Informations à confirmer</div>}</td>
+                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status] || STATUS_STYLE.quote_pending}`}>{item.status_label}</span>{item.coverage_status === 'partial' && <div className="mt-1 text-[11px] font-bold text-amber-300">Partiellement facturable</div>}{item.overdue && <div className="mt-1 text-xs font-bold text-red-300">{item.overdue_days} j de retard</div>}{!item.overdue && item.stage_age_days !== null && item.stage_age_days !== undefined && <div className="mt-1 text-[11px] text-savia-text-muted">Depuis {item.stage_age_days} jour{item.stage_age_days === 1 ? '' : 's'}</div>}{item.data_incomplete && <div className="mt-1 text-[11px] text-amber-300">Informations à confirmer</div>}</td>
                   <td className="px-3 py-3 text-right font-semibold">{item.invoice_amount ? money(item.invoice_amount, item.currency) : '—'}</td>
                   <td className={`px-3 py-3 text-right font-bold ${item.remaining_amount > 0 ? 'text-yellow-300' : 'text-green-300'}`}>{item.invoice_amount ? money(item.remaining_amount, item.currency) : '—'}</td>
                   <td className="px-3 py-3">{primaryAction(item) || <span className="text-xs font-semibold text-green-300">Dossier terminé</span>}</td>
@@ -643,7 +676,7 @@ export default function FacturationPage() {
       </div>
 
       <Modal isOpen={!!selected} onClose={() => { setSelected(null); setHistory([]); }} title={selected ? `Dossier de facturation #${selected.id}` : ''} size="xl">
-        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} />}
+        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} onReassess={reassessCoverage} />}
       </Modal>
 
       <Modal isOpen={!!stepDialog} onClose={() => setStepDialog(null)} title={stepDialog ? STEP_META[stepDialog.type].label : ''} size="md">
@@ -793,7 +826,7 @@ function InterventionPreview({ item }: { item: BillingCase }) {
   </div>;
 }
 
-function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate }: {
+function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate, onReassess }: {
   item: BillingCase;
   interventionOptions: InterventionOption[];
   duplicateCases: BillingCase[];
@@ -806,27 +839,32 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
   onToggleBlocked: (item: BillingCase) => void;
   onLinkIntervention: (item: BillingCase, interventionId: number) => void;
   onResolveDuplicate: (first: BillingCase, second: BillingCase) => void;
+  onReassess: (item: BillingCase) => void;
 }) {
   const [interventionPreviewOpen, setInterventionPreviewOpen] = useState(false);
   const matchingInterventions = interventionOptions.filter(option =>
     option.client.toLowerCase() === item.client.toLowerCase()
     && (!item.equipment || option.machine.toLowerCase() === item.equipment.toLowerCase())
   );
+  const coverageLocked = item.coverage_status === 'covered' || item.coverage_status === 'review';
   return <div className="max-h-[78vh] space-y-5 overflow-y-auto pr-1">
     {item.reused_existing_case && <div className="flex items-start gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-200"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Ce dossier était déjà en cours pour cet équipement. Il a été ouvert à la place de créer un doublon.</span></div>}
     {canResolveDuplicates && duplicateCases.map(duplicate => <div key={duplicate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><div><div className="text-sm font-bold text-amber-200">Doublon potentiel avec le dossier #{duplicate.id}</div><p className="mt-1 text-xs text-savia-text-muted">Même client et même équipement avec un cycle technique encore ouvert.</p></div><button type="button" onClick={() => onResolveDuplicate(item, duplicate)} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400">Résoudre le doublon</button></div>)}
     <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-savia-border bg-savia-surface-hover/50 p-4"><div><div className="flex items-center gap-2 font-bold"><Building2 className="h-4 w-4 text-savia-accent" />{item.client}</div><div className="mt-1 text-sm text-savia-text-muted">{item.equipment || 'Équipement non renseigné'} {item.intervention_id && `· Intervention #${item.intervention_id}`}</div><div className="mt-1 text-xs text-savia-text-dim">Responsable : {item.owner_username || 'non assigné'}</div></div><div className="text-right"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status]}`}>{item.status_label}</span>{item.block_reason && <div className="mt-2 max-w-xs text-xs text-red-300">{item.block_reason}</div>}</div></div>
+
+    {item.intervention_closed_at && <section className={`rounded-xl border p-4 ${item.coverage_status === 'covered' ? 'border-emerald-500/30 bg-emerald-500/5' : item.coverage_status === 'review' ? 'border-fuchsia-500/30 bg-fuchsia-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2 font-bold">{item.coverage_status === 'review' ? <AlertTriangle className="h-4 w-4 text-fuchsia-300" /> : <CheckCircle2 className="h-4 w-4 text-emerald-300" />}{item.coverage_status_label}</div><div className="mt-1 text-xs text-savia-text-muted">{item.contract_id ? `Contrat #${item.contract_id}${item.contract_type ? ` · ${item.contract_type}` : ''}` : 'Aucun contrat applicable'}</div><p className="mt-2 text-sm">{item.coverage_reason || 'Décision contractuelle non renseignée.'}</p></div><button type="button" onClick={() => onReassess(item)} className="rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Recalculer</button></div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">{[['Coût de revient MO', item.labor_amount || 0], ['Coût de revient pièces', item.parts_amount || 0], ['Coût MO hors couverture', item.uncovered_labor_cost || 0], ['Coût pièces hors couverture', item.uncovered_parts_cost || 0]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-savia-surface-hover/60 p-2.5"><div className="text-[11px] text-savia-text-muted">{label}</div><div className="mt-1 font-black">{money(Number(value), item.currency)}</div></div>)}</div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-savia-border/60 pt-3"><span className="text-sm font-semibold">Coût de revient hors couverture : {money(item.uncovered_total_cost || 0, item.currency)}</span><strong className="text-sm text-savia-accent">Prix client à renseigner dans le devis ou la facture</strong></div></section>}
 
     <div className="grid grid-cols-3 gap-3"><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Montant facturé</div><div className="mt-1 font-black">{money(item.invoice_amount, item.currency)}</div></div><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Reçu</div><div className="mt-1 font-black text-green-300">{money(item.paid_amount, item.currency)}</div></div><div className="rounded-xl border border-savia-border p-3"><div className="text-xs text-savia-text-muted">Reste</div><div className="mt-1 font-black text-yellow-300">{money(item.remaining_amount, item.currency)}</div></div></div>
 
     {!item.intervention_id && <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-bold text-blue-200">Intervention à organiser</div><p className="mt-1 text-xs text-savia-text-muted">La demande sera associée à ce dossier et conservera le devis et le bon de commande déjà renseignés.</p></div><Link href={`/demandes?billing_case_id=${item.id}`} className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-xs font-bold text-white hover:bg-blue-400"><Send className="h-3.5 w-3.5" /> Créer la demande d&apos;intervention</Link></div><details className="mt-3 border-t border-blue-500/15 pt-3"><summary className="cursor-pointer text-xs font-semibold text-savia-text-muted">Correction : associer une intervention existante</summary><div className="mt-2"><select defaultValue="" onChange={event => { const id = Number(event.target.value); if (id) onLinkIntervention(item, id); }} className={INPUT}><option value="">Sélectionner une intervention compatible…</option>{matchingInterventions.map(option => <option key={option.id} value={option.id}>#{option.id} · {formatDate(option.date)} · {option.statut}</option>)}</select>{matchingInterventions.length === 0 && <p className="mt-2 text-xs text-savia-text-muted">Aucune intervention avec le même client et le même équipement.</p>}</div></details></div>}
 
     <section><h3 className="mb-3 flex items-center gap-2 text-sm font-bold"><Calendar className="h-4 w-4 text-savia-accent" /> Chronologie du dossier</h3><div className="space-y-2">
-      <DocumentStepRow item={item} type="quote" onStep={onStep} />
-      <DocumentStepRow item={item} type="purchase_order" onStep={onStep} />
+      {!coverageLocked && <DocumentStepRow item={item} type="quote" onStep={onStep} />}
+      {!coverageLocked && <DocumentStepRow item={item} type="purchase_order" onStep={onStep} />}
       <div className={`rounded-xl border p-3 ${item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) ? 'border-orange-500/30 bg-orange-500/5' : 'border-savia-border'}`}><div className="flex items-center gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-full ${item.intervention_closed_at ? 'bg-green-500/15 text-green-300' : 'bg-violet-500/15 text-violet-300'}`}><Wrench className="h-4 w-4" /></div><div className="flex-1"><div className="font-semibold">Intervention SAV</div><div className="text-xs text-savia-text-muted">Début : {formatDateTime(item.intervention_started_at)} · Clôture : {formatDateTime(item.intervention_closed_at)}</div></div>{item.intervention_id && <button type="button" onClick={() => setInterventionPreviewOpen(value => !value)} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500/10 px-3 py-2 text-xs font-bold text-teal-300 hover:bg-teal-500/20"><Eye className="h-3.5 w-3.5" /> {interventionPreviewOpen ? 'Masquer' : 'Aperçu'}</button>}</div>{item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) && <p className="mt-2 text-xs font-semibold text-orange-300">Intervention clôturée : vérifiez son compte rendu avant de renseigner l&apos;envoi de la facture.</p>}{interventionPreviewOpen && <InterventionPreview item={item} />}</div>
-      {item.has_parts && <DocumentStepRow item={item} type="delivery_note" onStep={onStep} />}
-      <DocumentStepRow item={item} type="invoice" onStep={onStep} />
+      {!coverageLocked && item.has_parts && <DocumentStepRow item={item} type="delivery_note" onStep={onStep} />}
+      {!coverageLocked && <DocumentStepRow item={item} type="invoice" onStep={onStep} />}
+      {coverageLocked && <div className="rounded-lg border border-dashed border-savia-border p-3 text-center text-sm text-savia-text-muted">{item.coverage_status === 'covered' ? 'Aucune facture d’intervention n’est requise.' : 'La facturation est suspendue jusqu’à validation de la couverture.'}</div>}
     </div></section>
 
     <section><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-bold"><WalletCards className="h-4 w-4 text-green-300" /> Paiements reçus</h3>{item.remaining_amount > 0 && item.steps.invoice && <button onClick={() => onPayment(item)} className="rounded-lg bg-green-500/10 px-3 py-1.5 text-xs font-bold text-green-300"><Plus className="mr-1 inline h-3.5 w-3.5" /> Ajouter</button>}</div>{item.payments.length ? <div className="space-y-2">{item.payments.map(payment => <div key={payment.id} className="flex items-center justify-between rounded-lg border border-savia-border p-3"><div><div className="font-semibold text-green-300">{money(payment.amount, item.currency)}</div><div className="text-xs text-savia-text-muted">{formatDate(payment.effective_date)} · {payment.payment_method || 'mode non précisé'} · {payment.reference || 'sans référence'}</div></div><div className="text-xs text-savia-text-dim">par {payment.created_by}</div></div>)}</div> : <div className="rounded-lg border border-dashed border-savia-border p-4 text-center text-sm text-savia-text-muted">Aucun paiement enregistré</div>}</section>

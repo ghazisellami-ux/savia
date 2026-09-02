@@ -496,8 +496,9 @@ export default function InterventionDetailPage() {
     }
 
     let retourSiteConfirme = false;
-    const retourSiteEnAttente = Boolean(intervention?.date_transfert_atelier) && !intervention?.retour_site_confirme;
-    if (form.statut === 'Cloturee' && (retourSiteEnAttente || initialFormStatut === "Transfert vers l'atelier")) {
+    const retourSiteEnAttente = initialFormStatut === "Transfert vers l'atelier"
+      && !intervention?.retour_site_confirme;
+    if (form.statut === 'Cloturee' && retourSiteEnAttente) {
       retourSiteConfirme = window.confirm(
         "Confirmez-vous que l'équipement a bien été transféré sur site ?\n\nSi l'équipement est encore à l'atelier, annulez et ne clôturez pas l'intervention."
       );
@@ -610,10 +611,11 @@ export default function InterventionDetailPage() {
     }
 
     let retourSiteConfirme = false;
-    const retourSiteEnAttente = Boolean(intervention?.date_transfert_atelier) && !intervention?.retour_site_confirme;
+    const retourSiteEnAttente = initialTechnicianStatus === "Transfert vers l'atelier"
+      && !intervention?.retour_site_confirme;
     if (
       techForm.statut === 'Cloturee'
-      && (retourSiteEnAttente || initialTechnicianStatus === "Transfert vers l'atelier")
+      && retourSiteEnAttente
     ) {
       retourSiteConfirme = window.confirm(
         "Confirmez-vous que l'équipement a bien été transféré sur site ?\n\nSi l'équipement est encore à l'atelier, annulez et ne clôturez pas l'intervention."

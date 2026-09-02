@@ -469,7 +469,7 @@ export default function SavPage() {
   const handleStatusChange = async () => {
     if (!selectedIntervention) return;
 
-    const retourSiteEnAttente = Boolean(selectedIntervention.date_transfert_atelier)
+    const retourSiteEnAttente = selectedIntervention.statut === "Transfert vers l'atelier"
       && !selectedIntervention.retour_site_confirme;
     let retourSiteConfirme = false;
     if (statusForm.statut === 'Cloturee' && retourSiteEnAttente) {
