@@ -662,6 +662,16 @@ def ajouter_fabricant(nom):
     return True
 
 
+def _normalize_catalog_label(value):
+    """Canonicalise user-entered catalogue labels before comparison/storage."""
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return " ".join(normalized.split())
+
+
+def _catalog_label_key(value):
+    return _normalize_catalog_label(value).casefold()
+
+
 def lire_modeles_equipement(domaine="", type_equipement="", fabricant=""):
     """Retourne les modèles associés au contexte domaine/type/fabricant."""
     clauses = []
@@ -677,20 +687,61 @@ def lire_modeles_equipement(domaine="", type_equipement="", fabricant=""):
             f"SELECT id, nom, domaine, type_equipement, fabricant FROM modeles_equipement{where} ORDER BY nom",
             tuple(params),
         ).fetchall()
-        return [dict(r) for r in rows]
+        models = []
+        seen = set()
+        for row in rows:
+            model = dict(row)
+            for field in ("nom", "domaine", "type_equipement", "fabricant"):
+                model[field] = _normalize_catalog_label(model.get(field))
+            key = tuple(_catalog_label_key(model[field]) for field in ("nom", "domaine", "type_equipement", "fabricant"))
+            if key not in seen:
+                seen.add(key)
+                models.append(model)
+        return models
 
 
 def ajouter_modele_equipement(nom, domaine, type_equipement, fabricant):
-    """Ajoute un modèle dans son contexte de classification, sans doublon."""
-    values = tuple(str(value or "").strip() for value in (nom, domaine, type_equipement, fabricant))
+    """Retourne le modèle existant ou le crée une seule fois dans son contexte."""
+    fields = ("nom", "domaine", "type_equipement", "fabricant")
+    values = tuple(_normalize_catalog_label(value) for value in (nom, domaine, type_equipement, fabricant))
+    expected_key = tuple(_catalog_label_key(value) for value in values)
     with get_db() as conn:
-        conn.execute(
+        existing_rows = conn.execute(
+            "SELECT id, nom, domaine, type_equipement, fabricant FROM modeles_equipement",
+        ).fetchall()
+        for row in existing_rows:
+            model = dict(row)
+            row_key = tuple(_catalog_label_key(model.get(field)) for field in fields)
+            if row_key == expected_key:
+                for field in fields:
+                    model[field] = _normalize_catalog_label(model.get(field))
+                model["created"] = False
+                return model
+
+        row = conn.execute(
             """INSERT INTO modeles_equipement (nom, domaine, type_equipement, fabricant)
                VALUES (%s, %s, %s, %s)
-               ON CONFLICT DO NOTHING""",
+               ON CONFLICT DO NOTHING
+               RETURNING id, nom, domaine, type_equipement, fabricant""",
             values,
-        )
-    return True
+        ).fetchone()
+        if row:
+            model = dict(row)
+            model["created"] = True
+            return model
+
+        # A concurrent request may have inserted the same normalized model.
+        rows = conn.execute(
+            "SELECT id, nom, domaine, type_equipement, fabricant FROM modeles_equipement",
+        ).fetchall()
+        for existing in rows:
+            model = dict(existing)
+            if tuple(_catalog_label_key(model.get(field)) for field in fields) == expected_key:
+                for field in fields:
+                    model[field] = _normalize_catalog_label(model.get(field))
+                model["created"] = False
+                return model
+    raise RuntimeError("Le modèle n'a pas pu être enregistré")
 
 
 def lire_services_equipement():

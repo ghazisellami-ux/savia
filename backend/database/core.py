@@ -141,10 +141,11 @@ def _auto_migrate_vps_schema(conn):
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
                     WHERE table_name = 'contrats_equipements'
-                )
+                    AND table_schema = current_schema()
+                ) AS table_exists
             """)
             result = cursor.fetchone()
-            table_exists = result[0] if result else False
+            table_exists = bool(result and result["table_exists"])
         except Exception as table_check_error:
             logger.debug(f"Could not check if contrats_equipements exists: {table_check_error}")
             return
@@ -158,8 +159,9 @@ def _auto_migrate_vps_schema(conn):
             cursor.execute("""
                 SELECT column_name FROM information_schema.columns 
                 WHERE table_name = 'contrats_equipements'
+                AND table_schema = current_schema()
             """)
-            columns = [row[0] for row in cursor.fetchall()]
+            columns = {row["column_name"] for row in cursor.fetchall()}
         except Exception as schema_check_error:
             logger.debug(f"Could not check contrats_equipements schema: {schema_check_error}")
             return
