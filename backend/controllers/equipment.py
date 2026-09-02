@@ -494,8 +494,8 @@ def post_modele_equipement(payload: dict = Body(...), user: dict = Depends(_veri
     fabricant = str(payload.get("fabricant") or "").strip()
     if not all((nom, domaine, type_equipement, fabricant)):
         raise HTTPException(400, "Nom, domaine, type et fabricant requis")
-    ajouter_modele_equipement(nom, domaine, type_equipement, fabricant)
-    return {"ok": True}
+    model = ajouter_modele_equipement(nom, domaine, type_equipement, fabricant)
+    return {"ok": True, **model}
 
 
 @app.get("/api/services-equipement")

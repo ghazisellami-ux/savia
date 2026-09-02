@@ -389,7 +389,7 @@ export const modelesEquipement = {
     return request<Array<{ id: number; nom: string; domaine: string; type_equipement: string; fabricant: string }>>(`/api/modeles-equipement${qs ? `?${qs}` : ''}`);
   },
   create: (data: { nom: string; domaine: string; type: string; fabricant: string }) =>
-    request<{ ok: boolean }>('/api/modeles-equipement', { method: 'POST', body: data }),
+    request<{ ok: boolean; created: boolean; id: number; nom: string }>('/api/modeles-equipement', { method: 'POST', body: data }),
 };
 
 export const servicesEquipement = {

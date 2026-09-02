@@ -149,6 +149,25 @@ function computeGarantieFin(debut: string, duree: number): string {
   catch { return ''; }
 }
 
+function normalizeFilterLabel(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+function filterLabelKey(value: string): string {
+  return normalizeFilterLabel(value).toLocaleLowerCase('fr');
+}
+
+function uniqueFilterLabels(values: string[]): string[] {
+  const labelsByKey = new Map<string, string>();
+  for (const value of values) {
+    const label = normalizeFilterLabel(value);
+    if (label && !labelsByKey.has(filterLabelKey(label))) {
+      labelsByKey.set(filterLabelKey(label), label);
+    }
+  }
+  return Array.from(labelsByKey.values()).sort((a, b) => a.localeCompare(b, 'fr'));
+}
+
 function getGarantieBadge(fin: string): { label: string; icon: React.ReactNode; cls: string } | null {
   if (!fin) return null;
   const finD = new Date(fin); const today = new Date(); today.setHours(0,0,0,0);
@@ -269,7 +288,7 @@ export default function EquipementsPage() {
     // Keep a legacy value visible while editing an equipment created before
     // the model catalogue was introduced.
     if (editingEquip?.modele && form.Modele === editingEquip.modele && !options.includes(editingEquip.modele)) options.push(editingEquip.modele);
-    return options.sort((a, b) => a.localeCompare(b));
+    return uniqueFilterLabels(options);
   }, [modelesList, editingEquip, form.Modele]);
 
   const dynamicDomaines = useMemo(() => ['Tous', ...Array.from(new Set(data.map(d => d.domaine).filter(Boolean)))], [data]);
@@ -292,7 +311,7 @@ export default function EquipementsPage() {
       .filter(d => filterType === 'Tous' || d.type === filterType)
       .map(d => d.modele)
       .filter(Boolean);
-    return ['Tous', ...Array.from(new Set(models)).sort()];
+    return ['Tous', ...uniqueFilterLabels(models)];
   }, [data, filterDomaine, filterType]);
 
   // Filter clients based on selected domain
@@ -1083,7 +1102,7 @@ export default function EquipementsPage() {
     // Lecteur: show only their own client's equipment
     if (isLecteur && user?.client && eq.client !== user.client) return false;
     if (filterType !== 'Tous' && eq.type !== filterType) return false;
-    if (filterModele !== 'Tous' && eq.modele !== filterModele) return false;
+    if (filterModele !== 'Tous' && filterLabelKey(eq.modele) !== filterLabelKey(filterModele)) return false;
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
     if (filterDomaine !== 'Tous' && eq.domaine !== filterDomaine) return false;
     if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
