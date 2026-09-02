@@ -254,6 +254,35 @@ def finances_tco(client: Optional[str] = None, user: dict = Depends(_verify_toke
 # 🗺️ CARTE GÉOGRAPHIQUE
 # ==========================================
 
+def _map_health_key(value):
+    return str(value or "").strip().casefold()
+
+
+def _map_status_score(status):
+    """Fallback score when the dashboard health scorer has no row."""
+    status_key = _map_health_key(status)
+    if status_key == "hors service":
+        return 25
+    if status_key in {"critique", "en panne"}:
+        return 45
+    if status_key == "en atelier":
+        return 60
+    if status_key == "en maintenance":
+        return 75
+    return 100
+
+
+def _map_site_score(client, equipements, health_scores_by_equipment):
+    equipment_scores = [
+        health_scores_by_equipment.get(
+            (_map_health_key(equipement["nom"]), _map_health_key(client)),
+            _map_status_score(equipement["statut"]),
+        )
+        for equipement in equipements
+    ]
+    return round(sum(equipment_scores) / len(equipment_scores)) if equipment_scores else 100
+
+
 @app.get("/api/map/sites")
 def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)):
     """Retourne les sites clients avec coordonnées GPS et score de santé."""
@@ -338,6 +367,18 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
         df_equip = lire_equipements()
         df_interv = lire_interventions()
         df_plan = lire_planning()  # ← Load ONCE before the loop
+
+        # Keep the map score aligned with the dashboard score, which accounts
+        # for intervention history and the current equipment status.
+        health_scores_by_equipment = {}
+        try:
+            from controllers.auth_dashboard import get_health_scores
+
+            for health_row in get_health_scores(user=user):
+                key = (_map_health_key(health_row.get("machine")), _map_health_key(health_row.get("client")))
+                health_scores_by_equipment[key] = int(health_row.get("score", 100))
+        except Exception as exc:
+            logger.warning("Impossible de charger les scores santé détaillés pour la carte: %s", exc)
         
         # Load clients to get ville and region info
         try:
@@ -412,9 +453,7 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
         for cl, site in sites.items():
             if effective_client and str(cl).strip().casefold() != effective_client.strip().casefold():
                 continue
-            nb = site["nb_equipements"]
-            nb_hs = sum(1 for e in site["equipements"] if e["statut"] in ("Hors Service", "Critique", "En panne"))
-            score = max(0, round(((nb - nb_hs) / nb) * 100)) if nb > 0 else 100
+            score = _map_site_score(cl, site["equipements"], health_scores_by_equipment)
 
             # Auto-assign coordinates if missing
             lat, lng = site["latitude"], site["longitude"]
