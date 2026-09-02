@@ -10,7 +10,7 @@ import {
   Download, FolderOpen, Scan, Package, Wind, ShieldCheck, ShieldAlert, ShieldOff,
   MapPin, Globe, Phone, User, Landmark, Stethoscope, MoreHorizontal, History,
 } from 'lucide-react';
-import { equipements, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, modelesEquipement as modelesApi, servicesEquipement as servicesApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
+import { equipements, dashboard, documentsTechniques, clients as clientsApi, fabricants as fabricantsApi, modelesEquipement as modelesApi, servicesEquipement as servicesApi, typesEquipement as typesEquipApi, typesClient as typesClientApi, villesCustom as villesCustomApi, paysCustom as paysCustomApi, domaines_custom } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
 import { useAuth } from '@/lib/auth-context';
 import { COUNTRIES, DEFAULT_COUNTRY, cityCoordinates, countryCities, getCountry, parseCountrySelection, type CountryCode } from '@/lib/location-config';
@@ -147,6 +147,22 @@ function computeGarantieFin(debut: string, duree: number): string {
   if (!debut || !duree) return '';
   try { const d = new Date(debut); d.setFullYear(d.getFullYear() + duree); return d.toISOString().split('T')[0]; }
   catch { return ''; }
+}
+
+function healthScoreKey(value: unknown): string {
+  const normalized = String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return normalized.replace(/\s+/g, ' ').trim().toLocaleLowerCase('fr');
+}
+
+function fallbackHealthScore(status: unknown): number {
+  switch (healthScoreKey(status)) {
+    case 'hors service': return 25;
+    case 'critique':
+    case 'en panne': return 45;
+    case 'en atelier': return 60;
+    case 'en maintenance': return 75;
+    default: return 100;
+  }
 }
 
 function normalizeFilterLabel(value: string): string {
@@ -491,7 +507,16 @@ export default function EquipementsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const res = await equipements.list();
+      const [res, healthScores] = await Promise.all([
+        equipements.list(),
+        dashboard.healthScores().catch(() => []),
+      ]);
+      const healthByEquipment = new Map(
+        healthScores.map(score => [
+          `${healthScoreKey(score.machine)}|${healthScoreKey(score.client)}`,
+          Number(score.score),
+        ]),
+      );
       const mapped = res.map((item: any) => ({
         id: String(item.id || item.Nom),
         nom: item.Nom || '',
@@ -508,7 +533,11 @@ export default function EquipementsPage() {
         dateInstallation: item.DateInstallation || 'N/A',
         derniereMaintenance: item.DernieresMaintenance || 'N/A',
         prochaineMaintenance: 'N/A',
-        healthScore: item.Score_Sante || (item.Statut && (item.Statut === 'Actif' || item.Statut === 'Opérationnel') ? 95 : 50),
+        healthScore: (() => {
+          const status = item.Statut || 'Actif';
+          const score = healthByEquipment.get(`${healthScoreKey(item.Nom)}|${healthScoreKey(item.Client || 'Centre Principal')}`);
+          return score !== undefined && Number.isFinite(score) ? score : fallbackHealthScore(status);
+        })(),
         statut: item.Statut || 'Actif',
         documentTechnique: item.DocumentTechnique || '',
         garantieDebut: item.garantie_debut || '',
