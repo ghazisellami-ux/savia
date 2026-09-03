@@ -23,14 +23,18 @@ from typing import Optional, Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Body, Request, Response, Cookie
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, status, UploadFile, File, Form, Body, Request, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from repositories.technician_names import DatabaseTechnicianNameRepository
-from services.knowledge_import import detect_and_fix_encoding, parse_text_to_rows as _parse_text_to_rows
+from services.knowledge_import import (
+    detect_and_fix_encoding,
+    parse_text_to_rows as _parse_text_to_rows,
+    extract_docx_structured_rows as _extract_docx_structured_rows,
+)
 from services.localization import LocalizationService
 from services.technician_identity import TechnicianIdentityService
 from services.observability import (

@@ -3,9 +3,11 @@
 from api.runtime import (
     Depends,
     File,
+    Form,
     HTTPException,
     UploadFile,
     _parse_text_to_rows,
+    _extract_docx_structured_rows,
     ajouter_technicien,
     app,
     detect_and_fix_encoding,
@@ -57,6 +59,10 @@ def get_knowledge(user: dict = Depends(_verify_token)):
             "cause": sol.get("Cause", ""),
             "solution": sol.get("Solution", ""),
             "priorite": sol.get("Priorité", ""),
+            "source_document": sol.get("Source_Document") or info.get("Source_Document", ""),
+            "source_page": sol.get("Source_Page") or info.get("Source_Page"),
+            "extraction_method": sol.get("Extraction_Method") or info.get("Extraction_Method", "manual"),
+            "confidence_score": sol.get("Confidence_Score") or info.get("Confidence_Score"),
         })
     return results
 
@@ -82,17 +88,21 @@ def save_confirmed_knowledge(body: dict, user: dict = Depends(_verify_token)):
     try:
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
-                "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
-                (code[:120], message[:500], error_type),
+                "INSERT INTO codes_erreurs (code, message, type, source_document, source_page, extraction_method, confidence_score) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type, "
+                "source_document='', source_page=NULL, extraction_method=EXCLUDED.extraction_method, confidence_score=EXCLUDED.confidence_score",
+                (code[:120], message[:500], error_type, "", None, "manual", 100),
             )
             conn.execute(
-                "INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, updated_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) "
+                "INSERT INTO solutions (mot_cle, type, priorite, cause, solution, validated_by, source_document, source_page, extraction_method, confidence_score, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) "
                 "ON CONFLICT (mot_cle) DO UPDATE SET "
                 "type=EXCLUDED.type, priorite=EXCLUDED.priorite, cause=EXCLUDED.cause, "
-                "solution=EXCLUDED.solution, validated_by=EXCLUDED.validated_by, updated_at=CURRENT_TIMESTAMP",
-                (code[:120], error_type, priority, cause[:4000], solution[:8000], validated_by),
+                "solution=EXCLUDED.solution, validated_by=EXCLUDED.validated_by, "
+                "source_document='', source_page=NULL, "
+                "extraction_method=EXCLUDED.extraction_method, confidence_score=EXCLUDED.confidence_score, "
+                "updated_at=CURRENT_TIMESTAMP",
+                (code[:120], error_type, priority, cause[:4000], solution[:8000], validated_by, "", None, "manual", 100),
             )
         return {"ok": True, "message": "Cause et solution confirmées enregistrées dans la base de connaissances."}
     except Exception as exc:
@@ -104,10 +114,16 @@ def save_confirmed_knowledge(body: dict, user: dict = Depends(_verify_token)):
 
 
 @app.post("/api/knowledge/import")
-async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_verify_token)):
+async def import_knowledge(
+    file: UploadFile = File(...),
+    preview: bool = False,
+    preview_rows: str | None = Form(None),
+    user: dict = Depends(_verify_token),
+):
     require_roles(user, *KNOWLEDGE_WRITE_ROLES)
-    """Import error codes from an uploaded Excel/CSV file."""
+    """Preview or import validated error records from a technical document."""
     import io
+    import json
     import unicodedata
     import re
     
@@ -119,7 +135,22 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         if not text:
             return text
         
-        # Stratégie 1: Détecter UTF-8 mal interprété en Latin-1
+        # Stratégie 1: réparer les séquences UTF-8 décodées en CP1252.
+        # Exemple : ``â€‘`` représente le tiret insécable U+2011 et
+        # ``â€¯`` représente l'espace étroit insécable U+202F. Cette étape
+        # doit précéder le fallback Latin-1, sinon le caractère ``€`` est
+        # ignoré et le texte devient encore plus corrompu.
+        mojibake_markers = ("\u00e2\u20ac", "\u00c2")
+        if any(marker in text for marker in mojibake_markers):
+            try:
+                fixed = text.encode("cp1252").decode("utf-8")
+                if sum(fixed.count(marker) for marker in mojibake_markers) < sum(text.count(marker) for marker in mojibake_markers):
+                    logger.info("✓ fix_mojibake: réparation UTF-8/CP1252 réussie")
+                    return fixed
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+
+        # Stratégie 2: Détecter UTF-8 mal interprété en Latin-1
         # Caractères typiques: ƒ (U+0192), ö (U+00F6), etc.
         # Motif: si on voit trop de caractères accidentels, essayer de ré-encoder
         suspect_pattern = re.compile(r'[\u0192\u00C0-\u00FF\u0100-\u017F]')
@@ -137,13 +168,14 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
             except Exception as e:
                 logger.warning(f"⚠️ fix_mojibake: Tentative UTF-8→Latin-1 échouée: {e}")
         
-        # Stratégie 2: Remplacer les caractères connus corrompus
+        # Stratégie 3: Remplacer les caractères connus corrompus
         corruption_map = {
             'ƒ': '',  # U+0192 - suppression
             'Ô': 'O',  # U+00D4 - confusion
             'ô': 'o',  # U+00F4 - confusion
             'Õ': 'O',  # U+00D5 - confusion
             'õ': 'o',  # U+00F5 - confusion
+            '\ufffd': '',  # caractère de remplacement déjà irréversible
         }
         for wrong, correct in corruption_map.items():
             if wrong in text:
@@ -161,7 +193,7 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         
         # ÉTAPE 0.5: Convertir les espaces non-ASCII en espaces normaux AVANT toute autre chose
         # Cela évite les problèmes avec les patterns regex
-        text = re.sub(r'[\u00A0\u2000-\u200B\u2028\u2029\u3000]', ' ', text)
+        text = re.sub(r'[\u00A0\u2000-\u200B\u2028\u2029\u202F\u3000]', ' ', text)
         
         # ÉTAPE 1: Remplacer les caractères de typographie spéciaux par ASCII
         char_map = {
@@ -171,6 +203,9 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
             '"': '"',           # guillemet fermant courbe
             '–': '-',           # tiret court
             '—': '--',          # tiret long
+            '\u2011': '-',      # tiret insécable
+            '\u00AD': '',       # trait d'union conditionnel
+            '−': '-',           # signe moins Unicode
             '«': '"',           # guillemet français
             '»': '"',           # guillemet français
             '‹': '<',           # chevron ouvrant
@@ -216,15 +251,32 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
     content = validated_upload.data
 
     try:
-        if filename.endswith(".csv"):
+        filename_lower = filename.lower()
+        extraction_method = "structured_import"
+        parsed_preview_rows = None
+        if preview_rows:
+            try:
+                parsed_preview_rows = json.loads(preview_rows)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Prévisualisation invalide : {exc}")
+            if not isinstance(parsed_preview_rows, list):
+                raise HTTPException(status_code=400, detail="Prévisualisation invalide : tableau attendu.")
+            rows = parsed_preview_rows
+            extraction_method = "validated_preview"
+        elif filename_lower.endswith(".csv"):
             import csv
             # Utiliser la détection d'encodage universelle
             text = detect_and_fix_encoding(content)
             text = sanitize_text(text)
-            reader = csv.DictReader(io.StringIO(text))
+            try:
+                dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+            except csv.Error:
+                dialect = csv.excel
+            reader = csv.DictReader(io.StringIO(text), dialect=dialect)
             rows = list(reader)
+            extraction_method = "csv"
         
-        elif filename.endswith((".xlsx", ".xls")):
+        elif filename_lower.endswith((".xlsx", ".xls")):
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
             ws = wb.active
@@ -237,19 +289,52 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
                         val = str(v) if v else ""
                         row_dict[headers[i]] = sanitize_text(val)
                 rows.append(row_dict)
+            extraction_method = "xlsx"
         
-        elif filename.endswith(".pdf"):
+        elif filename_lower.endswith(".pdf"):
+            pdf_has_text = False
             try:
                 import fitz
                 doc = fitz.open(stream=content, filetype="pdf")
-                full_text = "\n".join(sanitize_text(page.get_text()) for page in doc)
+                page_texts = []
+                for page_number, page in enumerate(doc, start=1):
+                    page_text = sanitize_text(page.get_text())
+                    if page_text.strip():
+                        pdf_has_text = True
+                        page_texts.append((page_number, page_text))
+                # One AI pass over bounded, line-preserving chunks avoids a request storm on large PDFs.
+                full_text = "\n\n".join(f"[PAGE {page_number}]\n{page_text}" for page_number, page_text in page_texts)
+                rows = _parse_text_to_rows(full_text)
+                # Recover the source page from the code (or message) without another AI call.
+                for row in rows:
+                    code = str(row.get("code") or "").casefold()
+                    message = str(row.get("message") or "").casefold()
+                    code_tokens = [
+                        re.sub(r"\s+", "", token)
+                        for token in re.findall(r"\b\d{2}-\s*[0-9a-f]{3,4}h\b|\b\d{3,5}d\b", code, re.IGNORECASE)
+                    ]
+                    for page_number, page_text in page_texts:
+                        page_lower = page_text.casefold()
+                        page_compact = re.sub(r"\s+", "", page_lower)
+                        if (
+                            (code and code in page_lower)
+                            or any(token in page_compact for token in code_tokens)
+                            or (message and message[:40] in page_lower)
+                        ):
+                            row["source_page"] = page_number
+                            break
+                extraction_method = "pdf-text-ai-regex"
             except Exception:
                 # Fallback: décoder les bytes directement
                 full_text = detect_and_fix_encoding(content)
-            full_text = sanitize_text(full_text)
-            rows = _parse_text_to_rows(full_text)
+                full_text = sanitize_text(full_text)
+                pdf_has_text = bool(full_text.strip())
+                rows = _parse_text_to_rows(full_text)
+                extraction_method = "pdf-decoded-ai-regex"
+            if not rows and not pdf_has_text:
+                raise HTTPException(status_code=422, detail="PDF scanné ou sans texte exploitable : OCR requis avant import.")
         
-        elif filename.endswith((".docx", ".doc")):
+        elif filename_lower.endswith((".docx", ".doc")):
             import zipfile
             
             full_text = ""
@@ -267,10 +352,10 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
                 # Extract table content
                 for table in doc.tables:
                     for row in table.rows:
-                        for cell in row.cells:
-                            if cell.text and cell.text.strip():
-                                full_text += sanitize_text(cell.text) + " "
-                    full_text += "\n"
+                        cells = [sanitize_text(cell.text) for cell in row.cells if cell.text and cell.text.strip()]
+                        if cells:
+                            # Keep column boundaries visible to the extractor.
+                            full_text += " | ".join(cells) + "\n"
                 
                 logger.info(f"✓ DOCX extraction OK: {len(full_text)} chars extracted")
                     
@@ -297,18 +382,34 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
             full_text = sanitize_text(full_text) if full_text else ""
             logger.info(f"🔍 DEBUG - Total extracted: {len(full_text)} chars")
             
-            # Use AI-based parsing
-            rows = _parse_text_to_rows(full_text)
+            # Word alarm cards may live in embedded text boxes, which are not
+            # exposed by python-docx paragraphs. Extract them structurally so
+            # each ALARM/CAUSE/REMEDY card remains one row; Remedy is mapped to
+            # the canonical Solution column automatically.
+            structured_rows = _extract_docx_structured_rows(content)
+            ai_rows = _parse_text_to_rows(full_text)
+            if structured_rows:
+                # Do not import headings from the table of contents as error
+                # records. AI rows are useful only when they enrich a card
+                # that was actually found with CAUSE/REMEDY content.
+                structured_codes = {str(row.get("code", "")).casefold() for row in structured_rows}
+                ai_rows = [row for row in ai_rows if str(row.get("code", "")).casefold() in structured_codes]
+            rows = structured_rows + ai_rows
+            logger.info("DOCX structured extraction: %s card(s), AI supplement: %s row(s)", len(structured_rows), len(ai_rows))
+            extraction_method = "docx-ai-regex"
 
         
         else:
             raise HTTPException(status_code=400, detail="Format non supporté. Utilisez CSV, XLSX, PDF ou DOCX.")
 
+        if not rows:
+            raise HTTPException(status_code=422, detail="Aucune fiche d'erreur structurée n'a été trouvée dans le document.")
+
         # Auto-detect column mapping
         col_map = {}
         for h in (rows[0].keys() if rows else []):
             hl = h.lower().strip()
-            if "code" in hl: col_map["code"] = h
+            if "code" in hl or "mot_cle" in hl or "mot clé" in hl: col_map["code"] = h
             elif "message" in hl or "msg" in hl: col_map["message"] = h
             elif "type" in hl: col_map["type"] = h
             elif "cause" in hl: col_map["cause"] = h
@@ -318,29 +419,86 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
         if "code" not in col_map:
             raise HTTPException(status_code=400, detail="Colonne 'Code' non trouvée dans le fichier.")
 
+        # Normalize and merge records found on several pages/chunks before writing.
+        normalized_rows = {}
+        for row in rows:
+            code = sanitize_text(str(row.get(col_map.get("code", ""), "") or "").strip())
+            if not code:
+                continue
+            normalized = {
+                "code": code[:120],
+                "message": sanitize_text(str(row.get(col_map.get("message", ""), "") or ""))[:500],
+                "type": sanitize_text(str(row.get(col_map.get("type", ""), "Hardware") or "Hardware"))[:80] or "Hardware",
+                "cause": sanitize_text(str(row.get(col_map.get("cause", ""), "") or ""))[:4000],
+                "solution": sanitize_text(str(row.get(col_map.get("solution", ""), "") or ""))[:8000],
+                "priorite": sanitize_text(str(row.get(col_map.get("priorite", ""), "MOYENNE") or "MOYENNE")).upper(),
+                "source_page": row.get("source_page"),
+                "extraction_method": row.get("extraction_method") or extraction_method,
+                "confidence_score": row.get("confidence"),
+            }
+            if normalized["priorite"] not in {"HAUTE", "MOYENNE", "BASSE"}:
+                normalized["priorite"] = "MOYENNE"
+            try:
+                normalized["confidence_score"] = max(0, min(100, int(float(normalized["confidence_score"]))))
+            except (TypeError, ValueError):
+                normalized["confidence_score"] = 100 if extraction_method in {"csv", "xlsx"} else 35
+            key = code.casefold()
+            existing = normalized_rows.get(key)
+            if not existing:
+                normalized_rows[key] = normalized
+            else:
+                # Prefer the structured/document row over a low-confidence
+                # regex/AI fallback, regardless of extraction order.
+                if normalized["confidence_score"] > existing["confidence_score"]:
+                    previous = existing
+                    normalized_rows[key] = normalized
+                    existing = normalized
+                    normalized = previous
+                for field in ("message", "type", "cause", "solution"):
+                    if not existing[field] and normalized[field]:
+                        existing[field] = normalized[field]
+                existing["confidence_score"] = max(existing["confidence_score"], normalized["confidence_score"])
+
+        if not normalized_rows:
+            raise HTTPException(status_code=422, detail="Aucune ligne avec un code d'erreur exploitable n'a été trouvée.")
+
+        if preview:
+            return {
+                "ok": True,
+                "preview": True,
+                "filename": filename,
+                "rows": [
+                    {
+                        **row,
+                        "source_document": filename,
+                        "source_page": row["source_page"] if str(row["source_page"] or "").isdigit() else None,
+                        "confidence_score": row["confidence_score"],
+                    }
+                    for row in normalized_rows.values()
+                ],
+                "imported": len(normalized_rows),
+            }
+
         imported = 0
         with get_db() as conn:
-            for row in rows:
-                code = sanitize_text(row.get(col_map.get("code", ""), "").strip())
-                if not code:
-                    continue
-                msg = sanitize_text(row.get(col_map.get("message", ""), ""))
-                typ = sanitize_text(row.get(col_map.get("type", ""), "Hardware"))
-                cause = sanitize_text(row.get(col_map.get("cause", ""), ""))
-                solution = sanitize_text(row.get(col_map.get("solution", ""), ""))
-                priorite = sanitize_text(row.get(col_map.get("priorite", ""), "MOYENNE"))
-
-                # Insert or update codes_erreurs
+            for row in normalized_rows.values():
+                source_page = row["source_page"] if str(row["source_page"] or "").isdigit() else None
                 conn.execute(
-                    "INSERT INTO codes_erreurs (code, message, type) VALUES (%s, %s, %s) "
-                    "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type",
-                    (code, msg, typ)
+                    "INSERT INTO codes_erreurs (code, message, type, source_document, source_page, extraction_method, confidence_score) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (code) DO UPDATE SET message=EXCLUDED.message, type=EXCLUDED.type, "
+                    "source_document=EXCLUDED.source_document, source_page=EXCLUDED.source_page, "
+                    "extraction_method=EXCLUDED.extraction_method, confidence_score=EXCLUDED.confidence_score",
+                    (row["code"], row["message"], row["type"], filename, source_page, row["extraction_method"], row["confidence_score"])
                 )
-                # Insert or update solutions
                 conn.execute(
-                    "INSERT INTO solutions (mot_cle, cause, solution, priorite) VALUES (%s, %s, %s, %s) "
-                    "ON CONFLICT (mot_cle) DO UPDATE SET cause=EXCLUDED.cause, solution=EXCLUDED.solution, priorite=EXCLUDED.priorite",
-                    (code, cause, solution, priorite)
+                    "INSERT INTO solutions (mot_cle, type, cause, solution, priorite, source_document, source_page, extraction_method, confidence_score) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (mot_cle) DO UPDATE SET type=EXCLUDED.type, cause=EXCLUDED.cause, "
+                    "solution=EXCLUDED.solution, priorite=EXCLUDED.priorite, source_document=EXCLUDED.source_document, "
+                    "source_page=EXCLUDED.source_page, extraction_method=EXCLUDED.extraction_method, "
+                    "confidence_score=EXCLUDED.confidence_score, updated_at=CURRENT_TIMESTAMP",
+                    (row["code"], row["type"], row["cause"], row["solution"], row["priorite"], filename, source_page, row["extraction_method"], row["confidence_score"])
                 )
                 imported += 1
 
@@ -348,6 +506,7 @@ async def import_knowledge(file: UploadFile = File(...), user: dict = Depends(_v
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Knowledge import failed for %s", filename)
         raise HTTPException(status_code=500, detail=f"Erreur d'import: {str(e)}")
 
 

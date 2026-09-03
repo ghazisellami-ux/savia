@@ -14,7 +14,20 @@ interface KnowledgeItem {
   solution: string;
   type: string;
   priorite: string;
+  source_document?: string;
+  source_page?: number | null;
+  extraction_method?: string;
+  confidence_score?: number | null;
 }
+
+const readJsonResponse = async (response: Response): Promise<Record<string, any>> => {
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as Record<string, any>;
+  } catch {
+    throw new Error(response.ok ? 'Réponse serveur invalide.' : `Erreur serveur (${response.status}).`);
+  }
+};
 
 export default function KnowledgePage() {
   const [search, setSearch] = useState('');
@@ -25,22 +38,29 @@ export default function KnowledgePage() {
   const [importLoading, setImportLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState('');
+  const [previewRows, setPreviewRows] = useState<KnowledgeItem[] | null>(null);
+  const [previewFile, setPreviewFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pdfRef = useRef<HTMLInputElement>(null);
   const wordRef = useRef<HTMLInputElement>(null);
 
+  const mapKnowledgeRows = (rows: any[]): KnowledgeItem[] => rows.map((item: any) => ({
+    code: item.Code_Erreur || item.code || '',
+    message: item.Message || item.message || '',
+    cause: item.Cause || item.cause || '',
+    solution: item.Solution || item.solution || '',
+    type: item.Type || item.type || 'Hardware',
+    priorite: item.Priorite || item.priorite || 'MOYENNE',
+    source_document: item.Source_Document || item.source_document || '',
+    source_page: item.Source_Page ?? item.source_page ?? null,
+    extraction_method: item.Extraction_Method || item.extraction_method || 'manual',
+    confidence_score: item.Confidence_Score ?? item.confidence_score ?? null,
+  }));
+
   const loadData = async () => {
     try {
       const res = await knowledge.list();
-      const mapped = res.map((item: any) => ({
-        code: item.Code_Erreur || item.code || '',
-        message: item.Message || item.message || '',
-        cause: item.Cause || item.cause || '',
-        solution: item.Solution || item.solution || '',
-        type: item.Type || item.type || 'Hardware',
-        priorite: item.Priorite || item.priorite || 'MOYENNE',
-      }));
-      setData(mapped);
+      setData(mapKnowledgeRows(res));
     } catch (err) {
       console.error("Failed to fetch knowledge", err);
     } finally {
@@ -53,18 +73,21 @@ export default function KnowledgePage() {
   const handleImport = async (file: File) => {
     setImportLoading(true);
     setImportMsg('');
+    setPreviewRows(null);
+    setPreviewFile(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`/api/knowledge/import`, {
+      const res = await fetch(`/api/knowledge/import?preview=true`, {
         method: 'POST',
         credentials: 'same-origin',
         body: formData,
       });
-      const json = await res.json();
+      const json = await readJsonResponse(res);
       if (res.ok && json.ok) {
-        setImportMsg(`✓ ${json.imported} codes importés avec succès.`);
-        await loadData();
+        setPreviewRows(mapKnowledgeRows(json.rows || []));
+        setPreviewFile(file);
+        setImportMsg(`✓ ${json.imported} fiche(s) détectée(s). Vérifiez l'extraction avant confirmation.`);
       } else {
         setImportMsg(`✗ ${json.detail || 'Erreur inconnue'}`);
       }
@@ -73,6 +96,37 @@ export default function KnowledgePage() {
     } finally {
       setImportLoading(false);
     }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!previewFile) return;
+    setImportLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', previewFile);
+      formData.append('preview_rows', JSON.stringify(previewRows));
+      const res = await fetch('/api/knowledge/import', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData,
+      });
+      const json = await readJsonResponse(res);
+      if (!res.ok || !json.ok) throw new Error(json.detail || 'Erreur inconnue');
+      setImportMsg(`✓ ${json.imported} code(s) importé(s) avec succès.`);
+      setPreviewRows(null);
+      setPreviewFile(null);
+      await loadData();
+    } catch (e: any) {
+      setImportMsg(`✗ Erreur: ${e.message}`);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const cancelPreview = () => {
+    setPreviewRows(null);
+    setPreviewFile(null);
+    setImportMsg('Extraction annulée.');
   };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -307,6 +361,50 @@ export default function KnowledgePage() {
         )}
       </SectionCard>
 
+      {previewRows && previewFile && (
+        <SectionCard title={<span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-yellow-400" /> Prévisualisation — {previewFile.name}</span>}>
+          <p className="text-xs text-savia-text-muted mb-3">
+            Vérifiez les fiches extraites avant l&apos;écriture en base. Les entrées sont dédupliquées par code.
+          </p>
+          <div className="overflow-x-auto max-h-80 overflow-y-auto border border-savia-border/40 rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-savia-surface">
+                <tr className="text-left text-savia-text-dim uppercase tracking-wider">
+                  <th className="py-2 px-3">Code</th>
+                  <th className="py-2 px-3">Message</th>
+                  <th className="py-2 px-3">Type</th>
+                  <th className="py-2 px-3">Cause</th>
+                  <th className="py-2 px-3">Solution</th>
+                  <th className="py-2 px-3">Priorité</th>
+                  <th className="py-2 px-3">Confiance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-savia-border/30">
+                {previewRows.map((row, index) => (
+                  <tr key={`${row.code}-${index}`}>
+                    <td className="py-2 px-3 font-mono text-savia-accent font-bold">{row.code}</td>
+                    <td className="py-2 px-3">{row.message || '—'}</td>
+                    <td className="py-2 px-3">{row.type || '—'}</td>
+                    <td className="py-2 px-3">{row.cause || '—'}</td>
+                    <td className="py-2 px-3">{row.solution || '—'}</td>
+                    <td className="py-2 px-3">{row.priorite || 'MOYENNE'}</td>
+                    <td className="py-2 px-3">{row.confidence_score == null ? '—' : `${row.confidence_score}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-end gap-2 mt-4">
+            <button type="button" onClick={cancelPreview} disabled={importLoading} className="px-3 py-2 rounded-lg border border-savia-border text-sm text-savia-text-muted hover:bg-savia-surface-hover disabled:opacity-50">
+              Annuler
+            </button>
+            <button type="button" onClick={handleConfirmImport} disabled={importLoading} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-savia-accent text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+              {importLoading && <Loader2 className="w-4 h-4 animate-spin" />} Confirmer l&apos;import
+            </button>
+          </div>
+        </SectionCard>
+      )}
+
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
@@ -339,6 +437,11 @@ export default function KnowledgePage() {
                 <tr key={`${k.code}-${idx}`} className="hover:bg-savia-bg/40 transition-colors">
                   <td className="py-3 px-3">
                     <span className="font-mono text-savia-accent font-bold text-xs">{k.code}</span>
+                    {k.source_document && (
+                      <div className="text-[10px] text-savia-text-dim mt-1" title={k.extraction_method || 'manual'}>
+                        {k.source_document}{k.source_page ? ` · p.${k.source_page}` : ''}
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 px-3">
                     <span className="text-savia-text font-medium">{k.message}</span>

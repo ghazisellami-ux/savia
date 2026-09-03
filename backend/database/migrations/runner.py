@@ -731,6 +731,22 @@ def _migration_019_contract_billing_coverage(conn) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_cases_coverage ON billing_cases(coverage_status, updated_at DESC)")
 
 
+def _migration_020_knowledge_import_provenance(conn) -> None:
+    """Track where imported knowledge came from and how reliable it is."""
+    for table in ("codes_erreurs", "solutions"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS source_document TEXT NOT NULL DEFAULT ''")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS source_page INTEGER NULL")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS extraction_method TEXT NOT NULL DEFAULT 'manual'")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS confidence_score INTEGER NULL")
+        constraint_name = f"{table}_confidence_score_check"
+        if not _constraint_exists(conn, constraint_name):
+            conn.execute(
+                f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} "
+                "CHECK (confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 100)) NOT VALID"
+            )
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_source_document ON {table}(source_document)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -751,6 +767,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("017", "equipment model catalog", _migration_017_equipment_model_catalog),
     ("018", "equipment service catalog", _migration_018_equipment_service_catalog),
     ("019", "contract billing coverage", _migration_019_contract_billing_coverage),
+    ("020", "knowledge import provenance", _migration_020_knowledge_import_provenance),
 )
 
 

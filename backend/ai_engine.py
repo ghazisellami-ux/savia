@@ -55,7 +55,10 @@ def _generation_config(is_json: bool, timeout_seconds: int):
     config = {
         "temperature": 0.2,
         "candidate_count": 1,
-        "max_output_tokens": 4096,
+        # Knowledge-base extraction can legitimately contain many rows. Keep
+        # enough room for the complete JSON table while allowing deployments
+        # with tighter limits to override it through the environment.
+        "max_output_tokens": max(4096, int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))),
         "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True),
         "http_options": types.HttpOptions(
             timeout=timeout_seconds * 1000,
@@ -369,6 +372,15 @@ def clean_json_response(text_response):
     text = re.sub(r'```\w*\s*', '', text)
     text = re.sub(r'```', '', text)
     text = text.strip()
+
+    # Most structured extraction responses are already a complete JSON root.
+    # Parse that form first so arrays are not mistaken for their first object.
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    except json.JSONDecodeError:
+        pass
 
     # Essayer de trouver un objet JSON
     start = text.find("{")
