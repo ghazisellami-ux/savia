@@ -28,6 +28,31 @@ interface Demande {
   billing_case_id?: number | null;
 }
 
+interface EquipmentOption {
+  id: string;
+  name: string;
+  manufacturer: string;
+  model: string;
+  serialNumber: string;
+}
+
+const toEquipmentOptions = (items: Array<Record<string, unknown>>): EquipmentOption[] => items
+  .map((equipment, index) => ({
+    id: String(equipment.id ?? `${equipment.Nom || equipment.nom || 'equipement'}-${index}`),
+    name: String(equipment.Nom || equipment.nom || ''),
+    manufacturer: String(equipment.Fabricant || equipment.fabricant || ''),
+    model: String(equipment.Modele || equipment.modele || ''),
+    serialNumber: String(equipment.NumSerie || equipment.Num_Serie || equipment.num_serie || ''),
+  }))
+  .filter(equipment => equipment.name);
+
+const equipmentOptionLabel = (equipment: EquipmentOption): string => [
+  equipment.name,
+  equipment.manufacturer,
+  equipment.model,
+  equipment.serialNumber ? `SN: ${equipment.serialNumber}` : '',
+].filter(Boolean).join(' · ');
+
 // === 3 statuts officiels ===
 const STATUTS = ['En attente', 'Assignée', 'Clôturée'] as const;
 type Statut = typeof STATUTS[number];
@@ -123,7 +148,8 @@ export default function DemandesPage() {
   const [data, setData] = useState<Demande[]>([]);
 
   const [allClients, setAllClients] = useState<string[]>([]);
-  const [filteredEquips, setFilteredEquips] = useState<string[]>([]);
+  const [filteredEquips, setFilteredEquips] = useState<EquipmentOption[]>([]);
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState('');
   const [equipsLoading, setEquipsLoading] = useState(false);
   const [techs, setTechs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -211,25 +237,41 @@ export default function DemandesPage() {
     if (!isLecteur) return;
     setEquipsLoading(true);
     equipements.list()
-      .then((res: any[]) => {
-        const names = res.map((e: any) => e.Nom || e.nom || '').filter(Boolean);
-        setFilteredEquips(names);
+      .then((res: Array<Record<string, unknown>>) => {
+        const options = toEquipmentOptions(res);
+        setFilteredEquips(options);
+        setSelectedEquipmentId(current => options.some(equipment => equipment.id === current) ? current : '');
       })
-      .catch(() => setFilteredEquips([]))
+      .catch(() => {
+        setFilteredEquips([]);
+        setSelectedEquipmentId('');
+      })
       .finally(() => setEquipsLoading(false));
   }, [isLecteur]);
 
   useEffect(() => {
     if (isLecteur) return;
-    if (!form.client) { setFilteredEquips([]); return; }
+    if (!form.client) {
+      setFilteredEquips([]);
+      setSelectedEquipmentId('');
+      return;
+    }
     setEquipsLoading(true);
     equipements.list(form.client)
-      .then((res: any[]) => {
-        setFilteredEquips(res.map((e: any) => e.Nom || e.nom || '').filter(Boolean));
+      .then((res: Array<Record<string, unknown>>) => {
+        const options = toEquipmentOptions(res);
+        setFilteredEquips(options);
+        setSelectedEquipmentId(current => {
+          if (options.some(equipment => equipment.id === current)) return current;
+          return options.find(equipment => equipment.name === billingSource?.equipment)?.id || '';
+        });
       })
-      .catch(() => setFilteredEquips([]))
+      .catch(() => {
+        setFilteredEquips([]);
+        setSelectedEquipmentId('');
+      })
       .finally(() => setEquipsLoading(false));
-  }, [form.client, isLecteur]);
+  }, [billingSource?.equipment, form.client, isLecteur]);
 
   const duplicateRequest = useMemo(() => {
     const client = form.client.trim().toLocaleLowerCase('fr');
@@ -245,6 +287,7 @@ export default function DemandesPage() {
   const openNewModal = () => {
     setBillingSource(null);
     setForm({ ...emptyForm });
+    setSelectedEquipmentId('');
     setShowNewModal(true);
   };
 
@@ -530,7 +573,10 @@ export default function DemandesPage() {
                   {isLecteur || billingSource ? (
                     <div className="px-4 py-2.5 rounded-lg bg-savia-bg/30 border border-savia-border text-savia-text-muted text-sm">{billingSource?.client || clientNom}</div>
                   ) : (
-                    <select className={INPUT_CLS} value={form.client} onChange={e => setForm({ ...form, client: e.target.value, equipement: '' })}>
+                    <select className={INPUT_CLS} value={form.client} onChange={e => {
+                      setForm({ ...form, client: e.target.value, equipement: '' });
+                      setSelectedEquipmentId('');
+                    }}>
                       <option value="">— Sélectionner un client —</option>
                       {allClients.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
@@ -541,13 +587,24 @@ export default function DemandesPage() {
                     <Server className="w-3.5 h-3.5" /> Équipement concerné *
                     {equipsLoading && <Loader2 className="w-3 h-3 animate-spin text-savia-accent" />}
                   </label>
-                  <select className={INPUT_CLS} value={form.equipement}
-                    onChange={e => setForm({...form, equipement: e.target.value})}
+                  <select className={INPUT_CLS}
+                    value={selectedEquipmentId || (billingSource?.equipment ? '__billing-equipment__' : '')}
+                    onChange={e => {
+                      const selectedId = e.target.value;
+                      const selectedEquipment = filteredEquips.find(equipment => equipment.id === selectedId);
+                      setSelectedEquipmentId(selectedId);
+                      setForm({...form, equipement: selectedEquipment?.name || ''});
+                    }}
                     disabled={Boolean(billingSource?.equipment) || (!isLecteur && !form.client) || equipsLoading}>
                     <option value="">
                       {equipsLoading ? 'Chargement...' : (!isLecteur && !form.client) ? "← Choisir un client d'abord" : '— Sélectionner un équipement —'}
                     </option>
-                    {filteredEquips.map(e => <option key={e} value={e}>{e}</option>)}
+                    {billingSource?.equipment && !filteredEquips.some(equipment => equipment.name === billingSource.equipment) && (
+                      <option value="__billing-equipment__">{billingSource.equipment}</option>
+                    )}
+                    {filteredEquips.map(equipment => (
+                      <option key={equipment.id} value={equipment.id}>{equipmentOptionLabel(equipment)}</option>
+                    ))}
                   </select>
                   {!isLecteur && form.client && !equipsLoading && (
                     <p className="text-xs text-savia-text-muted mt-1 pl-1">
