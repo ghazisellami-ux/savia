@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { getUser, isLoggedIn } from '@/lib/auth';
+import { canCreateIntervention, getUser, isLoggedIn } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import InterventionCard from '@/components/InterventionCard';
@@ -18,9 +18,11 @@ export default function InterventionsPage() {
   const [statut, setStatut]     = useState(''); // Par défaut: Toutes
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState('');
+  const [canCreate, setCanCreate] = useState(false);
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
+    setCanCreate(canCreateIntervention());
     loadData();
   }, []);
 
@@ -91,10 +93,12 @@ export default function InterventionsPage() {
         {/* Page title */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <h1 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--navy)', display: 'flex', alignItems: 'center', gap: '8px' }}><ClipboardList style={{ width: 22, height: 22 }} /> Mes Interventions</h1>
-          <button onClick={() => router.push('/nouvelle')}
-            style={{ background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
-            + Nouvelle
-          </button>
+          {canCreate && (
+            <button onClick={() => router.push('/nouvelle')}
+              style={{ background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
+              + Nouvelle
+            </button>
+          )}
         </div>
 
         {/* Filter */}

@@ -160,7 +160,8 @@ export const api = {
 
   // Notifications
   notifications: {
-    list: () => req<any[]>('/api/notifications'),
+    list: () => req<any[]>('/api/notifications', { cache: 'no-store' }),
+    count: () => req<{ count: number }>('/api/notifications/count', { cache: 'no-store' }),
     markRead: (id: number) => req<any>(`/api/notifications/${id}/read`, { method: 'PATCH' }),
   },
 };

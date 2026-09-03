@@ -268,6 +268,26 @@ def _refs_match(ref1: str, ref2: str) -> bool:
     return n1 == n2
 
 
+def _is_stock_replenishment(stock_before, stock_after) -> bool:
+    """A pending request can be fulfilled by any positive stock increase."""
+    try:
+        before = int(stock_before)
+        after = int(stock_after)
+    except (TypeError, ValueError):
+        return False
+    return after > 0 and after > before
+
+
+def _optional_int(value):
+    """Convert nullable database numbers, including NaN values, to an int."""
+    try:
+        if value is None or value != value:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: int):
     """Vérifie si des demandes de pièces en attente correspondent à cette référence.
     Utilise un matching flou (normalisation des tirets, espaces, casse).
@@ -293,9 +313,11 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
     tech_map: dict = {}
     for _, d in df_matched.iterrows():
         t = d.get("technicien") or "inconnu"
-        if t not in tech_map:
-            tech_map[t] = []
-        tech_map[t].append({
+        technician_id = _optional_int(d.get("technicien_id"))
+        technician_key = (technician_id, t)
+        if technician_key not in tech_map:
+            tech_map[technician_key] = []
+        tech_map[technician_key].append({
             "intervention_id": d.get("intervention_id") or "",
             "equipement": d.get("equipement") or "",
             "client": d.get("client") or "",
@@ -303,7 +325,7 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
             "demande_id": int(d["id"]),
         })
 
-    for tech, demandes in tech_map.items():
+    for (technician_id, tech), demandes in tech_map.items():
         machines = ", ".join(set(d["equipement"] for d in demandes if d["equipement"]))
         clients = ", ".join(set(d["client"] for d in demandes if d.get("client")))
         problemes = "; ".join(set(d["probleme"] for d in demandes if d.get("probleme")))
@@ -320,6 +342,7 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
             "piece_reference": reference,
             "piece_nom": nom_piece,
             "technicien": tech,
+            "technicien_id": technician_id,
             "equipement": machines,
             "client": clients,
             "message": (
@@ -333,7 +356,7 @@ def _check_pieces_demandees_disponibles(reference: str, nom_piece: str, stock: i
 
     # Telegram : pièce demandée disponible
     try:
-        all_techs = ", ".join(tech_map.keys()) or "N/A"
+        all_techs = ", ".join(tech for _, tech in tech_map.keys()) or "N/A"
         all_machines = ", ".join(
             set(d["equipement"] for ds in tech_map.values() for d in ds if d.get("equipement"))
         ) or "N/A"
@@ -503,7 +526,7 @@ def create_piece(body: dict, user: dict = Depends(_verify_token)):
 
 @app.put("/api/pieces/{piece_id}")
 def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token)):
-    """Mise à jour d'une pièce. Si stock passe de 0 → >0, déclenche notifications pour les techniciens en attente."""
+    """Mise à jour d'une pièce. Un réapprovisionnement déclenche les notifications en attente."""
     if not _check_create_piece_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Gestionnaires de stock, Responsables, Managers et Admins")
     # Récupérer le stock AVANT modification pour détecter le réapprovisionnement
@@ -535,10 +558,11 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
     }, ensure_ascii=False)
     log_audit(username, "UPDATE_PIECE", details, "pieces")
 
-    # Détecter réapprovisionnement : stock passe de 0 (ou négatif) → positif
+    # Détecter tout réapprovisionnement positif. Une intervention peut être en
+    # attente parce que le stock existant était insuffisant, pas seulement nul.
     if nouveau_stock is not None and stock_avant is not None:
         try:
-            if int(stock_avant) <= 0 and int(nouveau_stock) > 0 and reference:
+            if _is_stock_replenishment(stock_avant, nouveau_stock) and reference:
                 # Chercher toutes les notifications rupture non traitées pour cette pièce
                 df_notifs = notifications_rupture_pour_piece(reference)
                 if not df_notifs.empty:
@@ -546,14 +570,16 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
                     tech_map: dict = {}
                     for _, n in df_notifs.iterrows():
                         t = n.get("technicien") or "inconnu"
-                        if t not in tech_map:
-                            tech_map[t] = []
-                        tech_map[t].append({
+                        technician_id = _optional_int(n.get("technicien_id"))
+                        technician_key = (technician_id, t)
+                        if technician_key not in tech_map:
+                            tech_map[technician_key] = []
+                        tech_map[technician_key].append({
                             "machine": n.get("equipement") or "",
                             "intervention_id": n.get("intervention_id") or "",
                         })
 
-                    for tech, interventions_list in tech_map.items():
+                    for (technician_id, tech), interventions_list in tech_map.items():
                         machines = ", ".join(set(i["machine"] for i in interventions_list if i["machine"]))
                         nb = len(interventions_list)
                         inter_ids = ", ".join(
@@ -564,6 +590,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
                             "piece_reference": reference,
                             "piece_nom": nom_piece,
                             "technicien": tech,
+                            "technicien_id": technician_id,
                             "equipement": machines,
                             "message": (
                                 f"✅ La pièce {reference} ({nom_piece}) est maintenant disponible — "
@@ -576,7 +603,7 @@ def update_piece(piece_id: int, body: dict, user: dict = Depends(_verify_token))
 
                     # --- Telegram : pièce à nouveau disponible ---
                     try:
-                        all_techs = ", ".join(tech_map.keys()) or "N/A"
+                        all_techs = ", ".join(tech for _, tech in tech_map.keys()) or "N/A"
                         all_machines = ", ".join(
                             set(i["machine"] for ivs in tech_map.values() for i in ivs if i.get("machine"))
                         ) or "N/A"

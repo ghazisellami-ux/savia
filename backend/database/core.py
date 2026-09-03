@@ -1259,6 +1259,7 @@ def init_db():
             equipement TEXT,
             client TEXT,
             technicien TEXT,
+            technicien_id INTEGER,
             message TEXT,
             source TEXT NOT NULL DEFAULT '',
             destination TEXT NOT NULL,
@@ -1268,6 +1269,8 @@ def init_db():
             date_traitement TIMESTAMP
         )
         """)
+        conn.execute("ALTER TABLE notifications_pieces ADD COLUMN IF NOT EXISTS technicien_id INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_pieces_technicien_id ON notifications_pieces(technicien_id)")
         # Table Pièces demandées (non référencées) par les techniciens
         conn.execute("""
         CREATE TABLE IF NOT EXISTS pieces_demandees (
@@ -1278,6 +1281,7 @@ def init_db():
             equipement TEXT DEFAULT '',
             client TEXT DEFAULT '',
             technicien TEXT DEFAULT '',
+            technicien_id INTEGER,
             probleme TEXT DEFAULT '',
             statut TEXT DEFAULT 'en_attente',
             date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1287,6 +1291,8 @@ def init_db():
         # Migration: ajouter colonne probleme si elle n'existe pas
         try:
             conn.execute("ALTER TABLE pieces_demandees ADD COLUMN IF NOT EXISTS probleme TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE pieces_demandees ADD COLUMN IF NOT EXISTS technicien_id INTEGER")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pieces_demandees_technicien_id ON pieces_demandees(technicien_id)")
         except Exception:
             pass
 

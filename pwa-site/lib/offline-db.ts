@@ -182,6 +182,13 @@ export async function removeOfflineOutbox(id: string) {
   await transaction(OUTBOX_STORE, 'readwrite', store => store.delete(id));
 }
 
+export async function removeBlockedOfflineOutbox() {
+  const items = await listOfflineOutbox();
+  const blockedItems = items.filter(item => item.blocked);
+  await Promise.all(blockedItems.map(item => removeOfflineOutbox(item.id)));
+  return blockedItems.length;
+}
+
 export async function getOfflineQueueStats(): Promise<OfflineQueueStats> {
   const items = await listOfflineOutbox();
   return {

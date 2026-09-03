@@ -47,3 +47,7 @@ export function clearSession() {
 export function isLoggedIn(): boolean {
   return !!getToken() && !!getUser();
 }
+
+export function canCreateIntervention(user: SaviaUser | null = getUser()): boolean {
+  return ['Admin', 'Manager', 'Responsable Technique'].includes(user?.role || '');
+}
