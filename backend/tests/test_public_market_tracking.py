@@ -16,6 +16,7 @@ def market(**overrides):
         "execution_delay_days": None,
         "equipment_reception_date": None,
         "delivery_note_date": None,
+        "invoice_date": None,
         "provisional_acceptance_date": None,
         "warranty_retention_days": None,
         "final_acceptance_date": None,
@@ -28,7 +29,8 @@ def test_market_status_follows_documentary_progress():
     assert compute_status(market(), today=date(2026, 8, 31)) == "signature_pending"
     assert compute_status(market(signature_date="2026-01-01"), today=date(2026, 8, 31)) == "equipment_reception_pending"
     assert compute_status(market(equipment_reception_date="2026-01-02"), today=date(2026, 8, 31)) == "delivery_note_pending"
-    assert compute_status(market(delivery_note_date="2026-01-03"), today=date(2026, 8, 31)) == "provisional_acceptance_pending"
+    assert compute_status(market(delivery_note_date="2026-01-03"), today=date(2026, 8, 31)) == "invoice_pending"
+    assert compute_status(market(invoice_date="2026-01-04"), today=date(2026, 8, 31)) == "provisional_acceptance_pending"
     assert compute_status(market(provisional_acceptance_date="2026-08-20", warranty_retention_days=60), today=date(2026, 8, 31)) == "warranty_in_progress"
     assert compute_status(market(provisional_acceptance_date="2026-08-20", warranty_retention_days=20), today=date(2026, 8, 31)) == "warranty_expiring"
     assert compute_status(market(final_acceptance_date="2026-08-30"), today=date(2026, 8, 31)) == "completed"
@@ -64,8 +66,8 @@ def test_warranty_reminder_starts_thirty_days_before_its_deadline():
     assert alert and alert["type"] == "warranty" and alert["days_remaining"] == 29
 
 
-def test_progress_counts_the_five_expected_milestones():
-    assert progress_count(market(signature_date="2026-01-01", delivery_note_date="2026-01-03")) == 2
+def test_progress_counts_the_six_expected_milestones():
+    assert progress_count(market(signature_date="2026-01-01", delivery_note_date="2026-01-03", invoice_date="2026-01-04")) == 3
 
 
 def test_public_market_schema_migration_is_registered():
@@ -84,3 +86,9 @@ def test_duplicate_equipment_names_migration_is_registered():
     migrations = [migration for migration in MIGRATIONS if migration[0] == "016"]
     assert len(migrations) == 1
     assert "duplicate equipment names" in migrations[0][1]
+
+
+def test_public_market_invoice_migration_is_registered():
+    migrations = [migration for migration in MIGRATIONS if migration[0] == "021"]
+    assert len(migrations) == 1
+    assert "invoice" in migrations[0][1]

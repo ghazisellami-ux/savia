@@ -25,6 +25,7 @@ DATE_FIELDS = (
     "signature_date",
     "equipment_reception_date",
     "delivery_note_date",
+    "invoice_date",
     "provisional_acceptance_date",
     "final_acceptance_date",
 )
@@ -35,6 +36,7 @@ TEXT_FIELDS = (
     "owner_username",
     "equipment_reception_note",
     "delivery_note_reference",
+    "invoice_reference",
     "provisional_acceptance_reference",
     "final_acceptance_reference",
     "case_state",
@@ -132,6 +134,7 @@ def _update_action(before: dict[str, Any], values: dict[str, Any], changed_field
         "signature_date": "SIGNATURE",
         "equipment_reception_date": "EQUIPMENT_RECEPTION",
         "delivery_note_date": "DELIVERY_NOTE",
+        "invoice_date": "INVOICE",
         "provisional_acceptance_date": "PROVISIONAL_ACCEPTANCE",
         "final_acceptance_date": "FINAL_ACCEPTANCE",
     }
@@ -158,7 +161,7 @@ def _hydrate(raw: Any) -> dict[str, Any]:
         "status_label": STATUS_LABELS[status],
         "next_step": NEXT_STEP[status],
         "progress_completed": progress_count(item),
-        "progress_total": 5,
+        "progress_total": 6,
         "execution_deadline": execution_deadline.isoformat() if execution_deadline else None,
         "warranty_deadline": warranty_deadline.isoformat() if warranty_deadline else None,
         "alert": compute_alert(item),
@@ -278,18 +281,21 @@ def create_public_market_case(body: dict = Body(...), user: dict = Depends(_veri
                    signature_date, execution_delay_days,
                    equipment_reception_date, equipment_reception_note,
                    delivery_note_date, delivery_note_reference,
+                   invoice_date, invoice_reference,
                    provisional_acceptance_date, provisional_acceptance_reference,
                    warranty_retention_days, final_acceptance_date,
                    final_acceptance_reference, case_state, block_reason, notes,
                    created_by, updated_by
                ) VALUES (
                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   %s, %s
                ) RETURNING id""",
             tuple(values[field] for field in (
                 "client", "market_number", "market_object", "owner_username",
                 "signature_date", "execution_delay_days", "equipment_reception_date",
                 "equipment_reception_note", "delivery_note_date", "delivery_note_reference",
+                "invoice_date", "invoice_reference",
                 "provisional_acceptance_date", "provisional_acceptance_reference",
                 "warranty_retention_days", "final_acceptance_date",
                 "final_acceptance_reference", "case_state", "block_reason", "notes",
@@ -326,6 +332,7 @@ def update_public_market_case(case_id: int, body: dict = Body(...), user: dict =
                    signature_date=%s, execution_delay_days=%s,
                    equipment_reception_date=%s, equipment_reception_note=%s,
                    delivery_note_date=%s, delivery_note_reference=%s,
+                   invoice_date=%s, invoice_reference=%s,
                    provisional_acceptance_date=%s, provisional_acceptance_reference=%s,
                    warranty_retention_days=%s, final_acceptance_date=%s,
                    final_acceptance_reference=%s, case_state=%s, block_reason=%s,
@@ -335,6 +342,7 @@ def update_public_market_case(case_id: int, body: dict = Body(...), user: dict =
                 "client", "market_number", "market_object", "owner_username",
                 "signature_date", "execution_delay_days", "equipment_reception_date",
                 "equipment_reception_note", "delivery_note_date", "delivery_note_reference",
+                "invoice_date", "invoice_reference",
                 "provisional_acceptance_date", "provisional_acceptance_reference",
                 "warranty_retention_days", "final_acceptance_date",
                 "final_acceptance_reference", "case_state", "block_reason", "notes",

@@ -10,6 +10,7 @@ STATUS_LABELS = {
     "signature_pending": "Signature à renseigner",
     "equipment_reception_pending": "Réception du matériel attendue",
     "delivery_note_pending": "Bon de livraison attendu",
+    "invoice_pending": "Facture attendue",
     "provisional_acceptance_pending": "PV provisoire attendu",
     "warranty_in_progress": "Retenue de garantie en cours",
     "warranty_expiring": "Échéance de garantie proche",
@@ -23,6 +24,7 @@ NEXT_STEP = {
     "signature_pending": "signature",
     "equipment_reception_pending": "equipment_reception",
     "delivery_note_pending": "delivery_note",
+    "invoice_pending": "invoice",
     "provisional_acceptance_pending": "provisional_acceptance",
     "warranty_in_progress": "final_acceptance",
     "warranty_expiring": "final_acceptance",
@@ -74,8 +76,10 @@ def compute_status(case: dict[str, Any], today: date | None = None) -> str:
         if (warranty_deadline - (today or date.today())).days <= 30:
             return "warranty_expiring"
         return "warranty_in_progress"
-    if as_date(case.get("delivery_note_date")):
+    if as_date(case.get("invoice_date")):
         return "provisional_acceptance_pending"
+    if as_date(case.get("delivery_note_date")):
+        return "invoice_pending"
     if as_date(case.get("equipment_reception_date")):
         return "delivery_note_pending"
     if as_date(case.get("signature_date")):
@@ -124,6 +128,7 @@ def progress_count(case: dict[str, Any]) -> int:
         "signature_date",
         "equipment_reception_date",
         "delivery_note_date",
+        "invoice_date",
         "provisional_acceptance_date",
         "final_acceptance_date",
     ))
