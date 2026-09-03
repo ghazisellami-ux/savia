@@ -89,20 +89,34 @@ def lire_base():
 
     with get_db() as conn:
         # Codes
-        for row in conn.execute("SELECT code, message, niveau, type FROM codes_erreurs").fetchall():
+        for row in conn.execute(
+            "SELECT code, message, niveau, type, source_document, source_page, extraction_method, confidence_score "
+            "FROM codes_erreurs"
+        ).fetchall():
             hex_db[row["code"]] = {
                 "Msg": row["message"],
                 "Level": row["niveau"],
                 "Type": row["type"],
+                "Source_Document": row.get("source_document", ""),
+                "Source_Page": row.get("source_page"),
+                "Extraction_Method": row.get("extraction_method", "manual"),
+                "Confidence_Score": row.get("confidence_score"),
             }
 
         # Solutions
-        for row in conn.execute("SELECT mot_cle, type, priorite, cause, solution FROM solutions").fetchall():
+        for row in conn.execute(
+            "SELECT mot_cle, type, priorite, cause, solution, source_document, source_page, "
+            "extraction_method, confidence_score FROM solutions"
+        ).fetchall():
             sol_db[row["mot_cle"]] = {
                 "Type": row["type"],
                 "Priorité": row["priorite"],
                 "Cause": row["cause"],
                 "Solution": row["solution"],
+                "Source_Document": row.get("source_document", ""),
+                "Source_Page": row.get("source_page"),
+                "Extraction_Method": row.get("extraction_method", "manual"),
+                "Confidence_Score": row.get("confidence_score"),
             }
 
     return hex_db, sol_db
