@@ -30,6 +30,7 @@ from api.security import (
 from services.scheduled_jobs import (
     _df_to_records,
 )
+from repositories.parts import resolve_technician_user_id
 
 
 VALID_ROLES = [
@@ -411,6 +412,15 @@ def _resolve_notification_scope(user: dict, destination: Optional[str] = None) -
         return expected_destination, technician_name
     return expected_destination, None
 
+
+def _notification_technician_id(user: dict) -> Optional[int]:
+    if user.get("role") != "Technicien":
+        return None
+    technician_id = resolve_technician_user_id(user.get("sub"))
+    if technician_id is None:
+        raise HTTPException(status_code=403, detail="Compte technicien introuvable")
+    return technician_id
+
 @app.get("/api/notifications")
 def get_notifications(
     destination: Optional[str] = None,
@@ -418,7 +428,12 @@ def get_notifications(
 ):
     """Liste uniquement les notifications de pièces visibles par le rôle courant."""
     destination, technician = _resolve_notification_scope(user, destination)
-    df = lire_notifications_pieces(destination=destination, technicien=technician)
+    technician_id = _notification_technician_id(user)
+    df = lire_notifications_pieces(
+        destination=destination,
+        technicien=technician,
+        technicien_id=technician_id,
+    )
     return _df_to_records(df)
 
 
@@ -429,7 +444,12 @@ def get_notification_count(
 ):
     """Compte uniquement les notifications de pièces visibles par le rôle courant."""
     destination, technician = _resolve_notification_scope(user, destination)
-    count = compter_notifications_non_lues(destination, technicien=technician)
+    technician_id = _notification_technician_id(user)
+    count = compter_notifications_non_lues(
+        destination,
+        technicien=technician,
+        technicien_id=technician_id,
+    )
     return {"count": count}
 
 
@@ -437,7 +457,13 @@ def get_notification_count(
 def mark_notification_read(notif_id: int, user: dict = Depends(_verify_token)):
     """Marque comme lue une notification appartenant à la destination visible."""
     destination, technician = _resolve_notification_scope(user)
-    if not marquer_notification_lue(notif_id, destination=destination, technicien=technician):
+    technician_id = _notification_technician_id(user)
+    if not marquer_notification_lue(
+        notif_id,
+        destination=destination,
+        technicien=technician,
+        technicien_id=technician_id,
+    ):
         raise HTTPException(status_code=404, detail="Notification introuvable")
     return {"ok": True}
 
@@ -446,7 +472,13 @@ def mark_notification_read(notif_id: int, user: dict = Depends(_verify_token)):
 def mark_notification_done(notif_id: int, user: dict = Depends(_verify_token)):
     """Marque comme traitée une notification appartenant à la destination visible."""
     destination, technician = _resolve_notification_scope(user)
-    if not marquer_notification_traitee(notif_id, destination=destination, technicien=technician):
+    technician_id = _notification_technician_id(user)
+    if not marquer_notification_traitee(
+        notif_id,
+        destination=destination,
+        technicien=technician,
+        technicien_id=technician_id,
+    ):
         raise HTTPException(status_code=404, detail="Notification introuvable")
     return {"ok": True}
 

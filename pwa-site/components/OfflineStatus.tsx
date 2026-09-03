@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CloudOff, RefreshCw, Wifi } from 'lucide-react';
+import { CloudOff, RefreshCw, Trash2, Wifi } from 'lucide-react';
 import { syncOfflineSession } from '@/lib/offline-db';
-import { OFFLINE_EVENT, SYNC_EVENT, checkBackendReachability, readOfflineStats, reportOfflineState, retryBlockedOfflineOutbox, syncOutbox } from '@/lib/offline-sync';
+import { OFFLINE_EVENT, SYNC_EVENT, checkBackendReachability, discardBlockedOfflineOutbox, readOfflineStats, reportOfflineState, retryBlockedOfflineOutbox, syncOutbox } from '@/lib/offline-sync';
 
 type State = {
   online: boolean;
@@ -19,6 +19,26 @@ export default function OfflineStatus() {
     pending: 0,
     failed: 0,
   });
+
+  const retryFailed = async () => {
+    setState(current => ({ ...current, syncing: true }));
+    const stats = await retryBlockedOfflineOutbox().catch(() => null);
+    if (stats) {
+      setState(current => ({ ...current, online: navigator.onLine, syncing: false, ...stats }));
+    } else {
+      setState(current => ({ ...current, syncing: false }));
+    }
+  };
+
+  const discardFailed = async () => {
+    const confirmed = window.confirm(
+      `Retirer ${state.failed} action${state.failed > 1 ? 's' : ''} en erreur ?\n\n` +
+      `Elles ne seront plus renvoyées au serveur. Cette opération est irréversible.`,
+    );
+    if (!confirmed) return;
+    const stats = await discardBlockedOfflineOutbox().catch(() => null);
+    if (stats) setState(current => ({ ...current, ...stats }));
+  };
 
   useEffect(() => {
     let active = true;
@@ -113,8 +133,13 @@ export default function OfflineStatus() {
               ? `Synchronisation${state.pending ? ` — ${state.pending} action(s)` : ''}…`
               : `${state.pending} action(s) en attente de synchronisation`}
       </span>
+      {state.failed > 0 && (
+        <button type="button" onClick={() => void discardFailed()} disabled={state.syncing} aria-label="Retirer les actions en erreur" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 0, background: 'transparent', color: 'inherit', fontWeight: 800, cursor: state.syncing ? 'wait' : 'pointer' }}>
+          <Trash2 size={15} /> Retirer
+        </button>
+      )}
       {state.online && (state.pending || state.failed) > 0 && (
-        <button type="button" onClick={() => void retryBlockedOfflineOutbox()} style={{ border: 0, background: 'transparent', color: 'inherit', fontWeight: 800, cursor: 'pointer' }}>
+        <button type="button" onClick={() => void retryFailed()} disabled={state.syncing} style={{ border: 0, background: 'transparent', color: 'inherit', fontWeight: 800, cursor: state.syncing ? 'wait' : 'pointer' }}>
           Réessayer
         </button>
       )}

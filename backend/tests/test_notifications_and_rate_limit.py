@@ -112,7 +112,29 @@ def test_notification_update_is_scoped_to_destination_and_technician(monkeypatch
     db = _NotificationDb({"id": 42})
     monkeypatch.setattr(parts, "get_db", lambda: db)
 
-    assert getattr(parts, function_name)(42, destination="technicien", technicien="Sellami Ghazi") is True
+    assert getattr(parts, function_name)(
+        42,
+        destination="technicien",
+        technicien="Sellami Ghazi",
+        technicien_id=7,
+    ) is True
     assert "destination = %s" in db.query
-    assert "LOWER(technicien) LIKE LOWER(%s)" in db.query
-    assert db.params == (42, "technicien", "%Sellami Ghazi%")
+    assert "technicien_id = %s" in db.query
+    assert db.query.count("LOWER(technicien) ~ %s") == 2
+    assert db.params == (
+        42,
+        "technicien",
+        7,
+        "(^|[^[:alnum:]])sellami([^[:alnum:]]|$)",
+        "(^|[^[:alnum:]])ghazi([^[:alnum:]]|$)",
+    )
+
+
+def test_technician_notification_scope_is_order_independent():
+    query = "SELECT * FROM notifications_pieces WHERE 1=1"
+    params = []
+
+    query = parts._append_technician_scope(query, params, "Sellami Ghazi")
+
+    assert query.count("LOWER(technicien) ~ %s") == 2
+    assert all("sellami" in params[0] and "ghazi" in params[1] for _ in [0])

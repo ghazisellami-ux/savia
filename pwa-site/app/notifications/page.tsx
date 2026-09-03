@@ -14,8 +14,33 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
-    api.notifications.list().then(setNotifs).catch(() => setNotifs([])).finally(() => setLoading(false));
-  }, []);
+
+    let active = true;
+    const refreshNotifications = () => {
+      api.notifications.list()
+        .then(items => {
+          if (active) setNotifs(items);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshNotifications();
+    };
+
+    refreshNotifications();
+    const interval = window.setInterval(refreshNotifications, 15_000);
+    window.addEventListener('focus', refreshNotifications);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshNotifications);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [router]);
 
   const markRead = async (id: number) => {
     await api.notifications.markRead(id).catch(() => {});

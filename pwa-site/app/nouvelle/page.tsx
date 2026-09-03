@@ -1,15 +1,16 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { getUser, isLoggedIn } from '@/lib/auth';
+import { canCreateIntervention, isLoggedIn } from '@/lib/auth';
 import { INTERVENTION_TYPES_BASE, mergeInterventionTypes } from '@/lib/intervention-types';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import TimeScrollPicker from '@/components/TimeScrollPicker';
 import {
   ChevronLeft, CheckCircle, Building2, Settings, FileText, Search,
   Timer, Car, Wrench, ClipboardList, Camera, Trash2, Loader2, Save,
-  Clock
+  Clock, Tag, AlertTriangle
 } from 'lucide-react';
 
 const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
@@ -31,15 +32,31 @@ const SECTION = {
   padding: '16px', marginBottom: '16px',
 } as const;
 
+const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
+  'Assignée':                 { bg: 'rgba(168,85,247,0.12)', color: '#7C3AED' },
+  'En cours':                { bg: 'rgba(86,124,141,0.12)', color: 'var(--teal)' },
+  "Transfert vers l'atelier": { bg: 'rgba(37,99,235,0.12)', color: '#2563EB' },
+  'En attente de piece':     { bg: 'rgba(245,158,11,0.12)', color: '#B45309' },
+  'Cloturee':                { bg: 'rgba(34,197,94,0.12)', color: '#15803D' },
+};
+
+type PiecesQty = Record<number, number>;
+
+function calculateDuration(startTime: string, endTime: string): number {
+  const [startH, startM] = startTime.split(':').map(Number);
+  const [endH, endM] = endTime.split(':').map(Number);
+  let duration = (endH * 60 + endM) - (startH * 60 + startM);
+  if (duration <= 0) duration += 24 * 60;
+  return Math.max(60, duration);
+}
+
 export default function NouvelleInterventionPage() {
   const router = useRouter();
-  const user = getUser();
 
   const [clients, setClients]     = useState<any[]>([]);
   const [equips, setEquips]       = useState<any[]>([]);
   const [techs, setTechs]         = useState<any[]>([]);
   const [pieces, setPieces]       = useState<any[]>([]);
-  const [loading, setLoading]     = useState(false);
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState('');
   const [success, setSuccess]     = useState(false);
@@ -48,12 +65,13 @@ export default function NouvelleInterventionPage() {
   const [interventionTypes, setInterventionTypes] = useState<string[]>([...INTERVENTION_TYPES_BASE]);
   const [customTypeMode, setCustomTypeMode] = useState(false);
   const [customTypeValue, setCustomTypeValue] = useState('');
+  const [piecesQty, setPiecesQty] = useState<PiecesQty>({});
 
   const [form, setForm] = useState({
     client: '', machine: '', technicien_assigne: '', type_intervention: 'Corrective',
     statut: 'Assignée', description: '', probleme: '', cause: '', solution: '',
-    duree: 0, deplacement: 0, code_erreur: '', type_erreur: '',
-    pieces_utilisees: [] as number[], notes: '', validation_client: 'En attente',
+    duree_minutes: 60, deplacement: 0, code_erreur: '', type_erreur: '',
+    notes: '', fiche_validation: 'En attente', start_time: '08:00', end_time: '09:00',
   });
 
   const filteredEquips = useMemo(() =>
@@ -61,8 +79,18 @@ export default function NouvelleInterventionPage() {
     [equips, form.client]
   );
 
+  const filteredPieces = useMemo(() => {
+    const equipment = equips.find((item: any) => (item.Nom || item.nom) === form.machine);
+    const equipmentType = String(equipment?.Type || equipment?.type || '').toLowerCase().trim();
+    if (!equipmentType) return [];
+    return pieces.filter((piece: any) =>
+      String(piece.equipement_type || '').toLowerCase().trim() === equipmentType,
+    );
+  }, [equips, form.machine, pieces]);
+
   useEffect(() => {
     if (!isLoggedIn()) { router.replace('/login'); return; }
+    if (!canCreateIntervention()) { router.replace('/interventions'); return; }
     Promise.all([
       api.clients.list().catch(() => []),
       api.equipements.list().catch(() => []),
@@ -78,11 +106,8 @@ export default function NouvelleInterventionPage() {
         INTERVENTION_TYPES_BASE,
         (types as any[]).map((type: any) => type.nom).filter(Boolean),
       ));
-      // Pre-fill technician
-      const me = (t as any[]).find((x: any) => x.nom?.toLowerCase().includes(user?.nom?.toLowerCase() || ''));
-      if (me) setForm(f => ({ ...f, technicien_assigne: String(me.id || me.nom) }));
     });
-  }, []);
+  }, [router]);
 
   const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -91,14 +116,62 @@ export default function NouvelleInterventionPage() {
     setPhotoPreview(URL.createObjectURL(f));
   };
 
+  const handleQty = (pieceId: number, qty: number) => {
+    setPiecesQty(current => {
+      const next = { ...current };
+      if (qty <= 0) delete next[pieceId];
+      else next[pieceId] = qty;
+      return next;
+    });
+  };
+
+  const handleStartTimeChange = useCallback((time: string) => {
+    setForm(current => ({
+      ...current,
+      start_time: time,
+      duree_minutes: calculateDuration(time, current.end_time),
+    }));
+  }, []);
+
+  const handleEndTimeChange = useCallback((time: string) => {
+    setForm(current => ({
+      ...current,
+      end_time: time,
+      duree_minutes: calculateDuration(current.start_time, time),
+    }));
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(''); setSaving(true);
+    setError('');
+    if (form.statut === 'Cloturee' && !form.solution.trim()) {
+      setError('La "Solution appliquée" est obligatoire pour clôturer l\'intervention.');
+      document.getElementById('field-solution')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    setSaving(true);
     try {
+      const selectedPieces = Object.entries(piecesQty).map(([pieceId, qty]) => {
+        const piece = pieces.find((item: any) => item.id === Number(pieceId));
+        return {
+          id: Number(pieceId),
+          ref: piece?.reference || '',
+          reference: piece?.reference || '',
+          qty,
+          quantite: qty,
+          designation: piece?.designation || piece?.nom || '',
+          prix_unitaire: piece?.prix_unitaire || 0,
+        };
+      });
       const payload = {
         ...form,
         technicien: form.technicien_assigne,
-        duree_minutes: Math.round((form.duree || 0) * 60),
+        duree_minutes: calculateDuration(form.start_time, form.end_time),
+        duree_deplacement: Math.round(form.deplacement * 60),
+        pieces_utilisees: selectedPieces
+          .map(piece => `${piece.designation} (${piece.reference}) × ${piece.qty}`)
+          .join(', '),
+        pieces_a_deduire: selectedPieces,
       };
       const created = await api.interventions.create(payload);
       if (photoFile && created.id) {
@@ -116,6 +189,7 @@ export default function NouvelleInterventionPage() {
   const set = (k: keyof typeof form, v: any) => setForm(f => ({ ...f, [k]: v }));
 
   const isClotured = form.statut === 'Cloturee';
+  const selectedCount = Object.keys(piecesQty).length;
 
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)' }}>
@@ -133,40 +207,28 @@ export default function NouvelleInterventionPage() {
         )}
 
         <form onSubmit={handleSubmit}>
-          {/* Client & Machine */}
+          {/* Client & Équipement */}
           <div style={SECTION}>
             <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Building2 style={{ width: 16, height: 16 }} /> Identification</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={LABEL}>Client *</label>
-                <select style={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('machine', ''); }} required>
+                <select style={INPUT} value={form.client} onChange={e => { set('client', e.target.value); set('machine', ''); setPiecesQty({}); }} required>
                   <option value="">— Choisir —</option>
                   {clients.map((c: any) => <option key={c.id || c.nom || c.Nom} value={c.nom || c.Nom}>{c.nom || c.Nom}</option>)}
                 </select>
               </div>
               <div>
-                <label style={LABEL}>Machine *</label>
-                <select style={INPUT} value={form.machine} onChange={e => set('machine', e.target.value)} required>
+                <label style={LABEL}>Équipement *</label>
+                <select style={INPUT} value={form.machine} onChange={e => { set('machine', e.target.value); setPiecesQty({}); }} required>
                   <option value="">— Choisir —</option>
                   {filteredEquips.map((e: any) => <option key={e.id || e.Nom || e.nom} value={e.Nom || e.nom}>{e.Nom || e.nom}</option>)}
                 </select>
               </div>
             </div>
             <div style={{ marginTop: '12px' }}>
-              <label style={LABEL}>Technicien(s)</label>
-              <select style={INPUT} value={form.technicien_assigne} onChange={e => set('technicien_assigne', e.target.value)}>
-                <option value="">— Choisir —</option>
-                {techs.map((t: any) => <option key={t.id || t.nom} value={t.nom || t.id}>{t.nom}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Type & Statut */}
-          <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings style={{ width: 16, height: 16 }} /> Classification</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
-                <label style={LABEL}>Type</label>
+                <label style={LABEL}>Type d&apos;intervention</label>
                 {customTypeMode ? (
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <input style={INPUT} autoFocus placeholder="Saisir le type..." value={customTypeValue} onChange={e => setCustomTypeValue(e.target.value)} />
@@ -193,120 +255,190 @@ export default function NouvelleInterventionPage() {
                   </select>
                 )}
               </div>
-              <div>
-                <label style={LABEL}>Statut</label>
-                <select style={INPUT} value={form.statut} onChange={e => set('statut', e.target.value)}>
-                  <option>Assignée</option>
-                  <option>En cours</option>
-                  <option>En attente de piece</option>
-                  <option>Cloturee</option>
+              <div style={{ marginTop: '12px' }}>
+                <label style={LABEL}>Technicien *</label>
+                <select style={INPUT} value={form.technicien_assigne} onChange={e => set('technicien_assigne', e.target.value)} required>
+                  <option value="">— Choisir —</option>
+                  {techs.map((technician: any) => (
+                    <option key={technician.id || technician.nom} value={technician.username || technician.nom || technician.id}>
+                      {technician.nom_complet || technician.nom || technician.username}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
           </div>
 
-          {/* Description */}
+          {/* ① Diagnostic — même ordre que la fiche d'intervention */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><FileText style={{ width: 16, height: 16 }} /> Description</h3>
-            <textarea style={{ ...INPUT, resize: 'vertical', minHeight: '80px' }} rows={3}
-              placeholder="Décrivez le problème..." value={form.description}
-              onChange={e => set('description', e.target.value)} />
-          </div>
-
-          {/* Diagnostic (Corrective only) */}
-          {form.type_intervention === 'Corrective' && (
-            <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Diagnostic</h3>
-              {[
-                { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
-                { key: 'cause',    label: 'Cause racine',      ph: 'Analyse de la cause...' },
-                { key: 'solution', label: 'Solution appliquée',ph: 'Actions correctives...' },
-              ].map(({ key, label, ph }) => (
-                <div key={key} style={{ marginBottom: '12px' }}>
-                  <label style={LABEL}>{label}</label>
-                  <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder={ph}
-                    value={(form as any)[key]} onChange={e => set(key as any, e.target.value)} />
-                </div>
-              ))}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
-                  <label style={LABEL}>Code Erreur</label>
-                  <input style={INPUT} placeholder="Ex: E102, 0x3F..." value={form.code_erreur} onChange={e => set('code_erreur', e.target.value)} />
-                </div>
-                <div>
-                  <label style={LABEL}>Type d&apos;erreur</label>
-                  <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
-                    <option value="">— Aucun —</option>
-                    {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </div>
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Diagnostic</h3>
+            {[
+              { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
+              { key: 'cause', label: 'Cause racine', ph: 'Analyse de la cause...' },
+              { key: 'solution', label: 'Solution appliquée', ph: 'Actions correctives...' },
+            ].map(({ key, label, ph }) => (
+              <div key={key} id={key === 'solution' ? 'field-solution' : undefined} style={{ marginBottom: '12px' }}>
+                <label style={LABEL}>
+                  {label}
+                  {key === 'solution' && isClotured && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}
+                </label>
+                <textarea
+                  style={{ ...INPUT, resize: 'vertical', borderColor: key === 'solution' && isClotured && !(form as any)[key] ? '#ef4444' : undefined }}
+                  rows={2}
+                  placeholder={ph}
+                  value={(form as any)[key]}
+                  onChange={e => set(key as any, e.target.value)}
+                />
               </div>
+            ))}
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={LABEL}>Type d&apos;erreur</label>
+              <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
+                <option value="">— Aucun —</option>
+                {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(type => <option key={type}>{type}</option>)}
+              </select>
             </div>
-          )}
 
-          {/* Durées */}
-          <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Timer style={{ width: 16, height: 16 }} /> Temps</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+              <TimeScrollPicker label="Heure de début" value={form.start_time} onChange={handleStartTimeChange} />
+              <TimeScrollPicker label="Heure de fin" value={form.end_time} onChange={handleEndTimeChange} />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
+              <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
               <div>
-                <label style={LABEL}>Durée (heures)</label>
-                <input type="number" style={INPUT} min={0} step={0.5} value={form.duree} onChange={e => set('duree', parseFloat(e.target.value) || 0)} />
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l&apos;intervention</span>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
+                  {(form.duree_minutes / 60).toFixed(1)}h
+                </div>
               </div>
-              <div>
-                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (h)</label>
-                <input type="number" style={INPUT} min={0} step={0.5} value={form.deplacement} onChange={e => set('deplacement', parseFloat(e.target.value) || 0)} />
-              </div>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
+            </div>
+
+            <div style={{ marginTop: '12px' }}>
+              <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (heures)</label>
+              <input type="number" style={INPUT} min={0} step={0.5} value={form.deplacement} onChange={e => set('deplacement', parseFloat(e.target.value) || 0)} />
             </div>
           </div>
 
-          {/* Pièces */}
+          {/* ② Pièces de rechange */}
           <div style={SECTION}>
-            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Wrench style={{ width: 16, height: 16 }} /> Pièces utilisées</h3>
-            <select style={{ ...INPUT, height: '100px' }} multiple
-              value={form.pieces_utilisees.map(String)}
-              onChange={e => set('pieces_utilisees', Array.from(e.target.selectedOptions).map(o => Number(o.value)))}>
-              {pieces.map((p: any) => <option key={p.id} value={p.id}>{p.nom} — {p.reference}</option>)}
-            </select>
-            <small style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>Tap long pour sélectionner plusieurs pièces</small>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+                  <Wrench style={ICON_INLINE} /> Pièces de rechange
+                </h3>
+                {selectedCount > 0 && (
+                  <span style={{ background: 'var(--teal)', color: '#fff', fontSize: '0.68rem', fontWeight: 700, padding: '3px 10px', borderRadius: '10px' }}>
+                    {selectedCount} sélectionnée{selectedCount > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              {form.machine && filteredPieces.length > 0 && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '10px', background: 'rgba(86,124,141,0.07)', padding: '6px 10px', borderRadius: '8px' }}>
+                  <Tag style={{ width: 12, height: 12, display: 'inline-block', verticalAlign: '-1px', marginRight: '4px' }} /> {form.machine} · {filteredPieces.length} pièce{filteredPieces.length > 1 ? 's' : ''} compatible{filteredPieces.length > 1 ? 's' : ''}
+                </p>
+              )}
+              {!form.machine && (
+                <p style={{ margin: 0, padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', background: '#fafafa', borderRadius: '8px' }}>
+                  Choisissez un équipement pour afficher ses pièces compatibles.
+                </p>
+              )}
+              {form.machine && filteredPieces.length === 0 && (
+                <p style={{ margin: 0, padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', background: '#fafafa', borderRadius: '8px' }}>
+                  Aucune pièce de rechange compatible avec cet équipement.
+                </p>
+              )}
+              {filteredPieces.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '244px', overflowY: 'auto', paddingRight: '2px' }}>
+                {filteredPieces.map((piece: any) => {
+                  const qty = piecesQty[piece.id] || 0;
+                  const stock = Number(piece.stock_actuel ?? piece.stock ?? 0);
+                  const unavailable = stock === 0;
+                  return (
+                    <div key={piece.id} style={{ background: qty > 0 ? 'rgba(86,124,141,0.06)' : '#fafafa', border: `1px solid ${qty > 0 ? 'var(--teal)' : 'var(--border)'}`, borderRadius: '10px', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px', opacity: unavailable && qty === 0 ? 0.55 : 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--navy)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{piece.designation || piece.nom}</p>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '2px' }}><Tag style={{ width: 10, height: 10 }} /> {piece.reference}</span>
+                          <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '1px 6px', borderRadius: '6px', background: unavailable ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', color: unavailable ? 'var(--danger)' : '#15803D' }}>
+                            {unavailable ? <><AlertTriangle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> Rupture</> : <><CheckCircle style={{ width: 10, height: 10, display: 'inline-block', verticalAlign: '-1px', marginRight: '2px' }} /> {stock} en stock</>}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <button type="button" onClick={() => handleQty(piece.id, qty - 1)} disabled={qty === 0} style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: qty === 0 ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: qty === 0 ? 'not-allowed' : 'pointer' }}>−</button>
+                        <span style={{ minWidth: '26px', textAlign: 'center', fontWeight: 800, color: qty > 0 ? 'var(--teal)' : 'var(--text-dim)', fontSize: '1.05rem' }}>{qty}</span>
+                        <button type="button" onClick={() => handleQty(piece.id, qty + 1)} disabled={unavailable || qty >= stock} style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border)', background: unavailable || qty >= stock ? '#f0f0f0' : '#fff', color: 'var(--navy)', fontWeight: 800, fontSize: '1.1rem', cursor: unavailable || qty >= stock ? 'not-allowed' : 'pointer' }}>+</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>}
+            </div>
+
+          {/* ③ Description & Notes */}
+          <div style={SECTION}>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={LABEL}><FileText style={ICON_INLINE} /> Description</label>
+              <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} value={form.description} onChange={e => set('description', e.target.value)} />
+            </div>
+            <div>
+              <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes</label>
+              <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} />
+            </div>
           </div>
 
-          {/* Notes */}
+          {/* ④ Statut — en bas, comme dans la fiche d'intervention */}
           <div style={SECTION}>
-            <label style={LABEL}><ClipboardList style={ICON_INLINE} /> Notes</label>
-            <textarea style={{ ...INPUT, resize: 'vertical' }} rows={2} placeholder="Observations complémentaires..."
-              value={form.notes} onChange={e => set('notes', e.target.value)} />
+            <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Settings style={{ width: 16, height: 16 }} /> Statut de l&apos;intervention</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              {['Assignée', 'En cours', "Transfert vers l'atelier", 'En attente de piece', 'Cloturee'].map(status => {
+                const style = STATUT_STYLES[status];
+                return (
+                  <button key={status} type="button" onClick={() => set('statut', status)} style={{ padding: '10px 4px', border: `2px solid ${form.statut === status ? style.color : 'var(--border)'}`, borderRadius: '10px', background: form.statut === status ? style.bg : '#fff', color: form.statut === status ? style.color : 'var(--text-muted)', fontWeight: form.statut === status ? 800 : 500, fontSize: '0.72rem', cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center' }}>
+                    {status}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Photo (clôture) */}
           {isClotured && (
-            <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera style={{ width: 16, height: 16 }} /> Fiche Signée</h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>Photographiez la fiche d&apos;intervention avec la signature du client.</p>
+            <div style={{ ...SECTION, border: '2px dashed var(--teal)' }}>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Camera style={{ width: 16, height: 16 }} /> Fiche d&apos;intervention signée</h3>
               <input type="file" id="photo-input" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handlePhoto} />
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                 <button type="button" onClick={() => document.getElementById('photo-input')?.click()}
-                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                  <Camera style={{ width: 16, height: 16 }} /> Prendre photo
+                  style={{ flex: 1, background: 'var(--teal)', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '0.95rem' }}>
+                  <Camera style={{ width: 16, height: 16, display: 'inline-block', verticalAlign: '-3px', marginRight: '6px' }} /> {photoFile ? 'Changer la photo' : 'Prendre / Importer photo'}
                 </button>
                 {photoFile && (
                   <button type="button" onClick={() => { setPhotoFile(null); setPhotoPreview(''); }}
-                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '12px 16px', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}><Trash2 style={{ width: 18, height: 18 }} /></button>
+                    style={{ background: 'var(--danger)', color: '#fff', border: 'none', padding: '14px 16px', borderRadius: '10px', cursor: 'pointer', fontWeight: 700, display: 'flex', alignItems: 'center' }}><Trash2 style={{ width: 18, height: 18 }} /></button>
                 )}
               </div>
               {photoPreview && (
-                <div style={{ marginTop: '10px' }}>
-                  <img src={photoPreview} alt="Aperçu" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain' }} />
-                  <p style={{ color: 'var(--success)', fontSize: '0.8rem', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle style={{ width: 14, height: 14 }} /> Photo jointe</p>
-                </div>
+                <img src={photoPreview} alt="Aperçu fiche" style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', border: '2px solid var(--teal)', objectFit: 'contain', marginBottom: '12px', display: 'block' }} />
+              )}
+              {!photoFile && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '12px' }}>
+                  Joignez une photo de la fiche d&apos;intervention signée par le client
+                </p>
               )}
 
-              {/* Validation client */}
-              <div style={{ marginTop: '16px' }}>
-                <label style={LABEL}><CheckCircle style={ICON_INLINE} /> Validation Client</label>
-                <select style={INPUT} value={form.validation_client} onChange={e => set('validation_client', e.target.value)}>
-                  <option value="En attente">En attente</option>
-                  <option value="Validée">Validée</option>
-                </select>
+              <div style={{ marginTop: '4px' }}>
+                <label style={LABEL}>Statut de la fiche signée</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  {[
+                    { val: 'En attente', icon: <Clock style={{ width: 14, height: 14 }} />, bg: 'rgba(245,158,11,0.1)', color: '#B45309' },
+                    { val: 'Validée', icon: <CheckCircle style={{ width: 14, height: 14 }} />, bg: 'rgba(34,197,94,0.1)', color: '#15803D' },
+                  ].map(({ val, icon, bg, color }) => (
+                    <button key={val} type="button" onClick={() => set('fiche_validation', val)} style={{ padding: '12px 8px', border: `2px solid ${form.fiche_validation === val ? color : 'var(--border)'}`, borderRadius: '10px', background: form.fiche_validation === val ? bg : '#fff', color: form.fiche_validation === val ? color : 'var(--text-muted)', fontWeight: form.fiche_validation === val ? 800 : 500, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center' }}>
+                      {icon} {val}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -317,7 +449,7 @@ export default function NouvelleInterventionPage() {
           {/* Submit */}
           <button type="submit" disabled={saving}
             style={{ width: '100%', padding: '16px', background: 'linear-gradient(135deg, var(--teal), var(--navy))', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '1rem', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer l&apos;intervention</>}
+            {saving ? <><Loader2 style={{ width: 18, height: 18, animation: 'spin 1s linear infinite' }} /> Enregistrement...</> : <><Save style={{ width: 18, height: 18 }} /> Enregistrer l&apos;intervention{selectedCount > 0 ? ` · ${selectedCount} pièce${selectedCount > 1 ? 's' : ''}` : ''}</>}
           </button>
         </form>
       </main>

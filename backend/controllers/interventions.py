@@ -31,7 +31,6 @@ from api.security import (
     HTTPException,
     JWT_SECRET,
     Optional,
-    _check_create_permission,
     _verify_token,
     assert_resource_client_access,
     assert_intervention_write_access,
@@ -402,12 +401,7 @@ def get_child_interventions_endpoint(
 
 @app.post("/api/interventions")
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
-    # Check permission
-    if not _check_create_permission(user):
-        raise HTTPException(
-            status_code=403,
-            detail="Cette action est réservée aux Responsables, Managers et Admins"
-        )
+    require_roles(user, "Admin", "Manager", "Responsable Technique")
     body["client"] = resolve_client_scope(user, body.get("client")) or ""
     if not body["client"] and body.get("machine"):
         with get_db() as conn:
@@ -425,7 +419,7 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
     if technicien_username:
         body["technicien"] = _get_technician_fullname(technicien_username)
     
-    ajouter_intervention(body)
+    intervention_id = ajouter_intervention(body)
     
     # Log audit
     username = user.get("sub", "unknown")
@@ -459,7 +453,7 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
         _send_telegram_bot("telegram", msg)
     except Exception as e:
         logger.warning(f"Notification Telegram nouvelle intervention échouée: {e}")
-    return {"ok": True}
+    return {"ok": True, "id": intervention_id}
 
 
 @app.put("/api/interventions/{intervention_id}")

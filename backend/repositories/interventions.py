@@ -119,14 +119,16 @@ def lire_interventions(machine=None):
 
 def ajouter_intervention(intervention_dict):
     """Ajoute une intervention."""
+    intervention_id = None
     with get_db() as conn:
-        conn.execute("""
+        new_intervention = conn.execute("""
             INSERT INTO interventions (date, machine, technicien, type_intervention,
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, cout_pieces, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite,
                                        duree_deplacement, start_time, end_time, fiche_validation, client)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
@@ -150,18 +152,16 @@ def ajouter_intervention(intervention_dict):
             intervention_dict.get("end_time") or None,
             intervention_dict.get("fiche_validation", "En attente"),
             intervention_dict.get("client") or "",
-        ))
-        new_intervention = conn.execute(
-            "SELECT id FROM interventions ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        )).fetchone()
         if new_intervention:
+            intervention_id = new_intervention["id"]
             synchroniser_statut_equipement(
                 conn,
-                new_intervention["id"],
+                intervention_id,
                 intervention_dict.get("statut", "Assignée"),
             )
     _trigger_backup()
-    return True
+    return intervention_id
 
 
 # ==========================================

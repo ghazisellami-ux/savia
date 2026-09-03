@@ -4,6 +4,7 @@ import {
   getOfflineQueueStats,
   listOfflineOutbox,
   patchCachedIntervention,
+  removeBlockedOfflineOutbox,
   removeOfflineOutbox,
   unblockOfflineOutbox,
   updateOfflineOutbox,
@@ -206,6 +207,13 @@ export async function readOfflineStats() {
 export async function retryBlockedOfflineOutbox() {
   await unblockOfflineOutbox();
   return syncOutbox();
+}
+
+export async function discardBlockedOfflineOutbox() {
+  await removeBlockedOfflineOutbox();
+  const stats = await getOfflineQueueStats();
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(SYNC_EVENT));
+  return stats;
 }
 
 export function requestBackgroundSync() {

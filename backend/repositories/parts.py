@@ -1,5 +1,7 @@
 """Spare-parts, stock-request, and stock-notification persistence."""
 
+import re
+
 import pandas as pd
 
 from database.core import _trigger_backup, get_db, logger, read_sql
@@ -17,6 +19,7 @@ __all__ = [
     "marquer_notification_lue",
     "marquer_notification_traitee",
     "notifications_rupture_pour_piece",
+    "resolve_technician_user_id",
     "ajouter_piece_demandee",
     "lire_pieces_demandees_en_attente",
     "resoudre_piece_demandee",
@@ -118,14 +121,67 @@ def supprimer_piece(piece_id):
 # FONCTIONS CRUD — NOTIFICATIONS PIÈCES
 # ==========================================
 
+def _technician_name_terms(technicien):
+    """Return name words used for an order-independent, whole-word SQL match."""
+    return [
+        word.casefold()
+        for word in re.split(r"[,;/\-_\.\(\)\[\]\s]+", str(technicien or "").strip())
+        if word
+    ]
+
+
+def _append_technician_scope(query, params, technicien):
+    for word in _technician_name_terms(technicien):
+        query += " AND LOWER(technicien) ~ %s"
+        params.append(rf"(^|[^[:alnum:]]){re.escape(word)}([^[:alnum:]]|$)")
+    return query
+
+
+def resolve_technician_user_id(username_or_name):
+    """Resolve one active technician account without guessing between duplicates."""
+    identity = str(username_or_name or "").strip()
+    if not identity:
+        return None
+    with get_db() as conn:
+        by_username = conn.execute(
+            """SELECT id FROM utilisateurs
+               WHERE actif = 1 AND role = 'Technicien' AND LOWER(username) = LOWER(%s)
+               LIMIT 1""",
+            (identity,),
+        ).fetchone()
+        if by_username:
+            return int(by_username["id"])
+        by_name = conn.execute(
+            """SELECT id FROM utilisateurs
+               WHERE actif = 1 AND role = 'Technicien' AND LOWER(TRIM(nom_complet)) = LOWER(%s)
+               ORDER BY id LIMIT 2""",
+            (identity,),
+        ).fetchall()
+        if len(by_name) == 1:
+            return int(by_name[0]["id"])
+        candidates = conn.execute(
+            """SELECT id, nom_complet FROM utilisateurs
+               WHERE actif = 1 AND role = 'Technicien' AND TRIM(nom_complet) != ''"""
+        ).fetchall()
+    identity_terms = sorted(_technician_name_terms(identity))
+    matching_ids = [
+        int(candidate["id"])
+        for candidate in candidates
+        if sorted(_technician_name_terms(candidate["nom_complet"])) == identity_terms
+    ]
+    return matching_ids[0] if len(matching_ids) == 1 else None
+
 def ajouter_notification_piece(notif_dict):
     """Ajoute une notification pièce (rupture ou arrivée)."""
+    technician_id = notif_dict.get("technicien_id")
+    if technician_id is None and notif_dict.get("technicien"):
+        technician_id = resolve_technician_user_id(notif_dict.get("technicien"))
     with get_db() as conn:
         conn.execute("""
             INSERT INTO notifications_pieces
-            (type, intervention_id, piece_reference, piece_nom, intervention_ref,
-             equipement, client, technicien, message, source, destination, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'non_lu')
+             (type, intervention_id, piece_reference, piece_nom, intervention_ref,
+             equipement, client, technicien, technicien_id, message, source, destination, statut)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'non_lu')
         """, (
             notif_dict.get("type", ""),
             notif_dict.get("intervention_id"),
@@ -135,6 +191,7 @@ def ajouter_notification_piece(notif_dict):
             notif_dict.get("equipement", ""),
             notif_dict.get("client", ""),
             notif_dict.get("technicien", ""),
+            technician_id,
             notif_dict.get("message", ""),
             notif_dict.get("source", ""),
             notif_dict.get("destination", ""),
@@ -142,7 +199,20 @@ def ajouter_notification_piece(notif_dict):
     return True
 
 
-def lire_notifications_pieces(destination=None, statut=None, technicien=None):
+def _append_notification_owner_scope(query, params, technicien_id=None, technicien=None):
+    if technicien_id is None:
+        return _append_technician_scope(query, params, technicien) if technicien else query
+    params.append(int(technicien_id))
+    if not technicien:
+        return query + " AND technicien_id = %s"
+    legacy_params = []
+    legacy_scope = _append_technician_scope("", legacy_params, technicien).removeprefix(" AND ")
+    query += f" AND (technicien_id = %s OR (technicien_id IS NULL AND {legacy_scope}))"
+    params.extend(legacy_params)
+    return query
+
+
+def lire_notifications_pieces(destination=None, statut=None, technicien=None, technicien_id=None):
     """Lit les notifications pièces, filtrées par destination, statut et/ou technicien."""
     _ensure_notifications_pieces_exists()
     query = "SELECT * FROM notifications_pieces WHERE 1=1"
@@ -153,9 +223,8 @@ def lire_notifications_pieces(destination=None, statut=None, technicien=None):
     if statut:
         query += " AND statut = %s"
         params.append(statut)
-    if technicien:
-        query += " AND LOWER(technicien) LIKE LOWER(%s)"
-        params.append(f"%{technicien}%")
+    if technicien or technicien_id is not None:
+        query = _append_notification_owner_scope(query, params, technicien_id, technicien)
     query += " ORDER BY date_creation DESC LIMIT 200"
     with get_db() as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
@@ -184,6 +253,7 @@ def _ensure_notifications_pieces_exists():
                         equipement TEXT,
                         client TEXT,
                         technicien TEXT,
+                        technicien_id INTEGER,
                         message TEXT,
                         source TEXT NOT NULL DEFAULT '',
                         destination TEXT NOT NULL,
@@ -195,24 +265,25 @@ def _ensure_notifications_pieces_exists():
                 """)
                 conn.commit()
                 logger.info("⚠️  Table notifications_pieces created dynamically (defensive)")
+            cur.execute("ALTER TABLE notifications_pieces ADD COLUMN IF NOT EXISTS technicien_id INTEGER")
+            conn.commit()
         except Exception as e:
             logger.debug(f"_ensure_notifications_pieces_exists: {e}")
 
 
-def compter_notifications_non_lues(destination, technicien=None):
+def compter_notifications_non_lues(destination, technicien=None, technicien_id=None):
     """Compte les notifications non lues pour une destination (et optionnellement un technicien)."""
     _ensure_notifications_pieces_exists()
     query = "SELECT COUNT(*) as cnt FROM notifications_pieces WHERE destination = %s AND statut = 'non_lu'"
     params = [destination]
-    if technicien:
-        query += " AND LOWER(technicien) LIKE LOWER(%s)"
-        params.append(f"%{technicien}%")
+    if technicien or technicien_id is not None:
+        query = _append_notification_owner_scope(query, params, technicien_id, technicien)
     with get_db() as conn:
         row = conn.execute(query, tuple(params)).fetchone()
         return int(row["cnt"]) if row else 0
 
 
-def marquer_notification_lue(notif_id, destination=None, technicien=None):
+def marquer_notification_lue(notif_id, destination=None, technicien=None, technicien_id=None):
     """Marque une notification comme lue, avec filtrage d'appartenance optionnel."""
     query = (
         "UPDATE notifications_pieces "
@@ -222,15 +293,14 @@ def marquer_notification_lue(notif_id, destination=None, technicien=None):
     if destination:
         query += " AND destination = %s"
         params.append(destination)
-    if technicien:
-        query += " AND LOWER(technicien) LIKE LOWER(%s)"
-        params.append(f"%{technicien}%")
+    if technicien or technicien_id is not None:
+        query = _append_notification_owner_scope(query, params, technicien_id, technicien)
     query += " RETURNING id"
     with get_db() as conn:
         return bool(conn.execute(query, tuple(params)).fetchone())
 
 
-def marquer_notification_traitee(notif_id, destination=None, technicien=None):
+def marquer_notification_traitee(notif_id, destination=None, technicien=None, technicien_id=None):
     """Marque une notification comme traitée, avec filtrage d'appartenance optionnel."""
     query = (
         "UPDATE notifications_pieces "
@@ -240,9 +310,8 @@ def marquer_notification_traitee(notif_id, destination=None, technicien=None):
     if destination:
         query += " AND destination = %s"
         params.append(destination)
-    if technicien:
-        query += " AND LOWER(technicien) LIKE LOWER(%s)"
-        params.append(f"%{technicien}%")
+    if technicien or technicien_id is not None:
+        query = _append_notification_owner_scope(query, params, technicien_id, technicien)
     query += " RETURNING id"
     with get_db() as conn:
         return bool(conn.execute(query, tuple(params)).fetchone())
@@ -250,10 +319,16 @@ def marquer_notification_traitee(notif_id, destination=None, technicien=None):
 
 def notifications_rupture_pour_piece(piece_reference):
     """Retourne les notifications de rupture non traitées pour une pièce donnée."""
+    normalized_reference = re.sub(r"[\s\-_.\\/]+", "", str(piece_reference or "")).casefold()
+    if not normalized_reference:
+        return pd.DataFrame()
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM notifications_pieces WHERE type = 'piece_rupture' AND piece_reference = %s AND statut != 'traite'",
-            (piece_reference,),
+            """SELECT * FROM notifications_pieces
+               WHERE type = 'piece_rupture'
+                 AND REGEXP_REPLACE(LOWER(COALESCE(piece_reference, '')), '[[:space:]_.\\/-]+', '', 'g') = %s
+                 AND statut != 'traite'""",
+            (normalized_reference,),
         ).fetchall()
     return pd.DataFrame([dict(row) for row in rows])
 
@@ -264,11 +339,14 @@ def notifications_rupture_pour_piece(piece_reference):
 
 def ajouter_piece_demandee(demande_dict):
     """Ajoute une demande de pièce non référencée."""
+    technician_id = demande_dict.get("technicien_id")
+    if technician_id is None and demande_dict.get("technicien"):
+        technician_id = resolve_technician_user_id(demande_dict.get("technicien"))
     with get_db() as conn:
         conn.execute("""
             INSERT INTO pieces_demandees
-            (reference, designation, intervention_id, equipement, client, technicien, probleme, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'en_attente')
+            (reference, designation, intervention_id, equipement, client, technicien, technicien_id, probleme, statut)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'en_attente')
         """, (
             demande_dict.get("reference", ""),
             demande_dict.get("designation", ""),
@@ -276,6 +354,7 @@ def ajouter_piece_demandee(demande_dict):
             demande_dict.get("equipement", ""),
             demande_dict.get("client", ""),
             demande_dict.get("technicien", ""),
+            technician_id,
             demande_dict.get("probleme", ""),
         ))
     return True
