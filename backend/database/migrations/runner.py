@@ -747,6 +747,12 @@ def _migration_020_knowledge_import_provenance(conn) -> None:
         conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_source_document ON {table}(source_document)")
 
 
+def _migration_021_public_market_invoice_step(conn) -> None:
+    """Persist the invoice milestone between delivery and provisional acceptance."""
+    conn.execute("ALTER TABLE public_market_cases ADD COLUMN IF NOT EXISTS invoice_date DATE NULL")
+    conn.execute("ALTER TABLE public_market_cases ADD COLUMN IF NOT EXISTS invoice_reference TEXT NOT NULL DEFAULT ''")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -768,6 +774,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("018", "equipment service catalog", _migration_018_equipment_service_catalog),
     ("019", "contract billing coverage", _migration_019_contract_billing_coverage),
     ("020", "knowledge import provenance", _migration_020_knowledge_import_provenance),
+    ("021", "public market invoice milestone", _migration_021_public_market_invoice_step),
 )
 
 
