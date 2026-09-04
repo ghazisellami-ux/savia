@@ -1,11 +1,13 @@
 """Audit, configuration, telemetry, import, and schema-maintenance persistence."""
 
 import os
+from datetime import datetime, timezone
 
 import pandas as pd
 import psycopg2
 
 from database.core import DATABASE_URL, get_db, init_db, logger, read_sql
+from services.timezone import utc_bounds_for_local_date
 
 __all__ = [
     "log_audit",
@@ -38,14 +40,18 @@ def log_audit(username, action, details="", page="", ip_address=""):
         page (str): Page/module concerné (equipements, interventions, etc.)
         ip_address (str): Adresse IP du client
     """
+    # Audit timestamps are stored as UTC without an offset for compatibility
+    # with the existing TIMESTAMP column. The frontend adds the UTC marker and
+    # converts them to each user's computer timezone when displaying logs.
+    timestamp_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO audit_log (username, action, details, page, ip_address)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (username, action, details, page, ip_address))
+            INSERT INTO audit_log (timestamp, username, action, details, page, ip_address)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (timestamp_utc, username, action, details, page, ip_address))
 
 
-def lire_audit(limit=1000, username="", action="", date_from="", date_to=""):
+def lire_audit(limit=1000, username="", action="", date_from="", date_to="", timezone_name="UTC"):
     """
     Lit le journal d'audit avec filtrage.
     
@@ -55,6 +61,7 @@ def lire_audit(limit=1000, username="", action="", date_from="", date_to=""):
         action (str): Filtrer par type d'action (optionnel)
         date_from (str): Date de début au format YYYY-MM-DD (optionnel)
         date_to (str): Date de fin au format YYYY-MM-DD (optionnel)
+        timezone_name (str): Fuseau de l'utilisateur qui filtre les logs
     
     Returns:
         pd.DataFrame: Les logs filtrés triés par timestamp décroissant
@@ -72,12 +79,12 @@ def lire_audit(limit=1000, username="", action="", date_from="", date_to=""):
             params.append(action)
         
         if date_from:
-            query += " AND DATE(timestamp) >= %s"
-            params.append(date_from)
+            query += " AND timestamp >= %s"
+            params.append(utc_bounds_for_local_date(date_from, timezone_name))
         
         if date_to:
-            query += " AND DATE(timestamp) <= %s"
-            params.append(date_to)
+            query += " AND timestamp < %s"
+            params.append(utc_bounds_for_local_date(date_to, timezone_name, end=True))
         
         query += " ORDER BY timestamp DESC LIMIT %s"
         params.append(limit)

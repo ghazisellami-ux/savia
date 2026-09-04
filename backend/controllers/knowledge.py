@@ -1,5 +1,7 @@
 """Knowledge-base, technician, and log-analysis routes."""
 
+from datetime import datetime, timezone
+
 from api.runtime import (
     Depends,
     File,
@@ -648,8 +650,13 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
             new_row = cursor.fetchone()
             new_id = (new_row["id"] if isinstance(new_row, dict) else new_row[0]) if new_row else None
             conn.execute(
-                "INSERT INTO audit_log (username, action, details) VALUES (%s, %s, %s)",
-                (username, "Upload Log", f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)")
+                "INSERT INTO audit_log (timestamp, username, action, details) VALUES (%s, %s, %s, %s)",
+                (
+                    datetime.now(timezone.utc).replace(tzinfo=None),
+                    username,
+                    "Upload Log",
+                    f"Log '{filename}' S3:{s3_key or 'N/A'} ({nb_errors} erreurs)",
+                )
             )
             return {"ok": True, "id": new_id, "s3_key": s3_key,
                     "message": f"Log enregistré — {size_bytes} octets, {nb_errors} erreur(s), S3: {'ok' if s3_key else 'fallback'}"}
