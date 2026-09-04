@@ -895,8 +895,11 @@ export default function ContratsPage() {
                 {/* Grid info */}
                 <div className="grid grid-cols-2 gap-4">
                   {[{icon: Building2, label: 'Client', val: c.client},
+                    {icon: Wrench, label: 'Type de contrat', val: c.type_contrat || '—'},
                     {icon: Calendar, label: 'Date début', val: c.date_debut},
                     {icon: Calendar, label: 'Date fin', val: c.date_fin},
+                    {icon: RefreshCcw, label: 'Récurrence', val: c.recurrence_maintenance || '—'},
+                    {icon: Calendar, label: 'Première maintenance', val: c.date_premiere_maintenance || '—'},
                     {icon: Clock, label: 'SLA Réponse', val: c.sla_temps_reponse_h + 'h'},
                     {icon: DollarSign, label: 'Montant annuel', val: (c.montant||0).toLocaleString('fr') + ' TND'},
                   ].map(({icon: Icon, label, val}) => (
