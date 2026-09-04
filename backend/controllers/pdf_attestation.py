@@ -39,6 +39,47 @@ from controllers.report_helpers import (
     _sanitize,
 )
 
+
+def _wrap_attestation_text(pdf, text: str, width: float) -> str:
+    """Wrap attestation values without truncating long client names."""
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    content_width = max(1, width - 1.5)
+    lines = []
+
+    def split_token(token: str) -> list[str]:
+        chunks = []
+        current = ""
+        for character in token:
+            candidate = current + character
+            if current and pdf.get_string_width(candidate) > content_width:
+                chunks.append(current)
+                current = character
+            else:
+                current = candidate
+        return chunks + [current] if current else chunks
+
+    for paragraph in value.split("\n") or [""]:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if pdf.get_string_width(candidate) <= content_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            chunks = split_token(word)
+            lines.extend(chunks[:-1])
+            current = chunks[-1] if chunks else ""
+        lines.append(current)
+
+    return "\n".join(lines) or " "
+
+
 @app.post("/api/equipements/{equip_id}/attestation-pdf")
 def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
     """Generate an 'Attestation de Bon Fonctionnement' PDF for an operational equipment."""
@@ -219,9 +260,28 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         # ── SECTION: CLIENT ──
         pdf.set_y(y0 + box_h + 6)
         y1 = pdf.get_y()
+        client_rows = [
+            ("Client", _sanitize(client_name)),
+            ("R\u00e9gion / Ville", _sanitize(f"{client_region} - {client_ville}".strip(" -") or "-")),
+            ("Adresse", _sanitize(client_adresse or "-")),
+            ("T\u00e9l\u00e9phone", _sanitize(client_telephone or "-")),
+        ]
+        client_value_width = (10 + W) - (left_x + 30) - 4
+        client_line_height = 5.5
+        pdf.set_font("Helvetica", "B", 8.5)
+        wrapped_client_rows = [
+            (label, _wrap_attestation_text(pdf, value, client_value_width))
+            for label, value in client_rows
+        ]
+        client_row_heights = [
+            max(row_h, client_line_height * (value.count("\n") + 1))
+            for _, value in wrapped_client_rows
+        ]
+        client_box_h = 9 + sum(client_row_heights) + 2
+        # The box grows with wrapped values so the full client name never
+        # overlaps the following declaration.
         pdf.set_fill_color(240, 245, 255)
         pdf.set_draw_color(180, 200, 230)
-        client_box_h = 38
         pdf.rect(10, y1, W, client_box_h, style="FD")
         pdf.set_xy(14, y1 + 2)
         pdf.set_font("Helvetica", "B", 10)
@@ -229,17 +289,23 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
         pdf.cell(W - 8, 6, "INFORMATIONS CLIENT")
         pdf.set_text_color(30, 40, 60)
 
-        for i, (label, value) in enumerate([
-            ("Client", _sanitize(client_name)),
-            ("R\u00e9gion / Ville", _sanitize(f"{client_region} - {client_ville}".strip(" -") or "-")),
-            ("Adresse", _sanitize(client_adresse or "-")),
-            ("T\u00e9l\u00e9phone", _sanitize(client_telephone or "-")),
-        ]):
-            pdf.set_xy(left_x, y1 + 9 + i * row_h)
+        client_y = y1 + 9
+        for (label, value), current_row_h in zip(wrapped_client_rows, client_row_heights):
+            pdf.set_xy(left_x, client_y)
             pdf.set_font("Helvetica", "", 8)
-            pdf.cell(30, row_h, _sanitize(label + " :"))
+            pdf.cell(30, current_row_h, _sanitize(label + " :"))
+            pdf.set_xy(left_x + 30, client_y)
             pdf.set_font("Helvetica", "B", 8.5)
-            pdf.cell(130, row_h, value[:70])
+            pdf.multi_cell(
+                client_value_width,
+                client_line_height,
+                value,
+                border=0,
+                align="L",
+                new_x="RIGHT",
+                new_y="TOP",
+            )
+            client_y += current_row_h
 
         # ── DECLARATION ──
         pdf.set_y(y1 + client_box_h + 8)
@@ -274,8 +340,11 @@ def generate_attestation_pdf(equip_id: int, body: dict = {}, user: dict = Depend
 
         pdf.set_xy(right_x, y_sig)
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(80, 6, _sanitize(f"Pour le client ({client_name[:30]}) :"))
-        pdf.set_xy(right_x, y_sig + 8)
+        signature_client = _wrap_attestation_text(pdf, f"Pour le client ({client_name}) :", 80)
+        signature_heading_h = 5 * (signature_client.count("\n") + 1)
+        pdf.multi_cell(80, 5, signature_client, border=0, new_x="RIGHT", new_y="TOP")
+        signature_details_y = y_sig + max(8, signature_heading_h + 2)
+        pdf.set_xy(right_x, signature_details_y)
         pdf.set_font("Helvetica", "", 8)
         pdf.cell(80, 5, "Nom, signature et cachet :")
         pdf.line(right_x, y_sig + 30, right_x + 76, y_sig + 30)

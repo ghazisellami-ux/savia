@@ -64,6 +64,53 @@ from controllers.auth_dashboard import (
 )
 from services.file_security import decode_and_validate_base64
 
+
+def _wrap_pdf_cell(pdf, text: str, width: float) -> str:
+    """Wrap a PDF cell without dropping any part of its value.
+
+    FPDF wraps at spaces, but a client name can also contain a long unbroken
+    token (for example a legal suffix or an imported identifier). Splitting
+    oversized tokens here keeps those values visible as well.
+    """
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    content_width = max(1, width - 1.5)
+    lines = []
+
+    def split_token(token: str) -> list[str]:
+        chunks = []
+        current = ""
+        for character in token:
+            candidate = current + character
+            if current and pdf.get_string_width(candidate) > content_width:
+                chunks.append(current)
+                current = character
+            else:
+                current = candidate
+        return chunks + [current] if current else chunks
+
+    for paragraph in value.split("\n") or [""]:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if pdf.get_string_width(candidate) <= content_width:
+                current = candidate
+                continue
+
+            if current:
+                lines.append(current)
+            token_chunks = split_token(word)
+            lines.extend(token_chunks[:-1])
+            current = token_chunks[-1] if token_chunks else ""
+        lines.append(current)
+
+    return "\n".join(lines) or " "
+
+
 @app.get("/api/equipements")
 def get_equipements(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     df = lire_equipements()
@@ -133,9 +180,11 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
                     continue
                 rows.append(item)
             headers = ["Client", "Code", "Type", "Region", "Ville", "Equipements", "Contact", "Telephone"]
-            col_widths = [50, 26, 30, 30, 30, 28, 45, 38]
+            # Give the client name more room while keeping the compact
+            # columns sized for their short values and preserving the table
+            # width on the landscape A4 page.
+            col_widths = [77, 22, 24, 24, 24, 22, 45, 39]
             keys = ("client", "code", "type", "region", "ville", "equipements", "contact", "telephone")
-            max_chars = [29, 15, 18, 18, 18, 12, 25, 20]
             title = "LISTE DES CLIENTS"
             filter_pairs = (("Recherche", "client_search"), ("Type", "client_type"), ("Region", "client_region"), ("Ville", "client_ville"))
             report_filename = "clients"
@@ -170,7 +219,6 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
             headers = ["Client", "Equipement", "Type", "Domaine", "Fabricant / modele", "Statut", "Service"]
             col_widths = [48, 54, 40, 40, 40, 30, 25]
             keys = ("client", "equipement", "type", "domaine", "modele", "statut", "service")
-            max_chars = [28, 30, 23, 23, 24, 18, 15]
             title = "LISTE DES EQUIPEMENTS"
             filter_pairs = (("Recherche", "search"), ("Domaine", "domaine"), ("Type", "type"), ("Modele", "modele"), ("Statut", "statut"), ("Service", "service"), ("Client", "client"))
             report_filename = "equipements"
@@ -224,18 +272,44 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
 
         pdf.set_font("Helvetica", size=7.5)
         pdf.set_text_color(30, 30, 30)
-        for item in rows:
-            if pdf.get_y() > 185:
+        row_line_height = 6.5
+
+        def draw_table_row(item):
+            wrapped_values = [
+                _wrap_pdf_cell(pdf, _sanitize(item[key]), width)
+                for width, key in zip(col_widths, keys)
+            ]
+            row_height = row_line_height * max(value.count("\n") + 1 for value in wrapped_values)
+
+            # Check the complete wrapped row before drawing it so its cells
+            # never get split across pages and all borders stay aligned.
+            if pdf.get_y() + row_height > pdf.page_break_trigger:
                 pdf.add_page()
                 draw_table_header()
                 pdf.set_font("Helvetica", size=7.5)
                 pdf.set_text_color(30, 30, 30)
-            for width, key, limit in zip(col_widths, keys, max_chars):
-                text = _sanitize(item[key])
-                if len(text) > limit:
-                    text = text[:limit - 1] + "..."
-                pdf.cell(width, 6.5, text, border=1)
-            pdf.ln()
+
+            row_y = pdf.get_y()
+            for width, key, text in zip(col_widths, keys, wrapped_values):
+                cell_x = pdf.get_x()
+                # Draw the full-height cell first. multi_cell() only draws
+                # the height required by its own text, which would otherwise
+                # leave the other cells shorter than the wrapped client cell.
+                pdf.rect(cell_x, row_y, width, row_height)
+                pdf.set_xy(cell_x, row_y)
+                pdf.multi_cell(
+                    width,
+                    row_line_height,
+                    text,
+                    border=0,
+                    align="C" if key == "equipements" else "L",
+                    new_x="RIGHT",
+                    new_y="TOP",
+                )
+            pdf.set_xy(pdf.l_margin, row_y + row_height)
+
+        for item in rows:
+            draw_table_row(item)
 
         pdf_bytes = pdf.output(dest="S")
         if isinstance(pdf_bytes, str):
