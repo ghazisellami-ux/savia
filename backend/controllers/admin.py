@@ -31,6 +31,7 @@ from services.scheduled_jobs import (
     _df_to_records,
 )
 from repositories.parts import resolve_technician_user_id
+from services.timezone import configure_process_timezone, format_utc_timestamp, now_in_timezone
 
 
 VALID_ROLES = [
@@ -217,6 +218,7 @@ def get_admin_audit_logs(
     action: str = Query(""),
     date_from: str = Query(""),
     date_to: str = Query(""),
+    timezone: str = Query("UTC"),
     user: dict = Depends(_verify_token),
 ):
     """
@@ -241,7 +243,8 @@ def get_admin_audit_logs(
             username=username if username else "",
             action=action if action else "",
             date_from=date_from if date_from else "",
-            date_to=date_to if date_to else ""
+            date_to=date_to if date_to else "",
+            timezone_name=timezone,
         )
         return _df_to_records(df)
     except Exception as e:
@@ -255,6 +258,7 @@ class AuditExportRequest(BaseModel):
     action: str = ""
     date_from: str = ""
     date_to: str = ""
+    timezone: str = "UTC"
 
 
 @app.post("/api/admin/audit-logs/export-pdf")
@@ -285,7 +289,8 @@ def export_audit_logs_pdf(
             username=req.username,
             action=req.action,
             date_from=req.date_from,
-            date_to=req.date_to
+            date_to=req.date_to,
+            timezone_name=req.timezone,
         )
         
         if df.empty:
@@ -315,7 +320,8 @@ def export_audit_logs_pdf(
         pdf.cell(0, 10, "Journal d'Audit SAVIA", ln=True, align="C")
         
         pdf.set_font(font_name, size=9)
-        pdf.cell(0, 5, f"Généré le: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=True, align="R")
+        generated_at = now_in_timezone(req.timezone)
+        pdf.cell(0, 5, f"Généré le: {generated_at.strftime('%d/%m/%Y %H:%M:%S')}", ln=True, align="R")
         pdf.cell(0, 5, f"Par: {user.get('nom', user.get('username', 'N/A'))}", ln=True, align="R")
         
         # Filtres appliqués
@@ -351,7 +357,7 @@ def export_audit_logs_pdf(
         pdf.set_font(font_name, size=8)
         pdf.set_text_color(0, 0, 0)  # Texte noir pour le contenu
         for _, row in df.iterrows():
-            timestamp = str(row.get("timestamp", ""))[:16]  # Format: YYYY-MM-DD HH:MM
+            timestamp = format_utc_timestamp(row.get("timestamp", ""), req.timezone, "%d/%m/%Y %H:%M")
             username_val = str(row.get("username", ""))[:25]
             action_val = str(row.get("action", ""))[:25]
             details_val = str(row.get("details", ""))[:50]
@@ -380,7 +386,7 @@ def export_audit_logs_pdf(
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=audit-logs-{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"}
+            headers={"Content-Disposition": f"attachment; filename=audit-logs-{generated_at.strftime('%Y%m%d_%H%M%S')}.pdf"}
         )
     
     except HTTPException:
@@ -547,6 +553,8 @@ def update_settings(body: dict = Body(...), user: dict = Depends(_verify_token))
                     """,
                     (k, str(v))
                 )
+        if "pays" in body:
+            configure_process_timezone()
         logger.info("Configuration administrateur mise à jour par %s (%d clés)", user.get("sub"), len(body))
         return {"ok": True}
     except Exception as e:
@@ -583,6 +591,8 @@ def update_admin_settings(body: dict = Body(...), user: dict = Depends(_verify_t
                     """,
                     (k, str(v))
                 )
+        if "pays" in body:
+            configure_process_timezone()
         logger.info(f"[UPDATE_ADMIN_SETTINGS] Admin settings saved successfully")
         return {"ok": True}
     except Exception as e:

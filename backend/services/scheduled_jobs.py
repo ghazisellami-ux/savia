@@ -21,6 +21,7 @@ from api.runtime import (
     pd,
     update_piece_parameters_batch,
 )
+from services.timezone import business_now, configure_process_timezone
 
 def check_garantie_expiry():
     """
@@ -737,13 +738,9 @@ SCHEDULER_LAST_RUN_KEY = "scheduled_jobs_last_run"
 
 
 def _tunis_now() -> datetime:
-    """Return the business clock, with a safe fallback if tzdata is absent."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Africa/Tunis"))
-    except Exception:
-        from datetime import timezone, timedelta
-        return datetime.now(timezone(timedelta(hours=1)))
+    """Return the business clock configured by the selected country."""
+    configure_process_timezone()
+    return business_now()
 
 
 def _get_scheduler_schedule(bot_key: str = "telegram") -> dict:

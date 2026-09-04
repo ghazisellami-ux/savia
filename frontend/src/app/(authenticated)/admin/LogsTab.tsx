@@ -5,6 +5,7 @@ import {
   Download, Search, Loader2, Calendar, User, Activity, Network,
   Filter, X, FileDown, AlertCircle,
 } from 'lucide-react';
+import { getBrowserTimezone, getLocalDateISO, parseServerTimestamp } from '@/lib/timezone';
 
 interface AuditLog {
   id: number;
@@ -67,6 +68,7 @@ export default function LogsTab() {
       if (action) params.append('action', action);
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
+      params.append('timezone', getBrowserTimezone());
       
       const res = await fetch(`/api/admin/audit-logs?${params}`, {
         credentials: 'same-origin',
@@ -127,6 +129,7 @@ export default function LogsTab() {
           action,
           date_from: dateFrom,
           date_to: dateTo,
+          timezone: getBrowserTimezone(),
         }),
       });
 
@@ -137,7 +140,7 @@ export default function LogsTab() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `audit-logs-${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.download = `audit-logs-${getLocalDateISO()}.pdf`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -298,7 +301,7 @@ export default function LogsTab() {
                 </thead>
                 <tbody>
                   {paginatedLogs.map(log => {
-                    const timestamp = new Date(log.timestamp);
+                    const timestamp = parseServerTimestamp(log.timestamp);
                     const actionColor = getActionColor(log.action);
                     const actionIcon = getActionIcon(log.action);
                     let details = '';

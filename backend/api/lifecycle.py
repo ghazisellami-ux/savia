@@ -11,10 +11,12 @@ from api.runtime import (
     migrer_clients_depuis_equipements,
 )
 from database.migrations import run_migrations
+from services.timezone import configure_process_timezone
 
 @app.on_event("startup")
 def startup():
     init_db()
+    configure_process_timezone()
     with get_db() as conn:
         applied = run_migrations(conn)
     if applied:
