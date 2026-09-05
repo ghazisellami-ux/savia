@@ -73,6 +73,7 @@ export default function PiecesPage() {
   const [traceTypeFilter, setTraceTypeFilter] = useState('');
   const [traceFournisseurFilter, setTraceFournisseurFilter] = useState('');
   const [traceSearch, setTraceSearch] = useState('');
+  const [selectedPredictionClients, setSelectedPredictionClients] = useState<{ piece: string; clients: string[] } | null>(null);
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
   const [equipmentCatalog, setEquipmentCatalog] = useState<Array<{ nom: string; type: string; domaine: string }>>([]);
@@ -1076,6 +1077,9 @@ export default function PiecesPage() {
                       })
                       .map(p => {
                         const forecast = predictions[p.id] || {};
+                        const clients = Array.isArray(forecast.clients_utilisateurs)
+                          ? forecast.clients_utilisateurs.map((client: unknown) => String(client).trim()).filter(Boolean)
+                          : [];
                         const isRupture = forecast.urgence === 'CRITIQUE' || p.stock_actuel === 0;
                         const isBas = !isRupture && (forecast.urgence === 'HAUTE' || p.stock_actuel <= p.stock_minimum);
                         const manquant = forecast.quantite_recommandee ?? Math.max(0, p.stock_minimum - p.stock_actuel + 1);
@@ -1089,10 +1093,22 @@ export default function PiecesPage() {
                               <div className="text-xs text-savia-text-muted font-mono">{p.reference}</div>
                             </td>
                             <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
-                            <td className="py-2.5 px-3 text-xs min-w-[150px]">
-                              {forecast.clients_utilisateurs?.length > 0
-                                ? forecast.clients_utilisateurs.join(', ')
-                                : <span className="text-savia-text-dim">Non documenté</span>}
+                            <td className="py-2.5 px-3 text-xs min-w-[180px]">
+                              {clients.length > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedPredictionClients({ piece: p.designation, clients })}
+                                  className="text-left group cursor-pointer"
+                                  aria-label={`Afficher les ${clients.length} clients concernés par ${p.designation}`}
+                                >
+                                  <span className="block font-semibold text-savia-accent group-hover:underline">
+                                    {clients.length} client{clients.length > 1 ? 's' : ''} concerné{clients.length > 1 ? 's' : ''}
+                                  </span>
+                                  <span className="block text-savia-text-muted truncate max-w-[220px]" title={clients.join(', ')}>
+                                    {clients.slice(0, 2).join(', ')}{clients.length > 2 ? ` +${clients.length - 2}` : ''}
+                                  </span>
+                                </button>
+                              ) : <span className="text-savia-text-dim">Non documenté</span>}
                             </td>
                             <td className="py-2.5 px-3 text-center">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
@@ -1653,6 +1669,29 @@ export default function PiecesPage() {
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Enregistrer
           </button>
         </div>
+      </Modal>
+
+      {/* Liste détaillée des clients d'une pièce, ouverte à la demande */}
+      <Modal
+        isOpen={Boolean(selectedPredictionClients)}
+        onClose={() => setSelectedPredictionClients(null)}
+        title={`Clients concernés — ${selectedPredictionClients?.piece || ''}`}
+        size="md"
+      >
+        {selectedPredictionClients && (
+          <div className="space-y-4">
+            <p className="text-sm text-savia-text-muted">
+              {selectedPredictionClients.clients.length} client{selectedPredictionClients.clients.length > 1 ? 's' : ''} concerné{selectedPredictionClients.clients.length > 1 ? 's' : ''} par cette pièce.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {selectedPredictionClients.clients.map((client, index) => (
+                <div key={`${client}-${index}`} className="rounded-lg border border-savia-border/60 bg-savia-surface-hover/40 px-3 py-2 text-sm">
+                  {client}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
