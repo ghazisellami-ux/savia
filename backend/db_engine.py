@@ -25,3 +25,4 @@ from repositories.parts import *
 from repositories.parts_prediction import *
 from repositories.requests import *
 from repositories.technician_work import *
+from repositories.work_sessions import *

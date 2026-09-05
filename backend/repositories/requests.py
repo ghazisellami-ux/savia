@@ -45,7 +45,8 @@ def _ensure_demandes_table():
                 date_traitement TIMESTAMP,
                 date_planifiee DATE,
                 intervention_id INTEGER,
-                priorite TEXT DEFAULT 'Moyenne'
+                priorite TEXT DEFAULT 'Moyenne',
+                type_intervention TEXT DEFAULT 'Corrective'
             )
         """)
         conn.commit()
@@ -54,6 +55,7 @@ def _ensure_demandes_table():
         try:
             cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS date_planifiee DATE")
             cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS priorite TEXT DEFAULT 'Moyenne'")
+            cur.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS type_intervention TEXT DEFAULT 'Corrective'")
             cur.execute(
                 """UPDATE demandes_intervention
                    SET priorite = CASE
@@ -97,8 +99,8 @@ def ajouter_demande_intervention(demande_dict):
         conn.execute("""
             INSERT INTO demandes_intervention
                 (date_demande, demandeur, client, equipement, urgence, priorite,
-                 description, code_erreur, contact_nom, contact_tel, statut)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 description, code_erreur, contact_nom, contact_tel, statut, type_intervention)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             demande_dict.get("date_demande", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             demande_dict.get("demandeur", ""),
@@ -111,6 +113,7 @@ def ajouter_demande_intervention(demande_dict):
             demande_dict.get("contact_nom", ""),
             demande_dict.get("contact_tel", ""),
             "Nouvelle",
+            demande_dict.get("type_intervention") or "Corrective",
         ))
     _trigger_backup()
     return True

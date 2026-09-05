@@ -187,9 +187,13 @@ def login(body: LoginRequest, request: Request, response: Response):
     log_audit(body.username, "LOGIN", "Connexion réussie", "auth", ip_address)
     _clear_login_attempts(ip_key, account_key)
     
-    token = _issue_access_token(user_data)
-    _set_auth_cookie(response, token)
     is_pwa_client = request.headers.get("X-SAVIA-Client", "").lower() == "pwa"
+    token = _issue_access_token(user_data)
+    # The PWA persists its bearer token separately for offline use.  Setting the
+    # dashboard cookie here would overwrite a browser session on the same host:
+    # cookies are scoped by hostname and path, not by port.
+    if not is_pwa_client:
+        _set_auth_cookie(response, token)
     return _login_response(user_data, token if is_pwa_client else None)
 
 

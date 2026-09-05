@@ -753,6 +753,95 @@ def _migration_021_public_market_invoice_step(conn) -> None:
     conn.execute("ALTER TABLE public_market_cases ADD COLUMN IF NOT EXISTS invoice_reference TEXT NOT NULL DEFAULT ''")
 
 
+def _migration_022_intervention_work_sessions(conn) -> None:
+    """Store every dated work period instead of one time pair per technician."""
+    # Fresh databases reach recorded migrations before the legacy runtime
+    # compatibility helper, so make its time columns explicit here as well.
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS start_time TIME")
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS end_time TIME")
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS duree_deplacement INTEGER DEFAULT 0")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS intervention_work_sessions (
+               id BIGSERIAL PRIMARY KEY,
+               entry_uuid TEXT NOT NULL,
+               intervention_id INTEGER NOT NULL REFERENCES interventions(id) ON DELETE CASCADE,
+               intervention_technicien_id INTEGER NULL REFERENCES interventions_techniciens(id) ON DELETE CASCADE,
+               technicien_nom TEXT NOT NULL,
+               work_date DATE NOT NULL,
+               start_time TIME NOT NULL,
+               end_time TIME NOT NULL,
+               duration_minutes INTEGER NOT NULL,
+               travel_minutes INTEGER NOT NULL DEFAULT 0,
+               created_by TEXT NOT NULL DEFAULT '',
+               updated_by TEXT NOT NULL DEFAULT '',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               deleted_at TIMESTAMPTZ NULL,
+               CONSTRAINT intervention_work_sessions_duration_check
+                   CHECK (duration_minutes > 0 AND duration_minutes <= 1440),
+               CONSTRAINT intervention_work_sessions_travel_check
+                   CHECK (travel_minutes >= 0)
+           )"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_work_sessions_entry
+           ON intervention_work_sessions(intervention_id, entry_uuid)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_work_sessions_intervention_date
+           ON intervention_work_sessions(intervention_id, work_date, start_time)
+           WHERE deleted_at IS NULL"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_work_sessions_assignment
+           ON intervention_work_sessions(intervention_technicien_id)
+           WHERE deleted_at IS NULL"""
+    )
+
+    # Preserve existing time data as an initial dated session. The legacy
+    # columns remain available during the compatibility period.
+    conn.execute(
+        """INSERT INTO intervention_work_sessions
+               (entry_uuid, intervention_id, intervention_technicien_id,
+                technicien_nom, work_date, start_time, end_time,
+                duration_minutes, travel_minutes, created_by, updated_by)
+           SELECT 'legacy-tech-' || it.id, it.intervention_id, it.id,
+                  it.technicien_nom, COALESCE(i.date::date, CURRENT_DATE),
+                  it.heure_debut_tech, it.heure_fin_tech,
+                  ((EXTRACT(EPOCH FROM (it.heure_fin_tech - it.heure_debut_tech)) / 60
+                    + CASE WHEN it.heure_fin_tech <= it.heure_debut_tech THEN 1440 ELSE 0 END)::INTEGER),
+                  COALESCE(it.duree_deplacement_tech, 0), 'migration', 'migration'
+           FROM interventions_techniciens it
+           JOIN interventions i ON i.id = it.intervention_id
+           WHERE it.heure_debut_tech IS NOT NULL
+             AND it.heure_fin_tech IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM intervention_work_sessions ws
+                 WHERE ws.intervention_id = it.intervention_id
+                   AND ws.entry_uuid = 'legacy-tech-' || it.id
+             )"""
+    )
+    conn.execute(
+        """INSERT INTO intervention_work_sessions
+               (entry_uuid, intervention_id, intervention_technicien_id,
+                technicien_nom, work_date, start_time, end_time,
+                duration_minutes, travel_minutes, created_by, updated_by)
+           SELECT 'legacy-intervention-' || i.id, i.id, NULL,
+                  COALESCE(NULLIF(BTRIM(i.technicien), ''), 'Non assigné'),
+                  COALESCE(i.date::date, CURRENT_DATE), i.start_time, i.end_time,
+                  ((EXTRACT(EPOCH FROM (i.end_time - i.start_time)) / 60
+                    + CASE WHEN i.end_time <= i.start_time THEN 1440 ELSE 0 END)::INTEGER),
+                  COALESCE(i.duree_deplacement, 0), 'migration', 'migration'
+           FROM interventions i
+           WHERE i.start_time IS NOT NULL
+             AND i.end_time IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM intervention_work_sessions ws
+                 WHERE ws.intervention_id = i.id
+             )"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -775,6 +864,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("019", "contract billing coverage", _migration_019_contract_billing_coverage),
     ("020", "knowledge import provenance", _migration_020_knowledge_import_provenance),
     ("021", "public market invoice milestone", _migration_021_public_market_invoice_step),
+    ("022", "dated intervention work sessions", _migration_022_intervention_work_sessions),
 )
 
 

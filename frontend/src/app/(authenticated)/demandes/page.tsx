@@ -17,6 +17,7 @@ interface Demande {
   client: string;
   demandeur: string;
   priorite: string;
+  type_intervention: string;
   statut: string;
   description: string;
   code_erreur: string;
@@ -134,8 +135,10 @@ export default function DemandesPage() {
     demandeur: demandeurNom, // Pré-rempli avec le nom de l'utilisateur connecté
     client: isLecteur ? clientNom : '',
     equipement: '',
+    type_intervention: 'Corrective',
     priorite: 'Moyenne',
     description: '',
+    notes_traitement: '',
     code_erreur: '',
     contact_nom: isLecteur ? demandeurNom : '',
     contact_tel: '',
@@ -179,6 +182,7 @@ export default function DemandesPage() {
         client: item.client || '',
         demandeur: item.demandeur || '',
         priorite: item.priorite || item.urgence || 'Moyenne',
+        type_intervention: item.type_intervention || 'Corrective',
         statut: normalizeStatut(item.statut || ''),
         description: item.description || '',
         code_erreur: item.code_erreur || '',
@@ -491,6 +495,7 @@ export default function DemandesPage() {
             <p className="text-sm mb-3 text-savia-text">{d.description}</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-savia-text-muted">
               <span className="flex items-center gap-1"><Server className="w-3 h-3" />{d.machine || '—'}</span>
+              <span className="flex items-center gap-1"><ClipboardList className="w-3 h-3" />{d.type_intervention}</span>
               <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{d.client || '—'}</span>
               <span className="flex items-center gap-1"><User className="w-3 h-3" />{d.demandeur || '—'}</span>
               <span className="flex items-center gap-1"><Clock className="w-3 h-3" />Demande : {formatDateTime(d.date)}</span>
@@ -562,6 +567,16 @@ export default function DemandesPage() {
                   <input type="date" className={INPUT_CLS} value={form.date_planifiee}
                     min={todayIso()}
                     onChange={e => setForm({...form, date_planifiee: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <ClipboardList className="w-3.5 h-3.5 text-savia-accent" /> Type d&apos;intervention *
+                  </label>
+                  <select className={INPUT_CLS} value={form.type_intervention}
+                    onChange={e => setForm({...form, type_intervention: e.target.value})}>
+                    <option value="Corrective">Corrective</option>
+                    <option value="Installation">Installation</option>
+                  </select>
                 </div>
               </div>
 
@@ -681,6 +696,13 @@ export default function DemandesPage() {
                 <textarea className={INPUT_CLS + ' resize-none'} rows={4}
                   placeholder="Décrivez le problème rencontré, les symptômes, depuis quand..."
                   value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
+              </div>
+              <div>
+                <label htmlFor="demande-note" className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <FileText className="w-3.5 h-3.5" /> Note (facultative)
+                </label>
+                <textarea id="demande-note" className={INPUT_CLS + ' resize-none'} rows={3}
+                  value={form.notes_traitement} onChange={e => setForm({...form, notes_traitement: e.target.value})} />
               </div>
             </div>
             <div className="flex justify-end gap-3 p-5 border-t border-savia-border">

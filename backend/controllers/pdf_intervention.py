@@ -56,7 +56,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
     from fastapi.responses import Response
     import base64 as _b64
     import urllib.request as _ur
-    from db_engine import get_interventions_techniciens
+    from db_engine import get_interventions_techniciens, list_work_sessions
 
     SAVIA_LOGO = "/app/logo-savia.png"
 
@@ -84,6 +84,11 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
             except Exception as e:
                 logger.debug(f"Could not load tech records: {e}")
                 tech_records = []
+        try:
+            work_sessions = list_work_sessions(interv_id)
+        except Exception as e:
+            logger.debug(f"Could not load work sessions: {e}")
+            work_sessions = []
 
         # Fetch equipment to determine warranty and serial number
         df_equip = lire_equipements()
@@ -234,7 +239,11 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         # TRAVAUX EFFECTUES - Table with Date, Start, End, Travel
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(0, 0, 0)
-        if is_multi_tech:
+        if work_sessions:
+            pdf.cell(W, 6, "Travaux Effectues")
+            col_widths = [28, 42, 24, 24, 26, 30]
+            headers = ["Date", "Technicien", "Debut", "Fin", "Duree", "Trajet (h)"]
+        elif is_multi_tech:
             pdf.cell(W, 6, "Travaux Effectues (Multi-Technicien)")
         else:
             pdf.cell(W, 6, "Travaux Effectues")
@@ -245,7 +254,9 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         pdf.set_fill_color(200, 200, 200)
         pdf.set_text_color(0, 0, 0)
         
-        if is_multi_tech:
+        if work_sessions:
+            pass
+        elif is_multi_tech:
             # Multi-tech table: Technicien, Debut, Fin, Trajet, Solution
             col_widths = [30, 25, 25, 25, 50]
             headers = ["Technicien", "Heure Debut", "Heure Fin", "Trajet (h)", "Solution"]
@@ -263,7 +274,23 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         pdf.set_fill_color(255, 255, 255)
         pdf.set_text_color(0, 0, 0)
         
-        if is_multi_tech and tech_records:
+        if work_sessions:
+            for session in work_sessions:
+                session_dict = dict(session) if hasattr(session, "keys") else session
+                duration = int(session_dict.get("duration_minutes", 0) or 0)
+                travel = int(session_dict.get("travel_minutes", 0) or 0)
+                values = [
+                    str(session_dict.get("work_date", ""))[:10],
+                    str(session_dict.get("technicien_nom", ""))[:24],
+                    str(session_dict.get("start_time", ""))[:5],
+                    str(session_dict.get("end_time", ""))[:5],
+                    f"{duration // 60}h{duration % 60:02d}",
+                    f"{round(travel / 60, 2)}" if travel else "-",
+                ]
+                for index, value in enumerate(values):
+                    pdf.cell(col_widths[index], 6, _sanitize(value), border=1)
+                pdf.ln(6)
+        elif is_multi_tech and tech_records:
             # Multi-tech mode: one row per technician from interventions_techniciens
             for tech_record in tech_records:
                 rec_dict = dict(tech_record) if hasattr(tech_record, 'keys') else tech_record
@@ -331,7 +358,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
             pdf.ln(6)
         
         # Add empty rows for manual fill (per model) - only for single-tech
-        if not is_multi_tech:
+        if not is_multi_tech and not work_sessions:
             for _ in range(2):
                 pdf.cell(col_widths[0], 6, "", border=1)
                 pdf.cell(col_widths[1], 6, "", border=1)
