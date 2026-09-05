@@ -68,9 +68,11 @@ export default function PiecesPage() {
   const [editDomaineFilter, setEditDomaineFilter] = useState('');
   const [editTypeFilter, setEditTypeFilter] = useState('');
   const [editFournisseurFilter, setEditFournisseurFilter] = useState('');
+  const [editSearch, setEditSearch] = useState('');
   const [traceDomaineFilter, setTraceDomaineFilter] = useState('');
   const [traceTypeFilter, setTraceTypeFilter] = useState('');
   const [traceFournisseurFilter, setTraceFournisseurFilter] = useState('');
+  const [traceSearch, setTraceSearch] = useState('');
   const [pendingDemandes, setPendingDemandes] = useState<any[]>([]);
   const [linkedDemandeId, setLinkedDemandeId] = useState<number | null>(null);
   const [equipmentCatalog, setEquipmentCatalog] = useState<Array<{ nom: string; type: string; domaine: string }>>([]);
@@ -561,19 +563,40 @@ export default function PiecesPage() {
     interventionData.forEach((inter: any) => {
       const piecesStr = inter.pieces_utilisees || '';
       if (!piecesStr.trim()) return;
-      const parts = piecesStr.replace(/;/g, ',').split(',').map((p: string) => p.trim()).filter(Boolean);
+      // Les interventions récentes enregistrent une pièce par ligne afin de
+      // conserver les métadonnées (référence, fournisseur, quantité). Les
+      // anciennes données peuvent encore être séparées par des virgules ou
+      // des points-virgules : on garde ce format comme solution de repli.
+      const parts = piecesStr
+        .split(/\r?\n/)
+        .flatMap((line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed) return [];
+          return /\b(?:Ref(?:érence)?|Fournisseur|Qty|Qte|Quantit(?:é|e))\s*:/i.test(trimmed)
+            ? [trimmed]
+            : trimmed.replace(/;/g, ',').split(',');
+        })
+        .map((p: string) => p.trim())
+        .filter(Boolean);
       parts.forEach((partName: string) => {
         const referenceMatch = partName.match(/\bRef(?:érence)?\s*:\s*([^|,]+)/i);
         const supplierMatch = partName.match(/\bFournisseur\s*:\s*([^|,]+)/i);
+        const quantityMatch = partName.match(/\b(?:Qty|Qte|Quantit(?:é|e))\s*:\s*(\d+(?:[.,]\d+)?)/i);
         const reference = referenceMatch?.[1]?.trim() || '';
         const catalogPiece = data.find(piece => reference && piece.reference.toLowerCase() === reference.toLowerCase());
+        // La désignation est affichée seule dans la colonne Pièce. Les
+        // informations techniques restent disponibles dans leurs colonnes
+        // dédiées, au lieu d'être concaténées dans une seule cellule.
+        const designation = partName.split('|')[0].trim() || partName;
         rows.push({
           date: (inter.date || '').substring(0, 10),
-          piece: partName,
+          piece: designation,
+          designation,
           reference,
           domaine: catalogPiece?.domaine || '',
           equipement_type: catalogPiece?.equipement_type || '',
-          fournisseur: catalogPiece?.fournisseur || supplierMatch?.[1]?.trim() || '',
+          fournisseur: supplierMatch?.[1]?.trim() || catalogPiece?.fournisseur || '',
+          quantite: quantityMatch?.[1] ? Number(quantityMatch[1].replace(',', '.')) : null,
           equipement: inter.machine || '',
           client: inter.client || '',
           technicien: inter.technicien || '',
@@ -585,6 +608,12 @@ export default function PiecesPage() {
   }, [interventionData, data]);
 
   const filteredTraceData = traceData.filter(row => {
+    const searchTerm = traceSearch.toLowerCase().trim();
+    if (searchTerm) {
+      const matchesSearch = [row.piece, row.reference, row.fournisseur]
+        .some(value => String(value || '').toLowerCase().includes(searchTerm));
+      if (!matchesSearch) return false;
+    }
     if (traceDomaineFilter && row.domaine !== traceDomaineFilter) return false;
     if (traceTypeFilter && row.equipement_type !== traceTypeFilter) return false;
     if (traceFournisseurFilter && row.fournisseur.toLowerCase() !== traceFournisseurFilter.toLowerCase()) return false;
@@ -754,28 +783,6 @@ export default function PiecesPage() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
-          <input type="text" placeholder="Rechercher par référence, désignation ou fournisseur..." value={search} onChange={e => setSearch(e.target.value)}
-            className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
-        </div>
-        <select value={filterDomaine} onChange={e => { setFilterDomaine(e.target.value); setFilterType('Tous'); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-          {domaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
-        </select>
-        <select value={filterType} onChange={e => { setFilterType(e.target.value); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-          {stockTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
-        </select>
-        <select value={filterFournisseur} onChange={e => setFilterFournisseur(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-          {stockSupplierOptions.map(name => <option key={name} value={name}>{name === 'Tous' ? 'Tous les fournisseurs' : name}</option>)}
-        </select>
-      </div>
-
-      <div className="text-xs text-savia-text-muted flex items-center gap-1">
-        <Package className="w-3.5 h-3.5" /> {filtered.length} pièce(s) affichée(s)
-      </div>
-
       {/* Tabs */}
       <div className="flex gap-1 border-b border-savia-border overflow-x-auto">
         {tabs.map((tab, i) => (
@@ -787,38 +794,62 @@ export default function PiecesPage() {
 
       {/* TAB 0: STOCK */}
       {activeTab === 0 && (
-        <SectionCard title="Inventaire Stock">
-          <div className="overflow-x-auto">
-            <div className="overflow-y-auto" style={{maxHeight: '380px'}}>
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-savia-surface z-10">
-                  <tr className="border-b border-savia-border">
-                    {['Référence', 'Désignation', 'Type Équip.', 'Stock', 'Min', 'Fournisseur', 'Prix Unit.'].map(h => (
-                      <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map(p => (
-                    <tr key={p.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
-                      <td className="py-2.5 px-3 font-mono text-savia-accent font-bold text-xs">{p.reference}</td>
-                      <td className="py-2.5 px-3 font-semibold">{p.designation}</td>
-                      <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
-                      <td className="py-2.5 px-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${p.stock_actuel === 0 ? 'bg-red-500/10 text-red-400' : p.stock_actuel <= p.stock_minimum ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
-                          {p.stock_actuel}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
-                      <td className="py-2.5 px-3 text-sm">{p.fournisseur}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-sm">{p.prix_unitaire.toLocaleString('fr')} TND</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div className="space-y-4">
+          {/* Filtres propres à l'onglet Stock */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+              <input type="text" placeholder="Rechercher par référence, désignation ou fournisseur..." value={search} onChange={e => setSearch(e.target.value)}
+                className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
+            <select value={filterDomaine} onChange={e => { setFilterDomaine(e.target.value); setFilterType('Tous'); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {domaines.map(d => <option key={d} value={d}>{d === 'Tous' ? 'Tous les domaines' : d}</option>)}
+            </select>
+            <select value={filterType} onChange={e => { setFilterType(e.target.value); setFilterFournisseur('Tous'); }} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {stockTypes.map(t => <option key={t} value={t}>{t === 'Tous' ? 'Tous les types' : t}</option>)}
+            </select>
+            <select value={filterFournisseur} onChange={e => setFilterFournisseur(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
+              {stockSupplierOptions.map(name => <option key={name} value={name}>{name === 'Tous' ? 'Tous les fournisseurs' : name}</option>)}
+            </select>
           </div>
-        </SectionCard>
+
+          <div className="text-xs text-savia-text-muted flex items-center gap-1">
+            <Package className="w-3.5 h-3.5" /> {filtered.length} pièce(s) affichée(s)
+          </div>
+
+          <SectionCard title="Inventaire Stock">
+            <div className="overflow-x-auto">
+              <div className="overflow-y-auto" style={{maxHeight: '380px'}}>
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-savia-surface z-10">
+                    <tr className="border-b border-savia-border">
+                      {['Référence', 'Désignation', 'Type Équip.', 'Stock', 'Min', 'Fournisseur', 'Prix Unit.'].map(h => (
+                        <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map(p => (
+                      <tr key={p.id} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
+                        <td className="py-2.5 px-3 font-mono text-savia-accent font-bold text-xs">{p.reference}</td>
+                        <td className="py-2.5 px-3 font-semibold">{p.designation}</td>
+                        <td className="py-2.5 px-3 text-xs text-savia-text-muted">{p.equipement_type}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${p.stock_actuel === 0 ? 'bg-red-500/10 text-red-400' : p.stock_actuel <= p.stock_minimum ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                            {p.stock_actuel}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
+                        <td className="py-2.5 px-3 text-sm">{p.fournisseur}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-sm">{p.prix_unitaire.toLocaleString('fr')} TND</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
       )}
 
       {/* TAB 1: TRAÇABILITÉ */}
@@ -842,7 +873,17 @@ export default function PiecesPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+              <input
+                type="text"
+                value={traceSearch}
+                onChange={e => setTraceSearch(e.target.value)}
+                placeholder="Rechercher une référence ou une pièce..."
+                className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40"
+              />
+            </div>
             <select value={traceDomaineFilter} onChange={e => { setTraceDomaineFilter(e.target.value); setTraceTypeFilter(''); setTraceFournisseurFilter(''); }}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               <option value="">Tous les domaines</option>
@@ -873,7 +914,7 @@ export default function PiecesPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-savia-bg">
                     <tr className="border-b border-savia-border">
-                      {['Date', 'Pièce', 'Équipement', 'Client', 'Technicien', 'Statut'].map(h => (
+                      {['Date', 'Pièce', 'Référence', 'Fournisseur', 'Quantité', 'Équipement', 'Client', 'Technicien', 'Statut'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted">{h}</th>
                       ))}
                     </tr>
@@ -883,6 +924,9 @@ export default function PiecesPage() {
                       <tr key={i} className="border-b border-savia-border/30">
                         <td className="py-2 px-3 text-xs">{t.date}</td>
                         <td className="py-2 px-3 font-semibold text-savia-accent">{t.piece}</td>
+                        <td className="py-2 px-3 font-mono text-xs">{t.reference || '—'}</td>
+                        <td className="py-2 px-3 text-sm">{t.fournisseur || '—'}</td>
+                        <td className="py-2 px-3 text-center">{t.quantite ?? '—'}</td>
                         <td className="py-2 px-3">{t.equipement}</td>
                         <td className="py-2 px-3 text-sm">{t.client}</td>
                         <td className="py-2 px-3">{t.technicien}</td>
@@ -914,6 +958,9 @@ export default function PiecesPage() {
             .filter(Boolean)
         )].sort((a, b) => a.localeCompare(b, 'fr'));
         const editFiltered = data.filter(p => {
+          const searchTerm = editSearch.toLowerCase().trim();
+          if (searchTerm && ![p.reference, p.designation, p.fournisseur]
+            .some(value => String(value || '').toLowerCase().includes(searchTerm))) return false;
           if (editDomaineFilter && p.domaine !== editDomaineFilter) return false;
           if (editTypeFilter && p.equipement_type !== editTypeFilter) return false;
           if (editFournisseurFilter && p.fournisseur.toLowerCase() !== editFournisseurFilter.toLowerCase()) return false;
@@ -922,6 +969,16 @@ export default function PiecesPage() {
         return (
         <div className="space-y-3">
           <div className="flex gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
+              <input
+                type="text"
+                value={editSearch}
+                onChange={e => setEditSearch(e.target.value)}
+                placeholder="Rechercher une référence ou une pièce..."
+                className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 text-sm"
+              />
+            </div>
             <select value={editDomaineFilter} onChange={e => { setEditDomaineFilter(e.target.value); setEditTypeFilter(''); setEditFournisseurFilter(''); }}
               className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 text-sm">
               <option value="">Tous domaines</option>
