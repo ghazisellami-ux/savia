@@ -123,6 +123,8 @@ export const PHRASES: Array<[string, string]> = [
   ['Notes', 'Notes'],
   ['Description', 'Description'],
   ['Problème', 'Problem'],
+  ['Note (facultative)', 'Note (optional)'],
+  ["Type d'intervention", 'Intervention type'],
   ['Probleme', 'Problem'],
   ['Cause', 'Cause'],
   ['Solution', 'Solution'],

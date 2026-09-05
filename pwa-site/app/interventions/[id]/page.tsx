@@ -6,11 +6,11 @@ import { isLoggedIn, getUser } from '@/lib/auth';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import OfflineInterventionBanner from '@/components/OfflineInterventionBanner';
-import TimeScrollPicker from '@/components/TimeScrollPicker';
+import WorkSessionsEditor, { newWorkSession, sessionDuration, validateSessionDrafts, type WorkSessionDraft } from '@/components/WorkSessionsEditor';
 import {
-  Search, Clock, Timer, Car, Wrench, Tag, AlertTriangle, CheckCircle,
+  Search, Clock, Wrench, Tag, AlertTriangle, CheckCircle,
   XCircle, FileText, ClipboardList, AlertOctagon, Settings, Camera,
-  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare, Zap
+  Trash2, Loader2, Save, CircleDot, Bell, ChevronLeft, ThumbsUp, ThumbsDown, MessageSquare
 } from 'lucide-react';
 
 const ICON_INLINE = { width: '14px', height: '14px', display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' } as const;
@@ -130,6 +130,8 @@ export default function InterventionDetailPage() {
   const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
   const [activeTabTech, setActiveTabTech] = useState(''); // Track active technician tab
   const [allTechnicians, setAllTechnicians] = useState<string[]>([]); // All technicians for this intervention
+  const [workSessions, setWorkSessions] = useState<WorkSessionDraft[]>([newWorkSession(localDateIso())]);
+  const [allWorkSessions, setAllWorkSessions] = useState<any[]>([]);
 
   const [form, setForm] = useState({
     statut: '', probleme: '', cause: '', solution: '',
@@ -228,6 +230,26 @@ export default function InterventionDetailPage() {
       console.log('🧑 Current user name:', currentUserName);
       
       setAllTechnicians(techniciens);
+
+      try {
+        const savedSessions = await api.interventions.getWorkSessions(id);
+        const validSessions = Array.isArray(savedSessions) ? savedSessions.filter((session: any) => session?.entry_uuid && session?.work_date) : [];
+        setAllWorkSessions(validSessions);
+        const mine = validSessions.filter((session: any) => namesMatch(session.technicien_nom || '', currentUserName));
+        if (mine.length > 0) {
+          setWorkSessions(mine.map((session: any) => ({
+            entry_uuid: String(session.entry_uuid),
+            work_date: String(session.work_date).slice(0, 10),
+            start_time: String(session.start_time).slice(0, 5),
+            end_time: String(session.end_time).slice(0, 5),
+            travel_minutes: Number(session.travel_minutes || 0),
+          })));
+        } else {
+          setWorkSessions([newWorkSession(localDateIso())]);
+        }
+      } catch (sessionError) {
+        console.debug('Work sessions not available yet:', sessionError);
+      }
       
       // Set active tab to current user's technician, fallback to first if not found
       // Multi-tech mode is only active if there are 2 or more technicians
@@ -494,6 +516,8 @@ export default function InterventionDetailPage() {
       document.getElementById('field-solution')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    const sessionError = validateSessionDrafts(workSessions);
+    if (sessionError) { setError(sessionError); return; }
 
     let retourSiteConfirme = false;
     const retourSiteEnAttente = initialFormStatut === "Transfert vers l'atelier"
@@ -531,21 +555,9 @@ export default function InterventionDetailPage() {
         designation: p.designation || p.nom || '',
       }));
       
-      // Calculate duration from times (HH:MM format)
-      const calculateDuration = (startTime: string, endTime: string): number => {
-        try {
-          const [startH, startM] = startTime.split(':').map(Number);
-          const [endH, endM] = endTime.split(':').map(Number);
-          let duration = (endH * 60 + endM) - (startH * 60 + startM);
-          if (duration <= 0) duration += 24 * 60;  // Handle midnight crossing
-          return Math.max(60, duration);  // Minimum 1 hour billing
-        } catch (e) {
-          return 60;
-        }
-      };
-      
-      const deploymentMinutes = Math.round(form.deplacement * 60);
-      const durationMinutes = calculateDuration(form.start_time, form.end_time);
+      const deploymentMinutes = workSessions.reduce((sum, session) => sum + session.travel_minutes, 0);
+      const durationMinutes = workSessions.reduce((sum, session) => sum + sessionDuration(session), 0);
+      const firstSession = workSessions[0];
       
       const updatePayload = { 
         ...(initialFormStatut !== 'Cloturee' ? { statut: form.statut } : {}),
@@ -556,8 +568,8 @@ export default function InterventionDetailPage() {
         notes: form.notes,
         type_erreur: form.type_erreur,
         duree_minutes: durationMinutes,
-        start_time: form.start_time,  // Send HH:MM directly
-        end_time: form.end_time,      // Send HH:MM directly
+        start_time: firstSession?.start_time || '08:00',
+        end_time: firstSession?.end_time || '09:00',
         deplacement: deploymentMinutes,  // Send in minutes
         fiche_validation: form.fiche_validation,
         ...(retourSiteConfirme ? { retour_site_confirme: true } : {}),
@@ -572,6 +584,11 @@ export default function InterventionDetailPage() {
       console.log('  duree_minutes:', updatePayload.duree_minutes);
       console.log('  deplacement:', updatePayload.deplacement, 'minutes');
       
+      if (initialFormStatut !== 'Cloturee') {
+        const sessionsResponse = await api.interventions.saveWorkSessions(id, workSessions);
+        if (Array.isArray(sessionsResponse?.sessions)) setAllWorkSessions(sessionsResponse.sessions);
+        else setAllWorkSessions(previous => [...previous.filter((session: any) => !namesMatch(session.technicien_nom || '', currentUserName)), ...workSessions.map(session => ({ ...session, technicien_nom: currentUserName, duration_minutes: sessionDuration(session) }))]);
+      }
       await api.interventions.update(id, updatePayload);
       setInitialFicheValidation(form.fiche_validation);
       setInitialFormStatut(form.statut);
@@ -605,10 +622,12 @@ export default function InterventionDetailPage() {
     }
 
     // Validation: solution_tech required when marking as Cloturee
-    if (techForm.statut === 'Cloturee' && !techForm.solution_tech.trim()) {
+    if (techForm.statut === 'Cloturee' && !form.solution.trim()) {
       setError('La "Solution" est obligatoire pour clôturer votre intervention.');
       return;
     }
+    const sessionError = validateSessionDrafts(workSessions);
+    if (sessionError) { setError(sessionError); return; }
 
     let retourSiteConfirme = false;
     const retourSiteEnAttente = initialTechnicianStatus === "Transfert vers l'atelier"
@@ -636,21 +655,9 @@ export default function InterventionDetailPage() {
         }
       }
 
-      // Calculate duration from times
-      const calculateDuration = (startTime: string, endTime: string): number => {
-        try {
-          const [startH, startM] = startTime.split(':').map(Number);
-          const [endH, endM] = endTime.split(':').map(Number);
-          let duration = (endH * 60 + endM) - (startH * 60 + startM);
-          if (duration <= 0) duration += 24 * 60;
-          return Math.max(60, duration);
-        } catch (e) {
-          return 60;
-        }
-      };
-
-      const durationMinutes = calculateDuration(techForm.heure_debut_tech, techForm.heure_fin_tech);
-      const deploymentMinutes = Math.round(techForm.duree_deplacement_tech);
+      const durationMinutes = workSessions.reduce((sum, session) => sum + sessionDuration(session), 0);
+      const deploymentMinutes = workSessions.reduce((sum, session) => sum + session.travel_minutes, 0);
+      const firstSession = workSessions[0];
 
       // Always collect selected pieces (for stock deduction when tech closes)
       const pieces_a_deduire = Object.entries(piecesQty).map(([pieceId, qty]) => {
@@ -682,11 +689,15 @@ export default function InterventionDetailPage() {
       const payload = {
         technicien_nom: currentUserName,
         technicien_id: currentUserTechId, // Send the ID for reliable updating
-        probleme_tech: techForm.probleme_tech,
-        cause_tech: techForm.cause_tech,
-        solution_tech: techForm.solution_tech,
-        heure_debut_tech: techForm.heure_debut_tech,
-        heure_fin_tech: techForm.heure_fin_tech,
+        probleme: form.probleme,
+        cause: form.cause,
+        solution: form.solution,
+        type_erreur: form.type_erreur,
+        probleme_tech: form.probleme,
+        cause_tech: form.cause,
+        solution_tech: form.solution,
+        heure_debut_tech: firstSession?.start_time || '08:00',
+        heure_fin_tech: firstSession?.end_time || '09:00',
         duree_minutes_tech: durationMinutes,
         duree_deplacement_tech: deploymentMinutes,
         notes_tech: techForm.notes_tech,
@@ -701,6 +712,9 @@ export default function InterventionDetailPage() {
 
       console.log('📤 Sending technician data:', payload);
       
+      const sessionsResponse = await api.interventions.saveWorkSessions(id, workSessions);
+      if (Array.isArray(sessionsResponse?.sessions)) setAllWorkSessions(sessionsResponse.sessions);
+      else setAllWorkSessions(previous => [...previous.filter((session: any) => !namesMatch(session.technicien_nom || '', currentUserName)), ...workSessions.map(session => ({ ...session, technicien_nom: currentUserName, duration_minutes: sessionDuration(session) }))]);
       const response = await api.interventions.updateTechnicianData(id, payload);
 
       // Reflect the selected status immediately in multi-tech mode. In
@@ -1021,27 +1035,27 @@ export default function InterventionDetailPage() {
           <form onSubmit={handleSaveTechnicianData}>
             {/* Diagnostic Section */}
             <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Mon Diagnostic ({activeTabTech})</h3>
+              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Search style={{ width: 16, height: 16 }} /> Diagnostic commun</h3>
               {[
-                { key: 'probleme_tech', label: 'Problème constaté', ph: 'Symptômes observés...' },
-                { key: 'cause_tech', label: 'Cause racine', ph: 'Analyse de la cause...' },
-                { key: 'solution_tech', label: 'Solution appliquée', ph: 'Actions correctives...' },
+                { key: 'probleme', label: 'Problème constaté', ph: 'Symptômes observés...' },
+                { key: 'cause', label: 'Cause racine', ph: 'Analyse de la cause...' },
+                { key: 'solution', label: 'Solution appliquée', ph: 'Actions correctives...' },
               ].map(({ key, label, ph }) => (
                 <div key={key} style={{ marginBottom: '12px' }}>
-                  <label style={LABEL}>{label}{key === 'solution_tech' && techForm.statut === 'Cloturee' && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}</label>
+                  <label style={LABEL}>{label}{key === 'solution' && techForm.statut === 'Cloturee' && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}</label>
                   <textarea
-                    style={{ ...INPUT, resize: 'vertical', borderColor: key === 'solution_tech' && techForm.statut === 'Cloturee' && !techForm.solution_tech ? '#ef4444' : undefined }}
+                    style={{ ...INPUT, resize: 'vertical', borderColor: key === 'solution' && techForm.statut === 'Cloturee' && !form.solution ? '#ef4444' : undefined }}
                     rows={2}
                     placeholder={ph}
-                    value={(techForm as any)[key]}
-                    onChange={e => setTechForm(f => ({ ...f, [key as any]: e.target.value }))}
+                    value={(form as any)[key]}
+                    onChange={e => set(key as any, e.target.value)}
                   />
                 </div>
               ))}
 
               <div style={{ marginBottom: '12px' }}>
                 <label style={LABEL}>Type d&apos;erreur</label>
-                <select style={INPUT} value={techForm.type_erreur_tech} onChange={e => setTechForm(f => ({ ...f, type_erreur_tech: e.target.value }))}>
+                <select style={INPUT} value={form.type_erreur} onChange={e => set('type_erreur', e.target.value)}>
                   <option value="">— Aucun —</option>
                   {['Hardware','Software','Réseau','Calibration','Mécanique','Électrique','Autre'].map(t => <option key={t}>{t}</option>)}
                 </select>
@@ -1050,40 +1064,7 @@ export default function InterventionDetailPage() {
 
             {/* Time & Duration Section */}
             <div style={SECTION}>
-              <h3 style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--teal)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}><Clock style={{ width: 16, height: 16 }} /> Temps</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                <div>
-                  <label style={LABEL}><Clock style={ICON_INLINE} /> Début (HH:MM)</label>
-                  <input type="time" style={INPUT} value={techForm.heure_debut_tech} onChange={e => setTechForm(f => ({ ...f, heure_debut_tech: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={LABEL}><Clock style={ICON_INLINE} /> Fin (HH:MM)</label>
-                  <input type="time" style={INPUT} value={techForm.heure_fin_tech} onChange={e => setTechForm(f => ({ ...f, heure_fin_tech: e.target.value }))} />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginBottom: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
-                <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
-                <div>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
-                    {(() => {
-                      const [startH, startM] = techForm.heure_debut_tech.split(':').map(Number);
-                      const [endH, endM] = techForm.heure_fin_tech.split(':').map(Number);
-                      let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
-                      if (durationMin <= 0) durationMin += 24 * 60;
-                      durationMin = Math.max(60, durationMin);
-                      return (durationMin / 60).toFixed(1);
-                    })()}h
-                  </div>
-                </div>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
-              </div>
-
-              <div>
-                <label style={LABEL}><Car style={ICON_INLINE} /> Déplacement (en heures)</label>
-                <input type="number" style={INPUT} min={0} step={0.5} value={techForm.duree_deplacement_tech === 0 ? '0' : (techForm.duree_deplacement_tech / 60).toFixed(2)} onChange={e => setTechForm(f => ({ ...f, duree_deplacement_tech: Math.round(parseFloat(e.target.value) * 60) || 0 }))} />
-              </div>
+              <WorkSessionsEditor sessions={workSessions} onChange={setWorkSessions} disabled={isTechnicianStatusLocked} />
             </div>
 
             {/* Notes */}
@@ -1430,10 +1411,17 @@ export default function InterventionDetailPage() {
               console.log("ss", techData)
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
-                  <div><strong>Problème:</strong> {techData.probleme_tech || '—'}</div>
-                  <div><strong>Cause:</strong> {techData.cause_tech || '—'}</div>
-                  <div><strong>Solution:</strong> {techData.solution_tech || '—'}</div>
-                  <div><strong>Horaires:</strong> {formatTime(techData.heure_debut_tech)} à {formatTime(techData.heure_fin_tech)}</div>
+                  <div><strong>Problème commun:</strong> {form.probleme || '—'}</div>
+                  <div><strong>Cause commune:</strong> {form.cause || '—'}</div>
+                  <div><strong>Solution commune:</strong> {form.solution || '—'}</div>
+                  <div>
+                    <strong>Créneaux:</strong>
+                    {allWorkSessions.filter((session: any) => namesMatch(session.technicien_nom || '', activeTabTech)).length === 0
+                      ? <div>—</div>
+                      : allWorkSessions.filter((session: any) => namesMatch(session.technicien_nom || '', activeTabTech)).map((session: any) => (
+                        <div key={session.entry_uuid} style={{ marginTop: 4 }}>{displayDate(String(session.work_date))} · {formatTime(session.start_time)}–{formatTime(session.end_time)} ({formatDuration(session.duration_minutes)})</div>
+                      ))}
+                  </div>
                   <div><strong>Durée:</strong> {formatDuration(techData.duree_minutes_tech)} | <strong>Déplacement:</strong> {formatDeployment(techData.duree_deplacement_tech)}</div>
                   {usedPieces.length > 0 && (
                     <div>
@@ -1548,58 +1536,8 @@ export default function InterventionDetailPage() {
               </select>
             </div>
 
-            {/* Time pickers with scrollable UI */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-              <TimeScrollPicker 
-                label="Heure de début"
-                value={form.start_time}
-                onChange={(time) => {
-                  set('start_time', time);
-                  // Auto-calculate duration
-                  const [startH, startM] = time.split(':').map(Number);
-                  const [endH, endM] = form.end_time.split(':').map(Number);
-                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
-                  if (durationMin <= 0) durationMin += 24 * 60;
-                  durationMin = Math.max(60, durationMin);
-                  setForm(f => ({ ...f, duree_minutes: durationMin }));
-                }}
-              />
-              <TimeScrollPicker 
-                label="Heure de fin"
-                value={form.end_time}
-                onChange={(time) => {
-                  set('end_time', time);
-                  // Auto-calculate duration
-                  const [startH, startM] = form.start_time.split(':').map(Number);
-                  const [endH, endM] = time.split(':').map(Number);
-                  let durationMin = (endH * 60 + endM) - (startH * 60 + startM);
-                  if (durationMin <= 0) durationMin += 24 * 60;
-                  durationMin = Math.max(60, durationMin);
-                  setForm(f => ({ ...f, duree_minutes: durationMin }));
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>
-              <Timer style={{ width: 18, height: 18, color: 'var(--teal)' }} />
-              <div>
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Durée de l'intervention</span>
-                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--teal)', marginTop: '2px' }}>
-                  {(form.duree_minutes / 60).toFixed(1)}h
-                </div>
-              </div>
-              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto', background: '#fff', padding: '4px 8px', borderRadius: '4px' }}>Min 1h</span>
-            </div>
-
             <div style={{ marginTop: '12px' }}>
-              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                <Car style={{ width: 14, height: 14, display: 'inline-block', verticalAlign: '-2px', marginRight: '4px' }} /> Déplacement (heures)
-              </label>
-              <input
-                type="number" style={{ width: '100%', background: '#fff', border: '1px solid var(--border)', borderRadius: '10px', color: 'var(--text)', padding: '12px 14px', fontSize: '1rem', outline: 'none', fontFamily: 'inherit' }} min={0} step={0.5}
-                value={form.deplacement}
-                onChange={e => set('deplacement', parseFloat(e.target.value) || 0)}
-              />
+              <WorkSessionsEditor sessions={workSessions} onChange={setWorkSessions} disabled={isSingleStatusLocked} />
             </div>
           </div>
 

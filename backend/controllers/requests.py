@@ -157,6 +157,9 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     priorite           = body.get("priorite") or body.get("urgence") or "Moyenne"
     urgence            = priorite
     description        = body.get("description") or ""
+    type_intervention  = str(body.get("type_intervention") or "Corrective").strip()
+    if type_intervention not in {"Corrective", "Installation"}:
+        raise HTTPException(status_code=422, detail="Type d'intervention invalide")
     code_erreur        = body.get("code_erreur") or ""
     contact_nom        = body.get("contact_nom") or ""
     contact_tel        = body.get("contact_tel") or ""
@@ -265,14 +268,16 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             INSERT INTO demandes_intervention
               (date_demande, demandeur, client, equipement, urgence, priorite,
                description, code_erreur, contact_nom, contact_tel,
-               statut, technicien_assigne, date_planifiee)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+               statut, technicien_assigne, date_planifiee, notes_traitement, type_intervention)
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             RETURNING id
         """, (
             body.get("date_demande") or now_str,
             demandeur, client, equipement, urgence, priorite,
             description, code_erreur, contact_nom, contact_tel,
             statut, ", ".join(techniciens_fullnames), date_planifiee,  # All techs in the demand
+            body.get("notes_traitement") or "",
+            type_intervention,
         )).fetchone()
 
         demande_id = new_demande["id"] if new_demande else None
@@ -291,7 +296,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                 (
                     equipement,
                     client,
-                    "Corrective",
+                    type_intervention,
                     description,
                     date_planifiee,
                     ", ".join(techniciens_fullnames),
@@ -321,7 +326,7 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             now,
             equipement,
             all_techs_str,  # Store all technician names
-            "Corrective",
+            type_intervention,
             description[:500],
             description[:500],
             code_erreur,
@@ -797,6 +802,29 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         if not success:
             raise HTTPException(status_code=400, detail="Aucune donnée à mettre à jour")
 
+        # The diagnosis belongs to the intervention, not to an individual
+        # technician. Keep accepting the legacy *_tech fields above for old
+        # clients, while new PWA clients write these shared parent fields.
+        shared_field_mapping = {
+            "probleme": "probleme",
+            "cause": "cause",
+            "solution": "solution",
+            "type_erreur": "type_erreur",
+        }
+        shared_updates = []
+        shared_params = []
+        for body_field, db_column in shared_field_mapping.items():
+            if body_field in body:
+                shared_updates.append(f"{db_column} = %s")
+                shared_params.append(body.get(body_field) or "")
+        if shared_updates:
+            shared_params.append(intervention_id)
+            with get_db() as conn:
+                conn.execute(
+                    f"UPDATE interventions SET {', '.join(shared_updates)} WHERE id = %s",
+                    shared_params,
+                )
+
         if body.get("statut") == "Cloturee" and retour_site_requis:
             with get_db() as conn:
                 conn.execute(
@@ -1179,6 +1207,70 @@ def get_intervention_techniciens(intervention_id: int, user: dict = Depends(_ver
     except Exception as e:
         logger.error(f"Erreur get_intervention_techniciens: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _current_technician_assignment(intervention_id: int, user: dict) -> dict:
+    """Resolve the authenticated technician's stable assignment row."""
+    from db_engine import get_or_create_interventions_techniciens
+
+    technician_name = str(user.get("nom") or user.get("sub") or "").strip()
+    if not technician_name:
+        raise HTTPException(status_code=403, detail="Technicien non identifiable")
+    get_or_create_interventions_techniciens(intervention_id, technician_name)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
+            (intervention_id,),
+        ).fetchall()
+    for row in rows:
+        if _tech_name_or_username_matches(technician_name, row.get("technicien_nom") or ""):
+            return dict(row)
+    raise HTTPException(status_code=403, detail="Cette intervention ne vous est pas assignée")
+
+
+@app.get("/api/interventions/{intervention_id}/work-sessions")
+def get_intervention_work_sessions(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Return the dated work log used by the PWA and intervention sheet."""
+    from db_engine import list_work_sessions
+
+    with get_db() as conn:
+        assert_resource_client_access(conn, "intervention", intervention_id, user)
+    return list_work_sessions(intervention_id)
+
+
+@app.put("/api/interventions/{intervention_id}/work-sessions")
+def put_intervention_work_sessions(
+    intervention_id: int,
+    request: Request,
+    body: dict = Body(...),
+    user: dict = Depends(_verify_token),
+):
+    """Replace the authenticated technician's active work log, auditably."""
+    from db_engine import replace_technician_work_sessions
+
+    require_roles(user, "Technicien")
+    endpoint = f"/api/interventions/{intervention_id}/work-sessions"
+    operation_id = operation_id_from_request(request)
+    username = str(user.get("sub") or "")
+    with get_db() as conn:
+        assert_intervention_write_access(conn, intervention_id, user)
+        cached = get_idempotent_response(operation_id, username, endpoint)
+        if cached is not None:
+            return cached
+    assignment = _current_technician_assignment(intervention_id, user)
+    try:
+        sessions = replace_technician_work_sessions(
+            intervention_id,
+            int(assignment["id"]),
+            str(assignment["technicien_nom"]),
+            body.get("sessions"),
+            username or str(user.get("nom") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    response = {"ok": True, "sessions": sessions}
+    save_idempotent_response(operation_id, username, endpoint, response)
+    return response
 
 
 @app.get("/api/interventions/{intervention_id}/techniciens-aggregated")

@@ -301,8 +301,8 @@ export default function NouvelleInterventionPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-              <TimeScrollPicker label="Heure de début" value={form.start_time} onChange={handleStartTimeChange} />
-              <TimeScrollPicker label="Heure de fin" value={form.end_time} onChange={handleEndTimeChange} />
+              <TimeScrollPicker label="Heure de début" value={form.start_time} defaultValue="08:00" onChange={handleStartTimeChange} />
+              <TimeScrollPicker label="Heure de fin" value={form.end_time} defaultValue="09:00" onChange={handleEndTimeChange} />
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 14px', marginTop: '12px', borderRadius: '8px', background: 'rgba(86,124,141,0.12)', border: '1px solid var(--border)' }}>

@@ -627,7 +627,7 @@ def finalize_intervention_from_techniciens(intervention_id):
         # Serialize finalization for a shared intervention. Two technicians
         # may submit their closure at nearly the same time.
         parent_state = conn.execute(
-            """SELECT id, statut, date_transfert_atelier, retour_site_confirme
+            """SELECT id, statut, date_transfert_atelier, retour_site_confirme, solution
                FROM interventions WHERE id = %s FOR UPDATE""",
             (intervention_id,),
         ).fetchone()
@@ -688,8 +688,12 @@ def finalize_intervention_from_techniciens(intervention_id):
         total_deplacement = sum(t.get('duree_deplacement_tech') or 0 for t in completed_techs)
         
         # Combine technical notes
-        solutions = [t.get('solution_tech', '').strip() for t in completed_techs if t.get('solution_tech', '').strip()]
-        combined_solution = " | ".join(solutions) if solutions else ""
+        solutions = []
+        for technician in completed_techs:
+            solution_value = technician.get('solution_tech', '').strip()
+            if solution_value and solution_value not in solutions:
+                solutions.append(solution_value)
+        combined_solution = str(parent_state.get('solution') or '').strip() or (" | ".join(solutions) if solutions else "")
         
         # Get the first type_erreur_tech from completed technicians (if any)
         first_error_type = next((t.get('type_erreur_tech', '').strip() for t in completed_techs 

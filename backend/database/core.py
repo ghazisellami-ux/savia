@@ -1243,9 +1243,11 @@ def init_db():
             notes_traitement TEXT DEFAULT '',
             date_traitement TIMESTAMP,
             date_planifiee DATE,
-            intervention_id INTEGER
+            intervention_id INTEGER,
+            type_intervention TEXT DEFAULT 'Corrective'
         )
         """)
+        conn.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS type_intervention TEXT DEFAULT 'Corrective'")
 
         # Table Notifications pièces (cross-app SIC Terrain ↔ SIC Radiologie)
         conn.execute("""
