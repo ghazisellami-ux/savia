@@ -79,7 +79,8 @@ export default function PiecesPage() {
   const [fournisseursList, setFournisseursList] = useState<string[]>([]);
   const [customFournisseur, setCustomFournisseur] = useState(false);
 
-  const emptyForm = { reference: '', designation: '', domaine: 'Radiologie' as string, equipement_type: 'Scanner CT', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
+  const defaultDomaine = customDomaines[0] || '';
+  const emptyForm = { reference: '', designation: '', domaine: defaultDomaine, equipement_type: customTypesForDomain[defaultDomaine]?.[0] || '', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = useCallback(async () => {
@@ -174,6 +175,16 @@ export default function PiecesPage() {
       loadEquipmentDomainesTypes();
     }
   }, [showAddModal, showEditModal, loadEquipmentDomainesTypes]);
+
+  // Initialiser aussi le formulaire si les équipements arrivent après son ouverture.
+  useEffect(() => {
+    if (!showAddModal || !customDomaines.length) return;
+    setForm(current => {
+      if (current.domaine) return current;
+      const domaine = customDomaines[0];
+      return { ...current, domaine, equipement_type: customTypesForDomain[domaine]?.[0] || '' };
+    });
+  }, [showAddModal, customDomaines, customTypesForDomain]);
 
   // Obtenir les types d'équipement disponibles pour le domaine sélectionné
   const getAvailableTypes = useCallback(() => {
