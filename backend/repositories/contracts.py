@@ -742,7 +742,8 @@ def cloturer_intervention(
             raise Exception(f"Erreur configuration: {str(e)}")
         cout_main_oeuvre = round((duree_val / 60) * taux_horaire, 2)
 
-        # 2. Mettre à jour l'intervention (date = date de clôture)
+        # 2. Mettre à jour l'intervention sans écraser `date`, qui conserve
+        # la date de création/planification utilisée par les tableaux de bord.
         date_cloture = datetime.now().isoformat()
         
         # Préparer l'UPDATE avec un dictionnaire pour éviter les décalages
@@ -756,7 +757,6 @@ def cloturer_intervention(
             "solution": solution,
             "duree_minutes": duree_val,
             "cout": cout_main_oeuvre,  # ← Main d'oeuvre ONLY
-            "date": date_cloture,
             "date_cloture": date_cloture
         }
 

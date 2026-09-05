@@ -42,6 +42,55 @@ from controllers.report_helpers import (
     _sanitize,
 )
 
+
+def _collect_technician_names(primary_value, assignment_records, work_sessions):
+    """Return every technician name once, preserving the most useful display order."""
+    names = []
+
+    def add(raw_name):
+        name = str(raw_name or "").strip()
+        if name and name.lower() not in {existing.lower() for existing in names}:
+            names.append(name)
+
+    for name in str(primary_value or "").split(","):
+        add(name)
+    for record in assignment_records or []:
+        item = dict(record) if hasattr(record, "keys") else record
+        add(item.get("technicien_nom", ""))
+    for session in work_sessions or []:
+        item = dict(session) if hasattr(session, "keys") else session
+        add(item.get("technicien_nom", ""))
+
+    return names
+
+
+def _write_header_field(pdf, x, y, width, label, value, line_height=5, multiline=False):
+    """Draw an underlined field label followed by its regular-weight value."""
+    pdf.set_xy(x, y)
+    pdf.set_font("Helvetica", "BU", 10)
+    label_width = pdf.get_string_width(label)
+    pdf.cell(label_width, line_height, _sanitize(label))
+    pdf.set_font("Helvetica", "B", 10)
+    separator = ": "
+    separator_width = pdf.get_string_width(separator)
+    pdf.cell(separator_width, line_height, separator)
+    value_width = width - label_width - separator_width
+    pdf.set_font("Helvetica", "", 10)
+    if multiline:
+        pdf.multi_cell(value_width, line_height, _sanitize(str(value)), max_line_height=line_height)
+    else:
+        pdf.cell(value_width, line_height, _sanitize(str(value)))
+
+
+def _fiche_display_date(intervention):
+    """Return the actual intervention date without changing the legacy `date` field."""
+    for field in ("date_cloture", "date_debut_intervention", "date"):
+        value = intervention.get(field)
+        if value and str(value).strip() and str(value).strip() != "None":
+            return str(value)[:10]
+    return "-"
+
+
 @app.post("/api/interventions/{interv_id}/fiche-pdf")
 def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
     """Generate a professional intervention fiche PDF with all details, logos, and signature areas.
@@ -71,24 +120,21 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         if not interv:
             raise HTTPException(status_code=404, detail="Intervention non trouvee")
 
-        # Check if multi-technician intervention (has comma-separated techniciens)
+        # Load all technician sources. Some multi-technician interventions retain
+        # only the primary technician in the legacy intervention column.
         technicien_str = str(interv.get("technicien", "")).strip()
-        technicians = [t.strip() for t in technicien_str.split(",") if t.strip()]
-        is_multi_tech = len(technicians) > 1
-        
-        # Load technician records if multi-tech
         tech_records = []
-        if is_multi_tech:
-            try:
-                tech_records = get_interventions_techniciens(interv_id)
-            except Exception as e:
-                logger.debug(f"Could not load tech records: {e}")
-                tech_records = []
+        try:
+            tech_records = get_interventions_techniciens(interv_id)
+        except Exception as e:
+            logger.debug(f"Could not load tech records: {e}")
         try:
             work_sessions = list_work_sessions(interv_id)
         except Exception as e:
             logger.debug(f"Could not load work sessions: {e}")
             work_sessions = []
+        technicians = _collect_technician_names(technicien_str, tech_records, work_sessions)
+        is_multi_tech = len(technicians) > 1
 
         # Fetch equipment to determine warranty and serial number
         df_equip = lire_equipements()
@@ -197,9 +243,10 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(0, 0, 0)
         
-        date_str = str(interv.get("date", ""))[:10]
+        date_str = _fiche_display_date(interv)
         intervention_id = str(interv.get("id", ""))
-        technicien = str(interv.get("technicien", "-")).strip()
+        technicien = ", ".join(technicians) or "-"
+        intervention_type = str(interv.get("type_intervention", "") or "-").strip()
         
         # Left column
         left_x = 14
@@ -208,30 +255,16 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         y_start = pdf.get_y()
         
         # LEFT COLUMN: Date, Client, Equipement, Marque/Modele, N° Serie
-        pdf.set_xy(left_x, y_start)
-        pdf.cell(70, line_h, _sanitize(f"Date: {date_str}"))
-        
-        pdf.set_xy(left_x, y_start + 5)
-        pdf.cell(70, line_h, _sanitize(f"Client: {client_name or '-'}"))
-        
-        pdf.set_xy(left_x, y_start + 10)
-        pdf.cell(70, line_h, _sanitize(f"Equipement: {str(interv.get('machine', '-'))[:35]}"))
-        
-        pdf.set_xy(left_x, y_start + 15)
-        pdf.cell(70, line_h, _sanitize(f"Marque/Modele: {str(equip_type or '-')[:30]}"))
-        
-        pdf.set_xy(left_x, y_start + 20)
-        pdf.cell(70, line_h, _sanitize(f"N° Serie: {str(num_serie or '-')[:25]}"))
-        
-        # RIGHT COLUMN: Technicien, Garantie, Contrat
-        pdf.set_xy(right_col_x, y_start)
-        pdf.cell(70, line_h, _sanitize(f"Technicien: {technicien}"))
-        
-        pdf.set_xy(right_col_x, y_start + 5)
-        pdf.cell(70, line_h, _sanitize(f"Garantie: {'OUI' if sous_garantie else 'NON'}"))
-        
-        pdf.set_xy(right_col_x, y_start + 10)
-        pdf.cell(70, line_h, _sanitize(f"Contrat: {'OUI' if sous_contrat else 'NON'}"))
+        _write_header_field(pdf, left_x, y_start, 85, "Date", date_str)
+        _write_header_field(pdf, left_x, y_start + 5, 85, "Client", client_name or "-")
+        _write_header_field(pdf, left_x, y_start + 10, 85, "Equipement", str(interv.get("machine", "-"))[:35])
+        _write_header_field(pdf, left_x, y_start + 15, 85, "Marque/Modele", str(equip_type or "-")[:30])
+        _write_header_field(pdf, left_x, y_start + 20, 85, "N° Serie", str(num_serie or "-")[:25])
+        # RIGHT COLUMN: Technicien(s), Garantie, Contrat, Type d'intervention
+        _write_header_field(pdf, right_col_x, y_start, 95, "Technicien(s)", technicien, multiline=True)
+        _write_header_field(pdf, right_col_x, y_start + 10, 95, "Garantie", "OUI" if sous_garantie else "NON")
+        _write_header_field(pdf, right_col_x, y_start + 15, 95, "Contrat", "OUI" if sous_contrat else "NON")
+        _write_header_field(pdf, right_col_x, y_start + 20, 95, "Type d'intervention", intervention_type)
         
         # Move down after info section
         pdf.set_y(y_start + 28)
