@@ -1177,7 +1177,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             client TEXT NOT NULL,
             equipement TEXT,
-            type_contrat TEXT DEFAULT 'Standard',
+            type_contrat TEXT DEFAULT 'Maintenance Préventive',
             date_debut DATE NOT NULL,
             date_fin DATE NOT NULL,
             sla_temps_reponse_h INTEGER DEFAULT 0,
@@ -1489,6 +1489,13 @@ def init_db():
             logger.info("✅ Migration réussie: colonnes pieces_incluses et avec_pieces ajoutées à contrats")
         except Exception as e:
             logger.debug(f"Migration colonnes pièces ignorée: {e}")
+
+        # Align the database default with the contract models available in the UI.
+        # Existing Standard/Premium contracts are intentionally preserved.
+        try:
+            conn.execute("ALTER TABLE contrats ALTER COLUMN type_contrat SET DEFAULT 'Maintenance Préventive'")
+        except Exception as e:
+            logger.debug(f"Migration défaut type de contrat ignorée: {e}")
         
         # --- Auto-Migration: VPS Schema (equipement_nom → equipement_id) ---
         # This migration runs automatically on every startup

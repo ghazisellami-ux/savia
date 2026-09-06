@@ -531,6 +531,8 @@ export const ADDITIONAL_PHRASES: Array<[string, string]> = [
   ['Maintenance Corrective', 'Corrective maintenance'],
   ['Pièces incluses', 'Parts included'],
   ['Pieces incluses', 'Parts included'],
+  ['Pièces uniquement', 'Parts only'],
+  ['Pieces uniquement', 'Parts only'],
   ["Main d'œuvre uniquement", 'Labor only'],
   ["Main d'oeuvre uniquement", 'Labor only'],
   ['Rappels & Maintenance', 'Reminders & Maintenance'],

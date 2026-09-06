@@ -295,7 +295,7 @@ def ajouter_contrat(contrat_dict):
                 RETURNING id
             """, (
                 contrat_dict.get("client", ""),
-                contrat_dict.get("type_contrat", "Standard"),
+                contrat_dict.get("type_contrat", "Maintenance Préventive"),
                 contrat_dict.get("date_debut", ""),
                 contrat_dict.get("date_fin", ""),
                 contrat_dict.get("sla_temps_reponse_h", 0),
@@ -502,7 +502,7 @@ def modifier_contrat(contrat_id, contrat_dict):
             WHERE id={ph}
         """, (
             contrat_dict.get("client", ""),
-            contrat_dict.get("type_contrat", "Standard"),
+            contrat_dict.get("type_contrat", "Maintenance Préventive"),
             contrat_dict.get("date_debut", ""),
             contrat_dict.get("date_fin", ""),
             contrat_dict.get("sla_temps_reponse_h", 0),
