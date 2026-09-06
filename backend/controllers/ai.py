@@ -170,7 +170,11 @@ def _contract_coverage(contract):
     if not contract:
         return {"parts": None, "labor": None, "label": "Contrat introuvable"}
     contract_type = str(contract.get("type_contrat") or "").lower()
-    has_parts = bool(contract.get("avec_pieces")) or bool(str(contract.get("pieces_incluses") or "").strip())
+    has_parts = (
+        ("pièces uniquement" in contract_type or "pieces uniquement" in contract_type)
+        or bool(contract.get("avec_pieces"))
+        or bool(str(contract.get("pieces_incluses") or "").strip())
+    )
     if "full service" in contract_type:
         has_parts = True
         has_labor = True

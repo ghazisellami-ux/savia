@@ -114,11 +114,14 @@ def infer_contract_scope(
 ) -> dict[str, Any]:
     """Infer coverage from explicit contract data and the scheduled link."""
     contract_type = _key(contract.get("type_contrat"))
+    # « Premium » is kept as a legacy synonym for old contracts. New contracts
+    # use one of the explicit billing scopes exposed by the UI.
     full_service = any(token in contract_type for token in ("full service", "full risk", "premium"))
     labor_only = "main" in contract_type and "oeuvre" in contract_type
+    parts_only = "pieces uniquement" in contract_type
     corrective_match = "corrective" in contract_type and "corrective" in _key(intervention_type)
     included_parts = parse_included_parts(contract.get("pieces_incluses"))
-    parts_enabled = full_service or bool(contract.get("avec_pieces")) or bool(included_parts)
+    parts_enabled = full_service or parts_only or bool(contract.get("avec_pieces")) or bool(included_parts)
     # A preventive recurrence covers the generated planning occurrences, not
     # arbitrary extra visits on the same equipment. Corrective/full-service
     # contracts may cover an ad-hoc corrective intervention.

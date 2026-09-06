@@ -67,7 +67,7 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
         # ── Extract fields ──
         client_name = str(contrat.get("client", "") or "-")
         equipement = str(contrat.get("equipement", "") or "")
-        type_contrat = str(contrat.get("type_contrat", "") or "Standard")
+        type_contrat = str(contrat.get("type_contrat", "") or "Maintenance Préventive")
         date_debut = str(contrat.get("date_debut", "") or "")[:10]
         date_fin = str(contrat.get("date_fin", "") or "")[:10]
         try:
@@ -401,6 +401,13 @@ def generate_contrat_pdf(contrat_id: int, body: dict = {}, user: dict = Depends(
                 "Support technique prioritaire 24h/24, 7j/7.",
                 "Reporting mensuel d\u00e9taill\u00e9 sur l'\u00e9tat du parc.",
                 "Acc\u00e8s prioritaire aux mises \u00e0 jour techniques.",
+            ]
+        elif "pièces uniquement" in type_lower or "pieces uniquement" in type_lower:
+            prest_desc = [
+                "Fourniture des pièces de rechange prévues au contrat.",
+                "Application des quotas de pièces définis pour la durée du contrat.",
+                "La main d'œuvre et les pièces hors couverture restent à la charge du Client.",
+                "Rédaction d'un rapport d'intervention après chaque opération.",
             ]
         elif "main" in type_lower and "uvre" in type_lower:
             prest_desc = [

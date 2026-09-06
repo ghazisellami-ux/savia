@@ -50,13 +50,22 @@ def test_labor_only_contract_marks_only_parts_outside_coverage():
     assert "billable_total_amount" not in result
 
 
+def test_parts_only_contract_marks_only_labor_outside_coverage():
+    result = assess(contract=contract("Pièces uniquement"), linked_from_planning=False)
+
+    assert result["coverage_status"] == "partial"
+    assert result["uncovered_labor_cost"] == 300
+    assert result["uncovered_parts_cost"] == 0
+    assert result["uncovered_total_cost"] == 300
+
+
 def test_included_part_quota_marks_only_excess_cost_outside_coverage():
     result = assess(
         labor_amount=0,
         parts_amount=300,
         used_parts=[{"ref": "P-001", "qty": 3}],
         contract=contract(
-            "Pièces incluses",
+            "Pièces uniquement",
             avec_pieces=True,
             pieces_incluses='[{"ref":"P-001","designation":"Carte","quota":3}]',
         ),

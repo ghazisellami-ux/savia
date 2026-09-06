@@ -1,6 +1,5 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { SectionCard } from '@/components/ui/cards';
 import { contrats, equipements, pieces as piecesApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useRoleGuard } from '@/lib/use-role-guard';
@@ -16,8 +15,39 @@ const INPUT = "w-full bg-savia-surface-hover border border-savia-border rounded-
 const LABEL = "block text-xs font-semibold text-savia-text-muted mb-1 uppercase tracking-wider";
 const SECTION_TITLE = "flex items-center gap-2 text-sm font-bold text-savia-text mb-3 pb-2 border-b border-savia-border";
 
-const TYPES_CONTRAT = ['Maintenance Préventive', 'Maintenance Corrective', 'Full Service', 'Standard', 'Premium', 'Pièces incluses', 'Main d\'œuvre uniquement'];
+// Les formules ci-dessous correspondent directement aux règles appliquées dans
+// le suivi de facturation. « Standard » et « Premium » restent lisibles pour
+// les anciens contrats, mais ne sont plus proposés à la création.
+const TYPES_CONTRAT = ['Maintenance Préventive', 'Maintenance Corrective', 'Full Service', 'Pièces uniquement', 'Main d\'œuvre uniquement'];
 const RECURRENCES = ['Mensuelle', 'Trimestrielle', 'Semestrielle', 'Annuelle', 'Hebdomadaire'];
+
+const CONTRACT_BILLING_RULES = [
+  {
+    type: 'Maintenance Préventive',
+    covered: 'Main-d’œuvre des maintenances prévues au planning',
+    billing: 'Les visites hors planning et les pièces non couvertes sont à facturer.',
+  },
+  {
+    type: 'Maintenance Corrective',
+    covered: 'Main-d’œuvre des interventions correctives',
+    billing: 'Les pièces restent à facturer, sauf si une couverture de pièces est configurée.',
+  },
+  {
+    type: 'Full Service',
+    covered: 'Main-d’œuvre et toutes les pièces utilisées',
+    billing: 'Intervention entièrement couverte : aucun dossier de facturation à établir.',
+  },
+  {
+    type: 'Pièces uniquement',
+    covered: 'Toutes les pièces, ou la sélection définie dans les quotas',
+    billing: 'La main-d’œuvre et les éventuelles pièces hors quota sont à facturer.',
+  },
+  {
+    type: 'Main d\'œuvre uniquement',
+    covered: 'Main-d’œuvre des interventions couvertes',
+    billing: 'Les pièces utilisées sont à facturer.',
+  },
+] as const;
 
 interface Contrat {
   id: string;
@@ -135,6 +165,7 @@ export default function ContratsPage() {
   const contractFileInputRef = useRef<HTMLInputElement>(null);
   const contractCameraInputRef = useRef<HTMLInputElement>(null);
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
+  const [billingRulesOpen, setBillingRulesOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ contratId: string; contratName: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -155,7 +186,7 @@ export default function ContratsPage() {
           ? item.equipement_ids.map((id: any) => Number(id)).filter((id: number) => id > 0)
           : equipmentDetails.map(equipment => equipment.id),
         equipement_details: equipmentDetails,
-        type_contrat: item.type_contrat || 'Standard',
+        type_contrat: item.type_contrat || TYPES_CONTRAT[0],
         date_debut: (item.date_debut || '').substring(0, 10),
         date_fin: (item.date_fin || '').substring(0, 10),
         sla_temps_reponse_h: Number(item.sla_temps_reponse_h ?? 0),
@@ -652,6 +683,45 @@ export default function ContratsPage() {
         </div>
       </div>
 
+      <section className="glass overflow-hidden rounded-xl">
+        <button
+          type="button"
+          onClick={() => setBillingRulesOpen(open => !open)}
+          aria-expanded={billingRulesOpen}
+          className="flex w-full items-center justify-between gap-3 p-5 text-left transition-colors hover:bg-savia-surface-hover/50"
+        >
+          <span className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-savia-text-muted">
+            <DollarSign className="h-4 w-4 text-savia-accent" /> Types de contrat et suivi de facturation
+          </span>
+          <ChevronDown className={`h-5 w-5 shrink-0 text-savia-text-muted transition-transform ${billingRulesOpen ? 'rotate-180' : ''}`} />
+        </button>
+        {billingRulesOpen && (
+          <div className="border-t border-savia-border px-5 pb-5">
+            <p className="mb-4 mt-4 text-sm text-savia-text-muted">La couverture ci-dessous détermine les éléments présentés comme facturables dans le suivi de facturation.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead className="border-b border-savia-border text-xs uppercase tracking-wider text-savia-text-muted">
+                  <tr>
+                    <th className="px-3 py-2.5 font-semibold">Type de contrat</th>
+                    <th className="px-3 py-2.5 font-semibold">Couverture contractuelle</th>
+                    <th className="px-3 py-2.5 font-semibold">Suivi de facturation</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-savia-border/70">
+                  {CONTRACT_BILLING_RULES.map(rule => (
+                    <tr key={rule.type} className="align-top hover:bg-savia-surface-hover/40">
+                      <td className="px-3 py-3 font-bold text-savia-accent">{rule.type}</td>
+                      <td className="px-3 py-3 text-savia-text">{rule.covered}</td>
+                      <td className="px-3 py-3 text-savia-text-muted">{rule.billing}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* ===== BANNER : contrats expirant dans 30j ===== */}
       {(() => {
         const expiring30 = data.filter(c => {
@@ -935,14 +1005,14 @@ export default function ContratsPage() {
                   </div>
                 )}
                 
-                {/* Pièces incluses */}
+                {/* Pièces couvertes */}
                 {c.avec_pieces && c.pieces_incluses && (() => {
                   try {
                     const pieces = JSON.parse(c.pieces_incluses);
                     if (Array.isArray(pieces) && pieces.length > 0) {
                       return (
                         <div className="bg-savia-surface-hover/40 rounded-xl p-4">
-                          <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Package className="w-3.5 h-3.5 text-savia-accent" /> Pièces de rechange incluses</p>
+                          <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2"><Package className="w-3.5 h-3.5 text-savia-accent" /> Pièces couvertes par le contrat</p>
                           <div className="space-y-2">
                             {pieces.map((p: any) => (
                               <div key={p.ref} className="flex items-center justify-between px-3 py-2 rounded-lg bg-savia-surface/40 border border-savia-border/30">
@@ -1150,7 +1220,19 @@ export default function ContratsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={LABEL}>Type de contrat</label>
-                    <select className={INPUT} value={form.type_contrat} onChange={e => set('type_contrat', e.target.value)}>
+                    <select className={INPUT} value={form.type_contrat} onChange={e => {
+                      const type = e.target.value;
+                      setForm(current => ({
+                        ...current,
+                        type_contrat: type,
+                        // Le modèle « Pièces uniquement » active d'emblée la
+                        // sélection des pièces et de leurs quotas.
+                        avec_pieces: type === 'Pièces uniquement' ? true : current.avec_pieces,
+                      }));
+                    }}>
+                      {!TYPES_CONTRAT.includes(form.type_contrat) && (
+                        <option value={form.type_contrat}>{form.type_contrat} (ancien modèle)</option>
+                      )}
                       {TYPES_CONTRAT.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
@@ -1239,11 +1321,11 @@ export default function ContratsPage() {
                     className={`w-5 h-5 rounded flex items-center justify-center border-2 transition-all ${form.avec_pieces ? 'bg-savia-accent border-savia-accent' : 'border-savia-border group-hover:border-savia-accent/60'}`}>
                     {form.avec_pieces && <CheckSquare className="w-3 h-3 text-white" />}
                   </div>
-                  <span className="text-sm font-semibold">Contrat avec pièces incluses</span>
+                  <span className="text-sm font-semibold">Pièces couvertes par le contrat</span>
                 </label>
                 {form.avec_pieces && (
                   <div className="space-y-3 mt-2">
-                    <p className="text-xs text-savia-text-muted">Cochez les pièces incluses et définissez un quota pour la durée du contrat :</p>
+                    <p className="text-xs text-savia-text-muted">Sélectionnez les pièces couvertes et définissez un quota pour la durée du contrat :</p>
                     <div className="border border-savia-border rounded-xl overflow-hidden">
                       <div className="max-h-64 overflow-y-auto divide-y divide-savia-border">
                         {filteredPieces.length === 0 ? (
