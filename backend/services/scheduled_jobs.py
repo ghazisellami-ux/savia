@@ -252,10 +252,10 @@ def sync_planning_to_interventions(*, notify=True):
                 if is_new:
                     conn.execute(
                         """INSERT INTO interventions
-                           (date, machine, technicien, type_intervention, description, probleme,
+                           (date, machine, client, technicien, type_intervention, description, probleme,
                             statut, priorite, notes, planning_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (planned_date, machine, technicien, type_maintenance, description, probleme,
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (planned_date, machine, client, technicien, type_maintenance, description, probleme,
                          'Assignée' if is_intervention_request else 'En cours', 'Moyenne', notes, pm_id)
                     )
                     linked = conn.execute(

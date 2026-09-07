@@ -584,12 +584,13 @@ def update_demande_statut(demande_id: int, body: dict, user: dict = Depends(_ver
                         notes_interv += f" — {notes_traitement}"
                     conn.execute("""
                         INSERT INTO interventions
-                          (date, machine, technicien, type_intervention, description,
+                          (date, machine, client, technicien, type_intervention, description,
                            probleme, code_erreur, statut, priorite, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
                         now,
                         equipement,
+                        client,
                         technicien_assigne,
                         "Corrective",
                         description[:500],
@@ -1384,12 +1385,14 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
     with get_db() as conn:
         _assert_intervention_action_access(conn, intervention_id, user)
         row = conn.execute(
-            """SELECT i.id, i.machine, i.technicien, i.statut, i.planning_id,
+            """SELECT i.id, i.machine, i.client AS intervention_client, pm.client AS planning_client,
+                      i.technicien, i.statut, i.planning_id,
                       d.id AS demande_id, d.client AS demande_client,
                       d.description AS demande_description, d.code_erreur AS demande_code_erreur,
                       d.date_planifiee
                FROM interventions i
                LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
+               LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
                WHERE i.id = %s""",
             (intervention_id,)
         ).fetchone()
@@ -1398,6 +1401,11 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
         cached_response = get_idempotent_response(operation_id, user.get("sub", ""), endpoint)
         if cached_response is not None:
             return cached_response
+        client = str(
+            row.get("demande_client") or row.get("intervention_client") or row.get("planning_client") or ""
+        ).strip()
+        if client and not str(row.get("intervention_client") or "").strip():
+            conn.execute("UPDATE interventions SET client = %s WHERE id = %s", (client, intervention_id))
 
         # L'entrée du planning existe dès la création de la demande. Le
         # technicien peut toutefois l'accepter uniquement le jour prévu.
@@ -1508,12 +1516,14 @@ def accept_intervention(intervention_id: int, request: Request, user: dict = Dep
 
     tech_name = user.get("nom") or user.get("username") or "?"
     machine = row["machine"] if row else ""
+    client = client or "Non renseigné"
     accepted_status = "En cours"
     if row and row.get("demande_id"):
         accepted_status = "En cours" if str(row.get("date_planifiee") or datetime.now().date().isoformat())[:10] <= datetime.now().date().isoformat() else "Planifiée"
     msg = (
         f"\u2705 <b>INTERVENTION #{intervention_id} — ACCEPTÉE</b>\n\n"
         f"\U0001f477 Technicien : <b>{tech_name}</b>\n"
+        f"🏢 Client : <b>{client}</b>\n"
         f"\U0001f3e5 Équipement : <b>{machine}</b>\n"
         f"\U0001f4ca Statut : <b>{accepted_status}</b>\n"
         f"\U0001f550 {datetime.now().strftime('%d/%m/%Y %H:%M')}"

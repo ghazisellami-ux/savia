@@ -659,22 +659,22 @@ export default function DashboardPage() {
 
       {/* KPIs Row - Top 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
-        <KpiCard icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
-        <KpiCard icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
-        <KpiCard icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
+        <KpiCard emphasis icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
+        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard emphasis icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
+        <KpiCard emphasis icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
       </div>
 
       {/* KPIs Row - Bottom 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.nb_interventions)} label="Interventions" />
-        <KpiCard icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux Résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="% interventions clôturées" />
-        <KpiCard icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
+        <KpiCard emphasis icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.nb_interventions)} label="Interventions" />
+        <KpiCard emphasis icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux Résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="% interventions clôturées" />
+        <KpiCard emphasis icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
         {canSeeCosts && (
-          <KpiCard icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_total.toLocaleString('fr')} TND`} label="Coût Maintenance" />
+          <KpiCard emphasis icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${(kpis.cout_total / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} K TND`} label="Coût Maintenance (indicatif)" tooltip="Valeur indicative, exprimée en milliers de TND." />
         )}
         {!canSeeCosts && (
-          <KpiCard icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
+          <KpiCard emphasis icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
         )}
       </div>
 

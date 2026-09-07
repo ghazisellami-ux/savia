@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
@@ -116,6 +116,7 @@ export default function SavPage() {
   const [savTechDropdownOpen, setSavTechDropdownOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<Intervention | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const openedDirectInterventionId = useRef<number | null>(null);
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
     return d.toISOString().substring(0, 10);
@@ -435,6 +436,32 @@ export default function SavPage() {
       return 60; // Default to 1 hour on error
     }
   };
+
+  const openStatusModal = useCallback((intervention: Intervention) => {
+    setSelectedIntervention(intervention);
+    setStatusForm({
+      statut: intervention.statut,
+      probleme: intervention.probleme,
+      cause: intervention.cause,
+      solution: intervention.solution,
+      duree_heures: String(Math.round((intervention.duree_minutes / 60) * 100) / 100),
+      duree_deplacement: String(Math.round(((intervention.duree_deplacement || 0) / 60) * 100) / 100),
+      start_time: intervention.start_time || '08:00',
+      end_time: intervention.end_time || '09:00',
+    });
+    setShowStatusModal(true);
+  }, []);
+
+  // Le suivi facturation peut ouvrir directement la fiche à clôturer.
+  useEffect(() => {
+    const requestedId = Number(new URLSearchParams(window.location.search).get('intervention_id'));
+    if (!Number.isInteger(requestedId) || requestedId <= 0 || openedDirectInterventionId.current === requestedId) return;
+    const intervention = data.find(item => item.id === requestedId);
+    if (!intervention) return;
+    openStatusModal(intervention);
+    openedDirectInterventionId.current = requestedId;
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [data, openStatusModal]);
 
   const handleSave = async () => {
     if (!form.machine.trim()) return;
@@ -1019,6 +1046,7 @@ export default function SavPage() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-savia-surface-hover/80 backdrop-blur-sm">
                   <tr className="border-b border-savia-border">
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs whitespace-nowrap">N° intervention</th>
                     <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5" /> Date</div>
                     </th>
@@ -1052,6 +1080,7 @@ export default function SavPage() {
                 <tbody>
                   {filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(i => (
                     <tr key={i.id} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors">
+                      <td className="py-2.5 px-3 font-mono text-xs font-semibold text-savia-accent">#{i.id}</td>
                       <td className="py-2.5 px-3 text-xs">{i.date.substring(0, 10)}</td>
                       <td className="py-2.5 px-3 font-semibold text-sm">{i.machine}</td>
                       <td className="py-2.5 px-3 text-sm text-savia-text-muted">{i.client || '—'}</td>
@@ -1069,20 +1098,7 @@ export default function SavPage() {
                       <td className="py-2.5 px-3 font-mono text-xs">{i.duree}h</td>
                       <td className="py-2.5 px-3">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => {
-                            setSelectedIntervention(i);
-                            setStatusForm({ 
-                              statut: i.statut, 
-                              probleme: i.probleme, 
-                              cause: i.cause, 
-                              solution: i.solution, 
-                              duree_heures: String(Math.round((i.duree_minutes / 60) * 100) / 100), 
-                              duree_deplacement: String(Math.round(((i.duree_deplacement || 0) / 60) * 100) / 100),
-                              start_time: i.start_time || '08:00',
-                              end_time: i.end_time || '09:00'
-                            });
-                            setShowStatusModal(true);
-                          }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
+                          <button onClick={() => openStatusModal(i)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer transition-colors">
                             <Edit className="w-3.5 h-3.5" />
                           </button>
                           <button onClick={() => setIntervDetailItem(i)}

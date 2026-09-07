@@ -267,6 +267,7 @@ export default function PublicMarketsPage() {
   const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState('');
+  const [equipmentFilter, setEquipmentFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [editing, setEditing] = useState<PublicMarketCase | null | 'new'>(null);
   const [form, setForm] = useState<MarketForm>(emptyForm());
@@ -356,14 +357,24 @@ export default function PublicMarketsPage() {
     }
   };
 
+  const availableEquipmentFilters = useMemo(() => {
+    const selectedClient = clientFilter.toLocaleLowerCase('fr');
+    const equipmentNames = cases
+      .filter(item => !selectedClient || item.client.toLocaleLowerCase('fr') === selectedClient)
+      .map(item => item.equipment_reception_note.trim())
+      .filter(Boolean);
+    return [...new Set(equipmentNames)].sort((a, b) => a.localeCompare(b, 'fr'));
+  }, [cases, clientFilter]);
+
   const filteredCases = useMemo(() => cases.filter(item => {
     const needle = search.trim().toLocaleLowerCase('fr');
-    const matchesSearch = !needle || [item.id, item.client, item.market_number, item.market_object, item.owner_username]
+    const matchesSearch = !needle || [item.id, item.client, item.market_number, item.market_object, item.equipment_reception_note, item.owner_username]
       .join(' ').toLocaleLowerCase('fr').includes(needle);
     const matchesClient = !clientFilter || item.client === clientFilter;
+    const matchesEquipment = !equipmentFilter || item.equipment_reception_note === equipmentFilter;
     const matchesStatus = !statusFilter || (statusFilter === 'alert' ? Boolean(item.alert) : item.status === statusFilter);
-    return matchesSearch && matchesClient && matchesStatus;
-  }), [cases, clientFilter, search, statusFilter]);
+    return matchesSearch && matchesClient && matchesEquipment && matchesStatus;
+  }), [cases, clientFilter, equipmentFilter, search, statusFilter]);
 
   const kpis = useMemo(() => ({
     total: cases.length,
@@ -407,11 +418,12 @@ export default function PublicMarketsPage() {
         ].map(card => <button key={card.label} onClick={() => card.filter && setStatusFilter(value => value === card.filter ? '' : card.filter)} className={`glass rounded-xl p-4 text-left transition hover:-translate-y-0.5 ${card.filter && statusFilter === card.filter ? 'ring-2 ring-savia-accent' : ''}`}><card.icon className={`mb-2 h-5 w-5 ${card.color}`} /><div className={`text-xl font-black ${card.color}`}>{card.value}</div><div className="mt-1 text-xs text-savia-text-muted">{card.label}</div></button>)}
       </div>
 
-      <div className="glass flex flex-wrap items-center gap-3 rounded-xl p-3">
-        <div className="relative min-w-[230px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-savia-text-dim" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Client, numéro, objet du marché…" className={`${INPUT} pl-9`} /></div>
-        <select value={clientFilter} onChange={event => setClientFilter(event.target.value)} className={`${INPUT} w-auto min-w-[180px]`}><option value="">Tous les clients</option>{[...new Set([...clients, ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
-        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={`${INPUT} w-auto min-w-[220px]`}><option value="">Tous les statuts</option><option value="alert">Avec alerte</option>{[...new Map(cases.map(item => [item.status, item.status_label])).entries()].map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select>
-        {(search || clientFilter || statusFilter) && <button onClick={() => { setSearch(''); setClientFilter(''); setStatusFilter(''); }} className="text-xs font-semibold text-savia-accent">Réinitialiser</button>}
+      <div className="glass grid grid-cols-1 gap-3 rounded-xl p-3 xl:grid-cols-[minmax(260px,1fr)_minmax(180px,0.55fr)_minmax(180px,0.55fr)_minmax(210px,0.65fr)_auto]">
+        <div className="relative min-w-0"><Search className="absolute left-3 top-2.5 h-4 w-4 text-savia-text-dim" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Client, équipement, numéro, objet du marché…" className={`${INPUT} pl-9`} /></div>
+        <select value={clientFilter} onChange={event => { setClientFilter(event.target.value); setEquipmentFilter(''); }} className={`${INPUT} min-w-0`}><option value="">Tous les clients</option>{[...new Set([...clients, ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
+        <select value={equipmentFilter} onChange={event => setEquipmentFilter(event.target.value)} disabled={availableEquipmentFilters.length === 0} className={`${INPUT} min-w-0 disabled:cursor-not-allowed disabled:opacity-50`}><option value="">Tous les équipements</option>{availableEquipmentFilters.map(equipment => <option key={equipment}>{equipment}</option>)}</select>
+        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={`${INPUT} min-w-0`}><option value="">Tous les statuts</option><option value="alert">Avec alerte</option>{[...new Map(cases.map(item => [item.status, item.status_label])).entries()].map(([status, label]) => <option key={status} value={status}>{label}</option>)}</select>
+        {(search || clientFilter || equipmentFilter || statusFilter) && <button onClick={() => { setSearch(''); setClientFilter(''); setEquipmentFilter(''); setStatusFilter(''); }} className="text-xs font-semibold text-savia-accent">Réinitialiser</button>}
       </div>
 
       <div className="glass overflow-hidden rounded-xl">

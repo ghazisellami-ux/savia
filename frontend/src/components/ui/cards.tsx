@@ -10,22 +10,24 @@ interface KpiCardProps {
   label?: string;
   variant?: 'default' | 'danger' | 'success' | 'warning' | 'skeleton';
   tooltip?: string;
+  emphasis?: boolean;
 }
 
-export function KpiCard({ icon, value, label, variant = 'default', tooltip }: KpiCardProps) {
+export function KpiCard({ icon, value, label, variant = 'default', tooltip, emphasis = false }: KpiCardProps) {
   // Skeleton variant - shows grayed out placeholder
   if (variant === 'skeleton') {
     return (
       <div
         className={clsx(
-          'glass rounded-xl p-4 text-center transition-all duration-300',
+          'glass rounded-xl text-center transition-all duration-300',
+          emphasis ? 'flex min-h-40 flex-col items-center justify-center p-5' : 'p-4',
           'border-savia-border/20 opacity-50',
           'animate-pulse'
         )}
       >
-        <div className="text-2xl mb-1 text-savia-text-dim">⚙️</div>
-        <div className="text-xl font-extrabold text-savia-text-dim tracking-tight">0</div>
-        <div className="text-xs text-savia-text-dim mt-1 leading-tight">Chargement...</div>
+        <div className={emphasis ? 'mb-2 text-3xl text-savia-text-dim' : 'mb-1 text-2xl text-savia-text-dim'}>⚙️</div>
+        <div className={emphasis ? 'text-2xl font-extrabold tracking-tight text-savia-text-dim md:text-3xl' : 'text-xl font-extrabold text-savia-text-dim tracking-tight'}>0</div>
+        <div className={emphasis ? 'mt-2 text-sm font-semibold leading-tight text-savia-text-dim' : 'text-xs text-savia-text-dim mt-1 leading-tight'}>Chargement...</div>
       </div>
     );
   }
@@ -47,15 +49,16 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip }: Kp
   return (
     <div
       className={clsx(
-        'glass rounded-xl p-4 text-center transition-all duration-300',
+        'glass rounded-xl text-center transition-all duration-300',
+        emphasis ? 'flex min-h-40 flex-col items-center justify-center p-5' : 'p-4',
         borderColor, glowColor,
         'hover:scale-[1.02] hover:-translate-y-0.5'
       )}
       title={tooltip}
     >
-      <div className="text-2xl mb-1">{icon}</div>
-      <div className="text-xl font-extrabold text-savia-text tracking-tight">{value}</div>
-      <div className="text-xs text-savia-text-muted mt-1 leading-tight">{label}</div>
+      <div className={emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl'}>{icon}</div>
+      <div className={emphasis ? 'text-2xl font-extrabold tracking-tight text-savia-text md:text-3xl' : 'text-xl font-extrabold text-savia-text tracking-tight'}>{value}</div>
+      <div className={emphasis ? 'mt-2 text-sm font-semibold leading-tight text-savia-text-muted' : 'text-xs text-savia-text-muted mt-1 leading-tight'}>{label}</div>
     </div>
   );
 }
