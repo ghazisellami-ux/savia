@@ -746,16 +746,25 @@ export default function SupervisionPage() {
       </div>
 
       {/* Import Log (collapsible) */}
-      <div className="glass rounded-xl overflow-hidden">
+      <div className="rounded-xl overflow-hidden border-2 border-dashed border-savia-accent/60 bg-savia-accent/5 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
         <button
           onClick={() => setExpandImport(!expandImport)}
-          className="w-full flex items-center justify-between p-4 hover:bg-savia-surface-hover/30 transition-colors cursor-pointer"
+          aria-expanded={expandImport}
+          className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-savia-accent/10 transition-colors cursor-pointer"
         >
-          <div className="flex items-center gap-3">
-            <Upload className="w-5 h-5 text-savia-accent" />
-            <span className="font-semibold">Importer un fichier Log</span>
+          <div className="flex items-center gap-3 text-left">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-savia-accent text-savia-bg shadow-lg shadow-savia-accent/30">
+              <Upload className="w-5 h-5" />
+            </span>
+            <span>
+              <span className="block font-bold text-savia-text">Cliquer ici pour ajouter un fichier log</span>
+              <span className="block text-xs text-savia-text-muted mt-0.5">Choisissez le client, l’équipement, puis le fichier à analyser.</span>
+            </span>
           </div>
-          {expandImport ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          <span className="flex shrink-0 items-center gap-2 rounded-lg bg-savia-accent px-3 py-2 text-xs font-bold text-savia-bg">
+            {expandImport ? 'Fermer' : 'Ajouter'}
+            {expandImport ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </span>
         </button>
         {expandImport && (
           <div className="p-4 pt-0 border-t border-savia-border/50 space-y-4">
