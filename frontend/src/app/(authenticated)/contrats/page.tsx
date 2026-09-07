@@ -49,6 +49,62 @@ const CONTRACT_BILLING_RULES = [
   },
 ] as const;
 
+const DAY_MS = 86_400_000;
+
+const contractDate = (value: string): Date | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const anniversaryOf = (start: Date, year: number): Date => {
+  const anniversary = new Date(Date.UTC(year, start.getUTCMonth(), start.getUTCDate()));
+  // A 29 February contract renews on the last day of February in non-leap years.
+  if (anniversary.getUTCMonth() !== start.getUTCMonth()) {
+    return new Date(Date.UTC(year, start.getUTCMonth() + 1, 0));
+  }
+  return anniversary;
+};
+
+const plural = (count: number, singular: string, pluralValue: string) => `${count} ${count === 1 ? singular : pluralValue}`;
+
+/**
+ * Formats an indicative duration without rounding a few surplus days into a
+ * new year. Near a full month, the remaining period is shown in months.
+ */
+const formatContractDuration = (startValue: string, endValue: string): string | null => {
+  const start = contractDate(startValue);
+  const end = contractDate(endValue);
+  if (!start || !end || end < start) return null;
+
+  const totalDays = Math.round((end.getTime() - start.getTime()) / DAY_MS);
+  let fullYears = end.getUTCFullYear() - start.getUTCFullYear();
+  if (anniversaryOf(start, start.getUTCFullYear() + fullYears) > end) fullYears -= 1;
+  const completedAnniversary = anniversaryOf(start, start.getUTCFullYear() + fullYears);
+  const nextAnniversary = anniversaryOf(start, start.getUTCFullYear() + fullYears + 1);
+  const daysUntilNextAnniversary = Math.round((nextAnniversary.getTime() - end.getTime()) / DAY_MS);
+
+  // Preserve the agreed convention: one or two missing days still count as a year.
+  if (daysUntilNextAnniversary > 0 && daysUntilNextAnniversary <= 2) {
+    return plural(fullYears + 1, 'an', 'ans');
+  }
+
+  if (fullYears === 0) {
+    const months = Math.max(1, Math.round(totalDays / 30.4375));
+    return plural(months, 'mois', 'mois');
+  }
+
+  const remainingDays = Math.round((end.getTime() - completedAnniversary.getTime()) / DAY_MS);
+  if (remainingDays === 0) return plural(fullYears, 'an', 'ans');
+  if (remainingDays < 25) {
+    return `${plural(fullYears, 'an', 'ans')} et ${plural(remainingDays, 'jour', 'jours')}`;
+  }
+
+  const remainingMonths = Math.max(1, Math.round(remainingDays / 30.4375));
+  if (remainingMonths >= 12) return plural(fullYears + 1, 'an', 'ans');
+  return `${plural(fullYears, 'an', 'ans')} et ${plural(remainingMonths, 'mois', 'mois')}`;
+};
+
 interface Contrat {
   id: string;
   client: string;
@@ -550,6 +606,7 @@ export default function ContratsPage() {
     
     return total + prorataRevenu;
   }, 0);
+  const formDuration = formatContractDuration(form.date_debut, form.date_fin);
 
   if (isLoading) return (
     <div className="flex justify-center items-center h-64">
@@ -738,25 +795,52 @@ export default function ContratsPage() {
                 ⚠️ {expiring30.length} contrat(s) expire(nt) dans moins de 30 jours
               </span>
             </div>
-            <div className="space-y-1 pl-7">
+            <div className="space-y-2 md:pl-7">
               {expiring30.map(c => {
                 const fin = new Date(c.date_fin + 'T23:59:59');
                 const daysLeft = Math.floor((fin.getTime() - Date.now()) / 86400000);
+                const contractEquipments = contractEquipmentItems(c);
+                const visibleEquipments = contractEquipments.slice(0, 3);
+                const hiddenEquipmentCount = contractEquipments.length - visibleEquipments.length;
+                const expiryDate = c.date_fin.split('-').reverse().join('/');
                 return (
-                  <div key={c.id} className="flex items-center gap-2 text-sm text-amber-700">
-                    <span className="font-mono text-xs bg-amber-100 px-1.5 py-0.5 rounded">#{c.id}</span>
-                    <span className="font-semibold">{c.client}</span>
-                    {contractEquipmentItems(c).map((equipment, idx) => {
-                      const label = contractEquipmentLabel(equipment);
-                      const meta = contractEquipmentMeta(equipment);
-                      return (
-                        <span key={typeof equipment === 'string' ? `${label}-${idx}` : equipment.id} className="text-amber-500">
-                          {idx === 0 ? '— ' : ', '}{label}{meta && <span className="text-amber-600/80"> ({meta})</span>}
+                  <div key={c.id} className="flex flex-col gap-3 rounded-lg bg-amber-100/60 p-3 text-sm text-amber-800 md:flex-row md:items-center">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded bg-amber-200/70 px-1.5 py-0.5 font-mono text-xs">#{c.id}</span>
+                        <span title={c.client} className="min-w-0 max-w-full truncate font-bold text-amber-900 md:max-w-md">
+                          {c.client}
                         </span>
-                      );
-                    })}
-                    <span className="ml-auto font-bold">{daysLeft}j restant(s)</span>
-                    <span className="text-amber-500">• {c.date_fin}</span>
+                      </div>
+                      {contractEquipments.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {visibleEquipments.map((equipment, index) => {
+                            const label = contractEquipmentLabel(equipment);
+                            const meta = contractEquipmentMeta(equipment);
+                            const equipmentTitle = [label, meta].filter(Boolean).join(' · ');
+                            return (
+                              <span
+                                key={typeof equipment === 'string' ? `${label}-${index}` : equipment.id}
+                                title={equipmentTitle}
+                                className="inline-flex max-w-64 items-center gap-1 truncate rounded-full border border-amber-300/70 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+                              >
+                                <Wrench className="h-3 w-3 shrink-0" />
+                                <span className="truncate">{label}{meta && ` · ${meta}`}</span>
+                              </span>
+                            );
+                          })}
+                          {hiddenEquipmentCount > 0 && (
+                            <span className="inline-flex items-center rounded-full border border-amber-300/70 bg-amber-200/60 px-2 py-0.5 text-xs font-bold text-amber-800">
+                              + {hiddenEquipmentCount} {hiddenEquipmentCount === 1 ? 'autre' : 'autres'}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-right md:block">
+                      <span className="font-black text-amber-800">{daysLeft} j restant{daysLeft === 1 ? '' : 's'}</span>
+                      <span className="block whitespace-nowrap text-xs font-semibold text-amber-600">Expire le {expiryDate}</span>
+                    </div>
                   </div>
                 );
               })}
@@ -806,6 +890,9 @@ export default function ContratsPage() {
           const isExpired = actualStatus === 'Expiré';
           const isSuspendu = actualStatus === 'Suspendu';
           const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
+          const contractEquipments = contractEquipmentItems(c);
+          const visibleEquipments = contractEquipments.slice(0, 3);
+          const hiddenEquipmentCount = contractEquipments.length - visibleEquipments.length;
           
           // Determine badge color and text
           let badgeClass = 'bg-green-500/10 text-green-400';
@@ -832,9 +919,9 @@ export default function ContratsPage() {
                     <span className="font-bold">{c.client}</span>
                   </div>
                   {/* Display equipments */}
-                  {contractEquipmentItems(c).length > 0 && (
+                  {contractEquipments.length > 0 && (
                     <div className="flex flex-wrap gap-1">
-                      {contractEquipmentItems(c).map((equipment, index) => {
+                      {visibleEquipments.map((equipment, index) => {
                         const label = contractEquipmentLabel(equipment);
                         const meta = contractEquipmentMeta(equipment);
                         return (
@@ -844,6 +931,11 @@ export default function ContratsPage() {
                           </span>
                         );
                       })}
+                      {hiddenEquipmentCount > 0 && (
+                        <span className="inline-flex items-center rounded-full border border-savia-border bg-savia-surface-hover px-2 py-0.5 text-xs font-semibold text-savia-text-muted">
+                          + {hiddenEquipmentCount} {hiddenEquipmentCount === 1 ? 'autre' : 'autres'}
+                        </span>
+                      )}
                     </div>
                   )}
                   <div className="flex items-center gap-3 text-xs text-savia-text-muted flex-wrap">
@@ -916,6 +1008,7 @@ export default function ContratsPage() {
         const isExpired = actualStatus === 'Expiré';
         const isExpiring = daysLeft >= 0 && daysLeft <= 60 && actualStatus === 'Actif';
         const isSuspendu = actualStatus === 'Suspendu';
+        const duration = formatContractDuration(c.date_debut, c.date_fin);
         
         let statutLabel = actualStatus;
         let badgeClass = 'bg-green-500/15 text-green-400';
@@ -968,6 +1061,7 @@ export default function ContratsPage() {
                     {icon: Wrench, label: 'Type de contrat', val: c.type_contrat || '—'},
                     {icon: Calendar, label: 'Date début', val: c.date_debut},
                     {icon: Calendar, label: 'Date fin', val: c.date_fin},
+                    {icon: Clock, label: 'Durée', val: duration || '—'},
                     {icon: RefreshCcw, label: 'Récurrence', val: c.recurrence_maintenance || '—'},
                     {icon: Calendar, label: 'Première maintenance', val: c.date_premiere_maintenance || '—'},
                     {icon: Clock, label: 'SLA Réponse', val: c.sla_temps_reponse_h + 'h'},
@@ -1174,41 +1268,43 @@ export default function ContratsPage() {
                       )}
                     </div>
                     
-                    {/* Selected Equipment Badges */}
-                    {form.equipements.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        {form.equipements.map((equip, index) => {
-                          const selectedEquipment = equips.find(e => Number(e.id) === form.equipement_ids[index]);
-                          const selectedMeta = selectedEquipment
-                            ? [selectedEquipment.Fabricant || selectedEquipment.fabricant, selectedEquipment.Modele || selectedEquipment.modele,
-                              selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie
-                                ? `SN: ${selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie}` : '']
-                                .filter(Boolean).join(' · ')
-                            : '';
-                          return (
-                            <div
-                              key={`${equip}-${form.equipement_ids[index] || index}`}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-savia-accent/10 border border-savia-accent/30 text-sm font-semibold text-savia-accent"
-                            >
-                              <span>
-                                {equip}
-                                {selectedMeta && <span className="ml-1 text-xs font-normal text-savia-text-muted">({selectedMeta})</span>}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => removeEquipment(index)}
-                                className="flex items-center justify-center w-4 h-4 rounded-full hover:bg-savia-accent/20 transition-colors"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    
                     {!form.client && <p className="text-xs text-savia-text-muted mt-1">Sélectionnez d'abord un client</p>}
                   </div>
+
+                  {/* Équipements sélectionnés : pleine largeur et deux colonnes pour éviter une longue liste verticale. */}
+                  {form.equipements.length > 0 && (
+                    <div className="md:col-span-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {form.equipements.map((equip, index) => {
+                        const selectedEquipment = equips.find(e => Number(e.id) === form.equipement_ids[index]);
+                        const selectedMeta = selectedEquipment
+                          ? [selectedEquipment.Fabricant || selectedEquipment.fabricant, selectedEquipment.Modele || selectedEquipment.modele,
+                            selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie
+                              ? `SN: ${selectedEquipment.NumSerie || selectedEquipment.Num_Serie || selectedEquipment.num_serie}` : '']
+                              .filter(Boolean).join(' · ')
+                          : '';
+                        return (
+                          <div
+                            key={`${equip}-${form.equipement_ids[index] || index}`}
+                            className="flex min-w-0 items-center gap-2 rounded-lg border border-savia-accent/30 bg-savia-accent/10 px-3 py-2 text-savia-accent"
+                          >
+                            <Wrench className="h-4 w-4 shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold" title={equip}>{equip}</p>
+                              {selectedMeta && <p className="truncate text-xs text-savia-text-muted" title={selectedMeta}>{selectedMeta}</p>}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeEquipment(index)}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full hover:bg-savia-accent/20 transition-colors"
+                              aria-label={`Retirer ${equip}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1250,16 +1346,23 @@ export default function ContratsPage() {
                     <label className={LABEL}>Date fin</label>
                     <input type="date" className={INPUT} value={form.date_fin} onChange={e => set('date_fin', e.target.value)} />
                   </div>
+                  <div className="md:col-span-2 rounded-lg border border-savia-accent/20 bg-savia-accent/5 px-3 py-2 text-sm">
+                    {formDuration ? (
+                      <span className="text-savia-text-muted">Durée indicative : <strong className="text-savia-accent">{formDuration}</strong></span>
+                    ) : (
+                      <span className="text-amber-500">Sélectionnez une date de fin postérieure à la date de début.</span>
+                    )}
+                  </div>
                   <div>
                     <label className={LABEL}>SLA Réponse (heures)</label>
-                    <input type="number" className={INPUT} value={form.sla_temps_reponse_h} min={0} max={240}
-                      onChange={e => set('sla_temps_reponse_h', Number(e.target.value))} />
+                    <input type="text" inputMode="numeric" className={INPUT} value={form.sla_temps_reponse_h}
+                      onChange={e => set('sla_temps_reponse_h', Math.min(240, Math.max(0, Number(e.target.value) || 0)))} />
                     <p className="text-xs text-savia-text-muted mt-1">0h = aucun engagement SLA de réponse</p>
                   </div>
                   <div>
                     <label className={LABEL}>Montant annuel (TND)</label>
-                    <input type="number" className={INPUT} value={form.montant} min={0}
-                      onChange={e => set('montant', Number(e.target.value))} />
+                    <input type="text" inputMode="decimal" className={INPUT} value={form.montant} placeholder="0"
+                      onChange={e => set('montant', Math.max(0, Number(e.target.value.replace(',', '.')) || 0))} />
                   </div>
                 </div>
               </div>
@@ -1382,11 +1485,10 @@ export default function ContratsPage() {
                   <div>
                     <label className={LABEL}>Rappel avant expiration</label>
                     <div className="grid grid-cols-2 gap-2">
-                      <input type="number" min={1} max={365}
+                      <input type="text" inputMode="numeric"
                         className="w-full border-2 border-savia-accent/40 rounded-lg px-3 py-2 bg-savia-surface-hover text-savia-text font-bold outline-none focus:border-savia-accent"
-                        style={{ appearance: 'textfield' }}
                         value={form.rappel_avant}
-                        onChange={e => set('rappel_avant', Number(e.target.value))} />
+                        onChange={e => set('rappel_avant', Math.min(365, Math.max(1, Number(e.target.value) || 1)))} />
                       <select className={INPUT} value={form.rappel_unite} onChange={e => set('rappel_unite', e.target.value)}>
                         <option value="jours">jours</option>
                         <option value="mois">mois</option>
