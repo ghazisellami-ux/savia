@@ -502,7 +502,24 @@ export default function EquipementsPage() {
     [form.GarantieDebut, form.GarantieDuree]
   );
 
-  const docEquipOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.equipement_nom).filter(Boolean)))], [docs]);
+  const docEquipOptions = useMemo(() => {
+    const options = new Map<string, { value: string; label: string }>();
+    for (const doc of docs) {
+      const value = doc.equipement_id ? `id:${doc.equipement_id}` : `nom:${doc.equipement_nom}`;
+      if (options.has(value)) continue;
+      const equipment = data.find(item => String(item.id) === String(doc.equipement_id))
+        || data.find(item => item.nom === doc.equipement_nom);
+      const details = [
+        equipment?.modele && `Modèle : ${equipment.modele}`,
+        equipment?.numSerie && `N° série : ${equipment.numSerie}`,
+      ].filter(Boolean);
+      options.set(value, {
+        value,
+        label: details.length > 0 ? `${doc.equipement_nom} — ${details.join(' · ')}` : doc.equipement_nom,
+      });
+    }
+    return [{ value: 'Tous', label: 'Tous les équipements' }, ...options.values()];
+  }, [docs, data]);
   const docClientOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.client).filter(Boolean)))], [docs]);
 
   const loadData = useCallback(async () => {
@@ -1142,7 +1159,11 @@ export default function EquipementsPage() {
   }), [search, filterType, filterModele, filterClient, filterDomaine, filterStatut, filterService, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
-    if (docFilterEquip !== 'Tous' && doc.equipement_nom !== docFilterEquip) return false;
+    if (docFilterEquip !== 'Tous') {
+      const matchesId = docFilterEquip === `id:${doc.equipement_id}`;
+      const matchesName = docFilterEquip === `nom:${doc.equipement_nom}`;
+      if (!matchesId && !matchesName) return false;
+    }
     if (docFilterClient !== 'Tous' && doc.client !== docFilterClient) return false;
     if (docSearch && !doc.nom_fichier.toLowerCase().includes(docSearch.toLowerCase()) &&
         !doc.equipement_nom?.toLowerCase().includes(docSearch.toLowerCase())) return false;
@@ -2434,7 +2455,7 @@ export default function EquipementsPage() {
                 className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
             <select value={docFilterEquip} onChange={e => setDocFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {docEquipOptions.map(e => <option key={e} value={e}>{e === 'Tous' ? 'Tous les équipements' : e}</option>)}
+              {docEquipOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
             <select value={docFilterClient} onChange={e => setDocFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
               {docClientOptions.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}

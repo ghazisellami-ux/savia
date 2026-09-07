@@ -104,6 +104,30 @@ function equipmentLabel(machine: Pick<MachineFleet, 'machine' | 'modele' | 'nume
   return details.length > 0 ? `${machine.machine} — ${details.join(' · ')}` : machine.machine;
 }
 
+function normalizedEquipmentName(value: unknown) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function equipmentNamesMatch(left: string, right: string) {
+  const normalizedLeft = normalizedEquipmentName(left);
+  const normalizedRight = normalizedEquipmentName(right);
+  return normalizedLeft === normalizedRight
+    || (normalizedLeft.length >= 5 && normalizedRight.includes(normalizedLeft))
+    || (normalizedRight.length >= 5 && normalizedLeft.includes(normalizedRight));
+}
+
+function logMatchesEquipment(log: { equipement_id?: unknown; equipement?: unknown }, machine: MachineFleet) {
+  const equipmentId = String(log.equipement_id || '').trim();
+  return equipmentId
+    ? equipmentId === machine.id
+    : equipmentNamesMatch(machine.machine, String(log.equipement || ''));
+}
+
 // --- Component ---
 export default function SupervisionPage() {
   const [fleet, setFleet] = useState<MachineFleet[]>([]);
@@ -140,6 +164,11 @@ export default function SupervisionPage() {
   const [knowledgePriority, setKnowledgePriority] = useState<'HAUTE' | 'MOYENNE' | 'BASSE'>('MOYENNE');
   const [knowledgeSaving, setKnowledgeSaving] = useState(false);
   const [knowledgeSaveMessage, setKnowledgeSaveMessage] = useState('');
+  const importEquipment = useMemo(() => rawEquipments.find((equipment: any) =>
+    String(equipment.id || equipment.ID || '') === importEquip
+  ), [rawEquipments, importEquip]);
+  const importEquipmentName = String(importEquipment?.Nom || importEquipment?.nom || '');
+  const importEquipmentClient = String(importEquipment?.Client || importEquipment?.client || importClient || '');
 
   // Delete log handler — called after user confirms via modal
   const executeDeleteLog = async (machine: MachineFleet) => {
@@ -229,9 +258,7 @@ export default function SupervisionPage() {
     setLogMergeApplied(true);
     setFleet(prev => prev.map(m => {
       // Find most recent log for this machine
-      const machineLogs = logHistory.filter(
-        (l: any) => (l.equipement || '').toLowerCase().trim() === m.machine.toLowerCase().trim()
-      );
+      const machineLogs = logHistory.filter((log: any) => logMatchesEquipment(log, m));
       if (machineLogs.length === 0) return m;
       const latestLog = machineLogs.sort(
         (a: any, b: any) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
@@ -272,6 +299,53 @@ export default function SupervisionPage() {
     fleet[0]
   );
   const selectedEquipment = fleet.find(m => m.id === selectedEquip);
+  const availableLogs = useMemo(() => {
+    const allowedMachines = selectedEquipment ? [selectedEquipment] : machinesForClient;
+    return logHistory
+      .filter(log => allowedMachines.some(machine => logMatchesEquipment(log, machine)))
+      .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
+  }, [logHistory, machinesForClient, selectedEquipment]);
+  const monitoredFleet = useMemo(() => {
+    const candidates = selectedEquip === 'Tous'
+      ? (selectedClient === 'Tous' ? fleet : machinesForClient)
+      : filteredFleet;
+    const latestByEquipment = new Map<string, { log: any; machine?: MachineFleet }>();
+
+    [...logHistory]
+      .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
+      .forEach(log => {
+        const logMachine = String(log.equipement || '').trim();
+        if (!logMachine) return;
+        const machine = candidates.find(item => logMatchesEquipment(log, item));
+        // With a client or equipment filter, exclude logs that cannot be related to that scope.
+        if (!machine && (selectedClient !== 'Tous' || selectedEquip !== 'Tous')) return;
+        const key = machine?.id || `log-${normalizedEquipmentName(logMachine)}`;
+        if (!latestByEquipment.has(key)) latestByEquipment.set(key, { log, machine });
+      });
+
+    return Array.from(latestByEquipment.entries()).map(([key, { log, machine }]) => {
+      const erreurs = Number(log.nb_errors || 0);
+      const critiques = Number(log.nb_critiques || 0);
+      return machine ? {
+        ...machine,
+        chemin: log.filename || '',
+        erreurs,
+        critiques,
+        etat: critiques > 0 ? 'CRITIQUE' as const : erreurs > 0 ? 'ATTENTION' as const : 'OK' as const,
+      } : {
+        id: key,
+        machine: String(log.equipement),
+        client: String(log.client || 'Non renseigné'),
+        modele: '',
+        numeroSerie: '',
+        chemin: log.filename || '',
+        erreurs,
+        critiques,
+        etat: critiques > 0 ? 'CRITIQUE' as const : erreurs > 0 ? 'ATTENTION' as const : 'OK' as const,
+        errors: [],
+      };
+    });
+  }, [fleet, filteredFleet, logHistory, machinesForClient, selectedClient, selectedEquip]);
   // Single source of truth: imported log errors when available, otherwise no errors.
   const displayErrors = loadedErrors ?? (currentMachine?.errors ?? []);
 
@@ -534,9 +608,9 @@ export default function SupervisionPage() {
       return;
     }
     // Find most recent log for this equipment
-    const equip = selectedEquipment?.machine.toLowerCase() || '';
+    if (!selectedEquipment) return;
     const matchingLogs = logHistory
-      .filter((l: any) => (l.equipement || '').toLowerCase() === equip)
+      .filter((log: any) => logMatchesEquipment(log, selectedEquipment))
       .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
     if (matchingLogs.length > 0) {
       setSelectedLogId(matchingLogs[0].id);
@@ -573,10 +647,14 @@ export default function SupervisionPage() {
       const errCount = parsedErrors.reduce((s: number, e: {frequence:number}) => s + e.frequence, 0);
       const critCount = parsedErrors.filter((e: {type:string}) => e.type === 'Critique').reduce((s: number, e: {frequence:number}) => s + e.frequence, 0);
 
-      // Update fleet for the selected equipment (case-insensitive name match)
-      const importEquipTrimmed = importEquip.trim();
+      const importEquipTrimmed = importEquipmentName.trim();
+      if (!importEquipTrimmed) {
+        setImportSuccess('✗ Équipement introuvable. Sélectionnez-le à nouveau.');
+        return;
+      }
+      // Update only the equipment selected by its unique ID.
       setFleet(prev => prev.map(m => {
-        if (m.machine.toLowerCase() !== importEquipTrimmed.toLowerCase()) return m;
+        if (m.id !== importEquip) return m;
         return {
           ...m,
           chemin: importFile.name,
@@ -587,7 +665,7 @@ export default function SupervisionPage() {
         };
       }));
       // Select this machine and its first real error
-      const importedMachine = fleet.find(m => m.machine.toLowerCase() === importEquipTrimmed.toLowerCase());
+      const importedMachine = fleet.find(m => m.id === importEquip);
       if (importedMachine) setSelectedMachine(importedMachine.id);
       const firstRealError = parsedErrors.find(e => e.statut !== 'OK');
       if (firstRealError) {
@@ -610,7 +688,9 @@ export default function SupervisionPage() {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
           body: JSON.stringify({
-            equipement: importEquip.trim(),
+            equipement: importEquipTrimmed,
+            equipement_id: importEquipment?.id || importEquipment?.ID || null,
+            client: importEquipmentClient,
             filename: importFile.name,
             content: text,
             nb_errors: errCount,
@@ -644,10 +724,10 @@ export default function SupervisionPage() {
     }
   };
 
-  // Use filteredFleet for KPIs so they reflect the current client filter
-  const critCount = filteredFleet.filter(m => m.etat === 'CRITIQUE').length;
-  const attCount = filteredFleet.filter(m => m.etat === 'ATTENTION').length;
-  const okCount = filteredFleet.filter(m => m.etat === 'OK').length;
+  // The fleet status only reflects equipment with an imported log.
+  const critCount = monitoredFleet.filter(m => m.etat === 'CRITIQUE').length;
+  const attCount = monitoredFleet.filter(m => m.etat === 'ATTENTION').length;
+  const okCount = monitoredFleet.filter(m => m.etat === 'OK').length;
 
   if (fleet.length === 0 || !currentMachine) {
     return <div className="flex justify-center items-center h-64"><div className="w-8 h-8 border-4 border-savia-accent border-t-transparent rounded-full animate-spin" /></div>;
@@ -718,7 +798,8 @@ export default function SupervisionPage() {
                     const modele = eq.Modele || eq.modele || eq.model || '';
                     const numeroSerie = eq.NumSerie || eq.num_serie || eq.numero_serie || eq.serial_number || '';
                     const details = [modele && `Modèle : ${modele}`, numeroSerie && `N° série : ${numeroSerie}`].filter(Boolean);
-                    return <option key={eq.id || eq.ID || `${nm}-${numeroSerie}`} value={nm}>{details.length ? `${nm} — ${details.join(' · ')}` : nm}</option>;
+                    const equipmentId = String(eq.id || eq.ID || `${eq.Client || eq.client || ''}-${nm}-${numeroSerie}`);
+                    return <option key={equipmentId} value={equipmentId}>{details.length ? `${nm} — ${details.join(' · ')}` : nm}</option>;
                   })}
                 </select>
               </div>
@@ -799,51 +880,42 @@ export default function SupervisionPage() {
           </label>
           <select
             key={`log-${selectedClient}-${selectedEquip}`}
-            value={selectedLogId !== null ? String(selectedLogId) : selectedMachine}
+            value={selectedLogId !== null ? String(selectedLogId) : ''}
             onChange={e => {
               const val = e.target.value;
-              const logId = parseInt(val);
-              if (!isNaN(logId)) {
-                // Selected a specific log file by ID
-                const logEntry = logHistory.find((l: any) => l.id === logId);
-                if (logEntry) setSelectedMachine(selectedEquip);
-                setSelectedLogId(logId);
-                fetchLogErrors(logId);
-              } else {
-                // Selected a machine from filteredFleet
-                setSelectedMachine(val);
+              if (!val) {
                 setSelectedLogId(null);
                 setLoadedErrors(null);
+                setRawLogContent('');
+                setSelectedError('');
+                return;
+              }
+              const logId = parseInt(val);
+              if (!isNaN(logId)) {
+                const logEntry = logHistory.find((l: any) => l.id === logId);
+                const machine = selectedEquipment || fleet.find(item =>
+                  logEntry ? logMatchesEquipment(logEntry, item) : false
+                );
+                if (machine) {
+                  setSelectedMachine(machine.id);
+                  setSelectedEquip(machine.id);
+                }
+                setSelectedLogId(logId);
+                fetchLogErrors(logId);
               }
               setSelectedError('');
               setAiResult(null);
               setShowAiDiag(false);
             }}
+            disabled={availableLogs.length === 0}
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
-            {selectedEquip !== 'Tous' ? (
-              /* Show uploaded log files for selected equipment, most recent first */
-              [...logHistory]
-                .filter(log => (log.equipement || '').toLowerCase() === selectedEquipment?.machine.toLowerCase())
-                .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
-                .length > 0
-                ? [...logHistory]
-                    .filter(log => (log.equipement || '').toLowerCase() === selectedEquipment?.machine.toLowerCase())
-                    .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
-                    .map(log => (
-                      <option key={log.id} value={String(log.id)}>
-                        {log.filename} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
-                      </option>
-                    ))
-                : <option value={selectedEquip}>{selectedEquipment ? `${equipmentLabel(selectedEquipment)} — aucun log importé` : 'Aucun log importé'}</option>
-            ) : (
-              /* No equipment selected: show all machines from filtered fleet */
-              filteredFleet.map(m => (
-                <option key={m.id} value={m.id}>
-                  {equipmentLabel(m)} ({m.erreurs} err.)
-                </option>
-              ))
-            )}
+            <option value="">{availableLogs.length === 0 ? 'Aucun log importé' : '— Sélectionner un fichier log —'}</option>
+            {availableLogs.map(log => (
+              <option key={log.id} value={String(log.id)}>
+                {log.filename} — {log.equipement} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -1147,7 +1219,7 @@ export default function SupervisionPage() {
             <History className="w-5 h-5 text-savia-accent" />
             <span className="font-semibold">Logs enregistrés</span>
             <span className="px-2 py-0.5 rounded-full bg-savia-accent/20 text-savia-accent text-xs font-bold">
-              {importEquip ? logHistory.filter((l: any) => l.equipement === importEquip.trim()).length : logHistory.length}
+              {importEquip ? logHistory.filter((log: any) => importEquipment ? logMatchesEquipment(log, importEquipment) : false).length : logHistory.length}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -1167,18 +1239,18 @@ export default function SupervisionPage() {
           {importEquip && (
             <div className="flex items-center gap-2 px-3 py-2 mb-2 rounded-lg bg-savia-accent/5 border border-savia-accent/20">
               <Server className="w-3.5 h-3.5 text-savia-accent" />
-              <span className="text-xs font-semibold text-savia-accent">Filtré : {importEquip}</span>
+              <span className="text-xs font-semibold text-savia-accent">Filtré : {importEquipmentName}</span>
               <button onClick={() => setImportEquip('')} className="ml-auto text-xs text-savia-text-muted hover:text-red-400 transition-colors cursor-pointer">✕ Tout afficher</button>
             </div>
           )}
           {(() => {
             const filteredHistory = [...(logHistory)]
-              .filter((log: any) => !importEquip || log.equipement === importEquip.trim())
+              .filter((log: any) => !importEquip || (importEquipment ? logMatchesEquipment(log, importEquipment) : false))
               .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
             return filteredHistory.length === 0 ? (
               <div className="text-center py-8 text-savia-text-muted">
                 <History className="w-10 h-10 mx-auto mb-2 text-savia-text-dim" />
-                <p className="text-sm">{importEquip ? `Aucun log pour ${importEquip}.` : 'Aucun log enregistré.'}</p>
+                <p className="text-sm">{importEquip ? `Aucun log pour ${importEquipmentName}.` : 'Aucun log enregistré.'}</p>
                 <p className="text-xs mt-1">Importez un fichier log pour le sauvegarder.</p>
               </div>
             ) : (
@@ -1334,10 +1406,10 @@ export default function SupervisionPage() {
               </tr>
             </thead>
             <tbody>
-              {[...filteredFleet].sort((a, b) => {
+              {[...monitoredFleet].sort((a, b) => {
                 // Sort: machines with recent logs first, then by err count
-                const aLog = logHistory.find((l: any) => (l.equipement||"").toLowerCase() === a.machine.toLowerCase());
-                const bLog = logHistory.find((l: any) => (l.equipement||"").toLowerCase() === b.machine.toLowerCase());
+                const aLog = logHistory.find((log: any) => logMatchesEquipment(log, a));
+                const bLog = logHistory.find((log: any) => logMatchesEquipment(log, b));
                 const aDate = aLog ? new Date(aLog.uploaded_at || 0).getTime() : 0;
                 const bDate = bLog ? new Date(bLog.uploaded_at || 0).getTime() : 0;
                 if (bDate !== aDate) return bDate - aDate; // most recent first
@@ -1385,6 +1457,13 @@ export default function SupervisionPage() {
                   </td>
                 </tr>
               ))}
+              {monitoredFleet.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-savia-text-muted">
+                    Aucun équipement avec un fichier log importé.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1397,8 +1476,8 @@ export default function SupervisionPage() {
             <AlertTriangle className="w-5 h-5" />
             {critCount} machine(s) en état CRITIQUE
           </div>
-          {fleet.filter(m => m.etat === 'CRITIQUE').map(m => (
-            <div key={m.machine} className="text-sm text-savia-text-muted ml-7 mt-1">
+          {monitoredFleet.filter(m => m.etat === 'CRITIQUE').map(m => (
+            <div key={m.id} className="text-sm text-savia-text-muted ml-7 mt-1">
               <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5 text-red-400" /> <strong>{m.machine}</strong> — Code <code className="text-red-400">{m.errors[0]?.code}</code> : {m.errors[0]?.message}
             </div>
           ))}
