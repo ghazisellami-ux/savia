@@ -736,6 +736,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS logs_uploaded (
             id SERIAL PRIMARY KEY,
             equipement TEXT NOT NULL,
+            equipement_id INTEGER,
+            client TEXT DEFAULT '',
             filename TEXT NOT NULL,
             s3_key TEXT DEFAULT '',
             content_hash TEXT DEFAULT '',
@@ -780,9 +782,17 @@ def init_db():
         );
         """)
         
+        # These columns must exist before creating their index on databases
+        # created by an earlier SAVIA release.
+        conn.execute("ALTER TABLE logs_uploaded ADD COLUMN IF NOT EXISTS equipement_id INTEGER")
+        conn.execute("ALTER TABLE logs_uploaded ADD COLUMN IF NOT EXISTS client TEXT DEFAULT ''")
+
         # Ajouter les indexes pour améliorer les performances
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_logs_uploaded_equipement ON logs_uploaded(equipement);
+        """)
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_uploaded_equipement_id ON logs_uploaded(equipement_id);
         """)
         conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_logs_uploaded_uploaded_at ON logs_uploaded(uploaded_at DESC);
@@ -887,6 +897,8 @@ def init_db():
         _safe_add_column("pieces_rechange", "data_confidence", "VARCHAR(20)", "'INSUFFICIENT'")
         
         _safe_add_column("logs_uploaded", "parsed_errors", "TEXT", "NULL")
+        _safe_add_column("logs_uploaded", "equipement_id", "INTEGER", "NULL")
+        _safe_add_column("logs_uploaded", "client", "TEXT", "''")
         
         # Migration: Ghost entry tracking for reschedule feature
         _safe_add_column("planning_maintenance", "is_ghost", "BOOLEAN", "false")

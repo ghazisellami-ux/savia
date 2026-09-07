@@ -596,6 +596,8 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
     """Upload un fichier log : contenu vers S3/MinIO, métadonnées vers PostgreSQL."""
     import hashlib
     equipement = body.get("equipement", "")
+    equipement_id = body.get("equipement_id")
+    client = body.get("client", "")
     filename = body.get("filename", "unknown.log")
     content = body.get("content", "")
     nb_errors = body.get("nb_errors", 0)
@@ -625,6 +627,14 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
                         "UPDATE logs_uploaded SET parsed_errors = %s WHERE id = %s AND (parsed_errors IS NULL OR parsed_errors = '')",
                         (parsed_errors_str, eid)
                     )
+                if equipement_id is not None or client:
+                    conn.execute(
+                        """UPDATE logs_uploaded
+                           SET equipement_id = COALESCE(%s, equipement_id),
+                               client = CASE WHEN %s != '' THEN %s ELSE client END
+                           WHERE id = %s""",
+                        (equipement_id, client, client, eid)
+                    )
                 return {"ok": True, "message": "Ce log a déjà été enregistré", "id": eid, "duplicate": True}
 
             # Upload contenu vers S3/MinIO
@@ -643,9 +653,9 @@ def upload_log(body: dict, user: dict = Depends(_verify_token)):
 
             # Métadonnées en PostgreSQL
             cursor = conn.execute(
-                """INSERT INTO logs_uploaded (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                (equipement, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
+                """INSERT INTO logs_uploaded (equipement, equipement_id, client, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, uploaded_by, parsed_errors)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (equipement, equipement_id, client, filename, s3_key, content_hash, size_bytes, nb_errors, nb_critiques, username, parsed_errors_str)
             )
             new_row = cursor.fetchone()
             new_id = (new_row["id"] if isinstance(new_row, dict) else new_row[0]) if new_row else None
@@ -673,17 +683,17 @@ def list_logs(equipement: str = None, user: dict = Depends(_verify_token)):
         with get_db() as conn:
             if equipement:
                 rows = conn.execute(
-                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = %s ORDER BY uploaded_at DESC",
+                    "SELECT id, equipement, equipement_id, client, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded WHERE equipement = %s ORDER BY uploaded_at DESC",
                     (equipement,)
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, equipement, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded ORDER BY uploaded_at DESC"
+                    "SELECT id, equipement, equipement_id, client, filename, s3_key, size_bytes, nb_errors, nb_critiques, uploaded_by, uploaded_at FROM logs_uploaded ORDER BY uploaded_at DESC"
                 ).fetchall()
             def _row(r):
                 if isinstance(r, dict):
-                    return {"id": r.get("id"), "equipement": r.get("equipement"), "filename": r.get("filename"), "s3_key": r.get("s3_key"), "size_bytes": r.get("size_bytes"), "nb_errors": r.get("nb_errors"), "nb_critiques": r.get("nb_critiques"), "uploaded_by": r.get("uploaded_by"), "uploaded_at": str(r.get("uploaded_at", ""))}
-                return {"id": r[0], "equipement": r[1], "filename": r[2], "s3_key": r[3], "size_bytes": r[4], "nb_errors": r[5], "nb_critiques": r[6], "uploaded_by": r[7], "uploaded_at": str(r[8])}
+                    return {"id": r.get("id"), "equipement": r.get("equipement"), "equipement_id": r.get("equipement_id"), "client": r.get("client"), "filename": r.get("filename"), "s3_key": r.get("s3_key"), "size_bytes": r.get("size_bytes"), "nb_errors": r.get("nb_errors"), "nb_critiques": r.get("nb_critiques"), "uploaded_by": r.get("uploaded_by"), "uploaded_at": str(r.get("uploaded_at", ""))}
+                return {"id": r[0], "equipement": r[1], "equipement_id": r[2], "client": r[3], "filename": r[4], "s3_key": r[5], "size_bytes": r[6], "nb_errors": r[7], "nb_critiques": r[8], "uploaded_by": r[9], "uploaded_at": str(r[10])}
             return [_row(r) for r in rows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
