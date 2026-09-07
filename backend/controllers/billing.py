@@ -138,7 +138,7 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
         params = (case_id,)
     rows = conn.execute(
         f"""SELECT bc.id, bc.intervention_id, bc.request_id, bc.merged_into_case_id,
-                   COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), e.client, '') AS client,
+                   COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, ''), e.client, '') AS client,
                    COALESCE(NULLIF(bc.equipment, ''), i.machine, '') AS equipment,
                    bc.owner_username, bc.currency, bc.case_state, bc.block_reason,
                    bc.contract_id, bc.coverage_status, bc.coverage_reason,
@@ -183,8 +183,17 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
                     NULLIF(BTRIM(COALESCE(i.pieces_utilisees, '')), '') IS NOT NULL) AS has_parts
             FROM billing_cases bc
             LEFT JOIN interventions i ON i.id = bc.intervention_id
+            LEFT JOIN LATERAL (
+                SELECT di.client
+                FROM demandes_intervention di
+                WHERE di.id = bc.request_id OR di.intervention_id = bc.intervention_id
+                ORDER BY CASE WHEN di.id = bc.request_id THEN 0 ELSE 1 END, di.id DESC
+                LIMIT 1
+            ) d ON TRUE
+            LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
             LEFT JOIN equipements e
-              ON LOWER(e.nom) = LOWER(i.machine) AND LOWER(e.client) = LOWER(i.client)
+              ON LOWER(e.nom) = LOWER(i.machine)
+             AND LOWER(e.client) = LOWER(COALESCE(NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, '')))
             LEFT JOIN contrats c ON c.id=bc.contract_id
             {where}
             ORDER BY bc.updated_at DESC, bc.id DESC""",

@@ -259,6 +259,7 @@ export default function FacturationPage() {
   const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState('');
+  const [equipmentFilter, setEquipmentFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [selected, setSelected] = useState<BillingCase | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -362,10 +363,24 @@ export default function FacturationPage() {
     setNewCaseForm(value => ({ ...value, client, equipment: matching.length === 1 ? matching[0].name : '' }));
   };
 
+  const availableEquipmentFilters = useMemo(() => {
+    const selectedClient = clientFilter.toLocaleLowerCase('fr');
+    const equipmentNames = [
+      ...equipmentOptions
+        .filter(item => !selectedClient || item.client.toLocaleLowerCase('fr') === selectedClient)
+        .map(item => item.name),
+      ...cases
+        .filter(item => !selectedClient || item.client.toLocaleLowerCase('fr') === selectedClient)
+        .map(item => item.equipment),
+    ].map(value => value.trim()).filter(Boolean);
+    return [...new Set(equipmentNames)].sort((a, b) => a.localeCompare(b, 'fr'));
+  }, [cases, clientFilter, equipmentOptions]);
+
   const filteredCases = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return cases.filter(item => {
       if (clientFilter && item.client !== clientFilter) return false;
+      if (equipmentFilter && item.equipment !== equipmentFilter) return false;
       if (statusFilter === 'overdue' && !item.overdue) return false;
       if (statusFilter === 'to_invoice' && !['delivery_note_pending', 'invoice_pending'].includes(item.status)) return false;
       if (statusFilter === 'waiting_payment' && !['payment_pending', 'partial_payment'].includes(item.status)) return false;
@@ -374,7 +389,7 @@ export default function FacturationPage() {
       const invoiceRef = item.steps.invoice?.reference || '';
       return `${item.id} ${item.client} ${item.equipment} ${item.technicien || ''} ${invoiceRef}`.toLowerCase().includes(needle);
     });
-  }, [cases, clientFilter, search, statusFilter]);
+  }, [cases, clientFilter, equipmentFilter, search, statusFilter]);
 
   const kpis = useMemo(() => ({
     toInvoice: cases.filter(item => item.status === 'invoice_pending' || item.status === 'delivery_note_pending').length,
@@ -587,7 +602,7 @@ export default function FacturationPage() {
         );
       }
       return (
-        <Link href="/sav" className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-3 py-2 text-xs font-bold text-violet-300 hover:bg-violet-500/20">
+        <Link href={`/sav?intervention_id=${item.intervention_id}`} className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/10 px-3 py-2 text-xs font-bold text-violet-300 hover:bg-violet-500/20">
           {NEXT_ACTION[item.next_step]} <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       );
@@ -636,17 +651,18 @@ export default function FacturationPage() {
         ))}
       </div>
 
-      <div className="glass flex flex-wrap items-center gap-3 rounded-xl p-3">
-        <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-savia-text-dim" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Client, équipement, technicien, référence…" className={`${INPUT} pl-9`} /></div>
-        <select value={clientFilter} onChange={event => setClientFilter(event.target.value)} className={`${INPUT} w-auto min-w-[180px]`}><option value="">Tous les clients</option>{[...new Set([...clients, ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
-        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={`${INPUT} w-auto min-w-[210px]`}>
+      <div className="glass grid grid-cols-1 gap-3 rounded-xl p-3 xl:grid-cols-[minmax(260px,1fr)_minmax(180px,0.55fr)_minmax(180px,0.55fr)_minmax(210px,0.65fr)_auto]">
+        <div className="relative min-w-0"><Search className="absolute left-3 top-2.5 h-4 w-4 text-savia-text-dim" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Client, équipement, technicien, référence…" className={`${INPUT} pl-9`} /></div>
+        <select value={clientFilter} onChange={event => { setClientFilter(event.target.value); setEquipmentFilter(''); }} className={`${INPUT} min-w-0`}><option value="">Tous les clients</option>{[...new Set([...clients, ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
+        <select value={equipmentFilter} onChange={event => setEquipmentFilter(event.target.value)} disabled={availableEquipmentFilters.length === 0} className={`${INPUT} min-w-0 disabled:cursor-not-allowed disabled:opacity-50`}><option value="">Tous les équipements</option>{availableEquipmentFilters.map(equipment => <option key={equipment}>{equipment}</option>)}</select>
+        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={`${INPUT} min-w-0`}>
           <option value="">Tous les statuts</option>
           <option value="to_invoice">Toutes les actions avant facture</option>
           <option value="waiting_payment">Tous les paiements attendus</option>
           {[...new Map(cases.map(item => [item.status, item.status_label])).entries()].map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           <option value="overdue">Paiement en retard</option>
         </select>
-        {(search || clientFilter || statusFilter) && <button onClick={() => { setSearch(''); setClientFilter(''); setStatusFilter(''); }} className="text-xs font-semibold text-savia-accent">Réinitialiser</button>}
+        {(search || clientFilter || equipmentFilter || statusFilter) && <button onClick={() => { setSearch(''); setClientFilter(''); setEquipmentFilter(''); setStatusFilter(''); }} className="text-xs font-semibold text-savia-accent">Réinitialiser</button>}
       </div>
 
       <div className="glass overflow-hidden rounded-xl">
@@ -766,7 +782,10 @@ function Progress({ item }: { item: BillingCase }) {
     { key: 'quote', done: stepCompleted(item.steps.quote), title: 'Devis' },
     { key: 'purchase_order', done: stepCompleted(item.steps.purchase_order), title: 'BC' },
     { key: 'intervention', done: Boolean(item.intervention_closed_at), active: Boolean(item.intervention_started_at), title: 'Interv.' },
-    { key: 'delivery_note', done: !item.has_parts || stepCompleted(item.steps.delivery_note), title: 'BL' },
+    // Une intervention non créée ou non clôturée ne permet pas encore de
+    // déterminer si un BL sera nécessaire. Le BL n'est donc validé
+    // automatiquement sans pièces qu'après la clôture.
+    { key: 'delivery_note', done: Boolean(item.intervention_closed_at) && (!item.has_parts || stepCompleted(item.steps.delivery_note)), title: 'BL' },
     { key: 'invoice', done: stepCompleted(item.steps.invoice), title: 'Facture' },
     { key: 'payment', done: item.status === 'paid', active: item.paid_amount > 0, title: 'Paiement' },
   ];
@@ -846,11 +865,17 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
     option.client.toLowerCase() === item.client.toLowerCase()
     && (!item.equipment || option.machine.toLowerCase() === item.equipment.toLowerCase())
   );
+  const assignedTechnicians = [...new Set(
+    (item.intervention_technicians || [])
+      .map(technician => technician.name.trim())
+      .filter(Boolean),
+  )];
+  const assignedTechnicianLabel = assignedTechnicians.join(', ') || item.technicien || 'non assigné';
   const coverageLocked = item.coverage_status === 'covered' || item.coverage_status === 'review';
   return <div className="max-h-[78vh] space-y-5 overflow-y-auto pr-1">
     {item.reused_existing_case && <div className="flex items-start gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-200"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Ce dossier était déjà en cours pour cet équipement. Il a été ouvert à la place de créer un doublon.</span></div>}
     {canResolveDuplicates && duplicateCases.map(duplicate => <div key={duplicate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><div><div className="text-sm font-bold text-amber-200">Doublon potentiel avec le dossier #{duplicate.id}</div><p className="mt-1 text-xs text-savia-text-muted">Même client et même équipement avec un cycle technique encore ouvert.</p></div><button type="button" onClick={() => onResolveDuplicate(item, duplicate)} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400">Résoudre le doublon</button></div>)}
-    <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-savia-border bg-savia-surface-hover/50 p-4"><div><div className="flex items-center gap-2 font-bold"><Building2 className="h-4 w-4 text-savia-accent" />{item.client}</div><div className="mt-1 text-sm text-savia-text-muted">{item.equipment || 'Équipement non renseigné'} {item.intervention_id && `· Intervention #${item.intervention_id}`}</div><div className="mt-1 text-xs text-savia-text-dim">Responsable : {item.owner_username || 'non assigné'}</div></div><div className="text-right"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status]}`}>{item.status_label}</span>{item.block_reason && <div className="mt-2 max-w-xs text-xs text-red-300">{item.block_reason}</div>}</div></div>
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-savia-border bg-savia-surface-hover/50 p-4"><div><div className="flex items-center gap-2 font-bold"><Building2 className="h-4 w-4 text-savia-accent" />{item.client}</div><div className="mt-1 text-sm text-savia-text-muted">{item.equipment || 'Équipement non renseigné'} {item.intervention_id && `· Intervention #${item.intervention_id}`}</div><div className="mt-1 text-xs text-savia-text-dim">Technicien assigné : {assignedTechnicianLabel}</div>{item.owner_username && <div className="mt-1 text-xs text-savia-text-dim">Responsable facturation : {item.owner_username}</div>}</div><div className="text-right"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status]}`}>{item.status_label}</span>{item.block_reason && <div className="mt-2 max-w-xs text-xs text-red-300">{item.block_reason}</div>}</div></div>
 
     {item.intervention_closed_at && <section className={`rounded-xl border p-4 ${item.coverage_status === 'covered' ? 'border-emerald-500/30 bg-emerald-500/5' : item.coverage_status === 'review' ? 'border-fuchsia-500/30 bg-fuchsia-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2 font-bold">{item.coverage_status === 'review' ? <AlertTriangle className="h-4 w-4 text-fuchsia-300" /> : <CheckCircle2 className="h-4 w-4 text-emerald-300" />}{item.coverage_status_label}</div><div className="mt-1 text-xs text-savia-text-muted">{item.contract_id ? `Contrat #${item.contract_id}${item.contract_type ? ` · ${item.contract_type}` : ''}` : 'Aucun contrat applicable'}</div><p className="mt-2 text-sm">{item.coverage_reason || 'Décision contractuelle non renseignée.'}</p></div><button type="button" onClick={() => onReassess(item)} className="rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Recalculer</button></div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">{[['Coût de revient MO', item.labor_amount || 0], ['Coût de revient pièces', item.parts_amount || 0], ['Coût MO hors couverture', item.uncovered_labor_cost || 0], ['Coût pièces hors couverture', item.uncovered_parts_cost || 0]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-savia-surface-hover/60 p-2.5"><div className="text-[11px] text-savia-text-muted">{label}</div><div className="mt-1 font-black">{money(Number(value), item.currency)}</div></div>)}</div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-savia-border/60 pt-3"><span className="text-sm font-semibold">Coût de revient hors couverture : {money(item.uncovered_total_cost || 0, item.currency)}</span><strong className="text-sm text-savia-accent">Prix client à renseigner dans le devis ou la facture</strong></div></section>}
 
