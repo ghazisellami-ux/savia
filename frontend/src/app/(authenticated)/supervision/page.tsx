@@ -22,8 +22,11 @@ interface LogEntry {
 }
 
 interface MachineFleet {
+  id: string;
   machine: string;
   client: string;
+  modele: string;
+  numeroSerie: string;
   chemin: string;
   etat: 'OK' | 'ATTENTION' | 'CRITIQUE';
   erreurs: number;
@@ -72,43 +75,33 @@ const AI_FALLBACK: AiDiagnostic = {
 
 function mapEquipToFleet(items: any[]): MachineFleet[] {
   return items.map((item: any, i: number) => {
-    const health = item.Score_Sante || item.health || 80;
+    const health = item.Score_Sante || item.health || 100;
     const etat: 'OK' | 'ATTENTION' | 'CRITIQUE' = health >= 80 ? 'OK' : health >= 50 ? 'ATTENTION' : 'CRITIQUE';
-    const errCount = item.nb_erreurs || item.erreurs || (etat === 'CRITIQUE' ? 8 : etat === 'ATTENTION' ? 4 : 1);
-    const critCount = etat === 'CRITIQUE' ? Math.ceil(errCount / 3) : etat === 'ATTENTION' ? 1 : 0;
-    
-    // Simulate error objects if there are none
-    let simulatedErrors: any[] = [];
-    if (!item.errors || item.errors.length === 0) {
-      if (etat === 'CRITIQUE') {
-        simulatedErrors = [
-          { code: `ERR-HV-0${(i%9)+1}`, message: 'Haute tension instable - variation détectée', statut: 'Non résolu', type: 'Hardware', frequence: 5 },
-          { code: `ERR-TMP-0${(i%3)+1}`, message: 'Surchauffe tube détectée', statut: 'Monitoring', type: 'System', frequence: 3 }
-        ];
-      } else if (etat === 'ATTENTION') {
-        simulatedErrors = [
-          { code: `ERR-CAL-0${(i%5)+1}`, message: 'Calibration capteur requise hors tolérance', statut: 'Non résolu', type: 'Software', frequence: 2 }
-        ];
-      } else if (errCount > 0) {
-        simulatedErrors = [
-          { code: `WARN-0${(i%5)+1}`, message: 'Micro-coupure réseau passée', statut: 'Résolu', type: 'Network', frequence: 1 }
-        ];
-      }
-    } else {
-      simulatedErrors = item.errors;
-    }
-
     const clientVal = item.Client || item.client || '';
+    const machine = item.Nom || item.nom || 'Équipement';
+    const modele = item.Modele || item.modele || item.model || '';
+    const numeroSerie = item.NumSerie || item.num_serie || item.numero_serie || item.serial_number || '';
     return {
-      machine: item.Nom || item.nom || 'Équipement',
+      id: String(item.id || item.ID || `${clientVal}-${machine}-${numeroSerie || i}`),
+      machine,
       client: clientVal,
-      chemin: `logs/${(item.Nom || 'equip').replace(/\s+/g, '_')}.log`,
+      modele,
+      numeroSerie,
+      chemin: '',
       etat,
-      erreurs: errCount,
-      critiques: critCount,
-      errors: simulatedErrors,
+      erreurs: 0,
+      critiques: 0,
+      errors: [],
     };
   });
+}
+
+function equipmentLabel(machine: Pick<MachineFleet, 'machine' | 'modele' | 'numeroSerie'>) {
+  const details = [
+    machine.modele && `Modèle : ${machine.modele}`,
+    machine.numeroSerie && `N° série : ${machine.numeroSerie}`,
+  ].filter(Boolean);
+  return details.length > 0 ? `${machine.machine} — ${details.join(' · ')}` : machine.machine;
 }
 
 // --- Component ---
@@ -158,8 +151,8 @@ export default function SupervisionPage() {
       console.warn('S3 delete skipped (no logs on S3 or S3 unavailable)', err);
     }
     // Always remove from local fleet state
-    setFleet(prev => prev.filter(m => m.machine !== machine.machine));
-    if (selectedMachine === machine.machine) {
+    setFleet(prev => prev.filter(m => m.id !== machine.id));
+    if (selectedMachine === machine.id) {
       setSelectedMachine('');
       setSelectedError('');
       setAiResult(null);
@@ -186,7 +179,7 @@ export default function SupervisionPage() {
         const mapped = mapEquipToFleet(equipRes);
         setFleet(mapped);
         setRawEquipments(equipRes);
-        if (mapped.length > 0) setSelectedMachine(mapped[0].machine);
+        if (mapped.length > 0) setSelectedMachine(mapped[0].id);
         const names = clientRes.map((c: any) => c.Nom || c.nom || '').filter(Boolean);
         setClientList(names.length > 0 ? names : ['Client 1']);
       } catch (err) {
@@ -225,7 +218,7 @@ export default function SupervisionPage() {
   // filteredFleet: filter by client (via m.client) then by selected equip
   const filteredFleet = useMemo(() => {
     return machinesForClient.filter(m => {
-      if (selectedEquip !== 'Tous' && m.machine !== selectedEquip) return false;
+      if (selectedEquip !== 'Tous' && m.id !== selectedEquip) return false;
       return true;
     });
   }, [machinesForClient, selectedEquip]);
@@ -239,7 +232,7 @@ export default function SupervisionPage() {
       const machineLogs = logHistory.filter(
         (l: any) => (l.equipement || '').toLowerCase().trim() === m.machine.toLowerCase().trim()
       );
-      if (machineLogs.length === 0) return m; // no log for this machine, keep simulated
+      if (machineLogs.length === 0) return m;
       const latestLog = machineLogs.sort(
         (a: any, b: any) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime()
       )[0];
@@ -247,19 +240,19 @@ export default function SupervisionPage() {
       const nbCritiques = latestLog.nb_critiques || 0;
       const newEtat: 'OK' | 'ATTENTION' | 'CRITIQUE' =
         nbCritiques > 0 ? 'CRITIQUE' : nbErrors > 0 ? 'ATTENTION' : 'OK';
-      return { ...m, erreurs: nbErrors, critiques: nbCritiques, etat: newEtat };
+      return { ...m, chemin: latestLog.filename || '', erreurs: nbErrors, critiques: nbCritiques, etat: newEtat };
     }));
   }, [fleet, logHistory, logMergeApplied]);
 
   // Auto-select first machine from machinesForClient when client filter changes
   useEffect(() => {
     if (machinesForClient.length > 0) {
-      const currentIsValid = selectedClient === 'Tous' || machinesForClient.some(m => m.machine === selectedMachine);
+      const currentIsValid = selectedClient === 'Tous' || machinesForClient.some(m => m.id === selectedMachine);
       if (!currentIsValid) {
         // Find first machine in fleet for this client
         const firstMatch = machinesForClient[0];
         if (firstMatch) {
-          setSelectedMachine(firstMatch.machine);
+          setSelectedMachine(firstMatch.id);
           setSelectedError('');
           setAiResult(null);
           setShowAiDiag(false);
@@ -273,12 +266,13 @@ export default function SupervisionPage() {
 
   // Use filteredFleet[0] as fallback to stay within client context
   const currentMachine = (
-    filteredFleet.find(m => m.machine === selectedMachine) ||
-    fleet.find(m => m.machine === selectedMachine) ||
+    filteredFleet.find(m => m.id === selectedMachine) ||
+    fleet.find(m => m.id === selectedMachine) ||
     filteredFleet[0] ||
     fleet[0]
   );
-  // Single source of truth: use real log errors if available, else simulated fleet errors
+  const selectedEquipment = fleet.find(m => m.id === selectedEquip);
+  // Single source of truth: imported log errors when available, otherwise no errors.
   const displayErrors = loadedErrors ?? (currentMachine?.errors ?? []);
 
   useEffect(() => {
@@ -540,21 +534,21 @@ export default function SupervisionPage() {
       return;
     }
     // Find most recent log for this equipment
-    const equip = selectedEquip.toLowerCase();
+    const equip = selectedEquipment?.machine.toLowerCase() || '';
     const matchingLogs = logHistory
       .filter((l: any) => (l.equipement || '').toLowerCase() === equip)
       .sort((a: any, b: any) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime());
     if (matchingLogs.length > 0) {
       setSelectedLogId(matchingLogs[0].id);
-      setSelectedMachine(selectedEquip); // set machine name for currentMachine lookup
+      setSelectedMachine(selectedEquip);
       fetchLogErrors(matchingLogs[0].id);
     } else {
       setLoadedErrors(null);
       setRawLogContent('');
       setSelectedLogId(null);
-      setSelectedMachine(selectedEquip); // still point to the equip even without logs
+      setSelectedMachine(selectedEquip);
     }
-  }, [selectedEquip, logHistory]);
+  }, [selectedEquip, selectedEquipment, logHistory]);
 
   // Fetch solution from knowledge base when error is selected
   useEffect(() => {
@@ -593,7 +587,8 @@ export default function SupervisionPage() {
         };
       }));
       // Select this machine and its first real error
-      setSelectedMachine(importEquipTrimmed);
+      const importedMachine = fleet.find(m => m.machine.toLowerCase() === importEquipTrimmed.toLowerCase());
+      if (importedMachine) setSelectedMachine(importedMachine.id);
       const firstRealError = parsedErrors.find(e => e.statut !== 'OK');
       if (firstRealError) {
         setSelectedError(firstRealError.code);
@@ -720,7 +715,10 @@ export default function SupervisionPage() {
                     : rawEquipments
                   ).map((eq: any) => {
                     const nm = (eq.Nom || eq.nom || '').trim();
-                    return <option key={eq.id || nm} value={nm}>{nm}</option>;
+                    const modele = eq.Modele || eq.modele || eq.model || '';
+                    const numeroSerie = eq.NumSerie || eq.num_serie || eq.numero_serie || eq.serial_number || '';
+                    const details = [modele && `Modèle : ${modele}`, numeroSerie && `N° série : ${numeroSerie}`].filter(Boolean);
+                    return <option key={eq.id || eq.ID || `${nm}-${numeroSerie}`} value={nm}>{details.length ? `${nm} — ${details.join(' · ')}` : nm}</option>;
                   })}
                 </select>
               </div>
@@ -791,7 +789,7 @@ export default function SupervisionPage() {
             className="w-full bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40"
           >
             <option value="Tous">Tous les équipements</option>
-            {machinesForClient.map(m => <option key={m.machine} value={m.machine}>{m.machine}</option>)}
+            {machinesForClient.map(m => <option key={m.id} value={m.id}>{equipmentLabel(m)}</option>)}
           </select>
 
         </div>
@@ -808,7 +806,7 @@ export default function SupervisionPage() {
               if (!isNaN(logId)) {
                 // Selected a specific log file by ID
                 const logEntry = logHistory.find((l: any) => l.id === logId);
-                if (logEntry) setSelectedMachine(logEntry.equipement || selectedEquip);
+                if (logEntry) setSelectedMachine(selectedEquip);
                 setSelectedLogId(logId);
                 fetchLogErrors(logId);
               } else {
@@ -826,23 +824,23 @@ export default function SupervisionPage() {
             {selectedEquip !== 'Tous' ? (
               /* Show uploaded log files for selected equipment, most recent first */
               [...logHistory]
-                .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
+                .filter(log => (log.equipement || '').toLowerCase() === selectedEquipment?.machine.toLowerCase())
                 .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                 .length > 0
                 ? [...logHistory]
-                    .filter(log => (log.equipement || '').toLowerCase() === selectedEquip.toLowerCase())
+                    .filter(log => (log.equipement || '').toLowerCase() === selectedEquipment?.machine.toLowerCase())
                     .sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())
                     .map(log => (
                       <option key={log.id} value={String(log.id)}>
                         {log.filename} ({log.uploaded_at ? new Date(log.uploaded_at).toLocaleDateString('fr-FR') : '—'})
                       </option>
                     ))
-                : <option value={selectedEquip}>{selectedEquip} — aucun log importé</option>
+                : <option value={selectedEquip}>{selectedEquipment ? `${equipmentLabel(selectedEquipment)} — aucun log importé` : 'Aucun log importé'}</option>
             ) : (
               /* No equipment selected: show all machines from filtered fleet */
               filteredFleet.map(m => (
-                <option key={m.machine} value={m.machine}>
-                  {m.machine} ({m.erreurs} err.)
+                <option key={m.id} value={m.id}>
+                  {equipmentLabel(m)} ({m.erreurs} err.)
                 </option>
               ))
             )}
@@ -1201,8 +1199,11 @@ export default function SupervisionPage() {
                       <tr key={log.id}
                         onClick={() => {
                           const equip = (log.equipement || '').trim();
-                          setSelectedMachine(equip);
-                          setSelectedEquip(equip);
+                          const machine = fleet.find(m => m.machine.toLowerCase() === equip.toLowerCase());
+                          if (machine) {
+                            setSelectedMachine(machine.id);
+                            setSelectedEquip(machine.id);
+                          }
                           setSelectedLogId(log.id);
                           setSelectedError('');
                           setAiResult(null);
@@ -1224,8 +1225,11 @@ export default function SupervisionPage() {
                           <button
                             onClick={() => {
                               const equip = (log.equipement || '').trim();
-                              setSelectedMachine(equip);
-                              setSelectedEquip(equip);
+                              const machine = fleet.find(m => m.machine.toLowerCase() === equip.toLowerCase());
+                              if (machine) {
+                                setSelectedMachine(machine.id);
+                                setSelectedEquip(machine.id);
+                              }
                               setSelectedLogId(log.id);
                               setSelectedError('');
                               setAiResult(null);
@@ -1338,13 +1342,13 @@ export default function SupervisionPage() {
                 const bDate = bLog ? new Date(bLog.uploaded_at || 0).getTime() : 0;
                 if (bDate !== aDate) return bDate - aDate; // most recent first
                 return b.erreurs - a.erreurs; // then by error count
-              }).map((m, i) => (
+              }).map(m => (
                 <tr
-                  key={m.machine}
+                  key={m.id}
                   className={`border-b border-savia-border/50 cursor-pointer transition-colors
-                    ${selectedMachine === m.machine ? 'bg-savia-accent/5' : 'hover:bg-savia-surface-hover/50'}`}
+                    ${selectedMachine === m.id ? 'bg-savia-accent/5' : 'hover:bg-savia-surface-hover/50'}`}
                   onClick={() => {
-                    setSelectedMachine(m.machine);
+                    setSelectedMachine(m.id);
                     setSelectedError('');
                     setAiResult(null);
                     setShowAiDiag(false);
@@ -1353,10 +1357,14 @@ export default function SupervisionPage() {
                   <td className="py-2.5 px-3 text-center text-lg">
                     {m.etat === 'OK' ? <CheckCircle2 className="w-5 h-5 mx-auto text-green-400" /> : m.etat === 'CRITIQUE' ? <AlertTriangle className="w-5 h-5 mx-auto text-red-500" /> : <Activity className="w-5 h-5 mx-auto text-yellow-400" />}
                   </td>
-                  <td className="py-2.5 px-3 font-bold">{m.machine}</td>
-                  <td className="py-2.5 px-3 text-savia-text-muted">{clientList[i % clientList.length]}</td>
+                  <td className="py-2.5 px-3 font-bold">{equipmentLabel(m)}</td>
+                  <td className="py-2.5 px-3 text-savia-text-muted">{m.client || 'Non renseigné'}</td>
                   <td className="py-2.5 px-3">
-                    <code className="text-xs bg-savia-bg px-2 py-0.5 rounded">{m.chemin.split('/').pop()}</code>
+                    {m.chemin ? (
+                      <code className="text-xs bg-savia-bg px-2 py-0.5 rounded">{m.chemin.split('/').pop()}</code>
+                    ) : (
+                      <span className="text-xs text-savia-text-muted">Aucun log importé</span>
+                    )}
                   </td>
                   <td className="py-2.5 px-3 text-center font-mono font-bold">{m.erreurs}</td>
                   <td className="py-2.5 px-3 text-center font-mono font-bold text-red-400">{m.critiques}</td>
