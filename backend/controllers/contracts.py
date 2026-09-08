@@ -1,6 +1,7 @@
 """Contract and compliance routes."""
 
 import json
+from urllib.parse import quote
 
 from api.runtime import (
     Depends,
@@ -50,6 +51,114 @@ from controllers.auth_dashboard import (
     logger,
 )
 
+MAX_CONTRACT_ATTACHMENTS = 10
+
+
+def _contract_attachment_records(conn, contrat_id: int) -> list[dict]:
+    """Return public metadata only; never expose the private storage key."""
+    rows = conn.execute(
+        """SELECT id, filename, content_type, size_bytes, created_at
+           FROM contrat_fichiers
+           WHERE contrat_id = %s
+           ORDER BY created_at, id""",
+        (contrat_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _attachment_response(content: bytes, content_type: str, filename: str):
+    from fastapi.responses import Response
+
+    # RFC 5987 preserves accented filenames while keeping the header ASCII.
+    encoded_name = quote(filename, safe="")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}"},
+    )
+
+
+async def _store_contrat_attachment(contrat_id: int, file: UploadFile, user: dict) -> dict:
+    """Validate, store and register one attachment without replacing others."""
+    if not _check_create_permission(user):
+        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+
+    validated = await read_validated_upload(file, "contrat")
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        duplicate = conn.execute(
+            """SELECT id, filename, content_type, size_bytes
+               FROM contrat_fichiers WHERE contrat_id = %s AND sha256 = %s""",
+            (contrat_id, validated.sha256),
+        ).fetchone()
+        if duplicate:
+            return {"ok": True, **dict(duplicate), "already_attached": True}
+        count = conn.execute(
+            "SELECT COUNT(*) AS count FROM contrat_fichiers WHERE contrat_id = %s",
+            (contrat_id,),
+        ).fetchone()["count"]
+        if count >= MAX_CONTRACT_ATTACHMENTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Un contrat ne peut pas contenir plus de {MAX_CONTRACT_ATTACHMENTS} pièces jointes",
+            )
+
+    from s3_storage import delete_file, upload_private_file
+
+    stored = upload_private_file(
+        validated.data,
+        category="contrats",
+        extension=validated.extension,
+        content_type=validated.content_type,
+        original_name=validated.display_name,
+        content_hash=validated.sha256,
+        metadata={"contract-id": contrat_id, "uploaded-by": user.get("sub", "unknown")},
+    )
+    if not stored:
+        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
+
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                """INSERT INTO contrat_fichiers
+                       (contrat_id, filename, storage_key, content_type, size_bytes, sha256, uploaded_by)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id, filename, content_type, size_bytes""",
+                (
+                    contrat_id,
+                    validated.display_name,
+                    stored["s3_key"],
+                    validated.content_type,
+                    stored["size_bytes"],
+                    validated.sha256,
+                    user.get("sub", "unknown"),
+                ),
+            ).fetchone()
+            # Keep the historical columns as a pointer to the first attachment
+            # for clients that still use the old singular endpoint.
+            conn.execute(
+                """UPDATE contrats
+                   SET fichier_contrat = CASE WHEN fichier_storage_key IS NULL THEN %s ELSE fichier_contrat END,
+                       fichier_storage_key = CASE WHEN fichier_storage_key IS NULL THEN %s ELSE fichier_storage_key END,
+                       fichier_content_type = CASE WHEN fichier_storage_key IS NULL THEN %s ELSE fichier_content_type END,
+                       fichier_size_bytes = CASE WHEN fichier_storage_key IS NULL THEN %s ELSE fichier_size_bytes END,
+                       fichier_sha256 = CASE WHEN fichier_storage_key IS NULL THEN %s ELSE fichier_sha256 END
+                   WHERE id = %s""",
+                (
+                    validated.display_name,
+                    stored["s3_key"],
+                    validated.content_type,
+                    stored["size_bytes"],
+                    validated.sha256,
+                    contrat_id,
+                ),
+            )
+        return {"ok": True, **dict(row), "already_attached": False}
+    except Exception:
+        delete_file(stored["s3_key"])
+        raise
+
+
 @app.get("/api/contrats")
 def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_token)):
     # Pour Lecteur : forcer le filtre par son client
@@ -60,7 +169,11 @@ def get_contrats(client: Optional[str] = None, user: dict = Depends(_verify_toke
     # Enrich each contract with its equipements array
     for record in records:
         contrat_id = record.get("id")
-        record["has_fichier"] = bool(record.get("fichier_storage_key"))
+        record["fichiers"] = []
+        if contrat_id:
+            with get_db() as conn:
+                record["fichiers"] = _contract_attachment_records(conn, contrat_id)
+        record["has_fichier"] = bool(record["fichiers"])
         # Never expose private object-storage keys or file hashes to clients.
         record.pop("fichier_storage_key", None)
         record.pop("fichier_sha256", None)
@@ -146,163 +259,128 @@ async def upload_contrat_file(
     file: UploadFile = File(...),
     user: dict = Depends(_verify_token),
 ):
-    """Attach a validated image or PDF to a contract."""
-    if not _check_create_permission(user):
-        raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    """Legacy singular endpoint; it now adds a file instead of replacing one."""
+    return await _store_contrat_attachment(contrat_id, file, user)
 
+
+@app.post("/api/contrats/{contrat_id}/fichiers")
+async def upload_contrat_attachment(
+    contrat_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(_verify_token),
+):
+    """Add one validated image or PDF to a contract."""
+    return await _store_contrat_attachment(contrat_id, file, user)
+
+
+@app.get("/api/contrats/{contrat_id}/fichiers")
+def list_contrat_attachments(contrat_id: int, user: dict = Depends(_verify_token)):
     with get_db() as conn:
         assert_resource_client_access(conn, "contrat", contrat_id, user)
-        previous = conn.execute(
-            """SELECT fichier_contrat, fichier_storage_key, fichier_content_type,
-                      fichier_size_bytes, fichier_sha256
-               FROM contrats WHERE id = %s""",
-            (contrat_id,),
+        return _contract_attachment_records(conn, contrat_id)
+
+
+@app.get("/api/contrats/{contrat_id}/fichiers/{fichier_id}")
+def download_contrat_attachment(contrat_id: int, fichier_id: int, user: dict = Depends(_verify_token)):
+    """Download one private contract attachment after authorization."""
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        row = conn.execute(
+            """SELECT filename, storage_key, content_type
+               FROM contrat_fichiers WHERE id = %s AND contrat_id = %s""",
+            (fichier_id, contrat_id),
         ).fetchone()
-    if not previous:
-        raise HTTPException(status_code=404, detail="Contrat non trouvé")
+    if not row:
+        raise HTTPException(status_code=404, detail="Pièce jointe introuvable")
 
-    validated = await read_validated_upload(file, "contrat")
-    # A retry after a lost HTTP response must be idempotent. If the exact
-    # content is already attached, do not create a second private object.
-    if previous.get("fichier_storage_key") and previous.get("fichier_sha256") == validated.sha256:
-        return {
-            "ok": True,
-            "filename": previous.get("fichier_contrat") or validated.display_name,
-            "content_type": previous.get("fichier_content_type") or validated.content_type,
-            "size_bytes": previous.get("fichier_size_bytes") or len(validated.data),
-            "already_attached": True,
-        }
-
-    from s3_storage import upload_private_file
-
-    stored = upload_private_file(
-        validated.data,
-        category="contrats",
-        extension=validated.extension,
-        content_type=validated.content_type,
-        original_name=validated.display_name,
-        content_hash=validated.sha256,
-        metadata={"contract-id": contrat_id, "uploaded-by": user.get("sub", "unknown")},
-    )
+    from s3_storage import download_private_file
+    stored = download_private_file(row["storage_key"])
     if not stored:
         raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
-
-    old_key = previous.get("fichier_storage_key") if previous else None
-    try:
-        with get_db() as conn:
-            conn.execute(
-                """UPDATE contrats
-                   SET fichier_contrat = %s,
-                       fichier_storage_key = %s,
-                       fichier_content_type = %s,
-                       fichier_size_bytes = %s,
-                       fichier_sha256 = %s
-                   WHERE id = %s""",
-                (
-                    validated.display_name,
-                    stored["s3_key"],
-                    validated.content_type,
-                    stored["size_bytes"],
-                    validated.sha256,
-                    contrat_id,
-                ),
-            )
-    except Exception:
-        from s3_storage import delete_file
-        delete_file(stored["s3_key"])
-        raise
-
-    if old_key and old_key != stored["s3_key"]:
-        from s3_storage import delete_file
-        if not delete_file(old_key):
-            logger.warning("Ancienne pièce jointe du contrat #%s non supprimée du stockage", contrat_id)
-
-    return {
-        "ok": True,
-        "filename": validated.display_name,
-        "content_type": validated.content_type,
-        "size_bytes": stored["size_bytes"],
-    }
+    content, detected_content_type = stored
+    return _attachment_response(
+        content,
+        row.get("content_type") or detected_content_type,
+        row.get("filename") or f"contrat_{contrat_id}",
+    )
 
 
 @app.get("/api/contrats/{contrat_id}/fichier")
 def download_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
-    """Download a contract attachment after client-scope authorization."""
-    from fastapi.responses import Response
-
+    """Legacy singular download endpoint, serving the first attachment."""
     with get_db() as conn:
         assert_resource_client_access(conn, "contrat", contrat_id, user)
         row = conn.execute(
-            """SELECT fichier_contrat, fichier_storage_key, fichier_content_type
-               FROM contrats WHERE id = %s""",
+            "SELECT id FROM contrat_fichiers WHERE contrat_id = %s ORDER BY created_at, id LIMIT 1",
             (contrat_id,),
         ).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Contrat non trouvé")
-    if not row.get("fichier_storage_key"):
         raise HTTPException(status_code=404, detail="Aucune pièce jointe pour ce contrat")
-
-    from s3_storage import download_private_file
-    stored = download_private_file(row["fichier_storage_key"])
-    if not stored:
-        raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
-    content, detected_content_type = stored
-    filename = row.get("fichier_contrat") or f"contrat_{contrat_id}"
-    content_type = row.get("fichier_content_type") or detected_content_type
-    return Response(
-        content=content,
-        media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
-    )
+    return download_contrat_attachment(contrat_id, row["id"], user)
 
 
-@app.delete("/api/contrats/{contrat_id}/fichier")
-def delete_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
-    """Delete a private contract attachment after RBAC and client-scope checks."""
+@app.delete("/api/contrats/{contrat_id}/fichiers/{fichier_id}")
+def delete_contrat_attachment(contrat_id: int, fichier_id: int, user: dict = Depends(_verify_token)):
+    """Delete exactly one attachment while leaving the other files intact."""
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
 
     with get_db() as conn:
-        # This check must happen before reading or deleting the private object.
         assert_resource_client_access(conn, "contrat", contrat_id, user)
         row = conn.execute(
-            """SELECT fichier_storage_key FROM contrats WHERE id = %s""",
-            (contrat_id,),
+            "SELECT storage_key FROM contrat_fichiers WHERE id = %s AND contrat_id = %s",
+            (fichier_id, contrat_id),
         ).fetchone()
-
-    storage_key = row.get("fichier_storage_key") if row else None
-    if not storage_key:
-        raise HTTPException(status_code=404, detail="Aucune pièce jointe pour ce contrat")
+    if not row:
+        raise HTTPException(status_code=404, detail="Pièce jointe introuvable")
 
     from s3_storage import delete_file
-    if not delete_file(storage_key):
+    if not delete_file(row["storage_key"]):
         raise HTTPException(status_code=503, detail="La suppression du fichier privé a échoué. Réessayez.")
 
-    try:
-        with get_db() as conn:
-            conn.execute(
-                """UPDATE contrats
-                   SET fichier_contrat = NULL,
-                       fichier_storage_key = NULL,
-                       fichier_content_type = NULL,
-                       fichier_size_bytes = NULL,
-                       fichier_sha256 = NULL
-                   WHERE id = %s""",
-                (contrat_id,),
-            )
-    except Exception:
-        # The object has already been removed. Keep the failure explicit so an
-        # operator can reconcile the metadata instead of reporting success.
-        logger.exception("Pièce jointe du contrat #%s supprimée mais métadonnées non mises à jour", contrat_id)
-        raise HTTPException(status_code=503, detail="Le fichier a été supprimé mais la mise à jour du contrat a échoué")
+    with get_db() as conn:
+        conn.execute("DELETE FROM contrat_fichiers WHERE id = %s AND contrat_id = %s", (fichier_id, contrat_id))
+        next_file = conn.execute(
+            """SELECT filename, storage_key, content_type, size_bytes, sha256
+               FROM contrat_fichiers WHERE contrat_id = %s ORDER BY created_at, id LIMIT 1""",
+            (contrat_id,),
+        ).fetchone()
+        conn.execute(
+            """UPDATE contrats
+               SET fichier_contrat = %s, fichier_storage_key = %s,
+                   fichier_content_type = %s, fichier_size_bytes = %s, fichier_sha256 = %s
+               WHERE id = %s""",
+            (
+                next_file.get("filename") if next_file else None,
+                next_file.get("storage_key") if next_file else None,
+                next_file.get("content_type") if next_file else None,
+                next_file.get("size_bytes") if next_file else None,
+                next_file.get("sha256") if next_file else None,
+                contrat_id,
+            ),
+        )
 
     log_audit(
         user.get("sub", "unknown"),
         "DELETE_CONTRAT_FILE",
-        json.dumps({"contrat_id": contrat_id}, ensure_ascii=False),
+        json.dumps({"contrat_id": contrat_id, "fichier_id": fichier_id}, ensure_ascii=False),
         "contrats",
     )
-    return {"ok": True, "contrat_id": contrat_id}
+    return {"ok": True, "contrat_id": contrat_id, "fichier_id": fichier_id}
+
+
+@app.delete("/api/contrats/{contrat_id}/fichier")
+def delete_contrat_file(contrat_id: int, user: dict = Depends(_verify_token)):
+    """Legacy singular deletion endpoint, deleting the first attachment."""
+    with get_db() as conn:
+        assert_resource_client_access(conn, "contrat", contrat_id, user)
+        row = conn.execute(
+            "SELECT id FROM contrat_fichiers WHERE contrat_id = %s ORDER BY created_at, id LIMIT 1",
+            (contrat_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Aucune pièce jointe pour ce contrat")
+    return delete_contrat_attachment(contrat_id, row["id"], user)
 
 
 @app.put("/api/contrats/{contrat_id}")
@@ -339,8 +417,23 @@ def delete_contrat(contrat_id: int, user: dict = Depends(_verify_token)):
                 (contrat_id,)
             ).fetchone()
             client = dict(row)["client"] if row else "Unknown"
+            attachment_rows = conn.execute(
+                "SELECT storage_key FROM contrat_fichiers WHERE contrat_id = %s",
+                (contrat_id,),
+            ).fetchall()
     except:
         client = "Unknown"
+        attachment_rows = []
+
+    # Delete private objects before removing their database references. A retry
+    # is safe if a transient database error follows an object deletion.
+    if attachment_rows:
+        from s3_storage import delete_file
+        failed_deletions = [
+            row["storage_key"] for row in attachment_rows if not delete_file(row["storage_key"])
+        ]
+        if failed_deletions:
+            raise HTTPException(status_code=503, detail="Impossible de supprimer toutes les pièces jointes du contrat")
     
     supprimer_contrat(contrat_id)
     
@@ -391,8 +484,12 @@ __all__ = [
     "get_contrats",
     "create_contrat",
     "upload_contrat_file",
+    "upload_contrat_attachment",
+    "list_contrat_attachments",
     "download_contrat_file",
+    "download_contrat_attachment",
     "delete_contrat_file",
+    "delete_contrat_attachment",
     "update_contrat",
     "delete_contrat",
     "get_conformite",

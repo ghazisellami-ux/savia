@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime
+from urllib.parse import quote
 from uuid import uuid4
 
 logger = logging.getLogger("s3_storage")
@@ -59,6 +60,20 @@ def _safe_log_component(value: str, fallback: str) -> str:
     return sanitized.strip(" .")[:100] or fallback
 
 
+def _ascii_metadata(metadata: dict) -> dict[str, str]:
+    """Encode S3 user-metadata keys and values into their ASCII wire form.
+
+    Object metadata is sent as HTTP headers.  S3-compatible services reject
+    non-ASCII header values, while filenames and usernames legitimately may
+    contain accents.  The database remains the source of the original display
+    name; percent-encoding only affects the optional object metadata copy.
+    """
+    return {
+        quote(str(key), safe="-_.~"): quote(str(value), safe="-_.~")
+        for key, value in metadata.items()
+    }
+
+
 def upload_file(content: str, filename: str, equipement: str, metadata: dict | None = None) -> dict | None:
     """Upload a log body. Its object key cannot be controlled by the caller."""
     client = _init_s3()
@@ -76,8 +91,9 @@ def upload_file(content: str, filename: str, equipement: str, metadata: dict | N
         "content-hash-sha256": content_hash,
         "upload-timestamp": now.isoformat(),
     }
+    object_metadata = _ascii_metadata(object_metadata)
     if metadata:
-        object_metadata.update({str(key): str(value) for key, value in metadata.items()})
+        object_metadata.update(_ascii_metadata(metadata))
     try:
         client.put_object(
             Bucket=S3_BUCKET,
@@ -118,8 +134,9 @@ def upload_private_file(content: bytes, *, category: str, extension: str, conten
         "upload-timestamp": now.isoformat(),
         "category": category,
     }
+    object_metadata = _ascii_metadata(object_metadata)
     if metadata:
-        object_metadata.update({str(meta_key): str(value) for meta_key, value in metadata.items()})
+        object_metadata.update(_ascii_metadata(metadata))
     try:
         client.put_object(
             Bucket=S3_BUCKET,

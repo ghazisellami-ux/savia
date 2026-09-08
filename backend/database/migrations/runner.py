@@ -842,6 +842,46 @@ def _migration_022_intervention_work_sessions(conn) -> None:
     )
 
 
+def _migration_023_contract_multiple_attachments(conn) -> None:
+    """Allow contracts to hold several private file attachments."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS contrat_fichiers (
+               id BIGSERIAL PRIMARY KEY,
+               contrat_id BIGINT NOT NULL REFERENCES contrats(id) ON DELETE CASCADE,
+               filename TEXT NOT NULL,
+               storage_key TEXT NOT NULL UNIQUE,
+               content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+               size_bytes BIGINT NOT NULL DEFAULT 0,
+               sha256 TEXT NOT NULL,
+               uploaded_by TEXT NOT NULL DEFAULT 'unknown',
+               created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_contrat_fichiers_content
+           ON contrat_fichiers(contrat_id, sha256)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_contrat_fichiers_contrat
+           ON contrat_fichiers(contrat_id, created_at, id)"""
+    )
+    # Preserve every file that was stored using the former single-attachment
+    # columns.  Keeping these columns populated also preserves the legacy API.
+    conn.execute(
+        """INSERT INTO contrat_fichiers
+               (contrat_id, filename, storage_key, content_type, size_bytes, sha256)
+           SELECT id, COALESCE(NULLIF(fichier_contrat, ''), 'Document joint'),
+                  fichier_storage_key,
+                  COALESCE(NULLIF(fichier_content_type, ''), 'application/octet-stream'),
+                  COALESCE(fichier_size_bytes, 0),
+                  COALESCE(NULLIF(fichier_sha256, ''), fichier_storage_key)
+           FROM contrats
+           WHERE fichier_storage_key IS NOT NULL
+             AND BTRIM(fichier_storage_key) <> ''
+           ON CONFLICT (storage_key) DO NOTHING"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -865,6 +905,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("020", "knowledge import provenance", _migration_020_knowledge_import_provenance),
     ("021", "public market invoice milestone", _migration_021_public_market_invoice_step),
     ("022", "dated intervention work sessions", _migration_022_intervention_work_sessions),
+    ("023", "multiple contract attachments", _migration_023_contract_multiple_attachments),
 )
 
 
