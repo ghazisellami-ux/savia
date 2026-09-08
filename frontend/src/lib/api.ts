@@ -326,7 +326,7 @@ export const contrats = {
   deleteFile: (id: string | number, fileId: number) =>
     request<{ ok: boolean; contrat_id: string | number; fichier_id: number }>(`/api/contrats/${id}/fichiers/${fileId}`, { method: 'DELETE' }),
   update: (id: number, data: Record<string, unknown>) =>
-    request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
+    request<{ ok: boolean; planning?: { removed: number; created: number } | null }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) =>
     request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'DELETE' }),
 };

@@ -888,6 +888,11 @@ def _migration_024_spare_part_multi_currency_prices(conn) -> None:
     conn.execute("ALTER TABLE pieces_rechange ADD COLUMN IF NOT EXISTS prix_eur REAL DEFAULT 0.0")
 
 
+def _migration_025_contract_historical_maintenance(conn) -> None:
+    """Keep the maintenance anchor for contracts imported after they started."""
+    conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS date_derniere_maintenance DATE")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -913,6 +918,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("022", "dated intervention work sessions", _migration_022_intervention_work_sessions),
     ("023", "multiple contract attachments", _migration_023_contract_multiple_attachments),
     ("024", "spare-part USD and EUR purchase prices", _migration_024_spare_part_multi_currency_prices),
+    ("025", "historical contract maintenance anchor", _migration_025_contract_historical_maintenance),
 )
 
 

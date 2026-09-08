@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -25,6 +25,7 @@ __all__ = [
     "get_contract_equipements",
     "ajouter_contrat",
     "generer_planning_from_contrat",
+    "replanifier_contrat",
     "modifier_contrat",
     "supprimer_contrat",
     "update_intervention_statut",
@@ -289,9 +290,9 @@ def ajouter_contrat(contrat_dict):
             row = conn.execute(f"""
                 INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                     sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, statut,
+                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, date_derniere_maintenance, statut,
                     pieces_incluses, avec_pieces, rappel_avant_jours)
-                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 RETURNING id
             """, (
                 contrat_dict.get("client", ""),
@@ -307,6 +308,7 @@ def ajouter_contrat(contrat_dict):
                 first_equipment,
                 contrat_dict.get("recurrence_maintenance", ""),
                 contrat_dict.get("date_premiere_maintenance", ""),
+                contrat_dict.get("date_derniere_maintenance") or None,
                 contrat_dict.get("statut", "Actif"),
                 pieces_incluses,
                 1 if contrat_dict.get("avec_pieces") else 0,
@@ -348,6 +350,25 @@ def ajouter_contrat(contrat_dict):
     _trigger_backup()
     logger.info(f"✅ Contrat #{contrat_id} saved successfully with {len(equipements)} equipment(s)")
     return contrat_id
+
+
+def _next_contract_maintenance_date(date_premiere, date_fin, delta, *, date_derniere=None, today=None):
+    """Return the first non-past date to plan, preserving a future first visit."""
+    today = today or date.today()
+    current_date = date_derniere + delta if date_derniere else date_premiere
+    while current_date < today:
+        current_date += delta
+    return current_date if current_date <= date_fin else None
+
+
+def _should_display_historical_anchor(date_derniere, *, today=None):
+    """Keep only the last-month completed visit visible for imported contracts."""
+    if not date_derniere:
+        return False
+    from dateutil.relativedelta import relativedelta
+
+    today = today or date.today()
+    return today - relativedelta(months=1) <= date_derniere <= today
 
 
 def generer_planning_from_contrat(contrat_id):
@@ -396,6 +417,7 @@ def generer_planning_from_contrat(contrat_id):
 
             date_fin_str = str(contrat.get("date_fin", "") or "")[:10]
             date_premiere_str = str(contrat.get("date_premiere_maintenance", "") or "")[:10]
+            date_derniere_str = str(contrat.get("date_derniere_maintenance", "") or "")[:10]
             client = contrat.get("client", "")
             rappel_avant_jours = contrat.get("rappel_avant_jours", 14) or 14
 
@@ -404,9 +426,9 @@ def generer_planning_from_contrat(contrat_id):
                 return 0
 
             try:
-                from datetime import date as _date
-                date_premiere = _date.fromisoformat(date_premiere_str)
-                date_fin = _date.fromisoformat(date_fin_str)
+                date_premiere = date.fromisoformat(date_premiere_str)
+                date_fin = date.fromisoformat(date_fin_str)
+                date_derniere = date.fromisoformat(date_derniere_str) if date_derniere_str else None
             except ValueError as ve:
                 logger.error(f"generer_planning: Invalid date format for contrat #{contrat_id}: {ve}")
                 return 0
@@ -435,6 +457,25 @@ def generer_planning_from_contrat(contrat_id):
                 return 0  # Aucun équipement à planifier
 
             delta = RECURRENCE_DELTAS[recurrence]
+            planning_start = _next_contract_maintenance_date(
+                date_premiere,
+                date_fin,
+                delta,
+                date_derniere=date_derniere,
+            )
+            show_historical_anchor = _should_display_historical_anchor(date_derniere)
+            if not planning_start and not show_historical_anchor:
+                logger.info(
+                    "generer_planning: No future maintenance to plan for contrat #%s "
+                    "(today=%s, first=%s, last=%s, end=%s, recurrence=%s)",
+                    contrat_id,
+                    date.today(),
+                    date_premiere,
+                    date_derniere,
+                    date_fin,
+                    recurrence,
+                )
+                return 0
             count = 0
 
             # Générer planning pour CHAQUE équipement
@@ -442,8 +483,45 @@ def generer_planning_from_contrat(contrat_id):
                 if not equipement:
                     logger.warning(f"generer_planning: Skipping empty equipement name for contrat #{contrat_id}")
                     continue
-                    
-                current_date = date_premiere
+
+                # La dernière maintenance déclarée est déjà réalisée. Elle est
+                # donc visible comme clôturée seulement pendant le mois qui
+                # suit, jamais comme une intervention en retard.
+                if show_historical_anchor:
+                    try:
+                        existing_anchor = conn.execute(
+                            f"""SELECT 1 FROM planning_maintenance
+                                WHERE contrat_id = {ph} AND machine = {ph} AND date_prevue = {ph}
+                                  AND notes LIKE {ph}
+                                LIMIT 1""",
+                            (contrat_id, equipement, date_derniere.isoformat(), "%[Ancre historique SAVIA]%"),
+                        ).fetchone()
+                        if not existing_anchor:
+                            conn.execute(f"""
+                                INSERT INTO planning_maintenance
+                                    (machine, client, type_maintenance, description,
+                                     date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
+                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                            """, (
+                                equipement,
+                                client,
+                                "Préventive",
+                                f"MP Contrat #{contrat_id} — {equipement}",
+                                date_derniere.isoformat(),
+                                "",
+                                recurrence,
+                                contrat_id,
+                                "Cloturee",
+                                f"[Ancre historique SAVIA] Dernière maintenance déclarée le {date_derniere.isoformat()} | Contrat #{contrat_id}",
+                            ))
+                            count += 1
+                    except Exception as e:
+                        logger.error(f"generer_planning: Error inserting historical anchor for {equipement} on {date_derniere}: {e}")
+
+                if not planning_start:
+                    continue
+
+                current_date = planning_start
                 while current_date <= date_fin:
                     try:
                         conn.execute(f"""
@@ -461,12 +539,12 @@ def generer_planning_from_contrat(contrat_id):
                             recurrence,
                             contrat_id,
                             "Planifiée",
-                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id} | Rappel: {rappel_avant_jours}j",
+                            f"[{client}] Généré automatiquement depuis contrat #{contrat_id} | Rappel: {rappel_avant_jours}j | Départ planning: {planning_start.isoformat()}",
                         ))
                         count += 1
                     except Exception as e:
                         logger.error(f"generer_planning: Error inserting planning for {equipement} on {current_date}: {e}")
-                    
+
                     current_date = current_date + delta
 
             logger.info(f"✅ generer_planning: Generated {count} planning entries for contrat #{contrat_id} across {len(equipements)} equipements (Rappel: {rappel_avant_jours}j)")
@@ -477,6 +555,29 @@ def generer_planning_from_contrat(contrat_id):
             import traceback
             logger.error(traceback.format_exc())
             return 0
+
+
+def replanifier_contrat(contrat_id):
+    """Replace pending visits and SAVIA's temporary historical anchor only."""
+    contrat_id = int(contrat_id)
+    with get_db() as conn:
+        result = conn.execute(
+            """DELETE FROM planning_maintenance
+               WHERE contrat_id = %s
+                 AND description LIKE %s
+                 AND (statut = 'Planifiée' OR notes LIKE %s)""",
+            (contrat_id, f"MP Contrat #{contrat_id} —%", "%[Ancre historique SAVIA]%"),
+        )
+        removed = result.rowcount if result.rowcount is not None else 0
+
+    created = generer_planning_from_contrat(contrat_id)
+    logger.info(
+        "Contrat #%s replanned: %s pending automatic visit(s) removed, %s created",
+        contrat_id,
+        removed,
+        created,
+    )
+    return {"removed": removed, "created": created}
 
 
 def modifier_contrat(contrat_id, contrat_dict):
@@ -498,7 +599,8 @@ def modifier_contrat(contrat_id, contrat_dict):
         conn.execute(f"""
             UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
                 sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
-                equipement={ph}, pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
+                equipement={ph}, recurrence_maintenance={ph}, date_premiere_maintenance={ph}, date_derniere_maintenance={ph},
+                pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
             WHERE id={ph}
         """, (
             contrat_dict.get("client", ""),
@@ -512,6 +614,9 @@ def modifier_contrat(contrat_id, contrat_dict):
             contrat_dict.get("notes", ""),
             contrat_dict.get("statut", "Actif"),
             first_equipment,
+            contrat_dict.get("recurrence_maintenance", ""),
+            contrat_dict.get("date_premiere_maintenance", ""),
+            contrat_dict.get("date_derniere_maintenance") or None,
             pieces_incluses,
             1 if contrat_dict.get("avec_pieces") else 0,
             contrat_dict.get("rappel_avant_jours", 14),

@@ -112,6 +112,9 @@ interface PlanItem {
 }
 
 const CLOSED_PLANNING_STATUSES = new Set(['Réalisée', 'Cloturee', 'Annulée']);
+const HISTORICAL_ANCHOR_MARKER = '[Ancre historique SAVIA]';
+const isHistoricalAnchor = (item: Pick<PlanItem, 'notes'>) =>
+  item.notes?.includes(HISTORICAL_ANCHOR_MARKER);
 const canReschedule = (item: PlanItem) =>
   !item.is_ghost &&
   !CLOSED_PLANNING_STATUSES.has(item.statut) &&
@@ -346,17 +349,17 @@ export default function PlanningPage() {
   [data]);
 
   const monthEvents = data.filter(d => {
-    if (d.is_ghost) return false;
+    if (d.is_ghost || isHistoricalAnchor(d)) return false;
     const dt = new Date(d.date_planifiee);
     return dt.getMonth() === currentMonth && dt.getFullYear() === currentYear;
   });
   const overdueCount = data.filter(d => {
-    if (d.is_ghost) return false;
+    if (d.is_ghost || isHistoricalAnchor(d)) return false;
     const automaticStatus = getAutomaticStatus(d.date_planifiee, d.statut, d.notes);
     // Only count as overdue if automatic status is "En retard"
     return automaticStatus === 'En retard';
   }).length;
-  const realPlanningCount = data.filter(d => !d.is_ghost).length;
+  const realPlanningCount = data.filter(d => !d.is_ghost && !isHistoricalAnchor(d)).length;
 
   const handleSave = async () => {
     setError('');
@@ -551,7 +554,7 @@ export default function PlanningPage() {
         {[
           { label: 'Total planifié', value: realPlanningCount, color: 'text-savia-accent', icon: <Calendar className="w-5 h-5" /> },
           { label: 'Ce mois', value: monthEvents.length, color: 'text-blue-400', icon: <Calendar className="w-5 h-5" /> },
-          { label: 'Réalisées', value: data.filter(d => !d.is_ghost && (d.statut === 'Réalisée' || d.statut === 'Cloturee')).length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
+          { label: 'Réalisées', value: data.filter(d => !d.is_ghost && !isHistoricalAnchor(d) && (d.statut === 'Réalisée' || d.statut === 'Cloturee')).length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
           <div key={kpi.label} className="glass rounded-xl p-4 text-center">
@@ -701,11 +704,12 @@ export default function PlanningPage() {
             if (!dateStr) return false;
             return dateStr >= pdfDateFrom && dateStr <= pdfDateTo;
           });
-        const realFilteredData = filteredData.filter(d => !d.is_ghost);
-        const ghostFilteredCount = filteredData.length - realFilteredData.length;
+        const realFilteredData = filteredData.filter(d => !d.is_ghost && !isHistoricalAnchor(d));
+        const historicalFilteredCount = filteredData.filter(d => !d.is_ghost && isHistoricalAnchor(d)).length;
+        const ghostFilteredCount = filteredData.filter(d => d.is_ghost).length;
         const selCls = "bg-savia-surface-hover border border-savia-border rounded-lg px-3 py-1.5 text-savia-text text-xs focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all min-w-[130px]";
         return (
-      <SectionCard title={"Toutes les Maintenances (" + realFilteredData.length + (realFilteredData.length !== realPlanningCount ? " / " + realPlanningCount : "") + ")" + (ghostFilteredCount > 0 ? " · " + ghostFilteredCount + " historique(s)" : "")}>
+      <SectionCard title={"Toutes les Maintenances (" + realFilteredData.length + (realFilteredData.length !== realPlanningCount ? " / " + realPlanningCount : "") + ")" + (historicalFilteredCount > 0 ? " · " + historicalFilteredCount + " maintenance(s) historique(s)" : "") + (ghostFilteredCount > 0 ? " · " + ghostFilteredCount + " trace(s) de décalage" : "")}>
         {/* Filter bar */}
         <div className="flex flex-wrap gap-3 mb-3 pb-3 border-b border-savia-border/40">
           {/* Région */}
@@ -869,6 +873,7 @@ export default function PlanningPage() {
                     const automaticStatus = getAutomaticStatus(ev.date_planifiee, ev.statut, ev.notes);
                     const colors = getStatutColor(automaticStatus, false);
                     const isOverdue = automaticStatus === 'En retard';
+                    const historicalAnchor = isHistoricalAnchor(ev);
                     return (
                       <tr key={ev.id} className={`border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors ${isOverdue ? 'bg-red-500/5' : ''}`}>
                         <td className="py-2 px-3 text-xs font-mono whitespace-nowrap text-savia-text-muted">#{ev.id}</td>
@@ -878,7 +883,10 @@ export default function PlanningPage() {
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.client || '—'}</td>
                         <td className="py-2 px-3 font-semibold text-sm">{ev.machine}</td>
                         <td className="py-2 px-3 text-xs">{ev.technicien || '—'}</td>
-                        <td className="py-2 px-3 text-xs whitespace-nowrap">{ev.type_maintenance}</td>
+                        <td className="py-2 px-3 text-xs whitespace-nowrap">
+                          {ev.type_maintenance}
+                          {historicalAnchor && <span className="ml-1 rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">Historique</span>}
+                        </td>
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—'}</td>
                         <td className="py-2 px-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>

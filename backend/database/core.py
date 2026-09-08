@@ -1003,6 +1003,7 @@ def init_db():
         # Contract → Planning auto-generation columns
         _safe_add_column("contrats", "recurrence_maintenance")
         _safe_add_column("contrats", "date_premiere_maintenance")
+        _safe_add_column("contrats", "date_derniere_maintenance", "DATE", "NULL")
         _safe_add_column("planning_maintenance", "contrat_id", "INTEGER", "NULL")
 
         # Ghost entry tracking for reschedule feature (prevent duplicates on multiple reschedules)
@@ -1205,6 +1206,7 @@ def init_db():
             pieces_incluses TEXT DEFAULT '',
             avec_pieces INTEGER DEFAULT 0,
             rappel_avant_jours INTEGER DEFAULT 14,
+            date_derniere_maintenance DATE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)

@@ -56,7 +56,7 @@ from db_engine import (
     lire_notifications_pieces, compter_notifications_non_lues, ajouter_notification_piece,
     marquer_notification_lue, marquer_notification_traitee, notifications_rupture_pour_piece,
     ajouter_piece_demandee, lire_pieces_demandees_en_attente, resoudre_piece_demandee, lire_toutes_pieces_demandees,
-    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat, get_contract_equipements,
+    lire_contrats, ajouter_contrat, modifier_contrat, supprimer_contrat, generer_planning_from_contrat, replanifier_contrat, get_contract_equipements,
     lire_conformite, ajouter_conformite, supprimer_conformite,
     lire_planning, ajouter_planning, update_planning_statut, supprimer_planning,
     lire_techniciens, ajouter_technicien, update_technicien, supprimer_technicien,
