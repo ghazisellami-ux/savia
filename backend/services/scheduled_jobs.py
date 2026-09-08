@@ -79,10 +79,10 @@ def check_garantie_expiry():
 def check_planning_reminder():
     """
     Vérifie les maintenances et demandes d'intervention planifiées dans les
-    prochains jours et envoie un rappel Telegram via le bot technique.
-    
-    Utilise le rappel_avant_jours configuré dans le contrat associé.
-    Par défaut: 14 jours si pas de contrat ou rappel non configuré.
+    15 prochains jours et envoie un rappel Telegram via le bot technique.
+
+    La fenêtre est volontairement fixe pour éviter que les réglages de contrat
+    à long terme (par exemple 40 jours) ne surchargent le rappel quotidien.
     """
     from datetime import date, timedelta
     try:
@@ -92,9 +92,6 @@ def check_planning_reminder():
         
         today = date.today()
         reminders = []
-        
-        # Track reminder days used - for logging
-        reminder_days_by_contrat = {}
         
         for _, row in df.iterrows():
             statut = str(row.get('statut', '') or '').strip()
@@ -110,25 +107,7 @@ def check_planning_reminder():
             try:
                 date_prevue = date.fromisoformat(date_str[:10])
                 
-                # Get contrat_id to fetch rappel_avant_jours
-                contrat_id = row.get('contrat_id')
-                reminder_days = 14  # Default
-                
-                if contrat_id:
-                    try:
-                        with get_db() as conn:
-                            ph = "%s"
-                            contrat_row = conn.execute(
-                                f"SELECT rappel_avant_jours FROM contrats WHERE id = {ph}",
-                                (contrat_id,)
-                            ).fetchone()
-                            if contrat_row:
-                                contrat_dict = dict(contrat_row)
-                                reminder_days = contrat_dict.get("rappel_avant_jours", 14) or 14
-                                reminder_days_by_contrat[contrat_id] = reminder_days
-                    except Exception as e:
-                        logger.debug(f"Could not fetch rappel_avant_jours for contrat {contrat_id}: {e}")
-                
+                reminder_days = 15
                 alert_limit = today + timedelta(days=reminder_days)
                 
                 if today <= date_prevue <= alert_limit:
@@ -159,16 +138,14 @@ def check_planning_reminder():
                 for r in sorted(reminders, key=lambda x: x['jours'])
             )
             
-            # Build dynamic message based on max reminder days used
-            max_days = max((r['reminder_days'] for r in reminders), default=14)
             msg = (
                 f"🔧 <b>Rappel des interventions planifiées</b>\n"
-                f"<i>{len(reminders)} intervention(s)/maintenance(s) dans les {max_days} prochains jours :</i>\n\n"
+                f"<i>{len(reminders)} intervention(s)/maintenance(s) dans les 15 prochains jours :</i>\n\n"
                 f"{lines}\n\n"
                 f"📅 Vérification SAVIA — {today.strftime('%d/%m/%Y')}"
             )
             _send_telegram(msg)
-            logger.info(f"Planning reminder: {len(reminders)} rappel(s) envoyé(s) | Jours config: {reminder_days_by_contrat}")
+            logger.info(f"Planning reminder: {len(reminders)} rappel(s) envoyé(s) | Fenêtre: 15 jours")
         return reminders
     except Exception as e:
         logger.error(f"Planning reminder check error: {e}")

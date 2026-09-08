@@ -354,7 +354,7 @@ export const planning = {
   comparateurPeriode: (dateDebut: string, dateFin: string) =>
     request<Record<string, unknown>>(`/api/planning/comparateur-periode?date_debut=${dateDebut}&date_fin=${dateFin}`),
   delete: (id: number) =>
-    request<{ ok: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
+    request<{ ok: boolean; deleted_planning: number; deleted_interventions: number; recurring: boolean }>(`/api/planning/${id}`, { method: 'DELETE' }),
 };
 export const knowledge = {
   list: () => request<Array<Record<string, unknown>>>('/api/knowledge'),
