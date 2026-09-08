@@ -909,7 +909,7 @@ export default function PlanningPage() {
                         <td className="py-2 px-3 text-xs">{ev.technicien || '—'}</td>
                         <td className="py-2 px-3 text-xs whitespace-nowrap">
                           {ev.type_maintenance}
-                          {historicalAnchor && <span className="ml-1 rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">Historique</span>}
+                          {historicalAnchor && <span className="ml-1 rounded border border-slate-700 bg-slate-700 px-1.5 py-0.5 text-[10px] font-bold text-white">Historique</span>}
                         </td>
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.recurrence && ev.recurrence !== 'Aucune' ? ev.recurrence : '—'}</td>
                         <td className="py-2 px-3">
@@ -1296,11 +1296,11 @@ export default function PlanningPage() {
       >
         {planningToDelete && (
           <div className="space-y-5">
-            <div className="flex gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-400" />
+            <div className="flex gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-700" />
               <div>
                 <p className="font-bold">Supprimer cette intervention du planning ?</p>
-                <p className="mt-1 text-red-200/80">Cette action supprimera aussi les éventuelles interventions liées.</p>
+                <p className="mt-1 text-red-700">Cette action supprimera aussi les éventuelles interventions liées.</p>
               </div>
             </div>
             <div className="rounded-lg bg-savia-surface-hover/60 p-3 text-sm">
