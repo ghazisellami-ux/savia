@@ -128,6 +128,15 @@ interface Contrat {
   fichier_contrat?: string;
   fichier_content_type?: string;
   has_fichier?: boolean;
+  fichiers?: ContractAttachment[];
+}
+
+interface ContractAttachment {
+  id: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at?: string;
 }
 
 interface ContractEquipment {
@@ -216,8 +225,8 @@ export default function ContratsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
   const [form, setForm] = useState(emptyForm());
-  const [contractAttachment, setContractAttachment] = useState<File | null>(null);
-  const [pendingAttachmentUpload, setPendingAttachmentUpload] = useState<{ contractId: string; file: File } | null>(null);
+  const [contractAttachments, setContractAttachments] = useState<File[]>([]);
+  const [pendingAttachmentUpload, setPendingAttachmentUpload] = useState<{ contractId: string; files: File[] } | null>(null);
   const contractFileInputRef = useRef<HTMLInputElement>(null);
   const contractCameraInputRef = useRef<HTMLInputElement>(null);
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
@@ -257,7 +266,8 @@ export default function ContratsPage() {
         date_premiere_maintenance: (item.date_premiere_maintenance || '').substring(0, 10),
         fichier_contrat: item.fichier_contrat || '',
         fichier_content_type: item.fichier_content_type || '',
-        has_fichier: Boolean(item.has_fichier),
+        fichiers: Array.isArray(item.fichiers) ? item.fichiers : [],
+        has_fichier: Boolean(item.has_fichier) || (Array.isArray(item.fichiers) && item.fichiers.length > 0),
         };
       }));
 
@@ -341,12 +351,16 @@ export default function ContratsPage() {
       })
     : stockPieces;
 
-  const applyAttachmentState = (contractId: string, filename: string) => {
+  const applyAttachmentState = (contractId: string, attachment: ContractAttachment) => {
+    const updateContract = (contract: Contrat): Contrat => {
+      const fichiers = [...(contract.fichiers || []).filter(file => file.id !== attachment.id), attachment];
+      return { ...contract, fichiers, has_fichier: true, fichier_contrat: fichiers[0]?.filename || attachment.filename };
+    };
     setData(previous => previous.map(contract => contract.id === contractId
-      ? { ...contract, has_fichier: true, fichier_contrat: filename }
+      ? updateContract(contract)
       : contract));
     setSelectedContrat(previous => previous?.id === contractId
-      ? { ...previous, has_fichier: true, fichier_contrat: filename }
+      ? updateContract(previous)
       : previous);
   };
 
@@ -354,11 +368,13 @@ export default function ContratsPage() {
     if (!pendingAttachmentUpload) return;
     setIsSaving(true);
     try {
-      const result = await contrats.uploadFile(pendingAttachmentUpload.contractId, pendingAttachmentUpload.file);
-      applyAttachmentState(pendingAttachmentUpload.contractId, result.filename);
+      for (const file of pendingAttachmentUpload.files) {
+        const result = await contrats.uploadFile(pendingAttachmentUpload.contractId, file);
+        applyAttachmentState(pendingAttachmentUpload.contractId, result);
+      }
       setPendingAttachmentUpload(null);
-      setContractAttachment(null);
-      setSaveMsg('✅ Contrat sauvegardé et pièce jointe envoyée avec succès.');
+      setContractAttachments([]);
+      setSaveMsg('✅ Contrat sauvegardé et pièces jointes envoyées avec succès.');
       await load();
       setTimeout(() => { setShowModal(false); setSaveMsg(''); }, 2500);
     } catch (err: any) {
@@ -412,19 +428,21 @@ export default function ContratsPage() {
           : '';
         setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
       }
-      if (contractAttachment && savedContractId) {
+      if (contractAttachments.length > 0 && savedContractId) {
         try {
-          const uploaded = await contrats.uploadFile(savedContractId, contractAttachment);
-          applyAttachmentState(savedContractId, uploaded.filename);
+          for (const file of contractAttachments) {
+            const uploaded = await contrats.uploadFile(savedContractId, file);
+            applyAttachmentState(savedContractId, uploaded);
+          }
         } catch {
-          setPendingAttachmentUpload({ contractId: savedContractId, file: contractAttachment });
+          setPendingAttachmentUpload({ contractId: savedContractId, files: contractAttachments });
           await load();
           setSaveMsg('');
           return;
         }
       }
       setForm(emptyForm());
-      setContractAttachment(null);
+      setContractAttachments([]);
       if (contractFileInputRef.current) contractFileInputRef.current.value = '';
       if (contractCameraInputRef.current) contractCameraInputRef.current.value = '';
       setEditingContrat(null);
@@ -437,7 +455,7 @@ export default function ContratsPage() {
 
   const openEdit = (c: Contrat) => {
     setEditingContrat(c);
-    setContractAttachment(null);
+    setContractAttachments([]);
     setPendingAttachmentUpload(null);
     
     // Parse pieces_incluses from JSON if it exists
@@ -486,22 +504,27 @@ export default function ContratsPage() {
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-  const chooseContractAttachment = (file?: File) => {
-    if (!file) return;
+  const chooseContractAttachments = (files: File[] | FileList) => {
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) return;
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
-    if (!allowed.includes(file.type)) {
+    const invalidFile = selectedFiles.find(file => !allowed.includes(file.type));
+    if (invalidFile) {
       setSaveMsg('❌ Format refusé. Choisissez une image JPG, PNG, WEBP ou un PDF.');
       return;
     }
+    const existingCount = editingContrat?.fichiers?.length || 0;
+    if (existingCount + contractAttachments.length + selectedFiles.length > 10) {
+      setSaveMsg('❌ Un contrat ne peut pas contenir plus de 10 pièces jointes.');
+      return;
+    }
     setSaveMsg('');
-    setContractAttachment(file);
+    setContractAttachments(current => [...current, ...selectedFiles]);
   };
 
-  const clearContractAttachment = () => {
-    setContractAttachment(null);
+  const removeContractAttachment = (index: number) => {
+    setContractAttachments(current => current.filter((_, attachmentIndex) => attachmentIndex !== index));
     setPendingAttachmentUpload(null);
-    if (contractFileInputRef.current) contractFileInputRef.current.value = '';
-    if (contractCameraInputRef.current) contractCameraInputRef.current.value = '';
   };
 
   // Toggle a piece in/out of selection (identified by unique reference)
@@ -639,34 +662,28 @@ export default function ContratsPage() {
     finally { setIsPdfGen(false); }
   };
 
-  const handleContractAttachmentDownload = async (c: Contrat) => {
+  const handleContractAttachmentDownload = async (c: Contrat, attachment: ContractAttachment) => {
     try {
-      const res = await fetch(`/api/contrats/${c.id}/fichier`, {
-        credentials: 'same-origin',
-      });
-      if (!res.ok) throw new Error('Pièce jointe indisponible');
-      const blob = await res.blob();
-      downloadBlob(blob, c.fichier_contrat || `contrat_${c.id}`);
+      const blob = await contrats.downloadFile(c.id, attachment.id);
+      downloadBlob(blob, attachment.filename || `contrat_${c.id}`);
     } catch (err: any) {
       alert('Erreur pièce jointe : ' + (err?.message || err));
     }
   };
 
-  const handleDeleteContractAttachment = async (c: Contrat) => {
-    if (!canEdit || !c.has_fichier) return;
-    if (!window.confirm(`Supprimer définitivement la pièce jointe du contrat #${c.id} ?`)) return;
+  const handleDeleteContractAttachment = async (c: Contrat, attachment: ContractAttachment) => {
+    if (!canEdit) return;
+    if (!window.confirm(`Supprimer définitivement « ${attachment.filename} » du contrat #${c.id} ?`)) return;
     setIsDeleting(true);
     try {
-      await contrats.deleteFile(c.id);
-      setData(previous => previous.map(contract => contract.id === c.id
-        ? { ...contract, has_fichier: false, fichier_contrat: '' }
-        : contract));
-      setSelectedContrat(previous => previous?.id === c.id
-        ? { ...previous, has_fichier: false, fichier_contrat: '' }
-        : previous);
-      setEditingContrat(previous => previous?.id === c.id
-        ? { ...previous, has_fichier: false, fichier_contrat: '' }
-        : previous);
+      await contrats.deleteFile(c.id, attachment.id);
+      const removeAttachment = (contract: Contrat): Contrat => {
+        const fichiers = (contract.fichiers || []).filter(file => file.id !== attachment.id);
+        return { ...contract, fichiers, has_fichier: fichiers.length > 0, fichier_contrat: fichiers[0]?.filename || '' };
+      };
+      setData(previous => previous.map(contract => contract.id === c.id ? removeAttachment(contract) : contract));
+      setSelectedContrat(previous => previous?.id === c.id ? removeAttachment(previous) : previous);
+      setEditingContrat(previous => previous?.id === c.id ? removeAttachment(previous) : previous);
       setSaveMsg('✅ Pièce jointe supprimée.');
     } catch (err: any) {
       setSaveMsg(`❌ Erreur suppression pièce jointe: ${err?.message || 'Indisponible'}`);
@@ -708,7 +725,7 @@ export default function ContratsPage() {
           </h1>
           <p className="text-savia-text-muted text-sm mt-1">Gestion des contrats SAV et maintenance préventive</p>
         </div>
-        {canEdit && <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setContractAttachment(null); setPendingAttachmentUpload(null); setSaveMsg(''); setShowModal(true); }}
+        {canEdit && <button onClick={() => { setEditingContrat(null); setForm(emptyForm()); setContractAttachments([]); setPendingAttachmentUpload(null); setSaveMsg(''); setShowModal(true); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20">
           <Plus className="w-4 h-4" /> Nouveau contrat
         </button>}
@@ -962,12 +979,12 @@ export default function ContratsPage() {
                 >
                   <Eye className="w-3.5 h-3.5" /> Voir les détails
                 </button>
-                {c.has_fichier && (
+                {(c.fichiers?.length || 0) > 0 && (
                   <button
-                    onClick={() => handleContractAttachmentDownload(c)}
+                    onClick={() => handleContractAttachmentDownload(c, c.fichiers![0])}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer"
                   >
-                    <Paperclip className="w-3.5 h-3.5" /> Pièce jointe
+                    <Paperclip className="w-3.5 h-3.5" /> Pièces jointes ({c.fichiers!.length})
                   </button>
                 )}
                 {canEdit && (
@@ -1127,30 +1144,35 @@ export default function ContratsPage() {
                   return null;
                 })()}
                 
-                {c.has_fichier && (
-                  <div className="bg-savia-surface-hover/40 rounded-xl p-4 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Paperclip className="w-4 h-4 text-purple-300 shrink-0" />
-                      <div className="min-w-0">
-                        <p className="text-xs text-savia-text-muted font-semibold uppercase tracking-wider">Pièce jointe du contrat</p>
-                        <p className="text-sm font-semibold truncate">{c.fichier_contrat || 'Document joint'}</p>
+                {(c.fichiers?.length || 0) > 0 && (
+                  <div className="bg-savia-surface-hover/40 rounded-xl p-4 space-y-2">
+                    <p className="text-xs text-savia-text-muted font-semibold uppercase tracking-wider">Pièces jointes du contrat</p>
+                    {c.fichiers!.map(attachment => (
+                      <div key={attachment.id} className="flex items-center justify-between gap-3 rounded-lg bg-savia-surface/40 border border-savia-border/30 px-3 py-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Paperclip className="w-4 h-4 text-purple-300 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate">{attachment.filename || 'Document joint'}</p>
+                            <p className="text-xs text-savia-text-muted">{(attachment.size_bytes / 1024 / 1024).toFixed(2)} Mo</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={() => handleContractAttachmentDownload(c, attachment)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer">
+                            <Download className="w-3.5 h-3.5" /> Télécharger
+                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleDeleteContractAttachment(c, attachment)}
+                              disabled={isDeleting}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-400/20 transition-all cursor-pointer disabled:opacity-50"
+                              title="Supprimer la pièce jointe"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Supprimer
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button onClick={() => handleContractAttachmentDownload(c)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-purple-300 hover:bg-purple-500/10 border border-purple-400/20 transition-all cursor-pointer">
-                        <Download className="w-3.5 h-3.5" /> Télécharger
-                      </button>
-                      {canEdit && (
-                        <button
-                          onClick={() => handleDeleteContractAttachment(c)}
-                          disabled={isDeleting}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-400/20 transition-all cursor-pointer disabled:opacity-50"
-                          title="Supprimer la pièce jointe"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" /> Supprimer
-                        </button>
-                      )}
-                    </div>
+                    ))}
                   </div>
                 )}
 
@@ -1376,9 +1398,10 @@ export default function ContratsPage() {
                   <input
                     ref={contractFileInputRef}
                     type="file"
+                    multiple
                     accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
                     className="hidden"
-                    onChange={e => chooseContractAttachment(e.target.files?.[0])}
+                    onChange={e => { chooseContractAttachments(e.target.files || []); e.currentTarget.value = ''; }}
                   />
                   <input
                     ref={contractCameraInputRef}
@@ -1386,30 +1409,34 @@ export default function ContratsPage() {
                     accept="image/*"
                     capture="environment"
                     className="hidden"
-                    onChange={e => chooseContractAttachment(e.target.files?.[0])}
+                    onChange={e => { chooseContractAttachments(e.target.files || []); e.currentTarget.value = ''; }}
                   />
                   <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={() => contractCameraInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white bg-savia-accent hover:opacity-90 transition-all cursor-pointer">
                       <Camera className="w-4 h-4" /> Prendre une photo
                     </button>
                     <button type="button" onClick={() => contractFileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-savia-text border border-savia-border hover:bg-savia-surface-hover transition-all cursor-pointer">
-                      <Paperclip className="w-4 h-4" /> Choisir une image ou un PDF
-                    </button>
-                  </div>
-                  {contractAttachment ? (
-                    <div className="flex items-center justify-between gap-3 rounded-lg bg-savia-accent/10 border border-savia-accent/20 px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold truncate">{contractAttachment.name}</p>
-                        <p className="text-xs text-savia-text-muted">{(contractAttachment.size / 1024 / 1024).toFixed(2)} Mo · sera enregistré avec le contrat</p>
-                      </div>
-                      <button type="button" onClick={clearContractAttachment} className="p-1.5 rounded-lg text-savia-text-muted hover:text-red-400 hover:bg-red-500/10 cursor-pointer" aria-label="Retirer la pièce jointe">
-                        <X className="w-4 h-4" />
-                      </button>
+                    <Paperclip className="w-4 h-4" /> Choisir des images ou PDF
+                  </button>
+                </div>
+                  {contractAttachments.length > 0 ? (
+                    <div className="space-y-2">
+                      {contractAttachments.map((attachment, index) => (
+                        <div key={`${attachment.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg bg-savia-accent/10 border border-savia-accent/20 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate">{attachment.name}</p>
+                            <p className="text-xs text-savia-text-muted">{(attachment.size / 1024 / 1024).toFixed(2)} Mo · sera enregistré avec le contrat</p>
+                          </div>
+                          <button type="button" onClick={() => removeContractAttachment(index)} className="p-1.5 rounded-lg text-savia-text-muted hover:text-red-400 hover:bg-red-500/10 cursor-pointer" aria-label="Retirer la pièce jointe">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ) : editingContrat?.has_fichier ? (
-                    <p className="text-xs text-savia-text-muted">Fichier actuel : <span className="font-semibold text-savia-text">{editingContrat.fichier_contrat}</span>. Sélectionnez un nouveau fichier pour le remplacer.</p>
+                  ) : editingContrat?.fichiers?.length ? (
+                    <p className="text-xs text-savia-text-muted">{editingContrat.fichiers.length} fichier(s) déjà joint(s). Les fichiers sélectionnés seront ajoutés.</p>
                   ) : (
-                    <p className="text-xs text-savia-text-muted">Formats acceptés : JPG, PNG, WEBP ou PDF · taille maximale : 20 Mo.</p>
+                    <p className="text-xs text-savia-text-muted">Formats acceptés : JPG, PNG, WEBP ou PDF · taille maximale : 20 Mo par fichier · 10 fichiers maximum.</p>
                   )}
                 </div>
               </div>

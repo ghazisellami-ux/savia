@@ -298,7 +298,7 @@ export const contrats = {
     const timer = setTimeout(() => controller.abort(), 60000);
     let res: Response;
     try {
-      res = await fetch(`/api/contrats/${id}/fichier`, {
+      res = await fetch(`/api/contrats/${id}/fichiers`, {
         method: 'POST',
         headers,
         credentials: 'same-origin',
@@ -315,10 +315,15 @@ export const contrats = {
       const data = await res.json().catch(() => ({ error: 'Erreur réseau' }));
       throw new Error(data.error || data.detail || `HTTP ${res.status}`);
     }
-    return res.json() as Promise<{ ok: boolean; filename: string; content_type: string; size_bytes: number; already_attached?: boolean }>;
+    return res.json() as Promise<{ ok: boolean; id: number; filename: string; content_type: string; size_bytes: number; already_attached?: boolean }>;
   },
-  deleteFile: (id: string | number) =>
-    request<{ ok: boolean; contrat_id: string | number }>(`/api/contrats/${id}/fichier`, { method: 'DELETE' }),
+  downloadFile: async (id: string | number, fileId: number) => {
+    const res = await fetch(`/api/contrats/${id}/fichiers/${fileId}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Pièce jointe indisponible');
+    return res.blob();
+  },
+  deleteFile: (id: string | number, fileId: number) =>
+    request<{ ok: boolean; contrat_id: string | number; fichier_id: number }>(`/api/contrats/${id}/fichiers/${fileId}`, { method: 'DELETE' }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean }>(`/api/contrats/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) =>
