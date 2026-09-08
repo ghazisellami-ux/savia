@@ -197,6 +197,7 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
                 item = {
                     "client": value(row, "Client", "client") or "Centre Principal",
                     "equipement": value(row, "Nom", "nom"),
+                    "num_serie": value(row, "NumSerie", "num_serie"),
                     "type": value(row, "Type", "type"),
                     "domaine": value(row, "Domaine", "domaine"),
                     "modele": " - ".join(filter(None, [value(row, "Fabricant", "fabricant"), value(row, "Modele", "modele")])),
@@ -216,9 +217,13 @@ def export_equipements_pdf(body: dict = Body(default={}), user: dict = Depends(_
                     serial = value(row, "NumSerie", "num_serie").casefold()
                     if not search or search in item["equipement"].casefold() or search in serial:
                         rows.append(item)
-            headers = ["Client", "Equipement", "Type", "Domaine", "Fabricant / modele", "Statut", "Service"]
-            col_widths = [48, 54, 40, 40, 40, 30, 25]
-            keys = ("client", "equipement", "type", "domaine", "modele", "statut", "service")
+            headers = ["Client", "Equipement", "N° de serie", "Type", "Domaine", "Fabricant / modele", "Statut", "Service"]
+            # Keep the table within the printable A4 landscape width while
+            # prioritising the client name. Type and domain have enough room
+            # for their usual labels to remain on one line; the equipment
+            # column gives up the required space.
+            col_widths = [62, 32, 28, 34, 34, 36, 28, 23]
+            keys = ("client", "equipement", "num_serie", "type", "domaine", "modele", "statut", "service")
             title = "LISTE DES EQUIPEMENTS"
             filter_pairs = (("Recherche", "search"), ("Domaine", "domaine"), ("Type", "type"), ("Modele", "modele"), ("Statut", "statut"), ("Service", "service"), ("Client", "client"))
             report_filename = "equipements"
