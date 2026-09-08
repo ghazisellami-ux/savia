@@ -61,11 +61,12 @@ export default function CartePage() {
       localStorage.setItem('savia_pays', selectedCountry);
       localStorage.setItem('savia_pays_selectionnes', selectedCountriesFromSettings.join(','));
       const data = (await mapApi.sites(selectedCountriesFromSettings.join(','))) as unknown as Site[];
-      // Auto-assign coordinates to sites without them
+      // Preserve precise coordinates saved for a client. Only use the city
+      // centre when a site genuinely has no location yet.
       const enriched = data.map(s => {
+        if (s.latitude != null && s.longitude != null) return s;
         const guess = selectedCountriesFromSettings.reduce<[number, number] | null>((found, selectedCode) => found || cityCoordinates(selectedCode, s.ville) || cityCoordinates(selectedCode, s.client), null);
         if (guess) return { ...s, latitude: guess[0], longitude: guess[1] };
-        if (s.latitude && s.longitude) return s;
         return { ...s, latitude: null, longitude: null };
       });
       setSites(enriched);
@@ -174,8 +175,37 @@ export default function CartePage() {
     });
 
     // Add markers
-    sites.forEach(site => {
-      if (!site.latitude || !site.longitude) return;
+    const sitesAtSameCoordinates = new Map<string, number[]>();
+    sites.forEach((site, index) => {
+      if (site.latitude == null || site.longitude == null) return;
+      const key = `${Number(site.latitude).toFixed(6)},${Number(site.longitude).toFixed(6)}`;
+      const indexes = sitesAtSameCoordinates.get(key) || [];
+      indexes.push(index);
+      sitesAtSameCoordinates.set(key, indexes);
+    });
+
+    const markerCoordinates = (site: Site, index: number): [number, number] => {
+      const latitude = Number(site.latitude);
+      const longitude = Number(site.longitude);
+      const key = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+      const collocatedIndexes = sitesAtSameCoordinates.get(key) || [];
+      if (collocatedIndexes.length < 2) return [latitude, longitude];
+
+      // Spread only perfectly overlapping pins around their shared location.
+      // This keeps precise client coordinates intact while making every client
+      // in a city individually selectable after zooming in.
+      const position = collocatedIndexes.indexOf(index);
+      const ring = Math.floor(position / 8);
+      const radius = 0.006 + ring * 0.003;
+      const angle = (2 * Math.PI * (position % 8)) / Math.min(collocatedIndexes.length, 8);
+      const latitudeOffset = Math.sin(angle) * radius;
+      const longitudeOffset = (Math.cos(angle) * radius) / Math.max(Math.cos(latitude * Math.PI / 180), 0.2);
+      return [latitude + latitudeOffset, longitude + longitudeOffset];
+    };
+
+    sites.forEach((site, index) => {
+      if (site.latitude == null || site.longitude == null) return;
+      const [markerLatitude, markerLongitude] = markerCoordinates(site, index);
 
       const score = site.score_sante;
       const color = score >= 80 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
@@ -195,7 +225,7 @@ export default function CartePage() {
         iconAnchor: [16, 16],
       });
 
-      const marker = L.marker([site.latitude, site.longitude], { icon }).addTo(map);
+      const marker = L.marker([markerLatitude, markerLongitude], { icon }).addTo(map);
 
       const popupContent = `
         <div style="min-width: 200px; font-family: system-ui;">
