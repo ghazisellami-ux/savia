@@ -13,6 +13,7 @@ from api.runtime import (
     ajouter_contrat,
     app,
     generer_planning_from_contrat,
+    replanifier_contrat,
     get_contract_equipements,
     get_db,
     lire_conformite,
@@ -390,6 +391,11 @@ def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_tok
     with get_db() as conn:
         assert_resource_client_access(conn, "contrat", contrat_id, user)
     modifier_contrat(contrat_id, body)
+    # A historical-contract anchor means that pending automatic visits can be
+    # safely rebuilt. Completed or closed visits are deliberately preserved.
+    planning_result = None
+    if body.get("date_derniere_maintenance"):
+        planning_result = replanifier_contrat(contrat_id)
     
     # Log audit
     username = user.get("sub", "unknown")
@@ -400,7 +406,7 @@ def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_tok
     }, ensure_ascii=False)
     log_audit(username, "UPDATE_CONTRAT", details, "contrats")
     
-    return {"ok": True}
+    return {"ok": True, "planning": planning_result}
 
 
 @app.delete("/api/contrats/{contrat_id}")

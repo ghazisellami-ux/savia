@@ -57,6 +57,49 @@ const contractDate = (value: string): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const oneYearLater = (value: string): string => {
+  const start = contractDate(value);
+  if (!start) return value;
+  const end = new Date(Date.UTC(start.getUTCFullYear() + 1, start.getUTCMonth(), start.getUTCDate()));
+  // 29 February becomes 28 February when the following year is not leap.
+  if (end.getUTCMonth() !== start.getUTCMonth()) {
+    return new Date(Date.UTC(start.getUTCFullYear() + 1, start.getUTCMonth() + 1, 0)).toISOString().substring(0, 10);
+  }
+  return end.toISOString().substring(0, 10);
+};
+
+function ContractDateInput({
+  value,
+  onChange,
+  disabled = false,
+  className = INPUT,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <input
+      type="date"
+      lang="fr-FR"
+      value={value}
+      disabled={disabled}
+      className={`${className} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+      onChange={event => onChange(event.target.value)}
+    />
+  );
+}
+
+const isHistoricalContractStart = (startValue: string): boolean => {
+  const start = contractDate(startValue);
+  if (!start) return false;
+  const now = new Date();
+  const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - 1);
+  return start < cutoff;
+};
+
 const anniversaryOf = (start: Date, year: number): Date => {
   const anniversary = new Date(Date.UTC(year, start.getUTCMonth(), start.getUTCDate()));
   // A 29 February contract renews on the last day of February in non-leap years.
@@ -125,6 +168,7 @@ interface Contrat {
   rappel_avant_jours?: number;
   recurrence_maintenance?: string;
   date_premiere_maintenance?: string;
+  date_derniere_maintenance?: string;
   fichier_contrat?: string;
   fichier_content_type?: string;
   has_fichier?: boolean;
@@ -147,14 +191,16 @@ interface ContractEquipment {
   num_serie?: string;
 }
 
-const emptyForm = () => ({
+const emptyForm = () => {
+  const dateDebut = new Date().toISOString().substring(0, 10);
+  return {
   client: '',
   equipement: '',
   equipements: [] as string[],
   equipement_ids: [] as number[],
   type_contrat: TYPES_CONTRAT[0],
-  date_debut: new Date().toISOString().substring(0, 10),
-  date_fin: new Date(Date.now() + 365 * 86400000).toISOString().substring(0, 10),
+  date_debut: dateDebut,
+  date_fin: oneYearLater(dateDebut),
   // 0 signifie qu'aucun engagement SLA de réponse n'est prévu.
   sla_temps_reponse_h: 0,
   montant: 0,
@@ -163,11 +209,13 @@ const emptyForm = () => ({
   rappel_avant: 30,
   rappel_unite: 'jours' as 'jours' | 'mois',
   recurrence_maintenance: RECURRENCES[2],
-  date_premiere_maintenance: new Date().toISOString().substring(0, 10),
+  date_premiere_maintenance: dateDebut,
+  date_derniere_maintenance: '',
   conditions: '',
   notes: '',
   statut: 'Actif',
-});
+  };
+};
 
 const normalizeContractEquipments = (item: any): string[] => {
   const source = Array.isArray(item.equipements) && item.equipements.length > 0
@@ -264,6 +312,7 @@ export default function ContratsPage() {
         rappel_avant_jours: item.rappel_avant_jours || 30,
         recurrence_maintenance: item.recurrence_maintenance || 'Semestrielle',
         date_premiere_maintenance: (item.date_premiere_maintenance || '').substring(0, 10),
+        date_derniere_maintenance: (item.date_derniere_maintenance || '').substring(0, 10),
         fichier_contrat: item.fichier_contrat || '',
         fichier_content_type: item.fichier_content_type || '',
         fichiers: Array.isArray(item.fichiers) ? item.fichiers : [],
@@ -393,6 +442,34 @@ export default function ContratsPage() {
     }
     if (!form.client) { setSaveMsg('Veuillez sélectionner un client.'); return; }
     if (form.equipements.length === 0) { setSaveMsg('Veuillez sélectionner au moins un équipement.'); return; }
+    const contractStart = contractDate(form.date_debut);
+    const contractEnd = contractDate(form.date_fin);
+    const firstMaintenance = contractDate(form.date_premiere_maintenance);
+    const lastMaintenance = contractDate(form.date_derniere_maintenance);
+    const today = new Date();
+    const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    if (!contractStart || !contractEnd || !firstMaintenance) {
+      setSaveMsg('Veuillez renseigner les dates du contrat et de la première maintenance au format JJ/MM/AAAA.');
+      return;
+    }
+    if (contractEnd < contractStart) {
+      setSaveMsg('La date de fin doit être postérieure à la date de début.');
+      return;
+    }
+    if (firstMaintenance < contractStart || firstMaintenance > contractEnd) {
+      setSaveMsg('La première maintenance doit être comprise dans la période du contrat.');
+      return;
+    }
+    if (isHistoricalContractStart(form.date_debut)) {
+      if (!lastMaintenance) {
+        setSaveMsg('Renseignez la date de la dernière maintenance pour ce contrat historique.');
+        return;
+      }
+      if (lastMaintenance && (lastMaintenance < contractStart || lastMaintenance > contractEnd || lastMaintenance > todayUtc)) {
+        setSaveMsg('La dernière maintenance doit être comprise dans le contrat et ne peut pas être future.');
+        return;
+      }
+    }
     setIsSaving(true);
     setSaveMsg('');
     try {
@@ -411,21 +488,27 @@ export default function ContratsPage() {
         rappel_avant_jours: form.rappel_unite === 'jours' ? form.rappel_avant : form.rappel_avant * 30,
         recurrence_maintenance: form.recurrence_maintenance,
         date_premiere_maintenance: form.date_premiere_maintenance,
+        date_derniere_maintenance: isHistoricalContractStart(form.date_debut)
+          ? form.date_derniere_maintenance
+          : '',
         conditions: form.conditions,
         notes: form.notes,
         statut: form.statut,
       };
       let savedContractId = editingContrat?.id;
       if (editingContrat) {
-        await (contrats as any).update(editingContrat.id, payload);
-        setSaveMsg('✅ Contrat mis à jour avec succès !');
+        const result = await contrats.update(Number(editingContrat.id), payload);
+        const planningMsg = result.planning
+          ? `\n📅 ${result.planning.removed} visite(s) automatique(s) remplacée(s) ; ${result.planning.created} visite(s) ajoutée(s) au planning.`
+          : '';
+        setSaveMsg(`✅ Contrat mis à jour avec succès !${planningMsg}`);
       } else {
         const result = await (contrats as any).create(payload) as any;
         savedContractId = result?.contrat_id ? String(result.contrat_id) : undefined;
         const nbPlannings = result?.nb_plannings || 0;
         const planningMsg = nbPlannings > 0
-          ? `\n📅 ${nbPlannings} maintenance(s) préventive(s) planifiées automatiquement`
-          : '';
+          ? `\n📅 ${nbPlannings} maintenance(s) ajoutée(s) au planning automatiquement`
+          : '\nℹ️ Aucune maintenance à venir n’a été créée. Vérifiez la première maintenance, la fin du contrat et la récurrence.';
         setSaveMsg(`✅ Contrat créé avec succès !${planningMsg}`);
       }
       if (contractAttachments.length > 0 && savedContractId) {
@@ -494,6 +577,7 @@ export default function ContratsPage() {
       rappel_unite: rappel_unite as 'jours' | 'mois',
       recurrence_maintenance: c.recurrence_maintenance || RECURRENCES[2],
       date_premiere_maintenance: c.date_premiere_maintenance || c.date_debut,
+      date_derniere_maintenance: c.date_derniere_maintenance || '',
       conditions: c.conditions,
       notes: c.notes,
       statut: c.statut,
@@ -630,6 +714,7 @@ export default function ContratsPage() {
     return total + prorataRevenu;
   }, 0);
   const formDuration = formatContractDuration(form.date_debut, form.date_fin);
+  const isHistoricalContract = isHistoricalContractStart(form.date_debut);
 
   if (isLoading) return (
     <div className="flex justify-center items-center h-64">
@@ -1362,11 +1447,19 @@ export default function ContratsPage() {
                   </div>
                   <div>
                     <label className={LABEL}>Date début</label>
-                    <input type="date" className={INPUT} value={form.date_debut} onChange={e => set('date_debut', e.target.value)} />
+                    <ContractDateInput value={form.date_debut} onChange={value => setForm(current => ({
+                      ...current,
+                      date_debut: value,
+                      // Tant que la première maintenance n'a pas été modifiée,
+                      // elle suit naturellement le nouveau début du contrat.
+                      date_premiere_maintenance: current.date_premiere_maintenance === current.date_debut
+                        ? value
+                        : current.date_premiere_maintenance,
+                    }))} />
                   </div>
                   <div>
                     <label className={LABEL}>Date fin</label>
-                    <input type="date" className={INPUT} value={form.date_fin} onChange={e => set('date_fin', e.target.value)} />
+                    <ContractDateInput value={form.date_fin} onChange={value => set('date_fin', value)} />
                   </div>
                   <div className="md:col-span-2 rounded-lg border border-savia-accent/20 bg-savia-accent/5 px-3 py-2 text-sm">
                     {formDuration ? (
@@ -1528,10 +1621,24 @@ export default function ContratsPage() {
                       {RECURRENCES.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </div>
-                  <div className="md:col-span-2">
+                  <div>
                     <label className={LABEL}>Date première maintenance</label>
-                    <input type="date" className={INPUT} value={form.date_premiere_maintenance}
-                      onChange={e => set('date_premiere_maintenance', e.target.value)} />
+                    <ContractDateInput value={form.date_premiere_maintenance}
+                      onChange={value => set('date_premiere_maintenance', value)} />
+                    <p className="mt-1 text-xs text-savia-text-muted">La première intervention sera créée à cette date.</p>
+                  </div>
+                  <div>
+                    <label className={LABEL}>Date dernière maintenance</label>
+                    <ContractDateInput
+                      value={form.date_derniere_maintenance}
+                      onChange={value => set('date_derniere_maintenance', value)}
+                      disabled={!isHistoricalContract}
+                    />
+                    <p className="mt-1 text-xs text-savia-text-muted">
+                      {isHistoricalContract
+                        ? 'La suite du planning partira après cette maintenance.'
+                        : 'Disponible si le début du contrat remonte à plus d’un mois.'}
+                    </p>
                   </div>
                 </div>
               </div>
