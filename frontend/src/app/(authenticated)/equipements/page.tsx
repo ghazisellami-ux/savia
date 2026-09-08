@@ -1183,6 +1183,41 @@ export default function EquipementsPage() {
     return allClients.size;
   }, [data, clientsList]);
 
+  const equipmentCategoriesByClient = useMemo(() => {
+    const categoriesByClient = new Map<string, Map<string, number>>();
+
+    data.forEach(equipment => {
+      if (!equipment.client) return;
+
+      const categories = categoriesByClient.get(equipment.client) || new Map<string, number>();
+      // The client view groups equipment by domaine (Radiologie, Soins intensifs,
+      // etc.), which is the category used throughout this page.
+      const category = equipment.domaine || equipment.type || 'Non catégorisé';
+      categories.set(category, (categories.get(category) || 0) + 1);
+      categoriesByClient.set(equipment.client, categories);
+    });
+
+    return new Map(
+      Array.from(categoriesByClient.entries()).map(([client, categories]) => [
+        client,
+        Array.from(categories.entries())
+          .map(([label, count]) => ({ label, count }))
+          .sort((a, b) => a.label.localeCompare(b.label, 'fr')),
+      ]),
+    );
+  }, [data]);
+
+  const showClientEquipments = (clientName: string) => {
+    setSearch('');
+    setFilterDomaine('Tous');
+    setFilterType('Tous');
+    setFilterModele('Tous');
+    setFilterStatut('Tous');
+    setFilterService('Tous');
+    setFilterClient(clientName);
+    setActiveTab('equipements');
+  };
+
   if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
 
   return (
@@ -2379,8 +2414,25 @@ export default function EquipementsPage() {
                 }
                 if (clientVilleFilter && c.ville !== clientVilleFilter) return false;
                 return true;
-              }).map(c => (
-                <div key={c.id} className="glass rounded-xl p-5 hover:border-savia-accent/30 transition-all group">
+              }).map(c => {
+                const equipmentCategories = equipmentCategoriesByClient.get(c.nom) || [];
+
+                return (
+                <div
+                  key={c.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Afficher les équipements de ${c.nom}`}
+                  title="Afficher les équipements de ce client"
+                  onClick={() => showClientEquipments(c.nom)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      showClientEquipments(c.nom);
+                    }
+                  }}
+                  className="glass rounded-xl p-5 hover:border-savia-accent/30 hover:-translate-y-0.5 transition-all group cursor-pointer focus:outline-none focus:ring-2 focus:ring-savia-accent/50"
+                >
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-lg bg-savia-accent/10 flex items-center justify-center flex-shrink-0">
@@ -2404,8 +2456,8 @@ export default function EquipementsPage() {
                     <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       {!isLecteur && (
                         <>
-                          <button onClick={() => startEditClient(c)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => requestDeleteClient(c)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={event => { event.stopPropagation(); startEditClient(c); }} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"><Edit2 className="w-3.5 h-3.5" /></button>
+                          <button onClick={event => { event.stopPropagation(); requestDeleteClient(c); }} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                         </>
                       )}
                     </div>
@@ -2424,14 +2476,32 @@ export default function EquipementsPage() {
                       <div className="text-[10px] text-savia-text-dim">Santé</div>
                     </div>
                   </div>
+                  <div className="border-t border-savia-border/30 pt-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-semibold text-savia-text-dim mr-0.5">Par domaine :</span>
+                      {equipmentCategories.length > 0 ? equipmentCategories.map(({ label, count }) => (
+                        <span
+                          key={label}
+                          className={`px-2 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1 ${DOMAINE_COLORS[label] || 'text-gray-400 bg-gray-500/10 border-gray-500/20'}`}
+                        >
+                          {DOMAINE_ICONS[label]}
+                          <span>{count}</span>
+                          <span>{label}</span>
+                        </span>
+                      )) : (
+                        <span className="text-xs text-savia-text-muted">Aucun équipement enregistré</span>
+                      )}
+                    </div>
+                  </div>
                   {(c.contact || c.telephone) && (
-                    <div className="flex items-center gap-3 text-xs text-savia-text-muted border-t border-savia-border/30 pt-2 mt-1">
+                    <div className="flex items-center gap-3 text-xs text-savia-text-muted border-t border-savia-border/30 pt-2 mt-2">
                       {c.contact && <span className="flex items-center gap-1"><User className="w-3 h-3" /> {c.contact}</span>}
                       {c.telephone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {c.telephone}</span>}
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
