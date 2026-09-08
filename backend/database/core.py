@@ -685,6 +685,8 @@ def init_db():
             stock_minimum INTEGER DEFAULT 1,
             fournisseur TEXT DEFAULT '',
             prix_unitaire REAL DEFAULT 0.0,
+            prix_usd REAL DEFAULT 0.0,
+            prix_eur REAL DEFAULT 0.0,
             derniere_commande DATE,
             notes TEXT DEFAULT ''
         );
@@ -887,6 +889,8 @@ def init_db():
         _safe_add_column("equipements", "garantie_duree", "INTEGER", "0")
         _safe_add_column("pieces_rechange", "domaine", "TEXT", "'Radiologie'")
         _safe_add_column("pieces_rechange", "est_annexe", "BOOLEAN", "false")
+        _safe_add_column("pieces_rechange", "prix_usd", "REAL", "0.0")
+        _safe_add_column("pieces_rechange", "prix_eur", "REAL", "0.0")
         
         # --- NEW MIGRATIONS: Advanced prediction parameters (using safe add for PostgreSQL compatibility) ---
         _safe_add_column("pieces_rechange", "consommation_moyenne_mois", "REAL", "1.0")

@@ -42,9 +42,10 @@ def ajouter_piece(piece_dict):
         conn.execute("""
             INSERT INTO pieces_rechange (reference, designation, domaine, equipement_type, est_annexe,
                                          stock_actuel, stock_minimum, fournisseur, prix_unitaire, notes,
+                                         prix_usd, prix_eur,
                                          consommation_moyenne_mois, delai_fournisseur_jours, criticite,
                                          nombre_equipements_relies, utilisation_recente_30j)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             piece_dict.get("reference", ""),
             piece_dict.get("designation", ""),
@@ -56,6 +57,8 @@ def ajouter_piece(piece_dict):
             piece_dict.get("fournisseur", ""),
             piece_dict.get("prix_unitaire", 0.0),
             piece_dict.get("notes", ""),
+            piece_dict.get("prix_usd", 0.0),
+            piece_dict.get("prix_eur", 0.0),
             piece_dict.get("consommation_moyenne_mois", 1.0),
             piece_dict.get("delai_fournisseur_jours", 14),
             piece_dict.get("criticite", "NORMAL"),
@@ -84,6 +87,7 @@ def modifier_piece(piece_id, piece_dict):
                 reference=%s, designation=%s, domaine=%s, equipement_type=%s, est_annexe=%s,
                 stock_actuel=%s, stock_minimum=%s, fournisseur=%s,
                 prix_unitaire=%s, notes=%s,
+                prix_usd=%s, prix_eur=%s,
                 consommation_moyenne_mois=%s, delai_fournisseur_jours=%s, criticite=%s,
                 nombre_equipements_relies=%s, utilisation_recente_30j=%s
             WHERE id=%s
@@ -98,6 +102,8 @@ def modifier_piece(piece_id, piece_dict):
             piece_dict.get("fournisseur", ""),
             piece_dict.get("prix_unitaire", 0.0),
             piece_dict.get("notes", ""),
+            piece_dict.get("prix_usd", 0.0),
+            piece_dict.get("prix_eur", 0.0),
             piece_dict.get("consommation_moyenne_mois", 1.0),
             piece_dict.get("delai_fournisseur_jours", 14),
             piece_dict.get("criticite", "NORMAL"),
