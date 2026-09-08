@@ -20,6 +20,8 @@ interface Piece {
   stock_actuel: number;
   stock_minimum: number;
   prix_unitaire: number;
+  prix_usd: number;
+  prix_eur: number;
   fournisseur: string;
   notes: string;
 }
@@ -81,9 +83,15 @@ export default function PiecesPage() {
   const [customTypesForDomain, setCustomTypesForDomain] = useState<Record<string, string[]>>({});
   const [fournisseursList, setFournisseursList] = useState<string[]>([]);
   const [customFournisseur, setCustomFournisseur] = useState(false);
+  const [configuredCurrency, setConfiguredCurrency] = useState(() => {
+    const stored = typeof window !== 'undefined' ? String(localStorage.getItem('savia_devise') || 'TND').trim().toUpperCase() : 'TND';
+    return /^[A-Z]{3}$/.test(stored) ? stored : 'TND';
+  });
+  const [exchangeRates, setExchangeRates] = useState<Record<string, number> | null>(null);
+  const [exchangeRatesError, setExchangeRatesError] = useState('');
 
   const defaultDomaine = customDomaines[0] || '';
-  const emptyForm = { reference: '', designation: '', domaine: defaultDomaine, equipement_type: customTypesForDomain[defaultDomaine]?.[0] || '', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', fournisseur: '', notes: '' };
+  const emptyForm = { reference: '', designation: '', domaine: defaultDomaine, equipement_type: customTypesForDomain[defaultDomaine]?.[0] || '', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', prix_usd: '0', prix_eur: '0', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = useCallback(async () => {
@@ -99,6 +107,8 @@ export default function PiecesPage() {
         stock_actuel: Number(item.stock_actuel || item.Stock_Actuel || 0),
         stock_minimum: Number(item.stock_minimum || item.Seuil_Critique || 1),
         prix_unitaire: Number(item.prix_unitaire || item.Cout_Unitaire || 0),
+        prix_usd: Number(item.prix_usd || 0),
+        prix_eur: Number(item.prix_eur || 0),
         fournisseur: item.fournisseur || item.Fournisseur || '',
         notes: item.notes || '',
       }));
@@ -112,6 +122,85 @@ export default function PiecesPage() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const loadExchangeRates = useCallback(async () => {
+    try {
+      const result = await pieces.exchangeRates();
+      const rates = Object.fromEntries(
+        Object.entries(result.rates || {})
+          .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0)
+          .map(([code, value]) => [code, Number(value)]),
+      ) as Record<string, number>;
+      if (!rates.USD || !rates.EUR) throw new Error('Taux USD ou EUR manquant');
+      setExchangeRates(rates);
+      setExchangeRatesError('');
+    } catch (error: unknown) {
+      setExchangeRatesError(error instanceof Error ? error.message : 'Les taux de change sont indisponibles.');
+    }
+  }, []);
+
+  useEffect(() => { void loadExchangeRates(); }, [loadExchangeRates]);
+
+  useEffect(() => {
+    const refreshConfiguredCurrency = () => {
+      const next = String(localStorage.getItem('savia_devise') || 'TND').trim().toUpperCase();
+      setConfiguredCurrency(/^[A-Z]{3}$/.test(next) ? next : 'TND');
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'savia_devise') refreshConfiguredCurrency();
+    };
+    window.addEventListener('savia_settings_changed', refreshConfiguredCurrency);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('savia_settings_changed', refreshConfiguredCurrency);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  const convertPrice = (amount: number, sourceCurrency: string, targetCurrency: string): number | null => {
+    const sourceRate = exchangeRates?.[sourceCurrency];
+    const targetRate = exchangeRates?.[targetCurrency];
+    if (!Number.isFinite(amount) || !sourceRate || !targetRate) return null;
+    return amount / sourceRate * targetRate;
+  };
+
+  const formatPriceInput = (amount: number) => String(Math.round(amount));
+
+  const roundedFormPrice = (value: string) => {
+    if (!value) return '';
+    const amount = Number(value);
+    return Number.isFinite(amount) ? formatPriceInput(amount) : value;
+  };
+
+  const updatePurchasePrice = (field: 'prix_unitaire' | 'prix_usd' | 'prix_eur', sourceCurrency: string, value: string) => {
+    setForm(current => {
+      const next = { ...current, [field]: value };
+      const amount = Number(value);
+      if (!value || !Number.isFinite(amount) || amount < 0 || !exchangeRates) return next;
+
+      const configuredValue = convertPrice(amount, sourceCurrency, configuredCurrency);
+      const usdValue = convertPrice(amount, sourceCurrency, 'USD');
+      const eurValue = convertPrice(amount, sourceCurrency, 'EUR');
+      if (configuredValue === null || usdValue === null || eurValue === null) return next;
+
+      return {
+        ...next,
+        prix_unitaire: formatPriceInput(configuredValue),
+        prix_usd: formatPriceInput(usdValue),
+        prix_eur: formatPriceInput(eurValue),
+      };
+    });
+  };
+
+  const getPriceInCurrency = (piece: Piece, currency: string): number | null => {
+    const stored = currency === 'USD' ? piece.prix_usd : currency === 'EUR' ? piece.prix_eur : piece.prix_unitaire;
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    return convertPrice(piece.prix_unitaire, configuredCurrency, currency);
+  };
+
+  const formatMoney = (value: number | null, currency: string) => (
+    value === null || !Number.isFinite(value) ? '—' : `${Math.round(value).toLocaleString('fr-FR', { maximumFractionDigits: 0 })} ${currency}`
+  );
 
   const loadFournisseurs = useCallback(async () => {
     try {
@@ -306,11 +395,13 @@ export default function PiecesPage() {
     const stock = Number(form.stock_actuel);
     const minimum = Number(form.stock_minimum);
     const price = Number(form.prix_unitaire);
+    const priceUsd = Number(form.prix_usd);
+    const priceEur = Number(form.prix_eur);
     if (!Number.isInteger(stock) || stock < 0 || !Number.isInteger(minimum) || minimum < 0) {
       return 'Le stock actuel et le stock minimum doivent être des nombres entiers positifs ou nuls.';
     }
-    if (!Number.isFinite(price) || price <= 0) {
-      return 'Le prix unitaire est obligatoire et doit être supérieur à zéro.';
+    if (![price, priceUsd, priceEur].every(value => Number.isFinite(value) && value > 0)) {
+      return 'Les prix d’achat en devise configurée, USD et EUR doivent être supérieurs à zéro.';
     }
     return '';
   };
@@ -329,7 +420,9 @@ export default function PiecesPage() {
         est_annexe: form.est_annexe,
         stock_actuel: Number(form.stock_actuel),
         stock_minimum: Number(form.stock_minimum),
-        prix_unitaire: Number(form.prix_unitaire),
+        prix_unitaire: Math.round(Number(form.prix_unitaire)),
+        prix_usd: Math.round(Number(form.prix_usd)),
+        prix_eur: Math.round(Number(form.prix_eur)),
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
@@ -366,7 +459,9 @@ export default function PiecesPage() {
         est_annexe: form.est_annexe,
         stock_actuel: Number(form.stock_actuel),
         stock_minimum: Number(form.stock_minimum),
-        prix_unitaire: Number(form.prix_unitaire),
+        prix_unitaire: Math.round(Number(form.prix_unitaire)),
+        prix_usd: Math.round(Number(form.prix_usd)),
+        prix_eur: Math.round(Number(form.prix_eur)),
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
@@ -470,7 +565,7 @@ export default function PiecesPage() {
         <div className="text-xs space-y-0.5">
           <div className="font-bold text-red-400">Rupture immédiate — commander maintenant</div>
           <div>Qté minimale : {pred.quantite_recommandee ?? 'Non calculable'}</div>
-          <div>Coût : {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'Non calculable'}</div>
+          <div>Coût : {formatMoney(forecastCost, configuredCurrency)}</div>
         </div>
       );
     }
@@ -689,7 +784,7 @@ export default function PiecesPage() {
         <div className="glass rounded-xl p-4 text-center">
           <div className="flex justify-center mb-2 text-green-400"><DollarSign className="w-5 h-5" /></div>
           <div className="text-3xl font-black text-green-400">{(totalValeur / 1000).toFixed(0)}K</div>
-          <div className="text-xs text-savia-text-muted mt-1">Valeur stock (TND)</div>
+          <div className="text-xs text-savia-text-muted mt-1">Valeur stock ({configuredCurrency})</div>
         </div>
         <div className="glass rounded-xl p-4 text-center">
           <div className="flex justify-center mb-2 text-purple-400"><Factory className="w-5 h-5" /></div>
@@ -824,7 +919,7 @@ export default function PiecesPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-savia-surface z-10">
                     <tr className="border-b border-savia-border">
-                      {['Référence', 'Désignation', 'Type Équip.', 'Stock', 'Min', 'Fournisseur', 'Prix Unit.'].map(h => (
+                      {['Référence', 'Désignation', 'Type Équip.', 'Stock', 'Min', 'Fournisseur', `Prix achat (${configuredCurrency})`, 'Dollar (USD)', 'Euro (EUR)'].map(h => (
                         <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -842,7 +937,9 @@ export default function PiecesPage() {
                         </td>
                         <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
                         <td className="py-2.5 px-3 text-sm">{p.fournisseur}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-sm">{p.prix_unitaire.toLocaleString('fr')} TND</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-sm">{formatMoney(p.prix_unitaire, configuredCurrency)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-sm">{formatMoney(getPriceInCurrency(p, 'USD'), 'USD')}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-sm">{formatMoney(getPriceInCurrency(p, 'EUR'), 'EUR')}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1014,7 +1111,7 @@ export default function PiecesPage() {
                     </span>
                     <div>
                       <div className="font-bold">{p.reference} — {p.designation}</div>
-                      <div className="text-xs text-savia-text-muted">{p.equipement_type} | Stock: {p.stock_actuel} | Min: {p.stock_minimum} | {p.prix_unitaire.toLocaleString('fr')} TND</div>
+                      <div className="text-xs text-savia-text-muted">{p.equipement_type} | Stock: {p.stock_actuel} | Min: {p.stock_minimum} | {formatMoney(p.prix_unitaire, configuredCurrency)}</div>
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -1027,7 +1124,7 @@ export default function PiecesPage() {
                         equipement_type: p.equipement_type,
                         est_annexe: p.est_annexe,
                         stock_actuel: String(p.stock_actuel), stock_minimum: String(p.stock_minimum),
-                        prix_unitaire: String(p.prix_unitaire), fournisseur: p.fournisseur, notes: p.notes,
+                        prix_unitaire: formatPriceInput(p.prix_unitaire), prix_usd: formatPriceInput(getPriceInCurrency(p, 'USD') || 0), prix_eur: formatPriceInput(getPriceInCurrency(p, 'EUR') || 0), fournisseur: p.fournisseur, notes: p.notes,
                       });
                       setCustomFournisseur(
                         Boolean(p.fournisseur) && !fournisseursList.some(item => item.toLowerCase() === p.fournisseur.toLowerCase()),
@@ -1119,7 +1216,7 @@ export default function PiecesPage() {
                             </td>
                             <td className="py-2.5 px-3 text-center text-xs text-savia-text-muted">{p.stock_minimum}</td>
                             <td className="py-2.5 px-3 text-xs">{p.fournisseur || '—'}</td>
-                            <td className="py-2.5 px-3 text-right font-mono text-xs">{p.prix_unitaire.toLocaleString('fr')} TND</td>
+                            <td className="py-2.5 px-3 text-right font-mono text-xs">{formatMoney(p.prix_unitaire, configuredCurrency)}</td>
                             <td className="py-2.5 px-3">
                               <span className={`flex items-center gap-1 text-xs font-semibold ${
                                 isRupture ? 'text-red-400' : isBas ? 'text-yellow-400' : 'text-green-400/80'
@@ -1134,14 +1231,14 @@ export default function PiecesPage() {
                                   <span className="flex items-center gap-1 text-xs font-bold text-red-400">
                                     <XCircle className="w-3 h-3" /> Commander immédiatement
                                   </span>
-                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s) · Coût: {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'non calculable'}</span>
+                                  <span className="text-[10px] text-red-400/70">À commander: {manquant} unité(s) · Coût: {formatMoney(forecastCost, configuredCurrency)}</span>
                                 </div>
                               ) : isBas ? (
                                 <div className="space-y-0.5">
                                   <span className="flex items-center gap-1 text-xs font-bold text-yellow-400">
                                     <AlertTriangle className="w-3 h-3" /> Commander bientôt
                                   </span>
-                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s) · Date: {forecast.date_commande || 'non calculable'} · Coût: {forecastCost != null ? `${forecastCost.toLocaleString('fr')} TND` : 'non calculable'}</span>
+                                  <span className="text-[10px] text-yellow-400/70">À commander: {manquant} unité(s) · Date: {forecast.date_commande || 'non calculable'} · Coût: {formatMoney(forecastCost, configuredCurrency)}</span>
                                 </div>
                               ) : (
                                 <span className="flex items-center gap-1 text-xs text-green-400">
@@ -1173,7 +1270,7 @@ export default function PiecesPage() {
                   <CheckCircle2 className="w-3 h-3" /> {data.length - lowStock.length} OK
                 </span>
                 <span className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400">
-                  <DollarSign className="w-3 h-3" /> Valeur: {(totalValeur / 1000).toFixed(0)}K TND
+                  <DollarSign className="w-3 h-3" /> Valeur: {(totalValeur / 1000).toFixed(0)}K {configuredCurrency}
                 </span>
               </div>
               <button onClick={handleAiAnalyze} disabled={isAnalyzing} className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-white bg-gradient-to-r from-purple-600 to-pink-500 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-purple-500/20 mx-auto disabled:opacity-50">
@@ -1222,7 +1319,7 @@ export default function PiecesPage() {
                             <div>Équipement : {d.equipement_type || 'Non documenté'} · Client(s) : {d.clients?.length ? d.clients.join(', ') : 'Non documenté'}</div>
                             <div>Fournisseur : {d.fournisseur || 'Non renseigné'} · Délai : {d.delai_fournisseur_jours != null ? `${d.delai_fournisseur_jours} jours` : 'non renseigné'}</div>
                             <div>Stock : {d.stock_actuel ?? '—'} / seuil {d.stock_minimum ?? '—'} · Point de commande : {d.point_commande ?? 'non calculable'} · Stock sécurité : {d.stock_securite ?? 'non calculable'}</div>
-                            <div>Prix unitaire : {d.prix_unitaire != null ? `${Number(d.prix_unitaire).toLocaleString('fr')} TND` : 'non renseigné'} · Coût de commande : {d.cout_estime != null ? `${Number(d.cout_estime).toLocaleString('fr')} TND` : 'non calculable'}</div>
+                            <div>Prix unitaire : {d.prix_unitaire != null ? formatMoney(Number(d.prix_unitaire), configuredCurrency) : 'non renseigné'} · Coût de commande : {d.cout_estime != null ? formatMoney(Number(d.cout_estime), configuredCurrency) : 'non calculable'}</div>
                             <div>Usage : 30 j {d.consommation_30j ?? 0} · 90 j {d.consommation_90j ?? 0} · 12 mois {d.utilisations_total_365j ?? 0} · rythme {d.consommation_mensuelle ?? 0}/mois</div>
                             <div>Commande : {d.date_commande || 'non calculable'} · Rupture : {d.date_rupture_prevue || 'non calculable'} · Risque 30 j : {d.risque_rupture_30j_pct != null ? `${d.risque_rupture_30j_pct}%` : 'non calculable'} · Fiabilité : {d.fiabilite_donnees_pct ?? 0}%</div>
                           </div>
@@ -1271,7 +1368,7 @@ export default function PiecesPage() {
                           <div className="flex items-center gap-3 text-xs flex-wrap">
                             <span className="flex items-center gap-1"><Boxes className="w-3 h-3" /> {r.quantite ?? 'Non calculable'} unité(s)</span>
                             <span className="flex items-center gap-1"><Calendar className="w-3 h-3 text-blue-400" /><span className="text-blue-400 font-semibold">{r.date_achat || 'Non calculable'}</span></span>
-                            <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime != null ? `${Number(r.cout_estime).toLocaleString('fr')} TND` : 'Non calculable'}</span>
+                            <span className="flex items-center gap-1 text-green-400"><DollarSign className="w-3 h-3" />{r.cout_estime != null ? formatMoney(Number(r.cout_estime), configuredCurrency) : 'Non calculable'}</span>
                           </div>
                         </div>
                       ))}
@@ -1287,7 +1384,7 @@ export default function PiecesPage() {
                       {aiResult.plan_achat.map((s: any, i: number) => (
                         <div key={i} className="flex items-start justify-between flex-wrap gap-2 p-3 rounded-lg bg-green-500/5">
                           <div><div className="font-semibold text-sm text-green-300">{s.semaine}</div><div className="text-xs text-savia-text-muted mt-1">{(s.pieces || []).join(' · ')}</div></div>
-                          <span className="flex items-center gap-1 text-sm font-bold text-green-400"><DollarSign className="w-3.5 h-3.5" />{s.budget?.toLocaleString('fr')} TND</span>
+                          <span className="flex items-center gap-1 text-sm font-bold text-green-400"><DollarSign className="w-3.5 h-3.5" />{formatMoney(Number(s.budget), configuredCurrency)}</span>
                         </div>
                       ))}
                     </div>
@@ -1297,8 +1394,8 @@ export default function PiecesPage() {
                   <div className="p-4 rounded-lg bg-blue-500/10 border-l-4 border-blue-500">
                     <div className="flex items-center gap-2 font-bold text-sm text-blue-400 mb-3 uppercase tracking-wider"><DollarSign className="w-4 h-4" /> Impact Budget</div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiResult.impact_budget.cout_total_commande != null ? `${Number(aiResult.impact_budget.cout_total_commande).toLocaleString('fr')} TND` : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">{aiResult.impact_budget.calcul_complet ? 'Coût total commande' : 'Coût connu (partiel)'}</div>{!aiResult.impact_budget.calcul_complet && aiResult.impact_budget.articles_sans_prix > 0 && <div className="text-[10px] text-yellow-400 mt-1">{aiResult.impact_budget.articles_sans_prix} pièce(s) sans prix</div>}</div>
-                      <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiResult.impact_budget.gain_potentiel != null ? `${Number(aiResult.impact_budget.gain_potentiel).toLocaleString('fr')} TND` : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
+                      <div className="text-center p-3 rounded-lg bg-blue-500/10"><div className="text-lg font-black text-blue-400">{aiResult.impact_budget.cout_total_commande != null ? formatMoney(Number(aiResult.impact_budget.cout_total_commande), configuredCurrency) : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">{aiResult.impact_budget.calcul_complet ? 'Coût total commande' : 'Coût connu (partiel)'}</div>{!aiResult.impact_budget.calcul_complet && aiResult.impact_budget.articles_sans_prix > 0 && <div className="text-[10px] text-yellow-400 mt-1">{aiResult.impact_budget.articles_sans_prix} pièce(s) sans prix</div>}</div>
+                      <div className="text-center p-3 rounded-lg bg-green-500/10"><div className="text-lg font-black text-green-400">{aiResult.impact_budget.gain_potentiel != null ? formatMoney(Number(aiResult.impact_budget.gain_potentiel), configuredCurrency) : 'Non calculable'}</div><div className="text-xs text-savia-text-muted">Gain potentiel</div></div>
                       <div className="text-center p-3 rounded-lg bg-purple-500/10"><div className="text-sm font-bold text-purple-400 leading-tight">{aiResult.impact_budget.ratio}</div><div className="text-xs text-savia-text-muted mt-1">Ratio ROI</div></div>
                     </div>
                   </div>
@@ -1537,7 +1634,16 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+            <div className="md:col-span-2 rounded-xl border border-savia-border/60 bg-savia-surface-hover/30 p-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat ({configuredCurrency}) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_unitaire)} onChange={e => updatePurchasePrice('prix_unitaire', configuredCurrency, e.target.value)} /></div>
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat (USD) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_usd)} onChange={e => updatePurchasePrice('prix_usd', 'USD', e.target.value)} /></div>
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat (EUR) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_eur)} onChange={e => updatePurchasePrice('prix_eur', 'EUR', e.target.value)} /></div>
+              </div>
+              <p className={`mt-2 text-xs ${exchangeRatesError ? 'text-red-400' : 'text-savia-text-dim'}`}>
+                {exchangeRatesError || (exchangeRates ? 'La saisie d’un montant met automatiquement à jour les deux autres devises.' : 'Chargement des taux de change…')}
+              </p>
+            </div>
             <div>
               <label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label>
               {customFournisseur ? (
@@ -1565,7 +1671,7 @@ export default function PiecesPage() {
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
           <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text cursor-pointer">Annuler</button>
-          <button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          <button onClick={handleSave} disabled={isSaving || !exchangeRates} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Sauvegarder
           </button>
         </div>
@@ -1637,7 +1743,16 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
-            <div><label className="block text-sm text-savia-text-muted mb-1">Prix unitaire (TND) *</label><input required min="0.01" step="0.01" type="number" className={INPUT_CLS} value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire: e.target.value})} /></div>
+            <div className="md:col-span-2 rounded-xl border border-savia-border/60 bg-savia-surface-hover/30 p-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat ({configuredCurrency}) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_unitaire)} onChange={e => updatePurchasePrice('prix_unitaire', configuredCurrency, e.target.value)} /></div>
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat (USD) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_usd)} onChange={e => updatePurchasePrice('prix_usd', 'USD', e.target.value)} /></div>
+                <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat (EUR) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_eur)} onChange={e => updatePurchasePrice('prix_eur', 'EUR', e.target.value)} /></div>
+              </div>
+              <p className={`mt-2 text-xs ${exchangeRatesError ? 'text-red-400' : 'text-savia-text-dim'}`}>
+                {exchangeRatesError || (exchangeRates ? 'La saisie d’un montant met automatiquement à jour les deux autres devises.' : 'Chargement des taux de change…')}
+              </p>
+            </div>
             <div>
               <label className="block text-sm text-savia-text-muted mb-1">Fournisseur *</label>
               {customFournisseur ? (
@@ -1665,7 +1780,7 @@ export default function PiecesPage() {
         </div>
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-white/5">
           <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text cursor-pointer">Annuler</button>
-          <button onClick={handleEdit} disabled={isSaving} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          <button onClick={handleEdit} disabled={isSaving || !exchangeRates} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-90 disabled:opacity-50 cursor-pointer">
             {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Enregistrer
           </button>
         </div>

@@ -1,5 +1,10 @@
 """Spare-parts, stock-request, and prediction routes."""
 
+import json
+import math
+from time import monotonic
+from urllib.request import Request, urlopen
+
 from api.runtime import (
     Body,
     Depends,
@@ -55,6 +60,10 @@ from controllers.auth_dashboard import (
 from services.spare_parts_prediction_engine import predict_piece_order_date as predict_piece_order_date_v2, predict_spare_parts
 
 STOCK_READ_ROLES = ("Admin", "Manager", "Responsable Technique", "Technicien", "Gestionnaire", "Gestionnaire de stock")
+_CURRENCY_RATES_URL = "https://open.er-api.com/v6/latest/USD"
+_CURRENCY_RATES_TTL_SECONDS = 6 * 60 * 60
+_currency_rates_cache: dict | None = None
+_currency_rates_cached_at = 0.0
 
 
 def _validate_piece_payload(body: dict) -> None:
@@ -72,7 +81,6 @@ def _validate_piece_payload(body: dict) -> None:
     if missing:
         raise HTTPException(status_code=422, detail=f"Champs obligatoires manquants : {', '.join(missing)}")
 
-    import math
     try:
         stock = float(body["stock_actuel"])
         minimum = float(body["stock_minimum"])
@@ -88,10 +96,64 @@ def _validate_piece_payload(body: dict) -> None:
     if price <= 0:
         raise HTTPException(status_code=422, detail="Le prix unitaire doit être supérieur à zéro")
 
+    for field in ("prix_usd", "prix_eur"):
+        if body.get(field) in (None, ""):
+            continue
+        try:
+            converted_price = float(body[field])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"{field} doit être un nombre valide")
+        if not math.isfinite(converted_price) or converted_price <= 0:
+            raise HTTPException(status_code=422, detail=f"{field} doit être supérieur à zéro")
+
+
+def _get_currency_rates() -> dict:
+    """Return USD-based exchange rates, reusing a recent server-side response."""
+    global _currency_rates_cache, _currency_rates_cached_at
+    now = monotonic()
+    if _currency_rates_cache and now - _currency_rates_cached_at < _CURRENCY_RATES_TTL_SECONDS:
+        return {**_currency_rates_cache, "cached": True}
+
+    try:
+        request = Request(_CURRENCY_RATES_URL, headers={"Accept": "application/json"})
+        with urlopen(request, timeout=8) as response:  # nosec B310 - fixed HTTPS endpoint
+            payload = json.loads(response.read().decode("utf-8"))
+        raw_rates = payload.get("rates") if payload.get("result") == "success" else None
+        if not isinstance(raw_rates, dict):
+            raise ValueError("Réponse de taux de change invalide")
+        rates = {
+            str(code).upper(): float(value)
+            for code, value in raw_rates.items()
+            if isinstance(code, str) and math.isfinite(float(value)) and float(value) > 0
+        }
+        rates["USD"] = 1.0
+        if "EUR" not in rates:
+            raise ValueError("Taux EUR indisponible")
+        _currency_rates_cache = {
+            "base_code": "USD",
+            "rates": rates,
+            "updated_at": payload.get("time_last_update_utc", ""),
+        }
+        _currency_rates_cached_at = now
+        return {**_currency_rates_cache, "cached": False}
+    except Exception as exc:
+        if _currency_rates_cache:
+            logger.warning("Taux de change indisponibles, utilisation du cache expiré: %s", exc)
+            return {**_currency_rates_cache, "cached": True, "stale": True}
+        logger.warning("Impossible de récupérer les taux de change: %s", exc)
+        raise HTTPException(status_code=503, detail="Les taux de change sont temporairement indisponibles")
+
 @app.get("/api/pieces")
 def get_pieces(user: dict = Depends(_verify_token)):
     require_roles(user, *STOCK_READ_ROLES)
     return _df_to_records(lire_pieces())
+
+
+@app.get("/api/currency-rates")
+def get_currency_rates(user: dict = Depends(_verify_token)):
+    """Expose the cached conversion rates needed by the spare-parts price form."""
+    require_roles(user, *STOCK_READ_ROLES)
+    return _get_currency_rates()
 
 
 @app.get("/api/fournisseurs")

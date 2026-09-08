@@ -882,6 +882,12 @@ def _migration_023_contract_multiple_attachments(conn) -> None:
     )
 
 
+def _migration_024_spare_part_multi_currency_prices(conn) -> None:
+    """Persist USD and EUR purchase prices alongside the configured currency."""
+    conn.execute("ALTER TABLE pieces_rechange ADD COLUMN IF NOT EXISTS prix_usd REAL DEFAULT 0.0")
+    conn.execute("ALTER TABLE pieces_rechange ADD COLUMN IF NOT EXISTS prix_eur REAL DEFAULT 0.0")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -906,6 +912,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("021", "public market invoice milestone", _migration_021_public_market_invoice_step),
     ("022", "dated intervention work sessions", _migration_022_intervention_work_sessions),
     ("023", "multiple contract attachments", _migration_023_contract_multiple_attachments),
+    ("024", "spare-part USD and EUR purchase prices", _migration_024_spare_part_multi_currency_prices),
 )
 
 

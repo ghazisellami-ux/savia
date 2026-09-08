@@ -239,6 +239,7 @@ export const techniciens = {
 // --- Pièces ---
 export const pieces = {
   list: () => request<Array<Record<string, unknown>>>('/api/pieces'),
+  exchangeRates: () => request<{ base_code: string; rates: Record<string, number>; updated_at?: string; cached?: boolean }>('/api/currency-rates'),
   create: (data: Record<string, unknown>) => request<{ok: boolean}>('/api/pieces', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'PUT', body: data }),
   delete: (id: number) => request<{ok: boolean}>(`/api/pieces/${id}`, { method: 'DELETE' }),
