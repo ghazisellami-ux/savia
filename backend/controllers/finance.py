@@ -258,6 +258,11 @@ def _map_health_key(value):
     return str(value or "").strip().casefold()
 
 
+def _map_client_key(value):
+    """Normalize client names so map records cannot split one client in two sites."""
+    return " ".join(str(value or "").split()).casefold()
+
+
 def _map_status_score(status):
     """Fallback score when the dashboard health scorer has no row."""
     status_key = _map_health_key(status)
@@ -386,13 +391,18 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
         except:
             df_clients = None
 
+        # The clients registry is the only source of truth for map sites and
+        # the site counter. Equipment records can contain legacy names, so
+        # they enrich a registered client but must never create an extra site.
         sites = {}
+        client_site_keys = {}
         if df_clients is not None and not df_clients.empty:
             for _, client_row in df_clients.iterrows():
                 cl = str(client_row.get("nom", "") or "").strip()
                 if not cl:
                     continue
-                client_country = str(client_row.get("country_code", "TN") or "TN").strip().upper()
+                client_country_raw = str(client_row.get("country_code", "TN") or "TN").strip().upper()
+                client_country = country_aliases.get(client_country_raw, client_country_raw)
                 if client_country not in requested_countries:
                     continue
                 sites[cl] = {
@@ -405,48 +415,32 @@ def map_sites(country: Optional[str] = None, user: dict = Depends(_verify_token)
                     "adresse": client_row.get("adresse", "") or "",
                     "ville": client_row.get("ville", "") or "",
                 }
+                client_site_keys[_map_client_key(cl)] = cl
 
         for _, eq in df_equip.iterrows():
-            cl = eq.get("Client", "")
-            if not cl:
+            raw_client = str(eq.get("Client", "") or "").strip()
+            if not raw_client:
                 continue
-            if cl not in sites:
-                # Get ville and region from clients table if available
-                ville = ""
-                if df_clients is not None and not df_clients.empty:
-                    client_row = df_clients[df_clients["nom"] == cl]
-                    if not client_row.empty:
-                        client_country = str(client_row.iloc[0].get("country_code", "TN") or "TN").strip().upper()
-                        if client_country not in requested_countries:
-                            continue
-                        ville = client_row.iloc[0].get("ville", "") or ""
-                
-                # Fallback to equipment ville if client ville not found
-                if not ville:
-                    ville = eq.get("Ville", eq.get("ville", ""))
-                
-                sites[cl] = {
-                    "client": cl,
-                    "country_code": client_country if df_clients is not None and not df_clients.empty and not client_row.empty else country_key,
-                    "equipements": [],
-                    "nb_equipements": 0,
-                    "latitude": eq.get("latitude", None),
-                    "longitude": eq.get("longitude", None),
-                    "adresse": eq.get("adresse", ""),
-                    "ville": ville,
-                }
-            else:
-                if not sites[cl].get("ville"):
-                    sites[cl]["ville"] = eq.get("Ville", eq.get("ville", "")) or ""
-                if not sites[cl].get("adresse"):
-                    sites[cl]["adresse"] = eq.get("adresse", "") or ""
-                if not sites[cl].get("latitude") and eq.get("latitude"):
-                    sites[cl]["latitude"] = eq.get("latitude")
-                    sites[cl]["longitude"] = eq.get("longitude")
+            canonical_client = client_site_keys.get(_map_client_key(raw_client))
+            if not canonical_client:
+                logger.warning(
+                    "Équipement %r ignoré sur la carte : client %r absent du registre clients",
+                    eq.get("Nom", ""), raw_client,
+                )
+                continue
+
+            site = sites[canonical_client]
+            if not site.get("ville"):
+                site["ville"] = eq.get("Ville", eq.get("ville", "")) or ""
+            if not site.get("adresse"):
+                site["adresse"] = eq.get("adresse", "") or ""
+            if not site.get("latitude") and eq.get("latitude"):
+                site["latitude"] = eq.get("latitude")
+                site["longitude"] = eq.get("longitude")
             nom = eq.get("Nom", "")
             statut = eq.get("Statut", eq.get("statut", "Actif"))
-            sites[cl]["equipements"].append({"nom": nom, "type": eq.get("Type", ""), "statut": statut})
-            sites[cl]["nb_equipements"] += 1
+            site["equipements"].append({"nom": nom, "type": eq.get("Type", ""), "statut": statut})
+            site["nb_equipements"] += 1
 
         # Compute health scores per site + auto-assign coordinates
         result = []
