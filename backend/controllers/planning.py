@@ -1,5 +1,7 @@
 """Planning, comparison, rescheduling, and planning-PDF routes."""
 
+from html import escape
+
 from api.runtime import (
     Depends,
     HTTPException,
@@ -37,6 +39,7 @@ from services.scheduled_jobs import (
     lire_equipements,
     lire_planning,
     logger,
+    send_telegram_reliably,
     sync_planning_to_interventions,
 )
 from controllers.auth_dashboard import (
@@ -100,19 +103,53 @@ def create_planning(body: dict, user: dict = Depends(_verify_token)):
             detail="Cette action est réservée aux Responsables, Managers et Admins"
         )
     
-    ajouter_planning(body)
+    planning_id = ajouter_planning(body)
+
+    def notification_value(key: str, fallback: str = "", *, limit: int = 800) -> str:
+        raw_value = str(body.get(key, fallback) or "").strip()
+        return escape(raw_value[:limit]) if raw_value else "Non renseigné"
+
+    raw_date = str(body.get("date_prevue", "") or "").strip()
+    try:
+        scheduled_date = datetime.fromisoformat(raw_date[:10]).strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        scheduled_date = notification_value("date_prevue")
+
+    notification_lines = [
+        f"📅 <b>INTERVENTION PLANIFIÉE — #{planning_id}</b>",
+        "",
+        f"🔹 Type : <b>{notification_value('type_maintenance', 'Préventive')}</b>",
+        f"🔧 Équipement : <b>{notification_value('machine')}</b>",
+        f"🏥 Client / site : <b>{notification_value('client')}</b>",
+        f"📆 Date prévue : <b>{scheduled_date}</b>",
+        f"👷 Technicien(s) : {notification_value('technicien_assigne')}",
+        f"🔁 Récurrence : {notification_value('recurrence')}",
+    ]
+    if str(body.get("description") or "").strip():
+        notification_lines.append(f"📝 Description : {notification_value('description')}")
+    if str(body.get("notes") or "").strip():
+        notification_lines.append(f"📌 Notes : {notification_value('notes')}")
+    notification_lines.extend(("", f"🕐 Planifiée le {datetime.now().strftime('%d/%m/%Y %H:%M')}"))
+
+    # This immediate message complements, rather than replaces, the daily
+    # reminder emitted by the scheduler. The outbox retries a failed send.
+    telegram_sent = send_telegram_reliably(
+        "telegram",
+        "\n".join(notification_lines),
+        f"planning:{planning_id}:created",
+    )
     
     # Log audit
     username = user.get("sub", "unknown")
     import json
     details = json.dumps({
         "machine": body.get("machine", ""),
-        "type": body.get("type", ""),
-        "date": body.get("date", ""),
+        "type": body.get("type_maintenance", ""),
+        "date": body.get("date_prevue", ""),
     }, ensure_ascii=False)
     log_audit(username, "CREATE_PLANNING", details, "planning")
     
-    return {"ok": True}
+    return {"ok": True, "id": planning_id, "telegram_sent": telegram_sent}
 
 
 @app.post("/api/planning/sync")
@@ -1076,8 +1113,21 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
 @app.delete("/api/planning/{planning_id}")
 def delete_planning(planning_id: int, user: dict = Depends(_verify_token)):
     require_roles(user, "Admin", "Manager", "Responsable Technique")
-    supprimer_planning(planning_id)
-    return {"ok": True}
+    try:
+        deleted = supprimer_planning(planning_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Planning introuvable")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    log_audit(
+        user.get("sub", "unknown"),
+        "DELETE_PLANNING",
+        f"Planning #{planning_id} supprimé : {deleted['deleted_planning']} occurrence(s), "
+        f"{deleted['deleted_interventions']} intervention(s) liée(s)",
+        "planning",
+    )
+    return {"ok": True, **deleted}
 
 
 # ==========================================

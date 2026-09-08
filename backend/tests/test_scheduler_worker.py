@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import services.scheduled_jobs as jobs
@@ -49,3 +49,34 @@ def test_scheduler_standby_does_not_execute_jobs(monkeypatch):
 def test_api_startup_no_longer_starts_a_scheduler_thread():
     lifecycle = Path(__file__).parents[1] / "api" / "lifecycle.py"
     assert "_start_garantie_daemon" not in lifecycle.read_text(encoding="utf-8")
+
+
+def test_planning_reminder_includes_only_the_next_fifteen_days(monkeypatch):
+    today = date.today()
+    monkeypatch.setattr(
+        jobs,
+        "lire_planning",
+        lambda: jobs.pd.DataFrame([
+            {
+                "id": 1,
+                "statut": "Planifiée",
+                "machine": "Dans la fenêtre",
+                "date_prevue": (today + timedelta(days=15)).isoformat(),
+            },
+            {
+                "id": 2,
+                "statut": "Planifiée",
+                "machine": "Hors fenêtre",
+                "date_prevue": (today + timedelta(days=16)).isoformat(),
+            },
+        ]),
+    )
+    messages = []
+    monkeypatch.setattr(jobs, "_send_telegram", messages.append)
+
+    reminders = jobs.check_planning_reminder()
+
+    assert [reminder["machine"] for reminder in reminders] == ["Dans la fenêtre"]
+    assert len(messages) == 1
+    assert "dans les 15 prochains jours" in messages[0]
+    assert "Hors fenêtre" not in messages[0]

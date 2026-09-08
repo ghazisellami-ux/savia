@@ -107,6 +107,7 @@ interface PlanItem {
   type_maintenance: string;
   recurrence: string;
   notes: string;
+  contrat_id?: number | null;
   is_ghost?: boolean;
   original_planning_id?: number | null;
 }
@@ -167,6 +168,9 @@ export default function PlanningPage() {
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
+  const [planningToDelete, setPlanningToDelete] = useState<PlanItem | null>(null);
+  const [isDeletingPlanning, setIsDeletingPlanning] = useState(false);
+  const [deletePlanningError, setDeletePlanningError] = useState('');
 
   const maintenanceTypes = useMemo(() => mergeInterventionTypes(
     INTERVENTION_TYPES_BASE,
@@ -269,6 +273,7 @@ export default function PlanningPage() {
         type_maintenance: item.type_maintenance || 'Préventive',
         recurrence: item.recurrence || 'Aucune',
         notes: item.notes || '',
+        contrat_id: item.contrat_id ?? null,
         is_ghost: item.is_ghost === true || item.is_ghost === 1 || item.is_ghost === 'true',
         original_planning_id: item.original_planning_id ?? null,
       }));
@@ -427,6 +432,25 @@ export default function PlanningPage() {
       setRescheduleError(err.message || 'Erreur lors du décalage. Veuillez réessayer.');
     } finally {
       setIsRescheduling(false);
+    }
+  };
+
+  const handleDeletePlanning = async () => {
+    if (!planningToDelete) return;
+
+    setIsDeletingPlanning(true);
+    setDeletePlanningError('');
+    try {
+      await planning.delete(planningToDelete.id);
+      setPlanningToDelete(null);
+      setDayDetailDate(null);
+      setDayDetailEvents([]);
+      await loadData();
+    } catch (err: any) {
+      console.error('Planning deletion failed', err);
+      setDeletePlanningError(err?.message || 'Impossible de supprimer cette intervention du planning.');
+    } finally {
+      setIsDeletingPlanning(false);
     }
   };
 
@@ -851,14 +875,14 @@ export default function PlanningPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-surface z-10">
                 <tr className="border-b border-savia-border">
-                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut'].map(h => (
+                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut', 'Actions'].map(h => (
                     <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filteredData.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center py-8 text-savia-text-muted text-sm">Aucune maintenance ne correspond aux filtres sélectionnés.</td></tr>
+                  <tr><td colSpan={9} className="text-center py-8 text-savia-text-muted text-sm">Aucune maintenance ne correspond aux filtres sélectionnés.</td></tr>
                 ) : filteredData
                   .slice()
                   .sort((a, b) => {
@@ -892,6 +916,17 @@ export default function PlanningPage() {
                           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${colors.badge}`}>
                             {automaticStatus}
                           </span>
+                        </td>
+                        <td className="py-2 px-3">
+                          {canCreate && !ev.contrat_id && !ev.is_ghost && !historicalAnchor ? (
+                            <button
+                              onClick={() => { setPlanningToDelete(ev); setDeletePlanningError(''); }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-400 transition-colors hover:bg-red-500/20"
+                              title="Supprimer du planning"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Supprimer
+                            </button>
+                          ) : <span className="text-savia-text-dim">—</span>}
                         </td>
                       </tr>
                     );
@@ -1225,15 +1260,25 @@ export default function PlanningPage() {
                       </div>
                     )}
                     
-                    {/* Action buttons for Admin/Manager */}
-                    {(user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev) && (
+                    {/* Action buttons for planning managers */}
+                    {(((user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev)) || (canCreate && !ev.contrat_id && !ev.is_ghost && !isHistoricalAnchor(ev))) && (
                       <div className="flex items-center gap-2 pt-2 border-t border-savia-border">
-                        <button
-                          onClick={() => handleOpenReschedule(ev)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent bg-savia-accent/10 hover:bg-savia-accent/20 border border-savia-accent/30 transition-all cursor-pointer flex-1"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" /> Décaler et assigner
-                        </button>
+                        {(user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev) && (
+                          <button
+                            onClick={() => handleOpenReschedule(ev)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent bg-savia-accent/10 hover:bg-savia-accent/20 border border-savia-accent/30 transition-all cursor-pointer flex-1"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" /> Décaler et assigner
+                          </button>
+                        )}
+                        {canCreate && !ev.contrat_id && !ev.is_ghost && !isHistoricalAnchor(ev) && (
+                          <button
+                            onClick={() => { setPlanningToDelete(ev); setDeletePlanningError(''); }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-all cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Supprimer
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1243,6 +1288,49 @@ export default function PlanningPage() {
           </div>
         </div>
       )}
+
+      <Modal
+        isOpen={!!planningToDelete}
+        onClose={() => { if (!isDeletingPlanning) setPlanningToDelete(null); }}
+        title="Confirmer la suppression"
+      >
+        {planningToDelete && (
+          <div className="space-y-5">
+            <div className="flex gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-400" />
+              <div>
+                <p className="font-bold">Supprimer cette intervention du planning ?</p>
+                <p className="mt-1 text-red-200/80">Cette action supprimera aussi les éventuelles interventions liées.</p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-savia-surface-hover/60 p-3 text-sm">
+              <p className="font-semibold text-savia-text">{planningToDelete.machine}</p>
+              <p className="mt-1 text-savia-text-muted">{planningToDelete.client || 'Client non renseigné'} · {planningToDelete.date_planifiee.substring(0, 10)}</p>
+              {planningToDelete.recurrence && planningToDelete.recurrence !== 'Aucune' && (
+                <p className="mt-2 text-amber-300">Récurrence {planningToDelete.recurrence} : toutes les occurrences associées à cet équipement seront supprimées.</p>
+              )}
+            </div>
+            {deletePlanningError && <p className="text-sm text-red-400">{deletePlanningError}</p>}
+            <div className="flex justify-end gap-3 border-t border-savia-border/50 pt-4">
+              <button
+                onClick={() => setPlanningToDelete(null)}
+                disabled={isDeletingPlanning}
+                className="rounded-lg border border-savia-border px-4 py-2 text-sm font-semibold text-savia-text-muted transition-colors hover:bg-savia-surface-hover disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleDeletePlanning}
+                disabled={isDeletingPlanning}
+                className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-50"
+              >
+                {isDeletingPlanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                Supprimer définitivement
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Reschedule Modal */}
       {showRescheduleModal && selectedIntervention && (
