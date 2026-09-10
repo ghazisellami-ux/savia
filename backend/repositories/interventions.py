@@ -44,6 +44,7 @@ def lire_interventions(machine=None):
                    i.date_retour_site, i.retour_site_confirme_par,
                    i.type_erreur, i.priorite,
                    i.start_time, i.end_time, i.planning_id,
+                   pm.date_prevue AS planning_date,
                    d.id AS demande_id, d.date_planifiee,
                    COALESCE(i.fiche_photo_nom, '') AS fiche_photo_nom,
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
@@ -53,6 +54,7 @@ def lire_interventions(machine=None):
             FROM interventions i
             LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
             LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
+            LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
             WHERE i.is_temporary = 0
         """
         if machine:
