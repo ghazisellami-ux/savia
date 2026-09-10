@@ -12,6 +12,7 @@ from datetime import datetime
 from api.runtime import (
     get_db,
     lire_contrats,
+    lire_demandes_intervention,
     lire_equipements,
     lire_interventions,
     lire_notification_schedules,
@@ -21,6 +22,8 @@ from api.runtime import (
     pd,
     update_piece_parameters_batch,
 )
+from repositories.contracts import get_contract_equipements
+from services.sla_tracking import active_sla_contracts, elapsed_hours, sla_contract_for, sla_start_value
 from services.timezone import business_now, configure_process_timezone
 
 def check_garantie_expiry():
@@ -547,26 +550,15 @@ def check_sla_alerts():
     try:
         df_contrats = lire_contrats()
         df_interv = lire_interventions()
+        df_demandes = lire_demandes_intervention()
         df_equip = lire_equipements()
 
-        # Build client → SLA mapping from active contracts
-        client_sla = {}
-        if df_contrats is not None and not df_contrats.empty:
-            for _, c in df_contrats.iterrows():
-                cl = c.get("client", "")
-                sla_h_raw = c.get("sla_temps_reponse_h", 0)
-                try:
-                    sla_h = max(0, int(sla_h_raw)) if pd.notna(sla_h_raw) else 0
-                except (TypeError, ValueError):
-                    sla_h = 0
-                statut = str(c.get("statut", "")).lower()
-                if cl and "actif" in statut:
-                    # Un SLA à 0 désactive les alertes SLA pour ce client.
-                    if cl not in client_sla or (client_sla[cl] > 0 and (sla_h == 0 or sla_h < client_sla[cl])):
-                        client_sla[cl] = int(sla_h)
-
-        if not client_sla:
-            return  # No active contracts with SLA
+        contractual_slas = active_sla_contracts(
+            df_contrats.to_dict("records") if df_contrats is not None and not df_contrats.empty else [],
+            get_contract_equipements,
+        )
+        if not contractual_slas:
+            return {"danger": 0, "breached": 0}
 
         # Build machine → client mapping
         machine_client = {}
@@ -582,12 +574,14 @@ def check_sla_alerts():
             active = df_interv[~df_interv["statut"].str.lower().str.contains("termin|clotur|clôtur", na=False)]
             for _, interv in active.iterrows():
                 machine = interv.get("machine", "")
-                cl = machine_client.get(machine, "")
-                if cl not in client_sla or client_sla[cl] <= 0:
-                    continue  # No SLA for this client
-
-                sla_h = client_sla[cl]
-                start_str = interv.get("date_debut_intervention") or interv.get("date", "")
+                cl = interv.get("client", "") or machine_client.get(machine, "")
+                contract = sla_contract_for(
+                    contractual_slas, cl, machine, interv.get("type_intervention", ""),
+                )
+                if not contract:
+                    continue
+                sla_h = contract["sla_h"]
+                start_str = sla_start_value(interv)
                 try:
                     start = pd.to_datetime(start_str)
                     if pd.isna(start):
@@ -595,7 +589,9 @@ def check_sla_alerts():
                 except Exception:
                     continue
 
-                elapsed_h = round((now - start).total_seconds() / 3600, 1)
+                elapsed_h = elapsed_hours(start_str, now, business_day_start_hour=8)
+                if elapsed_h is None:
+                    continue
                 pct = round((elapsed_h / sla_h) * 100, 1) if sla_h > 0 else 100
                 remaining_h = round(sla_h - elapsed_h, 1)
 
@@ -609,8 +605,44 @@ def check_sla_alerts():
                     "elapsed_h": elapsed_h,
                     "remaining_h": remaining_h,
                     "pct": pct,
+                    "contract_id": contract["id"],
                 }
 
+                if pct > 100:
+                    breached_items.append(item)
+                elif pct >= 75:
+                    danger_items.append(item)
+
+        # An unanswered request is itself subject to the response SLA.  The
+        # previous implementation only monitored interventions after they had
+        # been created, leaving the initial contractual response unalerted.
+        if df_demandes is not None and not df_demandes.empty:
+            active_demands = df_demandes[df_demandes["statut"].isin(["Nouvelle", "En attente"])]
+            for _, demand in active_demands.iterrows():
+                machine = demand.get("equipement", "")
+                cl = demand.get("client", "")
+                contract = sla_contract_for(
+                    contractual_slas, cl, machine, demand.get("type_intervention", "Corrective"),
+                )
+                if not contract:
+                    continue
+                elapsed_h = elapsed_hours(demand.get("date_demande", ""), now)
+                if elapsed_h is None:
+                    continue
+                sla_h = contract["sla_h"]
+                pct = round((elapsed_h / sla_h) * 100, 1)
+                item = {
+                    "id": f"DEM-{demand.get('id', '')}",
+                    "machine": machine,
+                    "client": cl,
+                    "technicien": demand.get("technicien_assigne", ""),
+                    "statut": demand.get("statut", ""),
+                    "sla_h": sla_h,
+                    "elapsed_h": elapsed_h,
+                    "remaining_h": round(sla_h - elapsed_h, 1),
+                    "pct": pct,
+                    "contract_id": contract["id"],
+                }
                 if pct > 100:
                     breached_items.append(item)
                 elif pct >= 75:
@@ -621,7 +653,7 @@ def check_sla_alerts():
             lines = '\n'.join(
                 f"  ⚠️ <b>#{d['id']}</b> — {d['machine']}"
                 f"\n    👤 {d['client']} | 👷 {d['technicien'] or 'Non assigné'}"
-                f"\n    ⏱ {d['elapsed_h']}h / {d['sla_h']}h ({d['pct']}%) — reste {max(0, d['remaining_h'])}h"
+                f"\n    📄 Contrat #{d['contract_id']} | ⏱ {d['elapsed_h']}h / {d['sla_h']}h ({d['pct']}%) — reste {max(0, d['remaining_h'])}h"
                 for d in sorted(danger_items, key=lambda x: -x['pct'])
             )
             msg = (
@@ -638,7 +670,7 @@ def check_sla_alerts():
             lines = '\n'.join(
                 f"  🔴 <b>#{b['id']}</b> — {b['machine']}"
                 f"\n    👤 {b['client']} | 👷 {b['technicien'] or 'Non assigné'}"
-                f"\n    ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {_format_hours(b['elapsed_h'] - b['sla_h'])}</b>"
+                f"\n    📄 Contrat #{b['contract_id']} | ⏱ {b['elapsed_h']}h / {b['sla_h']}h ({b['pct']}%) — <b>DÉPASSÉ de {_format_hours(b['elapsed_h'] - b['sla_h'])}</b>"
                 for b in sorted(breached_items, key=lambda x: -x['pct'])
             )
             msg = (
@@ -650,8 +682,11 @@ def check_sla_alerts():
             _send_telegram_bot("telegram_manager", msg)
             logger.info(f"SLA breach alerts: {len(breached_items)} envoyée(s) au bot Manager")
 
+        return {"danger": len(danger_items), "breached": len(breached_items)}
+
     except Exception as e:
         logger.error(f"check_sla_alerts error: {e}")
+        return {"danger": 0, "breached": 0}
 
 
 

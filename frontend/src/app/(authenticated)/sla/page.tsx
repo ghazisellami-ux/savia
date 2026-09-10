@@ -28,6 +28,8 @@ interface SlaItem {
   statut: string;
   date_debut: string;
   sla_h: number;
+  contract_id?: string | number;
+  contract_type?: string;
   elapsed_h: number;
   remaining_h: number;
   pct_used: number;
@@ -72,6 +74,7 @@ export default function SlaPage() {
 
   const kpis = data.kpis || {};
   const items = data.items || [];
+  const compliancePct = typeof kpis.compliance_pct === 'number' ? kpis.compliance_pct : 100;
 
   const filteredItems = items.filter(item => {
     if (filterStatus === 'breached') return item.breached;
@@ -108,7 +111,7 @@ export default function SlaPage() {
         <KpiCard
           icon={<Timer className="w-6 h-6 text-savia-accent" />}
           value={String(kpis.total_active || 0)}
-          label="Interventions actives"
+          label="Engagements SLA actifs"
         />
         <KpiCard
           icon={<CheckCircle2 className="w-6 h-6 text-green-400" />}
@@ -130,9 +133,9 @@ export default function SlaPage() {
         />
         <KpiCard
           icon={<TrendingUp className="w-6 h-6 text-blue-400" />}
-          value={`${kpis.compliance_pct || 100}%`}
+          value={`${compliancePct}%`}
           label="Taux de conformité"
-          variant={(kpis.compliance_pct || 100) >= 90 ? 'success' : (kpis.compliance_pct || 100) >= 70 ? 'warning' : 'danger'}
+          variant={compliancePct >= 90 ? 'success' : compliancePct >= 70 ? 'warning' : 'danger'}
         />
       </div>
 
@@ -144,10 +147,10 @@ export default function SlaPage() {
               <div
                 className="h-full rounded-full transition-all duration-1000"
                 style={{
-                  width: `${kpis.compliance_pct || 100}%`,
-                  background: (kpis.compliance_pct || 100) >= 90
+                  width: `${compliancePct}%`,
+                  background: compliancePct >= 90
                     ? 'linear-gradient(90deg, #22c55e, #2dd4bf)'
-                    : (kpis.compliance_pct || 100) >= 70
+                    : compliancePct >= 70
                     ? 'linear-gradient(90deg, #f59e0b, #eab308)'
                     : 'linear-gradient(90deg, #ef4444, #f97316)',
                 }}
@@ -155,7 +158,7 @@ export default function SlaPage() {
             </div>
             <div className="flex justify-between mt-1 text-xs text-savia-text-dim">
               <span>0%</span>
-              <span className="font-bold text-savia-text">{kpis.compliance_pct || 100}% des interventions respectent le SLA</span>
+              <span className="font-bold text-savia-text">{compliancePct}% des interventions respectent le SLA</span>
               <span>100%</span>
             </div>
           </div>
@@ -253,6 +256,7 @@ export default function SlaPage() {
                   <div className="flex items-center gap-3 text-xs text-savia-text-muted flex-wrap">
                     <span className="flex items-center gap-1"><Building2 className="w-3 h-3" /> {item.client}</span>
                     <span className="flex items-center gap-1"><Wrench className="w-3 h-3" /> {item.type_intervention}</span>
+                    {item.contract_id && <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> Contrat #{item.contract_id}{item.contract_type ? ` — ${item.contract_type}` : ''}</span>}
                     {item.technicien && <span className="flex items-center gap-1"><Zap className="w-3 h-3" /> {item.technicien}</span>}
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Depuis: {item.date_debut}</span>
                   </div>
