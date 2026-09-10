@@ -290,9 +290,9 @@ def ajouter_contrat(contrat_dict):
             row = conn.execute(f"""
                 INSERT INTO contrats (client, type_contrat, date_debut, date_fin,
                     sla_temps_reponse_h, interventions_incluses, montant, conditions, notes,
-                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, date_derniere_maintenance, statut,
+                    fichier_contrat, equipement, recurrence_maintenance, date_premiere_maintenance, date_derniere_maintenance, date_signature, statut,
                     pieces_incluses, avec_pieces, rappel_avant_jours)
-                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 RETURNING id
             """, (
                 contrat_dict.get("client", ""),
@@ -309,6 +309,7 @@ def ajouter_contrat(contrat_dict):
                 contrat_dict.get("recurrence_maintenance", ""),
                 contrat_dict.get("date_premiere_maintenance", ""),
                 contrat_dict.get("date_derniere_maintenance") or None,
+                contrat_dict.get("date_signature") or None,
                 contrat_dict.get("statut", "Actif"),
                 pieces_incluses,
                 1 if contrat_dict.get("avec_pieces") else 0,
@@ -599,7 +600,7 @@ def modifier_contrat(contrat_id, contrat_dict):
         conn.execute(f"""
             UPDATE contrats SET client={ph}, type_contrat={ph}, date_debut={ph}, date_fin={ph},
                 sla_temps_reponse_h={ph}, interventions_incluses={ph}, montant={ph}, conditions={ph}, notes={ph}, statut={ph},
-                equipement={ph}, recurrence_maintenance={ph}, date_premiere_maintenance={ph}, date_derniere_maintenance={ph},
+                equipement={ph}, recurrence_maintenance={ph}, date_premiere_maintenance={ph}, date_derniere_maintenance={ph}, date_signature={ph},
                 pieces_incluses={ph}, avec_pieces={ph}, rappel_avant_jours={ph}
             WHERE id={ph}
         """, (
@@ -617,6 +618,7 @@ def modifier_contrat(contrat_id, contrat_dict):
             contrat_dict.get("recurrence_maintenance", ""),
             contrat_dict.get("date_premiere_maintenance", ""),
             contrat_dict.get("date_derniere_maintenance") or None,
+            contrat_dict.get("date_signature") or None,
             pieces_incluses,
             1 if contrat_dict.get("avec_pieces") else 0,
             contrat_dict.get("rappel_avant_jours", 14),

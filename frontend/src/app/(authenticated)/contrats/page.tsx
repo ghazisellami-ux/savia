@@ -68,6 +68,34 @@ const oneYearLater = (value: string): string => {
   return end.toISOString().substring(0, 10);
 };
 
+const formatContractDateFr = (value: string): string => {
+  const date = contractDate(value);
+  if (!date) return value || '';
+
+  return `${String(date.getUTCDate()).padStart(2, '0')}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${date.getUTCFullYear()}`;
+};
+
+const parseContractDateFr = (value: string): string | null => {
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const [, rawDay, rawMonth, rawYear] = match;
+  const year = Number(rawYear);
+  const month = Number(rawMonth);
+  const day = Number(rawDay);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${rawYear}-${rawMonth}-${rawDay}`;
+};
+
 function ContractDateInput({
   value,
   onChange,
@@ -79,15 +107,72 @@ function ContractDateInput({
   disabled?: boolean;
   className?: string;
 }) {
+  const nativeInputRef = useRef<HTMLInputElement>(null);
+  const [displayValue, setDisplayValue] = useState(() => formatContractDateFr(value));
+
+  useEffect(() => {
+    setDisplayValue(formatContractDateFr(value));
+  }, [value]);
+
+  const openCalendar = () => {
+    const nativeInput = nativeInputRef.current;
+    if (!nativeInput || disabled) return;
+
+    try {
+      nativeInput.showPicker();
+    } catch {
+      nativeInput.focus();
+    }
+  };
+
   return (
-    <input
-      type="date"
-      lang="fr-FR"
-      value={value}
-      disabled={disabled}
-      className={`${className} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-      onChange={event => onChange(event.target.value)}
-    />
+    <div className="relative w-full">
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={10}
+        placeholder="JJ/MM/AAAA"
+        value={displayValue}
+        disabled={disabled}
+        className={`${className} pr-11 ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+        onChange={event => {
+          const digits = event.target.value.replace(/\D/g, '').substring(0, 8);
+          const nextDisplay = [digits.substring(0, 2), digits.substring(2, 4), digits.substring(4, 8)]
+            .filter(Boolean)
+            .join('/');
+
+          setDisplayValue(nextDisplay);
+          if (!nextDisplay) {
+            onChange('');
+            return;
+          }
+
+          const isoDate = parseContractDateFr(nextDisplay);
+          if (isoDate) onChange(isoDate);
+        }}
+        onBlur={() => setDisplayValue(formatContractDateFr(value))}
+      />
+      <input
+        ref={nativeInputRef}
+        type="date"
+        value={value}
+        tabIndex={-1}
+        aria-hidden="true"
+        className="sr-only"
+        onChange={event => onChange(event.target.value)}
+      />
+      <button
+        type="button"
+        onMouseDown={event => event.preventDefault()}
+        onClick={openCalendar}
+        disabled={disabled}
+        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-savia-text-muted transition-colors hover:text-savia-accent disabled:cursor-not-allowed"
+        aria-label="Ouvrir le calendrier"
+        title="Choisir une date"
+      >
+        <Calendar className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
 
@@ -158,6 +243,7 @@ interface Contrat {
   type_contrat: string;
   date_debut: string;
   date_fin: string;
+  date_signature?: string;
   sla_temps_reponse_h: number;
   montant: number;
   statut: string;
@@ -201,6 +287,7 @@ const emptyForm = () => {
   type_contrat: TYPES_CONTRAT[0],
   date_debut: dateDebut,
   date_fin: oneYearLater(dateDebut),
+  date_signature: '',
   // 0 signifie qu'aucun engagement SLA de réponse n'est prévu.
   sla_temps_reponse_h: 0,
   montant: 0,
@@ -302,6 +389,7 @@ export default function ContratsPage() {
         type_contrat: item.type_contrat || TYPES_CONTRAT[0],
         date_debut: (item.date_debut || '').substring(0, 10),
         date_fin: (item.date_fin || '').substring(0, 10),
+        date_signature: (item.date_signature || '').substring(0, 10),
         sla_temps_reponse_h: Number(item.sla_temps_reponse_h ?? 0),
         montant: item.montant || item.Montant_Annuel || 0,
         statut: item.statut || 'Actif',
@@ -481,6 +569,7 @@ export default function ContratsPage() {
         type_contrat: form.type_contrat,
         date_debut: form.date_debut,
         date_fin: form.date_fin,
+        date_signature: form.date_signature || '',
         sla_temps_reponse_h: Number(form.sla_temps_reponse_h),
         montant: Number(form.montant),
         avec_pieces: form.avec_pieces,
@@ -569,6 +658,7 @@ export default function ContratsPage() {
       type_contrat: c.type_contrat,
       date_debut: c.date_debut,
       date_fin: c.date_fin,
+      date_signature: c.date_signature || '',
       sla_temps_reponse_h: c.sla_temps_reponse_h,
       montant: c.montant,
       avec_pieces: c.avec_pieces || false,
@@ -1043,7 +1133,7 @@ export default function ContratsPage() {
                   <div className="flex items-center gap-3 text-xs text-savia-text-muted flex-wrap">
                     <span className="flex items-center gap-1"><Wrench className="w-3 h-3" /> {c.type_contrat}</span>
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> SLA: {c.sla_temps_reponse_h}h</span>
-                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {c.date_debut} → {c.date_fin}</span>
+                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {formatContractDateFr(c.date_debut)} → {formatContractDateFr(c.date_fin)}</span>
                     {c.montant > 0 && <span className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> {c.montant.toLocaleString('fr')} TND/an</span>}
                   </div>
                 </div>
@@ -1161,11 +1251,12 @@ export default function ContratsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   {[{icon: Building2, label: 'Client', val: c.client},
                     {icon: Wrench, label: 'Type de contrat', val: c.type_contrat || '—'},
-                    {icon: Calendar, label: 'Date début', val: c.date_debut},
-                    {icon: Calendar, label: 'Date fin', val: c.date_fin},
+                    {icon: Calendar, label: 'Date début', val: formatContractDateFr(c.date_debut)},
+                    {icon: Calendar, label: 'Date fin', val: formatContractDateFr(c.date_fin)},
+                    {icon: Calendar, label: 'Date de signature', val: c.date_signature ? formatContractDateFr(c.date_signature) : '—'},
                     {icon: Clock, label: 'Durée', val: duration || '—'},
                     {icon: RefreshCcw, label: 'Récurrence', val: c.recurrence_maintenance || '—'},
-                    {icon: Calendar, label: 'Première maintenance', val: c.date_premiere_maintenance || '—'},
+                    {icon: Calendar, label: 'Première maintenance', val: c.date_premiere_maintenance ? formatContractDateFr(c.date_premiere_maintenance) : '—'},
                     {icon: Clock, label: 'SLA Réponse', val: c.sla_temps_reponse_h + 'h'},
                     {icon: DollarSign, label: 'Montant annuel', val: (c.montant||0).toLocaleString('fr') + ' TND'},
                   ].map(({icon: Icon, label, val}) => (
@@ -1460,6 +1551,10 @@ export default function ContratsPage() {
                   <div>
                     <label className={LABEL}>Date fin</label>
                     <ContractDateInput value={form.date_fin} onChange={value => set('date_fin', value)} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className={LABEL}>Date de signature <span className="normal-case font-normal">(optionnelle)</span></label>
+                    <ContractDateInput value={form.date_signature} onChange={value => set('date_signature', value)} />
                   </div>
                   <div className="md:col-span-2 rounded-lg border border-savia-accent/20 bg-savia-accent/5 px-3 py-2 text-sm">
                     {formDuration ? (
