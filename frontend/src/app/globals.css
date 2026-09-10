@@ -85,6 +85,47 @@ thead th {
   background-clip: text;
 }
 
+/* --- Analyse IA : contrastes WCAG sur les fonds pastel ---
+   Les couleurs Tailwind 300/400 sont prévues pour un fond sombre. Dans SAVIA,
+   les cartes sont claires ; elles doivent donc employer des variantes foncées. */
+.ai-analysis .text-red-300,
+.ai-analysis .text-red-400,
+.ai-analysis .text-red-500 { color: #b42318 !important; }
+
+.ai-analysis .text-orange-100,
+.ai-analysis .text-orange-200,
+.ai-analysis .text-orange-300,
+.ai-analysis .text-orange-400,
+.ai-analysis .text-orange-500 { color: #a24400 !important; }
+
+.ai-analysis .text-yellow-100,
+.ai-analysis .text-yellow-200,
+.ai-analysis .text-yellow-300,
+.ai-analysis .text-yellow-400 { color: #8a5800 !important; }
+
+.ai-analysis .text-green-200,
+.ai-analysis .text-green-300,
+.ai-analysis .text-green-400,
+.ai-analysis .text-green-500,
+.ai-analysis .text-green-600 { color: #167447 !important; }
+
+.ai-analysis .text-cyan-200,
+.ai-analysis .text-cyan-300,
+.ai-analysis .text-cyan-400 { color: #0f5b63 !important; }
+
+.ai-analysis .text-blue-300,
+.ai-analysis .text-blue-400,
+.ai-analysis .text-blue-500 { color: #1d4ed8 !important; }
+
+.ai-analysis .text-indigo-300,
+.ai-analysis .text-indigo-400 { color: #3730a3 !important; }
+
+.ai-analysis .text-purple-300,
+.ai-analysis .text-purple-400,
+.ai-analysis .text-purple-500 { color: #6b21a8 !important; }
+
+.ai-analysis .text-pink-400 { color: #9d174d !important; }
+
 /* --- Login mesh background (beige conservé) --- */
 .login-mesh {
   position: fixed;

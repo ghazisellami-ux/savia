@@ -1758,7 +1758,17 @@ def ai_analyze_costs_pdf(body: dict, user: dict = Depends(_verify_token), x_savi
 
     # Section card renderer with bullet support
     def render_card(title, content, color_rgb):
-        r, g, b = color_rgb
+        # White titles need a darker accent than the bright UI palette.
+        # This keeps every financial-analysis PDF heading legible.
+        accessible_colors = {
+            (220, 53, 53): (180, 38, 42),
+            (234, 88, 12): (154, 52, 0),
+            (22, 163, 74): (22, 116, 71),
+            (13, 148, 136): (15, 94, 99),
+            (37, 99, 235): (29, 78, 216),
+            (124, 58, 237): (91, 33, 182),
+        }
+        r, g, b = accessible_colors.get(tuple(color_rgb), (47, 65, 86))
         W = pdf.w - 20  # usable width
 
         if pdf.get_y() > 250:

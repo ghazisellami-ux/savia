@@ -1401,7 +1401,7 @@ export default function SavPage() {
 
           {/* Results */}
           {aiResult && (
-            <div className="space-y-5">
+            <div className="ai-analysis space-y-5">
               {/* Score + Résumé */}
               <div className="glass rounded-xl p-6 border border-purple-500/20">
                 <div className="flex items-start gap-4">

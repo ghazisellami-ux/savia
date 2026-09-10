@@ -1282,7 +1282,7 @@ export default function PiecesPage() {
 
           {aiResult && (
             <SectionCard title="Résultat de l'Analyse IA">
-              <div className="space-y-4">
+              <div className="ai-analysis space-y-4">
                 {aiResult.analyse_risque && (
                   <div className="p-4 rounded-lg bg-red-500/10 border-l-4 border-red-500">
                     <div className="flex items-center gap-2 font-bold text-sm text-red-400 mb-2 uppercase tracking-wider">
