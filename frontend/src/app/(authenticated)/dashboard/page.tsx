@@ -229,6 +229,7 @@ export default function DashboardPage() {
     // If only client filter is applied, filter client-side (instant)
     if (selectedClient && !selectedEquipType) {
       setIsLoading(true);
+      let isCurrentRequest = true;
       try {
         // Filter health scores by client
         const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
@@ -269,7 +270,9 @@ export default function DashboardPage() {
             : 100;
         })();
 
-        // Compute ALL KPIs from filtered data
+        // The equipment KPI is intentionally sourced from the dedicated server
+        // counter below. Health scores are de-duplicated by machine name, so
+        // their count is not a reliable count of the client's equipment.
         const nb_eq = filteredHealth.length;
         const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
         const statusAvailability = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
@@ -319,12 +322,30 @@ export default function DashboardPage() {
         setRecentInterv(
           dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
         );
+
+        // Do not send the selected period here: the equipment fleet is a
+        // current-state KPI and must remain stable when switching month/year.
+        dashboard.kpis({ client: selectedClient })
+          .then((clientKpis) => {
+            if (!isCurrentRequest) return;
+            setKpis((current) => ({
+              ...current,
+              nb_equipements: Number(clientKpis.nb_equipements) || 0,
+            }));
+          })
+          .catch((err) => {
+            if (isCurrentRequest) {
+              console.error("Failed to load client equipment count", err);
+            }
+          });
       } catch (err) {
         console.error("Failed to filter data", err);
       } finally {
         setIsLoading(false);
       }
-      return;
+      return () => {
+        isCurrentRequest = false;
+      };
     }
 
     // If no filters or equipment type filter, use full data or call API
