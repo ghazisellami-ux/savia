@@ -65,24 +65,31 @@ jobs:
             for (const pullRequest of dependabotPullRequests) {
               let ciSucceeded = context.eventName === 'workflow_run' &&
                 context.payload.workflow_run.conclusion === 'success';
-              if (!ciSucceeded) {
+              let ciFailed = context.eventName === 'workflow_run' &&
+                context.payload.workflow_run.conclusion !== 'success';
+              if (context.eventName !== 'workflow_run') {
                 const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
                   owner,
                   repo,
                   head_sha: pullRequest.head.sha,
                   per_page: 100,
                 });
-                ciSucceeded = runs.workflow_runs.some((run) =>
-                  run.name === 'CI/CD Pipeline' &&
-                  run.head_sha === pullRequest.head.sha &&
-                  run.event === 'pull_request' &&
-                  run.status === 'completed' &&
-                  run.conclusion === 'success'
-                );
+                const ciRuns = runs.workflow_runs
+                  .filter((run) =>
+                    run.name === 'CI/CD Pipeline' &&
+                    run.head_sha === pullRequest.head.sha &&
+                    run.event === 'pull_request'
+                  )
+                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                const latestCiRun = ciRuns[0];
+                ciSucceeded = latestCiRun?.status === 'completed' &&
+                  latestCiRun.conclusion === 'success';
+                ciFailed = latestCiRun?.status === 'completed' &&
+                  latestCiRun.conclusion !== 'success';
               }
-              if (!ciSucceeded && context.eventName !== 'workflow_run') {
+              if (!ciSucceeded) {
                 core.info(`PR #${pullRequest.number} ignorée : la dernière CI n'est pas réussie.`);
-                if (context.eventName === 'workflow_run') {
+                if (ciFailed) {
                   await github.rest.pulls.update({
                     owner,
                     repo,
