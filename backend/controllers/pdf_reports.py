@@ -209,11 +209,25 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 'score':    chr(0xf201),  # chart-line (BarChart2)
             }
 
+            # The report uses a white background. The original bright web
+            # accents (cyan, amber, green...) did not meet readable contrast
+            # when used as text, icons or thin rules in a PDF.
+            _READABLE_ACCENTS = {
+                (1, 180, 188): (13, 94, 99),
+                (250, 137, 37): (146, 64, 0),
+                (95, 165, 90): (22, 116, 71),
+                (250, 84, 87): (180, 38, 42),
+                (155, 110, 5): (112, 78, 0),
+            }
+
+            def _readable_accent(color):
+                return _READABLE_ACCENTS.get(tuple(color), (47, 65, 86))
+
             def sec_hdr(lbl, bg, fa_key=None):
                 # Web-style: white bg, FA icon + colored bold title, thin underline
                 if pdf.get_y() > pdf.h - 45: pdf.add_page()
                 yh = pdf.get_y() + 2
-                R_, G_, B_ = bg
+                R_, G_, B_ = _readable_accent(bg)
                 # Font Awesome icon before title
                 if fa_key and _has_fa and fa_key in FA:
                     pdf.set_xy(10, yh - 0.5)
@@ -241,7 +255,7 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 if not txt: return
                 if pdf.get_y() > pdf.h - 20: pdf.add_page()
                 yi = pdf.get_y()
-                R_, G_, B_ = bg
+                R_, G_, B_ = _readable_accent(bg)
                 if _has_djvu:
                     _sym(8)
                     pdf.set_text_color(R_, G_, B_)
@@ -272,21 +286,22 @@ def generate_pdf_report(data: PdfRequest, user: dict = Depends(_verify_token)):
                 if sc >= 70:   s_bg = [95,165,90]
                 elif sc >= 40: s_bg = [250,137,37]
                 else:          s_bg = [250,84,87]
+                s_accent = _readable_accent(s_bg)
                 y_sc = pdf.get_y()
                 pdf.set_fill_color(255, 255, 255)
-                pdf.set_draw_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.set_draw_color(*s_accent)
                 pdf.set_line_width(0.8)
                 pdf.rect(10, y_sc, W, 16, style='FD')
-                pdf.set_fill_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.set_fill_color(*s_accent)
                 pdf.rect(10, y_sc, 5, 16, style='F')
                 pdf.set_xy(18, y_sc + 1.5)
                 _hel('B', 15)
-                pdf.set_text_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.set_text_color(*s_accent)
                 pdf.cell(25, 9, str(sc))
                 pdf.set_xy(36, y_sc + 2)
                 _hel('B', 9)
                 slabel = 'Excellent' if sc>=70 else 'Satisfaisant' if sc>=40 else 'A ameliorer'
-                pdf.set_text_color(s_bg[0], s_bg[1], s_bg[2])
+                pdf.set_text_color(*s_accent)
                 pdf.cell(50, 5.5, slabel)
                 pdf.set_xy(36, y_sc + 8.5)
                 _hel('', 7)

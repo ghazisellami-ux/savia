@@ -649,7 +649,7 @@ export default function ReportsPage() {
           </SectionCard>
 
           {aiReport && (
-            <div className="space-y-4">
+            <div className="ai-analysis space-y-4">
               {aiReport.donnees_exploitees && (
                 <div className="p-4 rounded-xl bg-indigo-500/10 border-l-4 border-indigo-500">
                   <h4 className="font-bold text-sm text-indigo-300 uppercase tracking-wider mb-3 flex items-center gap-2"><Activity className="w-4 h-4" /> Données réelles exploitées</h4>

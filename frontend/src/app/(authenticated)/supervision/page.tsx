@@ -1043,7 +1043,7 @@ export default function SupervisionPage() {
 
             {/* AI/Knowledge Diagnostic Results */}
             {((showAiDiag && aiResult) || knowledgeResult) ? (
-              <div className="space-y-4 animate-fade-in">
+              <div className="ai-analysis space-y-4 animate-fade-in">
                 <h3 className="text-lg font-bold gradient-text flex items-center gap-2">
                   {knowledgeResult && !showAiDiag ? (
                     <>
