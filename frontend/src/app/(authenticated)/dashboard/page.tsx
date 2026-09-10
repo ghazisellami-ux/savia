@@ -38,6 +38,8 @@ interface HealthScore {
   client?: string;
 }
 
+const clientKey = (client: string) => client.trim().toLocaleLowerCase();
+
 // --- Chart theme ---
 const CHART_STYLE = {
   bg: '#1e293b',
@@ -133,7 +135,7 @@ export default function DashboardPage() {
   const [kpis, setKpis] = useState<KpiData>({
     nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0, nb_clients: 0, taux_resolution: 0
   });
-  const [clientEquipmentCount, setClientEquipmentCount] = useState<number | null>(null);
+  const [clientEquipmentCounts, setClientEquipmentCounts] = useState<Record<string, number>>({});
   const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
   const [allInterventions, setAllInterventions] = useState<any[]>([]);
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
@@ -162,35 +164,37 @@ export default function DashboardPage() {
     });
   }, [selectedClient, getEquipmentTypesForFilters]);
 
-  // This current-state value is intentionally independent of the selected
-  // month/year. Leave it blank while another client's count is loading rather
-  // than briefly showing a health-score count as an equipment count.
+  // Preload each client's real fleet size. Changing the client then uses data
+  // already in memory rather than a new network request or a de-duplicated
+  // health-score count.
   useEffect(() => {
     let isCurrentRequest = true;
-    if (!selectedClient) {
-      setClientEquipmentCount(null);
-      return () => {
-        isCurrentRequest = false;
-      };
-    }
-
-    setClientEquipmentCount(null);
-    dashboard.kpis({ client: selectedClient })
-      .then((clientKpis) => {
-        if (isCurrentRequest) {
-          setClientEquipmentCount(Number(clientKpis.nb_equipements) || 0);
-        }
+    clientsApi.list()
+      .then((clients) => {
+        if (!isCurrentRequest) return;
+        const counts = clients.reduce<Record<string, number>>((result, client) => {
+          const name = String(client.nom || '').trim();
+          if (name) {
+            result[clientKey(name)] = Number(client.nb_equipements) || 0;
+          }
+          return result;
+        }, {});
+        setClientEquipmentCounts(counts);
       })
       .catch((err) => {
         if (isCurrentRequest) {
-          console.error("Failed to load client equipment count", err);
+          console.error("Failed to preload client equipment counts", err);
         }
       });
 
     return () => {
       isCurrentRequest = false;
     };
-  }, [selectedClient]);
+  }, []);
+
+  const selectedClientEquipmentCount = selectedClient
+    ? clientEquipmentCounts[clientKey(selectedClient)]
+    : undefined;
 
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
@@ -693,7 +697,7 @@ export default function DashboardPage() {
       {/* KPIs Row - Top 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard emphasis icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
-        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (clientEquipmentCount === null ? '—' : String(clientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (selectedClientEquipmentCount === undefined ? '—' : String(selectedClientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
         <KpiCard emphasis icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
         <KpiCard emphasis icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
       </div>
