@@ -521,7 +521,7 @@ export default function ContratsPage() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (forcePlanningRebuild = false) => {
     // A contract whose creation/update already succeeded must never be
     // submitted again just because its attachment upload failed.
     if (pendingAttachmentUpload) {
@@ -580,6 +580,7 @@ export default function ContratsPage() {
         date_derniere_maintenance: isHistoricalContractStart(form.date_debut)
           ? form.date_derniere_maintenance
           : '',
+        force_replan: forcePlanningRebuild,
         conditions: form.conditions,
         notes: form.notes,
         statut: form.statut,
@@ -1792,7 +1793,19 @@ export default function ContratsPage() {
                 className="px-4 py-2 rounded-lg text-sm font-semibold text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-all cursor-pointer">
                 Annuler
               </button>
-              <button onClick={handleSave} disabled={isSaving || (!pendingAttachmentUpload && !form.client)}
+              {editingContrat && !pendingAttachmentUpload && (
+                <button
+                  type="button"
+                  onClick={() => handleSave(true)}
+                  disabled={isSaving || !form.client}
+                  title="Remplace les maintenances automatiques planifiées selon les dates actuelles, sans toucher aux maintenances clôturées."
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-savia-accent border border-savia-accent/40 hover:bg-savia-accent/10 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCcw className="w-4 h-4" />
+                  Régénérer le planning
+                </button>
+              )}
+              <button onClick={() => handleSave()} disabled={isSaving || (!pendingAttachmentUpload && !form.client)}
                 className="flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-blue-600 hover:opacity-90 transition-all cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50">
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 {isSaving ? 'Enregistrement...' : pendingAttachmentUpload ? 'Réessayer l’envoi' : editingContrat ? 'Mettre à jour' : 'Créer le contrat'}
