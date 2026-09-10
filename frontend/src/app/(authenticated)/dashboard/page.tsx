@@ -133,6 +133,7 @@ export default function DashboardPage() {
   const [kpis, setKpis] = useState<KpiData>({
     nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0, nb_clients: 0, taux_resolution: 0
   });
+  const [clientEquipmentCount, setClientEquipmentCount] = useState<number | null>(null);
   const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
   const [allInterventions, setAllInterventions] = useState<any[]>([]);
   const [recentInterv, setRecentInterv] = useState<any[]>([]);
@@ -160,6 +161,36 @@ export default function DashboardPage() {
       }
     });
   }, [selectedClient, getEquipmentTypesForFilters]);
+
+  // This current-state value is intentionally independent of the selected
+  // month/year. Leave it blank while another client's count is loading rather
+  // than briefly showing a health-score count as an equipment count.
+  useEffect(() => {
+    let isCurrentRequest = true;
+    if (!selectedClient) {
+      setClientEquipmentCount(null);
+      return () => {
+        isCurrentRequest = false;
+      };
+    }
+
+    setClientEquipmentCount(null);
+    dashboard.kpis({ client: selectedClient })
+      .then((clientKpis) => {
+        if (isCurrentRequest) {
+          setClientEquipmentCount(Number(clientKpis.nb_equipements) || 0);
+        }
+      })
+      .catch((err) => {
+        if (isCurrentRequest) {
+          console.error("Failed to load client equipment count", err);
+        }
+      });
+
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [selectedClient]);
 
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
@@ -229,7 +260,6 @@ export default function DashboardPage() {
     // If only client filter is applied, filter client-side (instant)
     if (selectedClient && !selectedEquipType) {
       setIsLoading(true);
-      let isCurrentRequest = true;
       try {
         // Filter health scores by client
         const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
@@ -270,9 +300,8 @@ export default function DashboardPage() {
             : 100;
         })();
 
-        // The equipment KPI is intentionally sourced from the dedicated server
-        // counter below. Health scores are de-duplicated by machine name, so
-        // their count is not a reliable count of the client's equipment.
+        // Health scores are de-duplicated by machine name. They remain useful
+        // for health and availability, but not for the fleet-size card.
         const nb_eq = filteredHealth.length;
         const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
         const statusAvailability = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
@@ -323,29 +352,12 @@ export default function DashboardPage() {
           dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
         );
 
-        // Do not send the selected period here: the equipment fleet is a
-        // current-state KPI and must remain stable when switching month/year.
-        dashboard.kpis({ client: selectedClient })
-          .then((clientKpis) => {
-            if (!isCurrentRequest) return;
-            setKpis((current) => ({
-              ...current,
-              nb_equipements: Number(clientKpis.nb_equipements) || 0,
-            }));
-          })
-          .catch((err) => {
-            if (isCurrentRequest) {
-              console.error("Failed to load client equipment count", err);
-            }
-          });
       } catch (err) {
         console.error("Failed to filter data", err);
       } finally {
         setIsLoading(false);
       }
-      return () => {
-        isCurrentRequest = false;
-      };
+      return;
     }
 
     // If no filters or equipment type filter, use full data or call API
@@ -681,7 +693,7 @@ export default function DashboardPage() {
       {/* KPIs Row - Top 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
         <KpiCard emphasis icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
-        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (clientEquipmentCount === null ? '—' : String(clientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
         <KpiCard emphasis icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
         <KpiCard emphasis icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
       </div>
