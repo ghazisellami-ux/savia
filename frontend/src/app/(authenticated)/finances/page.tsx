@@ -350,7 +350,7 @@ export default function FinancesPage() {
         )}
 
         {aiRecos && (
-          <div className="space-y-4">
+          <div className="ai-analysis space-y-4">
             {/* Row 1: 2 cards */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Clients Coûteux */}

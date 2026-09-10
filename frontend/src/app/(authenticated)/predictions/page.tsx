@@ -146,7 +146,7 @@ export default function PredictionsPage() {
       <SectionCard title={<span className="flex items-center gap-2"><Brain className="w-4 h-4 text-savia-accent" /> Analyse IA prédictive</span>}>
         <p className="text-savia-text-muted text-sm mb-4">L&apos;IA explique les probabilités calculées, les causes issues des diagnostics techniciens, les actions préventives et l’économie potentielle. Les montants sont des estimations à valider par le responsable technique.</p>
         <button onClick={handleAiAnalysis} disabled={aiLoading} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-purple-600 to-blue-600 hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer mb-5">{aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{aiLoading ? 'Analyse en cours...' : 'Lancer l’analyse IA'}</button>
-        {aiAnalysis && <div className="space-y-5">
+        {aiAnalysis && <div className="ai-analysis space-y-5">
           {aiAnalysis._fallback && <div className="rounded-lg border border-yellow-500/30 bg-savia-surface p-3 text-xs text-yellow-200">Rapport detail genere a partir des donnees serveur; le fournisseur IA n&apos;a pas renvoye son rapport.</div>}
           <div className="flex items-center gap-2 text-purple-400 font-semibold text-sm"><ClipboardList className="w-4 h-4" /> Rapport détaillé de l’analyse</div>
 
