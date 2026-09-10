@@ -893,6 +893,11 @@ def _migration_025_contract_historical_maintenance(conn) -> None:
     conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS date_derniere_maintenance DATE")
 
 
+def _migration_026_contract_signature_date(conn) -> None:
+    """Store the optional date on which a contract was signed."""
+    conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS date_signature DATE")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -919,6 +924,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("023", "multiple contract attachments", _migration_023_contract_multiple_attachments),
     ("024", "spare-part USD and EUR purchase prices", _migration_024_spare_part_multi_currency_prices),
     ("025", "historical contract maintenance anchor", _migration_025_contract_historical_maintenance),
+    ("026", "contract signature date", _migration_026_contract_signature_date),
 )
 
 
