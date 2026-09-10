@@ -28,6 +28,11 @@ from api.security import (
     get_db,
     resolve_client_scope,
 )
+from repositories.contracts import get_contract_equipements
+from services.sla_tracking import (
+    active_sla_contracts, compliance_percentage, elapsed_hours, sla_contract_for,
+    sla_start_at, sla_start_value,
+)
 from services.scheduled_jobs import (
     get_db,
     lire_contrats,
@@ -556,21 +561,10 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
         df_equip = lire_equipements()
         df_demandes = lire_demandes_intervention()
 
-        # Build client → SLA mapping from contracts
-        client_sla = {}
-        if not df_contrats.empty:
-            for _, c in df_contrats.iterrows():
-                cl = c.get("client", "")
-                sla_h_raw = c.get("sla_temps_reponse_h", 0)
-                try:
-                    sla_h = max(0, int(sla_h_raw)) if pd.notna(sla_h_raw) else 0
-                except (TypeError, ValueError):
-                    sla_h = 0
-                statut = str(c.get("statut", "")).lower()
-                if cl and "actif" in statut:
-                    # Un SLA à 0 désactive le suivi pour ce client.
-                    if cl not in client_sla or (client_sla[cl] > 0 and (sla_h == 0 or sla_h < client_sla[cl])):
-                        client_sla[cl] = int(sla_h)
+        contractual_slas = active_sla_contracts(
+            df_contrats.to_dict("records") if not df_contrats.empty else [],
+            get_contract_equipements,
+        )
 
         # Build machine → client mapping
         machine_client = {}
@@ -594,13 +588,17 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
 
             for _, interv in active.iterrows():
                 machine = interv.get("machine", "")
-                cl = machine_client.get(machine, "")
-                sla_h = client_sla[cl] if cl in client_sla else 24
-                if sla_h <= 0:
+                cl = interv.get("client", "") or machine_client.get(machine, "")
+                contract = sla_contract_for(
+                    contractual_slas, cl, machine, interv.get("type_intervention", ""),
+                )
+                if not contract:
                     continue
+                sla_h = contract["sla_h"]
 
-                # Start time: date_debut_intervention or date (creation)
-                start_str = interv.get("date_debut_intervention") or interv.get("date", "")
+                # The planning's current date wins after every reschedule.
+                # Technician start timestamps must not postpone the SLA.
+                start_str = sla_start_value(interv)
                 try:
                     start = pd.to_datetime(start_str)
                     if pd.isna(start):
@@ -608,7 +606,10 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                 except Exception:
                     continue
 
-                elapsed_h = round((now - start).total_seconds() / 3600, 1)
+                elapsed_h = elapsed_hours(start_str, now, business_day_start_hour=8)
+                if elapsed_h is None:
+                    continue
+                sla_start = sla_start_at(start_str, business_day_start_hour=8)
                 remaining_h = round(sla_h - elapsed_h, 1)
                 pct = min(100, round((elapsed_h / sla_h) * 100, 1)) if sla_h > 0 else 100
                 breached = elapsed_h > sla_h
@@ -620,8 +621,10 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                     "technicien": interv.get("technicien", ""),
                     "type_intervention": interv.get("type_intervention", ""),
                     "statut": interv.get("statut", ""),
-                    "date_debut": str(start_str)[:16],
+                    "date_debut": str(sla_start)[:16] if sla_start else str(start_str)[:16],
                     "sla_h": sla_h,
+                    "contract_id": contract["id"],
+                    "contract_type": contract["type_contrat"],
                     "elapsed_h": elapsed_h,
                     "remaining_h": max(0, remaining_h),
                     "pct_used": pct,
@@ -640,9 +643,13 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
 
             for _, dem in active_dem.iterrows():
                 cl = dem.get("client", "")
-                sla_h = client_sla[cl] if cl in client_sla else 24
-                if sla_h <= 0:
+                machine = dem.get("equipement", "")
+                contract = sla_contract_for(
+                    contractual_slas, cl, machine, dem.get("type_intervention", "Corrective"),
+                )
+                if not contract:
                     continue
+                sla_h = contract["sla_h"]
                 start_str = dem.get("date_demande", "")
                 try:
                     start = pd.to_datetime(start_str)
@@ -651,20 +658,24 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
                 except Exception:
                     continue
 
-                elapsed_h = round((now - start).total_seconds() / 3600, 1)
+                elapsed_h = elapsed_hours(start, now)
+                if elapsed_h is None:
+                    continue
                 remaining_h = round(sla_h - elapsed_h, 1)
                 pct = min(100, round((elapsed_h / sla_h) * 100, 1)) if sla_h > 0 else 100
                 breached = elapsed_h > sla_h
 
                 sla_items.append({
                     "id": f"DEM-{dem.get('id', '')}",
-                    "machine": dem.get("equipement", ""),
+                    "machine": machine,
                     "client": cl,
                     "technicien": dem.get("technicien_assigne", ""),
                     "type_intervention": "Demande",
                     "statut": dem.get("statut", ""),
                     "date_debut": str(start_str)[:16],
                     "sla_h": sla_h,
+                    "contract_id": contract["id"],
+                    "contract_type": contract["type_contrat"],
                     "elapsed_h": elapsed_h,
                     "remaining_h": max(0, remaining_h),
                     "pct_used": pct,
@@ -681,33 +692,35 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
         nb_danger = sum(1 for s in sla_items if not s["breached"] and s["pct_used"] >= 75)
         nb_ok = total_active - nb_breached - nb_danger
 
-        # Historical compliance (closed interventions)
-        compliance_pct = 100
+        # Historical compliance plus currently open commitments.  A breached
+        # item must lower the global rate immediately, not only at closure.
+        historical_compliant = 0
+        historical_total = 0
         if not df_interv.empty:
             closed = df_interv[df_interv["statut"].str.lower().str.contains("termin|clotur|clôtur", na=False)]
             if not closed.empty and "date_debut_intervention" in closed.columns and "date_cloture" in closed.columns:
-                compliant = 0
-                total_measured = 0
                 for _, ci in closed.iterrows():
                     try:
                         start = pd.to_datetime(ci.get("date_debut_intervention"))
                         end = pd.to_datetime(ci.get("date_cloture"))
                         if pd.isna(start) or pd.isna(end):
                             continue
-                        cl_name = machine_client.get(ci.get("machine", ""), "")
+                        cl_name = ci.get("client", "") or machine_client.get(ci.get("machine", ""), "")
                         if effective_client and str(cl_name).strip().casefold() != effective_client.strip().casefold():
                             continue
-                        sla = client_sla[cl_name] if cl_name in client_sla else 24
-                        if sla <= 0:
+                        contract = sla_contract_for(
+                            contractual_slas, cl_name, ci.get("machine", ""), ci.get("type_intervention", ""),
+                        )
+                        if not contract:
                             continue
+                        sla = contract["sla_h"]
                         duration_h = (end - start).total_seconds() / 3600
-                        total_measured += 1
+                        historical_total += 1
                         if duration_h <= sla:
-                            compliant += 1
+                            historical_compliant += 1
                     except Exception:
                         continue
-                if total_measured > 0:
-                    compliance_pct = round((compliant / total_measured) * 100, 1)
+        compliance_pct = compliance_percentage(historical_compliant, historical_total, sla_items)
 
         return {
             "kpis": {
