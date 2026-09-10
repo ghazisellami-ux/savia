@@ -101,7 +101,7 @@ def _intervention_rows(conn: Any) -> list[dict[str, Any]]:
     rows = conn.execute(
         """SELECT i.machine,
                   COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
-                  i.date, i.pieces_utilisees, i.type_intervention,
+                  i.date, i.planning_id, i.pieces_utilisees, i.type_intervention,
                   i.probleme, i.cause, i.solution, i.description, i.statut
            FROM interventions i
            LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
@@ -114,8 +114,8 @@ def _intervention_rows(conn: Any) -> list[dict[str, Any]]:
 def _contract_rows(conn: Any) -> list[dict[str, Any]]:
     try:
         rows = conn.execute(
-            """SELECT client, equipement, type_contrat, avec_pieces,
-                      pieces_incluses, statut, date_fin
+            """SELECT id, client, equipement, type_contrat, avec_pieces,
+                      pieces_incluses, statut, date_debut, date_fin
                FROM contrats WHERE statut = 'Actif' ORDER BY date_fin DESC"""
         ).fetchall()
         return [dict(row) for row in rows]
@@ -132,9 +132,73 @@ def _equipment_client_rows(conn: Any) -> list[dict[str, Any]]:
         return []
 
 
+def _contract_planning_rows(conn: Any) -> list[dict[str, Any]]:
+    """Return contract-generated visits, including rescheduled dates.
+
+    ``date_prevue`` is updated when a visit is postponed, therefore it is the
+    authoritative date for the stock forecast. Ghost rows are audit history and
+    must never create a second demand signal.
+    """
+    try:
+        rows = conn.execute(
+            """SELECT id, contrat_id, machine, client, type_maintenance,
+                      date_prevue, statut, COALESCE(is_ghost, false) AS is_ghost
+               FROM planning_maintenance
+               WHERE contrat_id IS NOT NULL
+               ORDER BY date_prevue, id"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
+def _pending_part_request_rows(conn: Any) -> list[dict[str, Any]]:
+    """Open technician part requests reserve stock immediately.
+
+    The request table has no quantity column: one open request is therefore a
+    documented minimum demand of one unit, exposed as such in the result.
+    """
+    try:
+        rows = conn.execute(
+            """SELECT reference, designation, intervention_id, equipement, client,
+                      date_creation
+               FROM pieces_demandees
+               WHERE statut = 'en_attente'
+               ORDER BY date_creation, id"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+
 def _is_preventive(value: Any) -> bool:
     text = _norm(value)
     return any(token in text for token in ("prevent", "inspection", "controle", "calibr"))
+
+
+def _contract_part_entries(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the explicitly selected contract parts and their total quotas."""
+    entries = []
+    for item in _json_piece_entries(contract.get("pieces_incluses")):
+        reference = str(item.get("ref") or item.get("reference") or "").strip()
+        quota = _number(item.get("quota"), 0) or 0
+        if reference and quota > 0:
+            entries.append({"reference": reference, "quota": quota})
+    return entries
+
+
+def _contract_covers_reference(contract: dict[str, Any], reference: str) -> bool:
+    """Whether a contract explicitly covers this reference.
+
+    A selected quota is intentionally narrower than the old ``avec_pieces``
+    boolean: selecting only two references must not mark every catalogue part
+    as covered.
+    """
+    contract_type = _norm(contract.get("type_contrat"))
+    entries = _contract_part_entries(contract)
+    if entries:
+        return any(_norm(item["reference"]) == _norm(reference) for item in entries)
+    return bool(contract.get("avec_pieces")) or "fullservice" in contract_type
 
 
 def _client_contract(client: str, reference: str, contracts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -143,16 +207,178 @@ def _client_contract(client: str, reference: str, contracts: list[dict[str, Any]
     for contract in contracts:
         if client_key and _norm(contract.get("client")) != client_key:
             continue
-        contract_type = _norm(contract.get("type_contrat"))
-        included = _norm(contract.get("pieces_incluses"))
-        covered = bool(contract.get("avec_pieces")) or "fullservice" in contract_type or reference_key in included
+        covered = _contract_covers_reference(contract, reference_key)
         return {
+            "id": contract.get("id"),
             "client": contract.get("client") or "",
             "type": contract.get("type_contrat") or "",
             "pieces_couvertes": covered,
             "source": "contrat actif explicite",
         }
     return None
+
+
+def _is_open_planning_status(value: Any) -> bool:
+    return _norm(value) not in {"cloturee", "realisee", "terminee", "annulee", "decale"}
+
+
+def _visit_matches_piece(
+    visit: dict[str, Any],
+    piece: dict[str, Any],
+    equipment_types: dict[str, str],
+    used_machines: set[str],
+) -> bool:
+    """Restrict a visit to equipment compatible with the spare part."""
+    machine_key = _norm(visit.get("machine"))
+    expected_type = _norm(piece.get("equipement_type"))
+    if expected_type:
+        return equipment_types.get(machine_key) == expected_type
+    return bool(machine_key and machine_key in used_machines)
+
+
+def _future_contract_demand(
+    piece: dict[str, Any],
+    interventions: list[dict[str, Any]],
+    contracts: list[dict[str, Any]],
+    planning_rows: list[dict[str, Any]],
+    equipment_types: dict[str, str],
+    as_of: date,
+) -> dict[str, Any]:
+    """Build auditable demand signals from future contract-maintenance visits.
+
+    Explicit contract quotas are allocated across the remaining scheduled
+    visits.  Contracts without an explicit part quota never fabricate demand:
+    they only receive an estimate when this exact part has already been used
+    during comparable preventive work.
+    """
+    reference = str(piece.get("reference") or "")
+    contracts_by_id = {
+        int(contract["id"]): contract
+        for contract in contracts
+        if contract.get("id") is not None
+    }
+    planning_by_id = {
+        int(row["id"]): row
+        for row in planning_rows
+        if row.get("id") is not None
+    }
+    used_machines: set[str] = set()
+    for intervention in interventions:
+        intervention_date = _as_date(intervention.get("date"))
+        if intervention_date and intervention_date <= as_of and _usage_quantity(intervention.get("pieces_utilisees"), reference) > 0:
+            used_machines.add(_norm(intervention.get("machine")))
+    future_by_contract: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for visit in planning_rows:
+        contract_id = visit.get("contrat_id")
+        visit_date = _as_date(visit.get("date_prevue"))
+        if contract_id is None or not visit_date or visit_date <= as_of:
+            continue
+        try:
+            contract_id = int(contract_id)
+        except (TypeError, ValueError):
+            continue
+        contract = contracts_by_id.get(contract_id)
+        if not contract or visit.get("is_ghost") or not _is_open_planning_status(visit.get("statut")):
+            continue
+        contract_end = _as_date(contract.get("date_fin"))
+        if contract_end and visit_date > contract_end:
+            continue
+        if _visit_matches_piece(visit, piece, equipment_types, used_machines):
+            future_by_contract[contract_id].append({**visit, "date": visit_date})
+
+    all_future_visits = [visit for visits in future_by_contract.values() for visit in visits]
+
+    scheduled_events: list[dict[str, Any]] = []
+    explicit_contracts: list[dict[str, Any]] = []
+    explicit_visit_ids: set[int] = set()
+    for contract_id, visits in future_by_contract.items():
+        contract = contracts_by_id[contract_id]
+        entry = next(
+            (item for item in _contract_part_entries(contract) if _norm(item["reference"]) == _norm(reference)),
+            None,
+        )
+        if not entry:
+            continue
+        used_quota = 0.0
+        for intervention in interventions:
+            intervention_date = _as_date(intervention.get("date"))
+            try:
+                planning_id = int(intervention.get("planning_id") or 0)
+                linked_contract = int((planning_by_id.get(planning_id) or {}).get("contrat_id") or 0)
+            except (TypeError, ValueError):
+                linked_contract = 0
+            if intervention_date and intervention_date <= as_of and linked_contract == contract_id:
+                used_quota += _usage_quantity(intervention.get("pieces_utilisees"), reference)
+        remaining_quota = max(0.0, float(entry["quota"]) - used_quota)
+        if remaining_quota <= 0:
+            continue
+        quantity_per_visit = remaining_quota / len(visits)
+        for visit in visits:
+            scheduled_events.append({
+                "date": visit["date"],
+                "quantity": quantity_per_visit,
+                "source": "quota_contrat",
+                "contrat_id": contract_id,
+            })
+            if visit.get("id") is not None:
+                explicit_visit_ids.add(int(visit["id"]))
+        explicit_contracts.append({
+            "id": contract_id,
+            "client": contract.get("client") or "",
+            "type": contract.get("type_contrat") or "",
+            "quota_restant": round(remaining_quota, 2),
+            "interventions_planifiees": len(visits),
+        })
+
+    # For contracts without a declared part, use only observed preventive use
+    # of this same reference on compatible equipment.
+    comparable_preventive = []
+    for intervention in interventions:
+        intervention_date = _as_date(intervention.get("date"))
+        if (
+            intervention_date
+            and intervention_date <= as_of
+            and _is_preventive(intervention.get("type_intervention"))
+            and _visit_matches_piece(intervention, piece, equipment_types, used_machines)
+        ):
+            comparable_preventive.append(intervention)
+    historical_preventive_quantity = sum(
+        _usage_quantity(intervention.get("pieces_utilisees"), reference)
+        for intervention in comparable_preventive
+    )
+    estimated_per_visit = (
+        historical_preventive_quantity / len(comparable_preventive)
+        if comparable_preventive else 0.0
+    )
+    estimated_visits = 0
+    if estimated_per_visit > 0:
+        for visits in future_by_contract.values():
+            for visit in visits:
+                if visit.get("id") is not None and int(visit["id"]) in explicit_visit_ids:
+                    continue
+                scheduled_events.append({
+                    "date": visit["date"],
+                    "quantity": estimated_per_visit,
+                    "source": "historique_preventif",
+                    "contrat_id": visit.get("contrat_id"),
+                })
+                estimated_visits += 1
+
+    scheduled_events.sort(key=lambda item: item["date"])
+    explicit_quantity = sum(item["quantity"] for item in scheduled_events if item["source"] == "quota_contrat")
+    estimated_quantity = sum(item["quantity"] for item in scheduled_events if item["source"] == "historique_preventif")
+    return {
+        "events": scheduled_events,
+        "interventions_planifiees": len(all_future_visits),
+        "prochaine_intervention": min((visit["date"] for visit in all_future_visits), default=None).isoformat() if all_future_visits else None,
+        "quantite_quota_contrat": round(explicit_quantity, 2),
+        "quantite_estimee_historique": round(estimated_quantity, 2),
+        "quantite_totale": round(explicit_quantity + estimated_quantity, 2),
+        "contrats_quota": explicit_contracts,
+        "estimation_par_visite": round(estimated_per_visit, 3) if estimated_per_visit else 0.0,
+        "visites_estimees": estimated_visits,
+        "clients": sorted({str(visit.get("client") or "") for visit in all_future_visits if str(visit.get("client") or "")}),
+    }
 
 
 def _poisson_tail_at_least(demand: float, stock: int) -> float:
@@ -172,6 +398,9 @@ def _prediction_for_piece(
     piece: dict[str, Any],
     interventions: list[dict[str, Any]],
     contracts: list[dict[str, Any]],
+    planning_rows: list[dict[str, Any]],
+    pending_requests: list[dict[str, Any]],
+    equipment_types: dict[str, str],
     as_of: date,
 ) -> dict[str, Any]:
     reference = str(piece.get("reference") or "")
@@ -185,7 +414,21 @@ def _prediction_for_piece(
             # échouent et toute la prévision devient indisponible.
             events.append({**intervention, "date": event_date, "quantity": quantity})
 
+    contract_demand = _future_contract_demand(
+        piece, interventions, contracts, planning_rows, equipment_types, as_of,
+    )
+    scheduled_events = contract_demand["events"]
+
     stock = max(0, int(_number(piece.get("stock_actuel"), 0) or 0))
+    pending_for_piece = [
+        request for request in pending_requests
+        if _norm(request.get("reference")) == _norm(reference)
+    ]
+    pending_quantity = len(pending_for_piece)
+    # Pending technician requests are reservations, not historical usage.
+    # Reserve the documented minimum of one unit per open request before
+    # calculating the stock available to future maintenance.
+    available_stock = max(0, stock - pending_quantity)
     minimum = max(0, int(_number(piece.get("stock_minimum"), 0) or 0))
     unit_price = _number(piece.get("prix_unitaire"), None)
     lead_time = _number(piece.get("delai_fournisseur_jours"), None)
@@ -216,27 +459,61 @@ def _prediction_for_piece(
     safety_stock = 1.65 * demand_std * math.sqrt(max(lead_time, 1.0) / 30.0) if lead_time is not None else None
     reorder_point = math.ceil(minimum + lead_demand + safety_stock) if lead_demand is not None and safety_stock is not None else None
     daily_rate = monthly_rate / 30.0
-    stockout_days = stock / daily_rate if daily_rate > 0 else None
-    threshold_days = max(0, stock - (reorder_point or minimum)) / daily_rate if daily_rate > 0 and reorder_point is not None else None
-    order_date = as_of + timedelta(days=max(0, math.floor(threshold_days))) if threshold_days is not None else None
-    if stock == 0:
+    stockout_days = available_stock / daily_rate if daily_rate > 0 else None
+    threshold_days = max(0, available_stock - (reorder_point or minimum)) / daily_rate if daily_rate > 0 and reorder_point is not None else None
+    reorder_trigger_date = as_of + timedelta(days=max(0, math.floor(threshold_days))) if threshold_days is not None else None
+    contract_reorder_date = None
+    contract_stockout_date = None
+    cumulative_contract_demand = 0.0
+    for scheduled in scheduled_events:
+        days_until_visit = max(0, (scheduled["date"] - as_of).days)
+        cumulative_contract_demand += scheduled["quantity"]
+        projected_stock = available_stock - daily_rate * days_until_visit - cumulative_contract_demand
+        if reorder_point is not None and projected_stock <= reorder_point and contract_reorder_date is None:
+            contract_reorder_date = scheduled["date"]
+        if projected_stock <= 0 and contract_stockout_date is None:
+            contract_stockout_date = scheduled["date"]
+    reorder_trigger_date = min(
+        (candidate for candidate in (reorder_trigger_date, contract_reorder_date) if candidate is not None),
+        default=None,
+    )
+    order_date = reorder_trigger_date - timedelta(days=lead_time or 0) if reorder_trigger_date else None
+    if available_stock == 0:
         order_date = as_of
-    elif reorder_point is not None and stock <= reorder_point:
+    elif reorder_point is not None and available_stock <= reorder_point:
         order_date = as_of
+    elif order_date is not None and order_date < as_of:
+        order_date = as_of
+    forecast_window_start = order_date or as_of
+    forecast_window_end = forecast_window_start + timedelta(days=max(30, math.ceil(lead_time or 0)))
+    scheduled_demand_in_window = sum(
+        scheduled["quantity"] for scheduled in scheduled_events
+        if scheduled["date"] <= forecast_window_end
+    )
     if reorder_point is not None:
-        order_quantity = math.ceil(max(0, reorder_point + (monthly_rate if monthly_rate > 0 else 0) - stock))
-    elif stock == 0 and minimum > 0:
+        order_quantity = math.ceil(max(0, reorder_point + (monthly_rate if monthly_rate > 0 else 0) + scheduled_demand_in_window - available_stock))
+    elif available_stock == 0 and minimum > 0:
         # Recompléter le seuil configuré est une action de stock certaine,
         # même lorsque la prévision de consommation n'est pas calculable.
         order_quantity = minimum
     else:
         order_quantity = None
-    stockout_date = as_of + timedelta(days=max(0, math.floor(stockout_days))) if stockout_days is not None else None
-    probability_30 = _poisson_tail_at_least(monthly_rate, max(0, stock - minimum)) if monthly_rate > 0 else (1.0 if stock <= minimum else None)
+    baseline_stockout_date = as_of + timedelta(days=max(0, math.floor(stockout_days))) if stockout_days is not None else None
+    stockout_date = min(
+        (candidate for candidate in (baseline_stockout_date, contract_stockout_date) if candidate is not None),
+        default=None,
+    )
+    scheduled_demand_30 = sum(
+        scheduled["quantity"] for scheduled in scheduled_events
+        if scheduled["date"] <= as_of + timedelta(days=30)
+    )
+    probability_30 = _poisson_tail_at_least(monthly_rate + scheduled_demand_30, max(0, available_stock - minimum)) if (monthly_rate > 0 or scheduled_demand_30 > 0) else (1.0 if available_stock <= minimum else None)
 
     history_months = min(12.0, months_observed) if events else 0.0
     confidence = min(100, round(25 + min(35, len(events) * 5) + min(25, history_months / 12 * 25) + (15 if lead_time is not None else 0) + (10 if unit_price and unit_price > 0 else 0)))
-    if not events and stock > 0:
+    if not events and contract_demand["quantite_quota_contrat"] > 0:
+        confidence = max(confidence, 55)
+    elif not events and available_stock > 0:
         confidence = 0
     clients = sorted({str(event.get("client") or "") for event in events if str(event.get("client") or "")})
     contract_coverage = [_client_contract(client, reference, contracts) for client in clients]
@@ -254,11 +531,15 @@ def _prediction_for_piece(
         for event in sorted(events, key=lambda item: item["date"], reverse=True)[:5]
         if any(str(event.get(field) or "").strip() for field in ("probleme", "cause", "solution"))
     ]
-    if stock == 0:
+    if available_stock == 0:
         urgency = "CRITIQUE"
-    elif reorder_point is not None and stock <= reorder_point:
+    elif reorder_point is not None and available_stock <= reorder_point:
         urgency = "HAUTE" if lead_time and lead_time > 0 else "CRITIQUE"
-    elif stockout_days is not None and lead_time is not None and stockout_days <= lead_time:
+    elif contract_stockout_date is not None and (contract_stockout_date - as_of).days <= (lead_time or 0):
+        urgency = "CRITIQUE"
+    elif contract_reorder_date is not None and order_date == as_of:
+        urgency = "HAUTE"
+    elif stockout_date is not None and lead_time is not None and (stockout_date - as_of).days <= lead_time:
         urgency = "HAUTE"
     elif probability_30 is not None and probability_30 >= 0.5:
         urgency = "NORMALE"
@@ -267,10 +548,16 @@ def _prediction_for_piece(
 
     # Un stock nul est une urgence connue, mais il ne suffit pas à fabriquer
     # une prévision de quantité/date sans consommation et délai documentés.
-    prediction_available = bool(events and lead_time is not None and monthly_rate > 0)
+    prediction_available = bool(
+        lead_time is not None
+        and (monthly_rate > 0 or contract_demand["quantite_totale"] > 0)
+        and (events or contract_demand["quantite_totale"] > 0)
+    )
     reason = (
+        "Stock réservé par des demandes de techniciens en attente" if pending_quantity >= stock and pending_quantity > 0 else
         "Stock épuisé" if stock == 0 else
-        "Stock sous le point de commande calculé" if reorder_point is not None and stock <= reorder_point else
+        "Stock sous le point de commande calculé" if reorder_point is not None and available_stock <= reorder_point else
+        f"{contract_demand['interventions_planifiees']} maintenance(s) contractuelle(s) à venir, {contract_demand['quantite_totale']:.2f} unité(s) intégrée(s)" if contract_demand["quantite_totale"] > 0 else
         "Demande historique insuffisante" if not events else
         "Délai fournisseur non renseigné" if lead_time is None else
         "Consommation historique et variabilité observées"
@@ -283,6 +570,8 @@ def _prediction_for_piece(
         "domaine": piece.get("domaine") or "",
         "fournisseur": piece.get("fournisseur") or "",
         "stock_actuel": stock,
+        "stock_disponible_apres_demandes": available_stock,
+        "demandes_pieces_en_attente": pending_quantity,
         "stock_minimum": minimum,
         "prix_unitaire": unit_price,
         "date_commande": order_date.isoformat() if order_date else None,
@@ -293,7 +582,7 @@ def _prediction_for_piece(
         "raison": reason,
         "quantite_recommandee": order_quantity,
         "cout_estime": round(order_quantity * unit_price, 2) if order_quantity is not None and unit_price is not None and unit_price > 0 else None,
-        "jours_avant_rupture": round(stockout_days, 1) if stockout_days is not None else None,
+        "jours_avant_rupture": round((stockout_date - as_of).days, 1) if stockout_date is not None else None,
         "jours_jusqua_commande": (order_date - as_of).days if order_date else None,
         "risque_rupture_30j_pct": round(probability_30 * 100, 1) if probability_30 is not None else None,
         "fiabilite_donnees_pct": confidence,
@@ -306,9 +595,16 @@ def _prediction_for_piece(
         "stock_securite": round(safety_stock, 2) if safety_stock is not None else None,
         "clients_utilisateurs": clients,
         "contrats": contract_coverage,
+        "demande_contrats_futurs": {
+            **contract_demand,
+            "events": [
+                {**event, "date": event["date"].isoformat()}
+                for event in scheduled_events
+            ],
+        },
         "diagnostics": diagnostics,
         "historique": {"evenements": len(events), "mois_observes": round(history_months, 1)},
-        "modele": "weighted_poisson_reorder_point-v1",
+        "modele": "weighted_poisson_reorder_point-contracts-v2",
     }
 
 
@@ -320,8 +616,15 @@ def predict_spare_parts(conn: Any, piece_id: int | None = None, limit: int | Non
         return []
     interventions = _intervention_rows(conn)
     contracts = _contract_rows(conn)
+    planning_rows = _contract_planning_rows(conn)
+    pending_requests = _pending_part_request_rows(conn)
     equipment_rows = _equipment_client_rows(conn)
     clients_by_type: dict[str, set[str]] = defaultdict(set)
+    equipment_types = {
+        _norm(equipment.get("nom")): _norm(equipment.get("type"))
+        for equipment in equipment_rows
+        if _norm(equipment.get("nom")) and _norm(equipment.get("type"))
+    }
     for equipment in equipment_rows:
         equipment_type = _norm(equipment.get("type"))
         client = str(equipment.get("client") or "").strip()
@@ -329,13 +632,23 @@ def predict_spare_parts(conn: Any, piece_id: int | None = None, limit: int | Non
             clients_by_type[equipment_type].add(client)
     predictions = []
     for piece in pieces:
-        prediction = _prediction_for_piece(piece, interventions, contracts, date.today())
+        prediction = _prediction_for_piece(
+            piece, interventions, contracts, planning_rows, pending_requests, equipment_types, date.today(),
+        )
         fleet_clients = clients_by_type.get(_norm(piece.get("equipement_type")), set())
-        prediction["clients_utilisateurs"] = sorted(set(prediction.get("clients_utilisateurs") or []).union(fleet_clients))
-        prediction["contrats"] = [
+        contract_clients = set(prediction.get("demande_contrats_futurs", {}).get("clients") or [])
+        prediction["clients_utilisateurs"] = sorted(
+            set(prediction.get("clients_utilisateurs") or []).union(fleet_clients, contract_clients),
+        )
+        contract_coverage = [
             item for client in prediction["clients_utilisateurs"]
             for item in [_client_contract(client, prediction.get("reference"), contracts)]
             if item
+        ]
+        seen_contracts = set()
+        prediction["contrats"] = [
+            item for item in contract_coverage
+            if not (item.get("id") in seen_contracts or seen_contracts.add(item.get("id")))
         ]
         predictions.append(prediction)
     priority = {"CRITIQUE": 0, "HAUTE": 1, "NORMALE": 2, "BASSE": 3, "UNKNOWN": 4}

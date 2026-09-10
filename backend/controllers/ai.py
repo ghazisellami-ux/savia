@@ -499,15 +499,18 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
         recommendation["cout_estime"] = forecast.get("cout_estime")
         recommendation["delai_fournisseur"] = forecast.get("delai_fournisseur_jours")
         recommendation["action"] = "Commander immédiatement" if recommendation["urgence"] == "critique" else "Planifier la commande selon la date calculée"
-        recommendation["source_calcul"] = "Prévision serveur : consommation réelle, stock, délai fournisseur et prix catalogue"
+        recommendation["source_calcul"] = "Prévision serveur : consommation réelle, maintenances contractuelles planifiées, stock, délai fournisseur et prix catalogue"
         recommendation["fiabilite_donnees_pct"] = forecast.get("fiabilite_donnees_pct")
         recommendation["raison"] = forecast.get("raison")
         recommendation["prediction_available"] = forecast.get("prediction_available")
         recommendation["recommandation_actionnable"] = forecast.get("recommandation_actionnable")
         recommendation["consommation_mensuelle"] = forecast.get("consommation_mensuelle")
         recommendation["risque_rupture_30j_pct"] = forecast.get("risque_rupture_30j_pct")
+        recommendation["demandes_pieces_en_attente"] = forecast.get("demandes_pieces_en_attente", 0)
+        recommendation["stock_disponible_apres_demandes"] = forecast.get("stock_disponible_apres_demandes")
         recommendation["clients_utilisateurs"] = forecast.get("clients_utilisateurs") or []
         recommendation["contrats"] = forecast.get("contrats") or []
+        recommendation["demande_contrats_futurs"] = forecast.get("demande_contrats_futurs") or {}
         recommendation["diagnostics"] = forecast.get("diagnostics") or []
         verified.append(recommendation)
     # Une rupture effective ne doit pas disparaître parce que le modèle IA
@@ -527,14 +530,17 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
             "urgence": "critique",
             "cout_estime": forecast.get("cout_estime"),
             "delai_fournisseur": forecast.get("delai_fournisseur_jours"),
-            "source_calcul": "Rupture effective et stock minimum configuré",
+            "source_calcul": "Rupture effective, contrats planifiés et stock minimum configuré",
             "fiabilite_donnees_pct": forecast.get("fiabilite_donnees_pct"),
             "prediction_available": forecast.get("prediction_available"),
             "recommandation_actionnable": True,
             "consommation_mensuelle": forecast.get("consommation_mensuelle"),
             "risque_rupture_30j_pct": forecast.get("risque_rupture_30j_pct"),
+            "demandes_pieces_en_attente": forecast.get("demandes_pieces_en_attente", 0),
+            "stock_disponible_apres_demandes": forecast.get("stock_disponible_apres_demandes"),
             "clients_utilisateurs": forecast.get("clients_utilisateurs") or [],
             "contrats": forecast.get("contrats") or [],
+            "demande_contrats_futurs": forecast.get("demande_contrats_futurs") or {},
             "diagnostics": forecast.get("diagnostics") or [],
         })
     result["recommandations"] = verified
@@ -559,6 +565,8 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
             "fournisseur": forecast.get("fournisseur"),
             "clients": forecast.get("clients_utilisateurs") or [],
             "stock_actuel": forecast.get("stock_actuel"),
+            "stock_disponible_apres_demandes": forecast.get("stock_disponible_apres_demandes"),
+            "demandes_pieces_en_attente": forecast.get("demandes_pieces_en_attente", 0),
             "stock_minimum": forecast.get("stock_minimum"),
             "prix_unitaire": forecast.get("prix_unitaire"),
             "consommation_mensuelle": forecast.get("consommation_mensuelle"),
@@ -581,6 +589,7 @@ def _apply_spare_parts_ai_guardrails(result, forecasts, sym):
             "historique": forecast.get("historique") or {},
             "diagnostics": forecast.get("diagnostics") or [],
             "contrats": forecast.get("contrats") or [],
+            "demande_contrats_futurs": forecast.get("demande_contrats_futurs") or {},
             "donnees_manquantes": missing_data,
         })
         if (
@@ -1257,6 +1266,7 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
         risque_30j = forecast.get('risque_rupture_30j_pct')
         clients = ', '.join(forecast.get('clients_utilisateurs') or []) or 'Non documenté'
         diagnostic = (forecast.get('diagnostics') or [{}])[0]
+        contract_demand = forecast.get('demande_contrats_futurs') or {}
         
         # Format stock status with prediction (in French)
         if stock == 0:
@@ -1279,6 +1289,12 @@ def analyze_pieces(body: dict, user: dict = Depends(_verify_token), x_savia_lang
             f"cout_catalogue={cout_estime if cout_estime is not None else 'NON CALCULABLE'} {sym}; "
             f"risque_rupture_30j={risque_30j if risque_30j is not None else 'NON CALCULABLE'}%; "
             f"delai_fournisseur={forecast.get('delai_fournisseur_jours') if forecast.get('delai_fournisseur_jours') is not None else 'NON RENSEIGNE'} jours; "
+            f"demandes_techniciens_en_attente={forecast.get('demandes_pieces_en_attente', 0)}; "
+            f"stock_disponible_apres_demandes={forecast.get('stock_disponible_apres_demandes', stock)}; "
+            f"maintenances_contrat_a_venir={contract_demand.get('interventions_planifiees', 0)}; "
+            f"prochaine_maintenance={contract_demand.get('prochaine_intervention') or 'NON PLANIFIEE'}; "
+            f"demande_quota_contrat={contract_demand.get('quantite_quota_contrat', 0)}; "
+            f"demande_estimee_preventif={contract_demand.get('quantite_estimee_historique', 0)}; "
             f"clients={clients}; diagnostic_cause={diagnostic.get('cause') or 'NON RENSEIGNE'}; "
             f"diagnostic_type={diagnostic.get('type') or 'NON RENSEIGNE'}; "
             f"diagnostic_probleme={diagnostic.get('probleme') or 'NON RENSEIGNE'}; "
@@ -1320,12 +1336,12 @@ Articles urgence HAUTE: {stats['high_urgency_count']}
 {inventory_lines}
 
 === DIRECTIVES D'ANALYSE ===
-1. Exploiter toutes les valeurs déterministes disponibles pour chaque référence : stock, seuil, prix, consommation 30/90/365 jours, historique d'interventions, diagnostics, clients, contrats, fournisseur, délai, point de commande et stock de sécurité.
+1. Exploiter toutes les valeurs déterministes disponibles pour chaque référence : stock, demandes de techniciens en attente, seuil, prix, consommation 30/90/365 jours, historique d'interventions, diagnostics, clients, contrats, maintenances contractuelles à venir, quotas restants, fournisseur, délai, point de commande et stock de sécurité.
 2. L'analyse_risque doit être détaillée (6-8 phrases) et citer les références concernées, leur stock, leur coût connu et le motif calculé. Ne conclus jamais qu'une donnée est absente si elle apparaît dans INVENTAIRE.
 3. Data_confidence / fiabilite_donnees_pct indique la fiabilité : distingue données calculées, données de stock certaines et hypothèses à confirmer.
 4. days_until_rupture = jours avant rupture de stock; les usages 30/90/365 jours permettent de commenter la tendance réelle sans inventer une consommation.
 5. Les quantités, dates, coûts et priorités de recommandations seront corrigés par le serveur à partir des prévisions déterministes; explique donc leurs causes et impacts sans les modifier.
-6. Pour chaque rupture ou stock sous seuil, indique l'équipement/client concerné, la couverture contractuelle si présente, le dernier diagnostic lié et les données qui restent à compléter.
+6. Pour chaque rupture ou stock sous seuil, indique l'équipement/client concerné, la couverture contractuelle si présente, les maintenances planifiées et leurs quotas quand ils existent, le dernier diagnostic lié et les données qui restent à compléter.
 
 RÈGLES FINANCIÈRES ET DE COHÉRENCE :
 - Utilise uniquement les quantités, dates, urgences et coûts présents dans INVENTAIRE PIÈCES AVEC PRÉDICTIONS.
