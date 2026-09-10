@@ -24,6 +24,7 @@ __all__ = [
     "lire_contrats",
     "get_contract_equipements",
     "ajouter_contrat",
+    "contract_planning_settings_changed",
     "generer_planning_from_contrat",
     "replanifier_contrat",
     "modifier_contrat",
@@ -360,6 +361,55 @@ def _next_contract_maintenance_date(date_premiere, date_fin, delta, *, date_dern
     while current_date < today:
         current_date += delta
     return current_date if current_date <= date_fin else None
+
+
+def _contract_date_value(value):
+    """Compare PostgreSQL dates and API strings without their time portion."""
+    return str(value or "")[:10]
+
+
+def _contract_equipment_names(value):
+    """Return a stable set of equipment names from a contract request."""
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = []
+    return {str(item).strip() for item in values if str(item).strip()}
+
+
+def contract_planning_settings_changed(existing_contract, existing_equipments, updated_contract):
+    """Whether an update must rebuild the contract's pending automatic visits.
+
+    Closed visits are retained by ``replanifier_contrat``.  Only fields that
+    define the maintenance calendar are considered here, so changing a price
+    or contract note never rewrites the planning.
+    """
+    date_fields = (
+        "date_debut",
+        "date_fin",
+        "date_premiere_maintenance",
+        "date_derniere_maintenance",
+    )
+    for field in date_fields:
+        if field in updated_contract and _contract_date_value(existing_contract.get(field)) != _contract_date_value(updated_contract.get(field)):
+            return True
+
+    if (
+        "recurrence_maintenance" in updated_contract
+        and str(existing_contract.get("recurrence_maintenance") or "").strip()
+        != str(updated_contract.get("recurrence_maintenance") or "").strip()
+    ):
+        return True
+
+    if "equipements" in updated_contract or "equipement" in updated_contract:
+        updated_equipments = _contract_equipment_names(updated_contract.get("equipements"))
+        if not updated_equipments:
+            updated_equipments = _contract_equipment_names(updated_contract.get("equipement"))
+        return _contract_equipment_names(existing_equipments) != updated_equipments
+
+    return False
 
 
 def _should_display_historical_anchor(date_derniere, *, today=None):

@@ -41,6 +41,7 @@ from services.scheduled_jobs import (
     logger,
 )
 from services.file_security import read_validated_upload
+from repositories.contracts import contract_planning_settings_changed
 from controllers.auth_dashboard import (
     Depends,
     Optional,
@@ -390,11 +391,31 @@ def update_contrat(contrat_id: int, body: dict, user: dict = Depends(_verify_tok
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     with get_db() as conn:
         assert_resource_client_access(conn, "contrat", contrat_id, user)
+        contract_row = conn.execute("SELECT * FROM contrats WHERE id = %s", (contrat_id,)).fetchone()
+        equipment_rows = conn.execute(
+            """SELECT e.nom
+               FROM contrats_equipements ce
+               JOIN equipements e ON e.id = ce.equipement_id
+               WHERE ce.contrat_id = %s""",
+            (contrat_id,),
+        ).fetchall()
+
+    existing_contract = dict(contract_row) if contract_row else None
+    existing_equipments = [row["nom"] for row in equipment_rows]
+    if existing_contract and not existing_equipments:
+        existing_equipments = [existing_contract.get("equipement", "")]
+    planning_changed = bool(body.get("force_replan")) or (
+        bool(existing_contract) and contract_planning_settings_changed(
+            existing_contract,
+            existing_equipments,
+            body,
+        )
+    )
     modifier_contrat(contrat_id, body)
-    # A historical-contract anchor means that pending automatic visits can be
-    # safely rebuilt. Completed or closed visits are deliberately preserved.
+    # Rebuild only when the calendar itself changed.  Closed visits are
+    # deliberately preserved by replanifier_contrat.
     planning_result = None
-    if body.get("date_derniere_maintenance"):
+    if planning_changed:
         planning_result = replanifier_contrat(contrat_id)
     
     # Log audit

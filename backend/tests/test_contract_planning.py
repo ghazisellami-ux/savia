@@ -2,7 +2,11 @@ from datetime import date
 
 from dateutil.relativedelta import relativedelta
 
-from repositories.contracts import _next_contract_maintenance_date, _should_display_historical_anchor
+from repositories.contracts import (
+    _next_contract_maintenance_date,
+    _should_display_historical_anchor,
+    contract_planning_settings_changed,
+)
 
 
 def test_contract_update_controller_imports_the_replanning_service():
@@ -23,6 +27,32 @@ def test_future_first_maintenance_is_not_replaced_by_today():
     )
 
     assert result == date(2026, 10, 1)
+
+
+def test_first_maintenance_change_replans_pending_contract_visits():
+    existing = {
+        "date_debut": "2026-09-29",
+        "date_fin": "2027-09-28",
+        "date_premiere_maintenance": "2026-11-21",
+        "date_derniere_maintenance": None,
+        "recurrence_maintenance": "Semestrielle",
+    }
+    updated = {**existing, "date_premiere_maintenance": "2026-11-16", "equipements": ["Respirateur"]}
+
+    assert contract_planning_settings_changed(existing, ["Respirateur"], updated)
+
+
+def test_non_planning_change_does_not_replan_contract_visits():
+    existing = {
+        "date_debut": "2026-09-29",
+        "date_fin": "2027-09-28",
+        "date_premiere_maintenance": "2026-11-16",
+        "date_derniere_maintenance": None,
+        "recurrence_maintenance": "Semestrielle",
+    }
+    updated = {**existing, "montant": 27000, "notes": "Avenant commercial", "equipements": ["Respirateur"]}
+
+    assert not contract_planning_settings_changed(existing, ["Respirateur"], updated)
 
 
 def test_historical_contract_starts_after_the_last_maintenance():
