@@ -58,6 +58,13 @@ function formatContractCoverage(contracts: unknown): string {
     .join(', ');
 }
 
+function formatClientSummary(clients: unknown): string {
+  if (!Array.isArray(clients)) return '';
+  const names = [...new Set(clients.map(client => String(client || '').trim()).filter(Boolean))];
+  if (names.length <= 2) return names.join(', ');
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2} autres`;
+}
+
 function formatFutureContractDemand(demand: unknown): string {
   if (!demand || typeof demand !== 'object') return '';
   const data = demand as Record<string, unknown>;
@@ -1251,7 +1258,7 @@ export default function PiecesPage() {
                                     {clients.length} client{clients.length > 1 ? 's' : ''} concerné{clients.length > 1 ? 's' : ''}
                                   </span>
                                   <span className="block text-savia-text-muted truncate max-w-[220px]" title={clients.join(', ')}>
-                                    {clients.slice(0, 2).join(', ')}{clients.length > 2 ? ` +${clients.length - 2}` : ''}
+                                    {formatClientSummary(clients)}
                                   </span>
                                 </button>
                               ) : <span className="text-savia-text-dim">Non documenté</span>}
@@ -1365,7 +1372,7 @@ export default function PiecesPage() {
                             <span className={d.urgence === 'CRITIQUE' ? 'text-red-400 font-bold' : d.urgence === 'HAUTE' ? 'text-yellow-400 font-bold' : 'text-savia-text-muted'}>{d.urgence || 'UNKNOWN'}</span>
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-1 text-savia-text-muted">
-                            <div>Équipement : {d.equipement_type || 'Non documenté'} · Client(s) : {d.clients?.length ? d.clients.join(', ') : 'Non documenté'}</div>
+                            <div>Équipement : {d.equipement_type || 'Non documenté'} · Client(s) : {formatClientSummary(d.clients) || 'Non documenté'}</div>
                             <div>Fournisseur : {d.fournisseur || 'Non renseigné'} · Délai : {d.delai_fournisseur_jours != null ? `${d.delai_fournisseur_jours} jours` : 'non renseigné'}</div>
                             <div>Stock : {d.stock_actuel ?? '—'} / seuil {d.stock_minimum ?? '—'} · Point de commande : {d.point_commande ?? 'non calculable'} · Stock sécurité : {d.stock_securite ?? 'non calculable'}</div>
                             <div>Prix unitaire : {d.prix_unitaire != null ? formatMoney(Number(d.prix_unitaire), configuredCurrency) : 'non renseigné'} · Coût de commande : {d.cout_estime != null ? formatMoney(Number(d.cout_estime), configuredCurrency) : 'non calculable'}</div>
@@ -1411,7 +1418,7 @@ export default function PiecesPage() {
                           )}
                           {(r.clients_utilisateurs?.length > 0 || r.contrats?.length > 0 || r.diagnostics?.length > 0 || formatFutureContractDemand(r.demande_contrats_futurs) || Number(r.demandes_pieces_en_attente || 0) > 0) && (
                             <div className="text-xs text-savia-text-muted bg-savia-surface/50 rounded px-3 py-2 mb-2 space-y-1">
-                              {r.clients_utilisateurs?.length > 0 && <div><span className="font-semibold">Clients concernés :</span> {r.clients_utilisateurs.join(', ')}</div>}
+                              {r.clients_utilisateurs?.length > 0 && <div><span className="font-semibold">Clients concernés :</span> {formatClientSummary(r.clients_utilisateurs)}</div>}
                               {formatContractCoverage(r.contrats) && <div><span className="font-semibold">Contrat :</span> {formatContractCoverage(r.contrats)}</div>}
                               {formatFutureContractDemand(r.demande_contrats_futurs) && <div><span className="font-semibold">Maintenances à venir :</span> {formatFutureContractDemand(r.demande_contrats_futurs)}</div>}
                               {Number(r.demandes_pieces_en_attente || 0) > 0 && <div><span className="font-semibold">Demandes techniciens :</span> {r.demandes_pieces_en_attente} en attente · stock disponible après réservation : {r.stock_disponible_apres_demandes}</div>}
