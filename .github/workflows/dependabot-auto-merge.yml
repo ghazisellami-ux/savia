@@ -15,19 +15,29 @@ permissions:
 
 jobs:
   merge-after-ci:
-    name: Merge Dependabot PR after successful CI
+    name: Resolve Dependabot PR after CI
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
-      (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'success')
+      github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Merge eligible Dependabot pull requests
+      - name: Resolve eligible Dependabot pull requests
         uses: actions/github-script@v7
         with:
           script: |
             const { owner, repo } = context.repo;
+            const deleteDependabotBranch = async (pullRequest) => {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${pullRequest.head.ref}`,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            };
             let dependabotPullRequests;
             if (context.eventName === 'workflow_run') {
               const { data: pullRequests } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
@@ -53,24 +63,41 @@ jobs:
             );
 
             for (const pullRequest of dependabotPullRequests) {
-              let ciSucceeded = context.eventName === 'workflow_run';
-              if (!ciSucceeded) {
+              let ciSucceeded = context.eventName === 'workflow_run' &&
+                context.payload.workflow_run.conclusion === 'success';
+              let ciFailed = context.eventName === 'workflow_run' &&
+                context.payload.workflow_run.conclusion !== 'success';
+              if (context.eventName !== 'workflow_run') {
                 const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
                   owner,
                   repo,
                   head_sha: pullRequest.head.sha,
                   per_page: 100,
                 });
-                ciSucceeded = runs.workflow_runs.some((run) =>
-                  run.name === 'CI/CD Pipeline' &&
-                  run.head_sha === pullRequest.head.sha &&
-                  run.event === 'pull_request' &&
-                  run.status === 'completed' &&
-                  run.conclusion === 'success'
-                );
+                const ciRuns = runs.workflow_runs
+                  .filter((run) =>
+                    run.name === 'CI/CD Pipeline' &&
+                    run.head_sha === pullRequest.head.sha &&
+                    run.event === 'pull_request'
+                  )
+                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                const latestCiRun = ciRuns[0];
+                ciSucceeded = latestCiRun?.status === 'completed' &&
+                  latestCiRun.conclusion === 'success';
+                ciFailed = latestCiRun?.status === 'completed' &&
+                  latestCiRun.conclusion !== 'success';
               }
               if (!ciSucceeded) {
                 core.info(`PR #${pullRequest.number} ignorée : la dernière CI n'est pas réussie.`);
+                if (ciFailed) {
+                  await github.rest.pulls.update({
+                    owner,
+                    repo,
+                    pull_number: pullRequest.number,
+                    state: 'closed',
+                  });
+                  await deleteDependabotBranch(pullRequest);
+                }
                 continue;
               }
 
@@ -88,15 +115,7 @@ jobs:
 
               // Remove the Dependabot branch after a successful merge so it
               // does not accumulate alongside the project's working branches.
-              try {
-                await github.rest.git.deleteRef({
-                  owner,
-                  repo,
-                  ref: `heads/${pullRequest.head.ref}`,
-                });
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
+              await deleteDependabotBranch(pullRequest);
             }
 
             // Remove closed/stale Dependabot branches, while preserving every
