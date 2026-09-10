@@ -22,6 +22,7 @@ interface Piece {
   prix_unitaire: number;
   prix_usd: number;
   prix_eur: number;
+  delai_fournisseur_jours: number;
   fournisseur: string;
   notes: string;
 }
@@ -38,6 +39,39 @@ const DOMAINES_TYPES: Record<string, string[]> = {
 };
 const ALL_DOMAINES = Object.keys(DOMAINES_TYPES);
 const TYPES_EQUIPEMENTS = Object.values(DOMAINES_TYPES).flat(); // compat
+
+function formatContractCoverage(contracts: unknown): string {
+  if (!Array.isArray(contracts)) return '';
+  const groups = new Map<string, { type: string; covered: boolean; count: number }>();
+  for (const contract of contracts) {
+    if (!contract || typeof contract !== 'object') continue;
+    const item = contract as { type?: unknown; pieces_couvertes?: unknown; id?: unknown };
+    const type = String(item.type || 'Contrat actif');
+    const covered = Boolean(item.pieces_couvertes);
+    const key = `${type}|${covered}`;
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { type, covered, count: 1 });
+  }
+  return [...groups.values()]
+    .map(group => `${group.type} (${group.covered ? 'pièces couvertes' : 'pièces non couvertes'})${group.count > 1 ? ` — ${group.count} contrats` : ''}`)
+    .join(', ');
+}
+
+function formatFutureContractDemand(demand: unknown): string {
+  if (!demand || typeof demand !== 'object') return '';
+  const data = demand as Record<string, unknown>;
+  const visits = Number(data.interventions_planifiees || 0);
+  if (!Number.isFinite(visits) || visits <= 0) return '';
+  const parts = [`${visits} maintenance${visits > 1 ? 's' : ''} contractuelle${visits > 1 ? 's' : ''} à venir`];
+  if (data.prochaine_intervention) parts.push(`prochaine le ${String(data.prochaine_intervention)}`);
+  const quota = Number(data.quantite_quota_contrat || 0);
+  const estimated = Number(data.quantite_estimee_historique || 0);
+  if (quota > 0) parts.push(`${quota} unité${quota > 1 ? 's' : ''} issue${quota > 1 ? 's' : ''} des quotas`);
+  if (estimated > 0) parts.push(`${estimated} unité${estimated > 1 ? 's' : ''} estimée${estimated > 1 ? 's' : ''} selon l'historique préventif`);
+  if (quota <= 0 && estimated <= 0) parts.push('sans consommation de cette référence confirmée à ce stade');
+  return parts.join(' · ');
+}
 
 export default function PiecesPage() {
   const { user } = useAuth();
@@ -91,7 +125,7 @@ export default function PiecesPage() {
   const [exchangeRatesError, setExchangeRatesError] = useState('');
 
   const defaultDomaine = customDomaines[0] || '';
-  const emptyForm = { reference: '', designation: '', domaine: defaultDomaine, equipement_type: customTypesForDomain[defaultDomaine]?.[0] || '', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', prix_usd: '0', prix_eur: '0', fournisseur: '', notes: '' };
+  const emptyForm = { reference: '', designation: '', domaine: defaultDomaine, equipement_type: customTypesForDomain[defaultDomaine]?.[0] || '', est_annexe: false, stock_actuel: '1', stock_minimum: '1', prix_unitaire: '0', prix_usd: '0', prix_eur: '0', delai_fournisseur_jours: '14', fournisseur: '', notes: '' };
   const [form, setForm] = useState(emptyForm);
 
   const loadData = useCallback(async () => {
@@ -109,6 +143,7 @@ export default function PiecesPage() {
         prix_unitaire: Number(item.prix_unitaire || item.Cout_Unitaire || 0),
         prix_usd: Number(item.prix_usd || 0),
         prix_eur: Number(item.prix_eur || 0),
+        delai_fournisseur_jours: Number.isFinite(Number(item.delai_fournisseur_jours)) ? Number(item.delai_fournisseur_jours) : 14,
         fournisseur: item.fournisseur || item.Fournisseur || '',
         notes: item.notes || '',
       }));
@@ -397,11 +432,15 @@ export default function PiecesPage() {
     const price = Number(form.prix_unitaire);
     const priceUsd = Number(form.prix_usd);
     const priceEur = Number(form.prix_eur);
+    const leadTime = Number(form.delai_fournisseur_jours);
     if (!Number.isInteger(stock) || stock < 0 || !Number.isInteger(minimum) || minimum < 0) {
       return 'Le stock actuel et le stock minimum doivent être des nombres entiers positifs ou nuls.';
     }
     if (![price, priceUsd, priceEur].every(value => Number.isFinite(value) && value > 0)) {
       return 'Les prix d’achat en devise configurée, USD et EUR doivent être supérieurs à zéro.';
+    }
+    if (form.delai_fournisseur_jours === '' || !Number.isInteger(leadTime) || leadTime < 0 || leadTime > 365) {
+      return 'Le délai fournisseur doit être un nombre entier compris entre 0 et 365 jours.';
     }
     return '';
   };
@@ -423,6 +462,7 @@ export default function PiecesPage() {
         prix_unitaire: Math.round(Number(form.prix_unitaire)),
         prix_usd: Math.round(Number(form.prix_usd)),
         prix_eur: Math.round(Number(form.prix_eur)),
+        delai_fournisseur_jours: Number(form.delai_fournisseur_jours),
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
@@ -462,6 +502,7 @@ export default function PiecesPage() {
         prix_unitaire: Math.round(Number(form.prix_unitaire)),
         prix_usd: Math.round(Number(form.prix_usd)),
         prix_eur: Math.round(Number(form.prix_eur)),
+        delai_fournisseur_jours: Number(form.delai_fournisseur_jours),
         fournisseur: form.fournisseur.trim(),
         notes: form.notes.trim(),
       });
@@ -560,23 +601,31 @@ export default function PiecesPage() {
       return <span className="text-orange-400 text-xs font-semibold">⚠️ Données insuffisantes</span>;
     }
     const forecastCost = getForecastCost(p, pred);
+    const futureContractDemand = formatFutureContractDemand(pred.demande_contrats_futurs);
     if (pred.stock_actuel === 0 && pred.recommandation_actionnable) {
       return (
         <div className="text-xs space-y-0.5">
           <div className="font-bold text-red-400">Rupture immédiate — commander maintenant</div>
           <div>Qté minimale : {pred.quantite_recommandee ?? 'Non calculable'}</div>
           <div>Coût : {formatMoney(forecastCost, configuredCurrency)}</div>
+          {futureContractDemand && <div className="text-savia-text-muted">Contrat : {futureContractDemand}</div>}
         </div>
       );
     }
     if (!pred.prediction_available) {
-      return <span className="text-orange-400 text-xs font-semibold">Prévision non calculable : {pred.raison || 'historique ou délai fournisseur manquant'}</span>;
+      return (
+        <div className="text-xs space-y-0.5">
+          <div className="text-orange-400 font-semibold">Prévision non calculable : {pred.raison || 'historique ou délai fournisseur manquant'}</div>
+          {futureContractDemand && <div className="text-savia-text-muted">Contrat : {futureContractDemand}</div>}
+        </div>
+      );
     }
     return (
       <div className="text-xs space-y-0.5">
         <div className="font-semibold">Commande : {pred.date_commande || 'Non calculable'}</div>
         <div className="text-savia-text-muted">Rupture : {pred.date_rupture_prevue || 'Non calculable'}</div>
         <div className="text-savia-text-dim">Qté : {formatForecastNumber(pred.quantite_recommandee)} · Risque 30 j : {formatForecastNumber(pred.risque_rupture_30j_pct, '%')}</div>
+        {futureContractDemand && <div className="text-savia-text-muted">Contrat : {futureContractDemand}</div>}
       </div>
     );
   };
@@ -1124,7 +1173,7 @@ export default function PiecesPage() {
                         equipement_type: p.equipement_type,
                         est_annexe: p.est_annexe,
                         stock_actuel: String(p.stock_actuel), stock_minimum: String(p.stock_minimum),
-                        prix_unitaire: formatPriceInput(p.prix_unitaire), prix_usd: formatPriceInput(getPriceInCurrency(p, 'USD') || 0), prix_eur: formatPriceInput(getPriceInCurrency(p, 'EUR') || 0), fournisseur: p.fournisseur, notes: p.notes,
+                        prix_unitaire: formatPriceInput(p.prix_unitaire), prix_usd: formatPriceInput(getPriceInCurrency(p, 'USD') || 0), prix_eur: formatPriceInput(getPriceInCurrency(p, 'EUR') || 0), delai_fournisseur_jours: String(p.delai_fournisseur_jours), fournisseur: p.fournisseur, notes: p.notes,
                       });
                       setCustomFournisseur(
                         Boolean(p.fournisseur) && !fournisseursList.some(item => item.toLowerCase() === p.fournisseur.toLowerCase()),
@@ -1324,7 +1373,9 @@ export default function PiecesPage() {
                             <div>Commande : {d.date_commande || 'non calculable'} · Rupture : {d.date_rupture_prevue || 'non calculable'} · Risque 30 j : {d.risque_rupture_30j_pct != null ? `${d.risque_rupture_30j_pct}%` : 'non calculable'} · Fiabilité : {d.fiabilite_donnees_pct ?? 0}%</div>
                           </div>
                           <div className="text-savia-text-muted bg-savia-surface/50 rounded px-2.5 py-2"><span className="font-semibold text-savia-text">Décision calculée :</span> {d.recommandation_actionnable ? `commander ${d.quantite_recommandee ?? 'à confirmer'} unité(s)` : 'pas de commande automatique'} — {d.raison || 'raison non renseignée'}.</div>
-                          {d.contrats?.length > 0 && <div className="text-savia-text-muted">Contrat : {d.contrats.map((c: any) => `${c.client || 'Client'} — ${c.type || 'Actif'} (${c.pieces_couvertes ? 'pièce couverte' : 'pièce non couverte'})`).join(' · ')}</div>}
+                          {formatContractCoverage(d.contrats) && <div className="text-savia-text-muted">Contrat : {formatContractCoverage(d.contrats)}</div>}
+                          {formatFutureContractDemand(d.demande_contrats_futurs) && <div className="text-savia-text-muted">Maintenances à venir : {formatFutureContractDemand(d.demande_contrats_futurs)}</div>}
+                          {Number(d.demandes_pieces_en_attente || 0) > 0 && <div className="text-savia-text-muted">Demandes techniciens en attente : {d.demandes_pieces_en_attente} · stock disponible après réservation : {d.stock_disponible_apres_demandes}</div>}
                           {d.diagnostics?.[0] && <div className="text-savia-text-muted">Diagnostic : {d.diagnostics[0].type || '—'} · {d.diagnostics[0].probleme || 'Problème non renseigné'} · Cause : {d.diagnostics[0].cause || 'non renseignée'} · Solution : {d.diagnostics[0].solution || 'non renseignée'}</div>}
                           {d.donnees_manquantes?.length > 0 && <div className="text-yellow-300 bg-yellow-500/10 border border-yellow-500/20 rounded px-2.5 py-2">À compléter : {d.donnees_manquantes.join(' · ')}</div>}
                         </div>
@@ -1358,10 +1409,12 @@ export default function PiecesPage() {
                               {r.raison}
                             </div>
                           )}
-                          {(r.clients_utilisateurs?.length > 0 || r.diagnostics?.length > 0) && (
+                          {(r.clients_utilisateurs?.length > 0 || r.contrats?.length > 0 || r.diagnostics?.length > 0 || formatFutureContractDemand(r.demande_contrats_futurs) || Number(r.demandes_pieces_en_attente || 0) > 0) && (
                             <div className="text-xs text-savia-text-muted bg-savia-surface/50 rounded px-3 py-2 mb-2 space-y-1">
                               {r.clients_utilisateurs?.length > 0 && <div><span className="font-semibold">Clients concernés :</span> {r.clients_utilisateurs.join(', ')}</div>}
-                              {r.contrats?.length > 0 && <div><span className="font-semibold">Contrat :</span> {r.contrats.map((c: any) => `${c.type || 'Actif'} (${c.pieces_couvertes ? 'pièces couvertes' : 'pièces non couvertes'})`).join(', ')}</div>}
+                              {formatContractCoverage(r.contrats) && <div><span className="font-semibold">Contrat :</span> {formatContractCoverage(r.contrats)}</div>}
+                              {formatFutureContractDemand(r.demande_contrats_futurs) && <div><span className="font-semibold">Maintenances à venir :</span> {formatFutureContractDemand(r.demande_contrats_futurs)}</div>}
+                              {Number(r.demandes_pieces_en_attente || 0) > 0 && <div><span className="font-semibold">Demandes techniciens :</span> {r.demandes_pieces_en_attente} en attente · stock disponible après réservation : {r.stock_disponible_apres_demandes}</div>}
                               {r.diagnostics?.[0] && <div><span className="font-semibold">Diagnostic récent :</span> {r.diagnostics[0].type || '—'} · {r.diagnostics[0].probleme || 'Problème non renseigné'} · Cause : {r.diagnostics[0].cause || 'non renseignée'} · Solution : {r.diagnostics[0].solution || 'non renseignée'}</div>}
                             </div>
                           )}
@@ -1634,6 +1687,7 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} placeholder="Tube radiogène" value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Délai fournisseur (jours) *</label><input required min="0" max="365" step="1" type="number" className={INPUT_CLS} value={form.delai_fournisseur_jours} onChange={e => setForm({...form, delai_fournisseur_jours: e.target.value})} /><p className="text-xs text-savia-text-dim mt-1">0 = disponibilité immédiate</p></div>
             <div className="md:col-span-2 rounded-xl border border-savia-border/60 bg-savia-surface-hover/30 p-3">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat ({configuredCurrency}) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_unitaire)} onChange={e => updatePurchasePrice('prix_unitaire', configuredCurrency, e.target.value)} /></div>
@@ -1743,6 +1797,7 @@ export default function PiecesPage() {
             <div><label className="block text-sm text-savia-text-muted mb-1">Désignation *</label><input required className={INPUT_CLS} value={form.designation} onChange={e => setForm({...form, designation: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock actuel *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_actuel} onChange={e => setForm({...form, stock_actuel: e.target.value})} /></div>
             <div><label className="block text-sm text-savia-text-muted mb-1">Stock minimum (seuil alerte) *</label><input required min="0" step="1" type="number" className={INPUT_CLS} value={form.stock_minimum} onChange={e => setForm({...form, stock_minimum: e.target.value})} /></div>
+            <div><label className="block text-sm text-savia-text-muted mb-1">Délai fournisseur (jours) *</label><input required min="0" max="365" step="1" type="number" className={INPUT_CLS} value={form.delai_fournisseur_jours} onChange={e => setForm({...form, delai_fournisseur_jours: e.target.value})} /><p className="text-xs text-savia-text-dim mt-1">0 = disponibilité immédiate</p></div>
             <div className="md:col-span-2 rounded-xl border border-savia-border/60 bg-savia-surface-hover/30 p-3">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div><label className="block text-sm text-savia-text-muted mb-1">Prix d&apos;achat ({configuredCurrency}) *</label><input required min="1" step="1" type="number" className={INPUT_CLS} value={roundedFormPrice(form.prix_unitaire)} onChange={e => updatePurchasePrice('prix_unitaire', configuredCurrency, e.target.value)} /></div>

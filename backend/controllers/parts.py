@@ -106,6 +106,17 @@ def _validate_piece_payload(body: dict) -> None:
         if not math.isfinite(converted_price) or converted_price <= 0:
             raise HTTPException(status_code=422, detail=f"{field} doit être supérieur à zéro")
 
+    # Optional for backward-compatible API clients; the frontend always sends
+    # it.  A value of 0 is valid for immediately available local suppliers.
+    if body.get("delai_fournisseur_jours") not in (None, ""):
+        try:
+            lead_time = float(body["delai_fournisseur_jours"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Le délai fournisseur doit être un nombre valide")
+        if not math.isfinite(lead_time) or not lead_time.is_integer() or not 0 <= lead_time <= 365:
+            raise HTTPException(status_code=422, detail="Le délai fournisseur doit être un nombre entier compris entre 0 et 365 jours")
+        body["delai_fournisseur_jours"] = int(lead_time)
+
 
 def _get_currency_rates() -> dict:
     """Return USD-based exchange rates, reusing a recent server-side response."""
