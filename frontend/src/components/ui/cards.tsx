@@ -12,10 +12,11 @@ interface KpiCardProps {
   tooltip?: string;
   detail?: string;
   loading?: boolean;
+  appearance?: 'default' | 'status-stripe';
   emphasis?: boolean;
 }
 
-export function KpiCard({ icon, value, label, variant = 'default', tooltip, detail, loading = false, emphasis = false }: KpiCardProps) {
+export function KpiCard({ icon, value, label, variant = 'default', tooltip, detail, loading = false, appearance = 'default', emphasis = false }: KpiCardProps) {
   // Skeleton variant - shows grayed out placeholder
   if (variant === 'skeleton') {
     return (
@@ -48,18 +49,41 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip, deta
     warning: 'hover:shadow-[0_0_20px_rgba(245,158,11,0.1)]',
   }[variant];
 
+  const stripeGradient = {
+    default: 'linear-gradient(90deg, #567C8D 0%, rgba(86,124,141,0.16) 100%)',
+    danger: 'linear-gradient(90deg, #EF4444 0%, rgba(239,68,68,0.16) 100%)',
+    success: 'linear-gradient(90deg, #22C55E 0%, rgba(34,197,94,0.16) 100%)',
+    warning: 'linear-gradient(90deg, #F59E0B 0%, rgba(245,158,11,0.16) 100%)',
+  }[variant];
+
+  const iconSurface = {
+    default: 'rounded-full bg-savia-surface-hover p-2',
+    danger: 'rounded-full bg-red-500/10 p-2',
+    success: 'rounded-full bg-green-500/10 p-2',
+    warning: 'rounded-full bg-amber-500/10 p-2',
+  }[variant];
+
+  const valueColor = loading ? 'text-savia-text' : {
+    default: 'text-savia-text',
+    danger: 'text-red-500',
+    success: 'text-green-500',
+    warning: 'text-amber-500',
+  }[variant];
+
   return (
     <div
       className={clsx(
         'glass rounded-xl text-center transition-all duration-300',
         emphasis ? 'flex min-h-40 flex-col items-center justify-center p-5' : 'p-4',
         borderColor, glowColor,
+        appearance === 'status-stripe' && 'relative overflow-hidden',
         'hover:scale-[1.02] hover:-translate-y-0.5'
       )}
       title={tooltip}
     >
-      <div className={clsx(emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl', loading && 'animate-pulse opacity-60')}>{icon}</div>
-      <div className={clsx(emphasis ? 'text-2xl font-extrabold tracking-tight text-savia-text md:text-3xl' : 'text-xl font-extrabold text-savia-text tracking-tight', loading && 'animate-pulse')}>{loading ? '—' : value}</div>
+      {appearance === 'status-stripe' && <div aria-hidden="true" className="absolute left-0 right-0 top-0 z-10" style={{ height: '3px', background: stripeGradient }} />}
+      <div className={clsx(emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl', loading && 'animate-pulse opacity-60', appearance === 'status-stripe' && iconSurface)}>{icon}</div>
+      <div className={clsx(emphasis ? 'text-2xl font-extrabold tracking-tight md:text-3xl' : 'text-xl font-extrabold tracking-tight', valueColor, loading && 'animate-pulse')}>{loading ? '—' : value}</div>
       <div className={emphasis ? 'mt-2 text-sm font-semibold leading-tight text-savia-text-muted' : 'text-xs text-savia-text-muted mt-1 leading-tight'}>{label}</div>
       {detail && <div className="mt-2 text-xs leading-tight text-savia-text-muted">{loading ? 'Chargement…' : detail}</div>}
     </div>
