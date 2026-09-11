@@ -10,10 +10,12 @@ interface KpiCardProps {
   label?: string;
   variant?: 'default' | 'danger' | 'success' | 'warning' | 'skeleton';
   tooltip?: string;
+  detail?: string;
+  loading?: boolean;
   emphasis?: boolean;
 }
 
-export function KpiCard({ icon, value, label, variant = 'default', tooltip, emphasis = false }: KpiCardProps) {
+export function KpiCard({ icon, value, label, variant = 'default', tooltip, detail, loading = false, emphasis = false }: KpiCardProps) {
   // Skeleton variant - shows grayed out placeholder
   if (variant === 'skeleton') {
     return (
@@ -34,9 +36,9 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip, emph
 
   const borderColor = {
     default: 'border-savia-accent/20',
-    danger: 'border-savia-danger/30',
-    success: 'border-savia-success/30',
-    warning: 'border-savia-warning/30',
+    danger: 'border-red-500/20 bg-red-500/10',
+    success: 'border-green-500/20 bg-green-500/10',
+    warning: 'border-amber-500/20 bg-amber-500/10',
   }[variant];
 
   const glowColor = {
@@ -56,9 +58,10 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip, emph
       )}
       title={tooltip}
     >
-      <div className={emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl'}>{icon}</div>
-      <div className={emphasis ? 'text-2xl font-extrabold tracking-tight text-savia-text md:text-3xl' : 'text-xl font-extrabold text-savia-text tracking-tight'}>{value}</div>
+      <div className={clsx(emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl', loading && 'animate-pulse opacity-60')}>{icon}</div>
+      <div className={clsx(emphasis ? 'text-2xl font-extrabold tracking-tight text-savia-text md:text-3xl' : 'text-xl font-extrabold text-savia-text tracking-tight', loading && 'animate-pulse')}>{loading ? '—' : value}</div>
       <div className={emphasis ? 'mt-2 text-sm font-semibold leading-tight text-savia-text-muted' : 'text-xs text-savia-text-muted mt-1 leading-tight'}>{label}</div>
+      {detail && <div className="mt-2 text-xs leading-tight text-savia-text-muted">{loading ? 'Chargement…' : detail}</div>}
     </div>
   );
 }
