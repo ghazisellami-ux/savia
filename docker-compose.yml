@@ -10,6 +10,12 @@ services:
       MINIO_ROOT_USER: ${SERVICE_USER_MINIO}
       MINIO_ROOT_PASSWORD: ${SERVICE_PASSWORD_64_MINIO}
     command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
   backend:
@@ -56,7 +62,7 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
     depends_on:
       minio:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/"]
       interval: 15s
