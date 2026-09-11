@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Modal } from '@/components/ui/modal';
+import { KpiCard } from '@/components/ui/cards';
 import { TimePicker } from '@/components/ui/time-picker';
 import {
   Search, Wrench, Clock, CheckCircle, AlertTriangle, Loader2, Save,
@@ -972,11 +973,8 @@ export default function SavPage() {
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
           ...(!isClient && !isTechnicien ? [{ label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' }] : []),
         ].map(k => (
-          <div key={k.label} className="glass rounded-xl p-3 text-center">
-            <div className={`flex justify-center mb-1 ${k.color}`}>{k.icon}</div>
-            <div className={`text-2xl font-black ${k.color}`}>{k.value}</div>
-            <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
-          </div>
+          <KpiCard key={k.label} appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+            variant={k.label === 'Clôturées' || k.label === 'Taux résol.' ? 'success' : k.label === 'En cours' ? 'warning' : k.label === 'Coût total' ? 'danger' : 'default'} />
         ))}
       </div>
 
@@ -1078,8 +1076,8 @@ export default function SavPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(i => (
-                    <tr key={i.id} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors">
+                  {filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((i, rowIndex) => (
+                    <tr key={`${i.id}-${rowIndex}`} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors">
                       <td className="py-2.5 px-3 font-mono text-xs font-semibold text-savia-accent">#{i.id}</td>
                       <td className="py-2.5 px-3 text-xs">{i.date.substring(0, 10)}</td>
                       <td className="py-2.5 px-3 font-semibold text-sm">{i.machine}</td>
@@ -1169,11 +1167,11 @@ export default function SavPage() {
           </div>
 
           {/* Summary KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="glass rounded-xl p-4 text-center"><div className="flex justify-center mb-1"><Wrench className="w-5 h-5 text-savia-accent" /></div><div className="text-3xl font-black text-savia-accent">{totalInterv}</div><div className="text-xs text-savia-text-muted mt-1">Interventions totales</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="flex justify-center mb-1"><Target className="w-5 h-5 text-green-400" /></div><div className="text-3xl font-black text-green-400">{tauxResolution}%</div><div className="text-xs text-savia-text-muted mt-1">Taux résolution</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="flex justify-center mb-1"><Timer className="w-5 h-5 text-purple-400" /></div><div className="text-3xl font-black text-purple-400">{mttr}h</div><div className="text-xs text-savia-text-muted mt-1">MTTR moyen</div></div>
-            <div className="glass rounded-xl p-4 text-center"><div className="flex justify-center mb-1"><Clock className="w-5 h-5 text-yellow-400" /></div><div className="text-3xl font-black text-yellow-400">{totalDureeH}h</div><div className="text-xs text-savia-text-muted mt-1">Durée totale</div></div>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <KpiCard appearance="status-stripe" icon={<Wrench className="h-5 w-5" />} value={String(totalInterv)} label="Interventions totales" />
+            <KpiCard appearance="status-stripe" icon={<Target className="h-5 w-5" />} value={`${tauxResolution}%`} label="Taux résolution" variant="success" />
+            <KpiCard appearance="status-stripe" icon={<Timer className="h-5 w-5" />} value={`${mttr}h`} label="MTTR moyen" />
+            <KpiCard appearance="status-stripe" icon={<Clock className="h-5 w-5" />} value={`${totalDureeH}h`} label="Durée totale" variant="warning" />
           </div>
 
           {/* Ratio correctif/préventif */}
@@ -1349,8 +1347,8 @@ export default function SavPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {pdfFiltered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(i => (
-                          <tr key={i.id} className="border-b border-savia-border/30">
+                        {pdfFiltered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((i, rowIndex) => (
+                          <tr key={`${i.id}-${rowIndex}`} className="border-b border-savia-border/30">
                             <td className="py-1.5 px-2">{i.date.substring(0, 10)}</td>
                             <td className="py-1.5 px-2 font-semibold">{i.machine}</td>
                             <td className="py-1.5 px-2">{i.technicien}</td>

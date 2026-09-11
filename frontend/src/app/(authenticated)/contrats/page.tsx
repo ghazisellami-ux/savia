@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { contrats, equipements, pieces as piecesApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useRoleGuard } from '@/lib/use-role-guard';
+import { KpiCard } from '@/components/ui/cards';
 import { downloadBlob } from '@/lib/download';
 import {
   Plus, Search, FileText, Calendar, DollarSign, Clock, Wrench,
@@ -916,21 +917,12 @@ export default function ContratsPage() {
           { label: 'Expiré', value: expires, color: 'text-red-500', icon: <AlertTriangle className="w-4 h-4" />, span: false },
           { label: 'Expire dans 60j', value: expiringIn60, color: 'text-yellow-400', icon: <Clock className="w-4 h-4" />, span: false },
         ].map(k => (
-          <div key={k.label} className={`glass rounded-xl p-2.5 text-center md:col-span-2`}>
-            <div className={`${k.color} mx-auto mb-1 flex justify-center`}>{k.icon}</div>
-            <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
-            <div className="text-xs text-savia-text-muted mt-0.5">{k.label}</div>
-          </div>
+          <KpiCard key={k.label} className="md:col-span-2" appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+            variant={k.label === 'Actifs' ? 'success' : k.label === 'Expiré' ? 'danger' : k.label === 'Suspendus' || k.label === 'Expire dans 60j' ? 'warning' : 'default'} />
         ))}
         
         {/* Revenu annuel - larger card (2 columns) */}
-        <div className="glass rounded-xl p-4 text-center md:col-span-2">
-          <div className="text-savia-accent mx-auto mb-2 flex justify-center">
-            <DollarSign className="w-6 h-6" />
-          </div>
-          <div className="text-2xl font-black text-savia-accent">{(totalRevenu / 1000).toFixed(0)}K TND</div>
-          <div className="text-sm text-savia-text-muted mt-2">Revenu annuel</div>
-        </div>
+        <KpiCard className="md:col-span-2" appearance="status-stripe" icon={<DollarSign className="h-6 w-6" />} value={`${(totalRevenu / 1000).toFixed(0)}K TND`} label="Revenu annuel" variant="success" />
       </div>
 
       <section className="glass overflow-hidden rounded-xl">
