@@ -19,13 +19,23 @@ from api.runtime import (
     get_db,
     jwt,
     lire_equipements,
+    lire_contrats,
+    get_contract_equipements,
     lire_interventions,
+    lire_planning,
     log_audit,
     logger,
     pd,
     read_sql,
     timedelta,
     unicodedata,
+)
+from services.sla_tracking import (
+    active_sla_contracts,
+    compliance_percentage,
+    elapsed_hours,
+    sla_contract_for,
+    sla_start_value,
 )
 from api.security import (
     ChangePasswordRequest,
@@ -375,6 +385,11 @@ def get_dashboard_kpis(
             df_int = df_int[df_int["machine"].isin(machines_filtered)]
             logger.info(f"After region/ville/type intervention filter: {len(df_int)} interventions")
 
+        # Operational indicators (open work, SLA and preventive planning) are
+        # always about the current situation. Keep this scoped-but-undated
+        # dataset before applying the dashboard period to historical KPIs.
+        df_int_current = df_int.copy()
+
         # Filter interventions by date range
         if not df_int.empty and "date" in df_int.columns:
             df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
@@ -423,14 +438,14 @@ def get_dashboard_kpis(
         nb_eq = len(df_eq_for_status) if not df_eq_for_status.empty else 0
         nb_critiques = 0
         dispo = 100.0
+
+        def _status_key(value: Any) -> str:
+            text = unicodedata.normalize("NFD", str(value or "").strip().lower())
+            return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
         
         # Alertes Critiques = CURRENT equipment status (not filtered by month)
         # Shows all equipment currently in critical/down state
         if not df_eq_for_status.empty and "Statut" in df_eq_for_status.columns:
-            def _status_key(value: Any) -> str:
-                text = unicodedata.normalize("NFD", str(value or "").strip().lower())
-                return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-
             status_values = df_eq_for_status["Statut"].map(_status_key)
             critical_statuses = {"hors service", "critique", "en panne"}
             unavailable_statuses = critical_statuses | {"en atelier"}
@@ -457,31 +472,147 @@ def get_dashboard_kpis(
 
         # Calculate intervention-based KPIs
         nb_interventions = len(df_int) if not df_int.empty else 0
+
+        closed_statuses = {"cloturee", "closed", "resolved", "terminee", "completee", "annulee"}
+
+        def _is_closed_status(value: Any) -> bool:
+            return _status_key(value) in closed_statuses
+
+        # Open interventions are deliberately not limited to the selected
+        # historic period: an intervention remains actionable until it closes.
+        nb_interventions_ouvertes = 0
+        nb_interventions_retard = 0
+        if not df_int_current.empty and "statut" in df_int_current.columns:
+            open_interventions = df_int_current[
+                ~df_int_current["statut"].apply(_is_closed_status)
+            ].copy()
+            nb_interventions_ouvertes = len(open_interventions)
+            if not open_interventions.empty:
+                due_col = "planning_date" if "planning_date" in open_interventions.columns else "date"
+                if due_col in open_interventions.columns:
+                    due_dates = pd.to_datetime(open_interventions[due_col], errors="coerce")
+                    nb_interventions_retard = int((due_dates.dt.date < datetime.now().date()).fillna(False).sum())
+
+        # Preventive work comes from the planning table, not from interventions:
+        # future planning rows do not yet have an intervention by design.
+        preventives_retard = 0
+        preventives_7j = 0
+        preventives_30j = 0
+        try:
+            df_plan = lire_planning()
+            if not df_plan.empty:
+                if effective_client and "client" in df_plan.columns:
+                    df_plan = df_plan[
+                        df_plan["client"].astype(str).str.strip().str.casefold()
+                        == effective_client.strip().casefold()
+                    ]
+                if (region or ville or equipment_type) and "machine" in df_plan.columns:
+                    scoped_machines = set(df_eq["Nom"].dropna().astype(str)) if "Nom" in df_eq.columns else set()
+                    df_plan = df_plan[df_plan["machine"].astype(str).isin(scoped_machines)]
+                if "is_ghost" in df_plan.columns:
+                    df_plan = df_plan[~df_plan["is_ghost"].fillna(False).astype(bool)]
+                if "statut" in df_plan.columns:
+                    df_plan = df_plan[~df_plan["statut"].apply(_is_closed_status)]
+                if "type_maintenance" in df_plan.columns:
+                    df_plan = df_plan[
+                        df_plan["type_maintenance"].astype(str).str.normalize("NFKD")
+                        .str.encode("ascii", "ignore").str.decode("ascii")
+                        .str.lower().str.contains("prevent")
+                    ]
+                if "date_prevue" in df_plan.columns:
+                    planned_dates = pd.to_datetime(df_plan["date_prevue"], errors="coerce").dt.date
+                    today = datetime.now().date()
+                    in_7_days = today + timedelta(days=7)
+                    in_30_days = today + timedelta(days=30)
+                    preventives_retard = int((planned_dates < today).fillna(False).sum())
+                    preventives_7j = int(((planned_dates >= today) & (planned_dates <= in_7_days)).fillna(False).sum())
+                    preventives_30j = int(((planned_dates > in_7_days) & (planned_dates <= in_30_days)).fillna(False).sum())
+        except Exception as exc:
+            logger.warning("Unable to compute preventive dashboard KPIs: %s", exc)
+
+        # SLA: use the same contract-resolution rules as the dedicated SLA
+        # page. The rate combines closed cases in the selected period with
+        # currently open commitments; only work covered by a contract is used.
+        sla_respect_pct = 100.0
+        sla_hors_delai = 0
+        sla_suivies = 0
+        try:
+            contractual_slas = active_sla_contracts(
+                lire_contrats().to_dict("records"), get_contract_equipements,
+            )
+            machine_clients = {}
+            if not df_eq_for_status.empty and {"Nom", "Client"}.issubset(df_eq_for_status.columns):
+                machine_clients = dict(zip(df_eq_for_status["Nom"], df_eq_for_status["Client"]))
+
+            active_sla_items = []
+            if not df_int_current.empty:
+                for _, intervention in df_int_current.iterrows():
+                    if _is_closed_status(intervention.get("statut")):
+                        continue
+                    machine = intervention.get("machine", "")
+                    client_name = intervention.get("client", "") or machine_clients.get(machine, "")
+                    contract = sla_contract_for(contractual_slas, client_name, machine, intervention.get("type_intervention", ""))
+                    if not contract:
+                        continue
+                    elapsed = elapsed_hours(sla_start_value(intervention), datetime.now(), business_day_start_hour=8)
+                    if elapsed is None:
+                        continue
+                    active_sla_items.append({"breached": elapsed > contract["sla_h"]})
+
+            historical_compliant = 0
+            historical_total = 0
+            if not df_int.empty:
+                for _, intervention in df_int.iterrows():
+                    if not _is_closed_status(intervention.get("statut")):
+                        continue
+                    start = pd.to_datetime(intervention.get("date_debut_intervention"), errors="coerce")
+                    end = pd.to_datetime(intervention.get("date_cloture"), errors="coerce")
+                    if pd.isna(start) or pd.isna(end):
+                        continue
+                    machine = intervention.get("machine", "")
+                    client_name = intervention.get("client", "") or machine_clients.get(machine, "")
+                    contract = sla_contract_for(contractual_slas, client_name, machine, intervention.get("type_intervention", ""))
+                    if not contract:
+                        continue
+                    historical_total += 1
+                    if (end - start).total_seconds() <= contract["sla_h"] * 3600:
+                        historical_compliant += 1
+
+            sla_hors_delai = sum(1 for item in active_sla_items if item["breached"])
+            sla_suivies = historical_total + len(active_sla_items)
+            sla_respect_pct = compliance_percentage(historical_compliant, historical_total, active_sla_items)
+        except Exception as exc:
+            logger.warning("Unable to compute SLA dashboard KPIs: %s", exc)
         
-        # Calculate MTBF (Mean Time Between Failures) - average days between interventions
+        # MTBF is based only on corrective failures, per equipment. Preventive
+        # visits are planned work and must never shorten a reliability metric.
         mtbf = 0.0
-        if nb_interventions > 1 and not df_int.empty and "date" in df_int.columns:
-            df_int_sorted = df_int.sort_values("date")
-            dates = pd.to_datetime(df_int_sorted["date"], errors="coerce").dropna()
-            if len(dates) > 1:
-                time_diffs = dates.diff().dropna()
-                avg_days = time_diffs.dt.total_seconds().mean() / (24 * 3600)  # Convert to days
-                mtbf = avg_days * 24 if avg_days > 0 else 0  # Convert to hours
+        corrective_interventions = pd.DataFrame()
+        if not df_int.empty and {"date", "machine", "type_intervention"}.issubset(df_int.columns):
+            corrective_interventions = df_int[
+                df_int["type_intervention"].astype(str).str.normalize("NFKD")
+                .str.encode("ascii", "ignore").str.decode("ascii")
+                .str.lower().str.contains("correct")
+            ].copy()
+            corrective_interventions["date"] = pd.to_datetime(corrective_interventions["date"], errors="coerce")
+            gaps = []
+            for _, failures in corrective_interventions.dropna(subset=["date"]).groupby("machine"):
+                dates = failures["date"].sort_values()
+                if len(dates) > 1:
+                    gaps.extend(dates.diff().dropna().dt.total_seconds().div(3600).tolist())
+            if gaps:
+                mtbf = float(sum(gaps) / len(gaps))
         
-        # Calculate MTTR (Mean Time To Repair) - average duration of interventions
+        # MTTR uses the recorded duration in minutes for closed corrective work.
         mttr = 0.0
-        if not df_int.empty:
-            # Check for duration column (could be "duree_intervention", "duree", etc.)
-            duration_col = None
-            for col in ["duree_intervention", "duree", "duration", "Duree"]:
-                if col in df_int.columns:
-                    duration_col = col
-                    break
-            
-            if duration_col:
-                durations = pd.to_numeric(df_int[duration_col], errors="coerce").dropna()
-                if len(durations) > 0:
-                    mttr = float(durations.mean())
+        if not corrective_interventions.empty and "duree_minutes" in corrective_interventions.columns:
+            repaired = corrective_interventions[
+                corrective_interventions["statut"].apply(_is_closed_status)
+            ] if "statut" in corrective_interventions.columns else corrective_interventions
+            durations = pd.to_numeric(repaired["duree_minutes"], errors="coerce")
+            durations = durations[durations > 0]
+            if not durations.empty:
+                mttr = float(durations.mean() / 60.0)
         
         # Calculate total cost = cout_main_oeuvre + cout_pieces (NOT cout_interventions which double-counts)
         # Use ALL interventions (not just closed) to match SAV page calculation
@@ -518,6 +649,24 @@ def get_dashboard_kpis(
                     logger.info(f"Found {col}: total = {cout_pieces_total}")
                     break
         
+        # Average cost of a corrective intervention is more actionable than a
+        # fleet-wide total. It follows the same labour + parts calculation.
+        cout_correctif_moyen = 0.0
+        if not corrective_interventions.empty:
+            corrective_count = len(corrective_interventions)
+            corrective_labor = 0.0
+            corrective_parts = 0.0
+            if "duree_minutes" in corrective_interventions.columns:
+                corrective_labor = (
+                    float(pd.to_numeric(corrective_interventions["duree_minutes"], errors="coerce").fillna(0).sum())
+                    / 60.0 * taux_horaire
+                )
+            for col in ["cout_pieces", "pieces", "cout_pieces_utilisees", "pieces_cost"]:
+                if col in corrective_interventions.columns:
+                    corrective_parts = float(pd.to_numeric(corrective_interventions[col], errors="coerce").fillna(0).sum())
+                    break
+            cout_correctif_moyen = (corrective_labor + corrective_parts) / corrective_count
+
         # Total cost = main d'oeuvre + pièces (no double-counting)
         cout_total = cout_main_oeuvre_total + cout_pieces_total
         logger.info(f"Dashboard KPIs: cout_main_oeuvre_total={cout_main_oeuvre_total}, cout_pieces_total={cout_pieces_total}, cout_total={cout_total}")
@@ -548,6 +697,15 @@ def get_dashboard_kpis(
             "nb_interventions": nb_interventions,
             "nb_clients": nb_clients,
             "taux_resolution": taux_resolution,
+            "interventions_ouvertes": nb_interventions_ouvertes,
+            "interventions_retard": nb_interventions_retard,
+            "preventives_retard": preventives_retard,
+            "preventives_7j": preventives_7j,
+            "preventives_30j": preventives_30j,
+            "sla_respect_pct": sla_respect_pct,
+            "sla_hors_delai": sla_hors_delai,
+            "sla_suivies": sla_suivies,
+            "cout_correctif_moyen": round(cout_correctif_moyen, 2),
         }
     except Exception as e:
         logger.error(f"Dashboard KPIs error: {e}")
