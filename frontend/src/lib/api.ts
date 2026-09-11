@@ -19,6 +19,7 @@ interface ApiOptions {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  timeoutMs?: number;
 }
 
 class ApiError extends Error {
@@ -42,7 +43,7 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
   // Certaines analyses IA SAV prennent plus de 30 secondes (notamment avec
   // un modèle de raisonnement). Le backend peut déjà avoir terminé avec 200
   // alors qu'un ancien délai client provoque à tort une erreur réseau.
-  const timeoutMs = isAiEndpoint ? 300000 : 30000;
+  const timeoutMs = options.timeoutMs ?? (isAiEndpoint ? 300000 : 30000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
@@ -56,7 +57,12 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     });
   } catch(fetchErr: any) {
     clearTimeout(timer);
-    if (fetchErr.name === 'AbortError') throw new ApiError('Timeout: L\'IA mettra trop de temps. Reessayez.', 408);
+    if (fetchErr.name === 'AbortError') {
+      throw new ApiError(
+        isAiEndpoint ? "Timeout : l'IA met trop de temps. Réessayez." : 'La requête a expiré. Réessayez.',
+        408,
+      );
+    }
     throw new ApiError('Erreur reseau: ' + (fetchErr.message || 'indisponible'), 0);
   }
   clearTimeout(timer);
@@ -222,7 +228,8 @@ export const documentsTechniques = {
   upload: (equipementId: number, nomFichier: string, contenuBase64: string) =>
     request<{ok: boolean}>('/api/documents-techniques/upload', {
       method: 'POST',
-      body: { equipement_id: equipementId, nom_fichier: nomFichier, contenu_base64: contenuBase64 }
+      body: { equipement_id: equipementId, nom_fichier: nomFichier, contenu_base64: contenuBase64 },
+      timeoutMs: 120000,
     }),
   download: (docId: number) => request<{ contenu_base64: string; nom_fichier: string }>(`/api/documents-techniques/download/${docId}`),
   delete: (docId: number) => request<{ok: boolean}>(`/api/documents-techniques/${docId}`, { method: 'DELETE' }),

@@ -59,6 +59,15 @@ interface DocTechnique {
   client: string;
 }
 
+interface TechnicalDocumentGroup {
+  key: string;
+  document: DocTechnique;
+  documents: DocTechnique[];
+  domaine: string;
+}
+
+const TECHNICAL_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+
 const INPUT_CLS = "w-full bg-savia-bg/50 border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 focus:border-savia-accent/40 outline-none transition-all";
 
 // ======================= CATALOGUE DOMAINES & TYPES =======================
@@ -216,22 +225,31 @@ export default function EquipementsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [docFiles, setDocFiles] = useState<File[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<Equipment | null>(null);
   const [historyEquip, setHistoryEquip] = useState<Equipment | null>(null);
   const [statusHistory, setStatusHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [editingEquip, setEditingEquip] = useState<Equipment | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const technicalDocumentInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const clientFormRef = useRef<HTMLDivElement>(null);
 
   // Documents state
   const [docs, setDocs] = useState<DocTechnique[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
-  const [docFilterEquip, setDocFilterEquip] = useState('Tous');
-  const [docFilterClient, setDocFilterClient] = useState('Tous');
   const [docSearch, setDocSearch] = useState('');
+  const [docFilterDomaine, setDocFilterDomaine] = useState('Tous');
+  const [docFilterType, setDocFilterType] = useState('Tous');
+  const [docFilterFabricant, setDocFilterFabricant] = useState('Tous');
+  const [docFilterModele, setDocFilterModele] = useState('Tous');
+  const [expandDocumentUpload, setExpandDocumentUpload] = useState(false);
+  const [uploadDocDomaine, setUploadDocDomaine] = useState('Tous');
+  const [uploadDocType, setUploadDocType] = useState('Tous');
+  const [uploadDocFabricant, setUploadDocFabricant] = useState('Tous');
+  const [uploadDocModele, setUploadDocModele] = useState('Tous');
+  const [technicalDocumentFiles, setTechnicalDocumentFiles] = useState<File[]>([]);
+  const [technicalDocumentFeedback, setTechnicalDocumentFeedback] = useState('');
+  const [isUploadingTechnicalDocument, setIsUploadingTechnicalDocument] = useState(false);
 
   // Form state
   const emptyForm = {
@@ -502,25 +520,47 @@ export default function EquipementsPage() {
     [form.GarantieDebut, form.GarantieDuree]
   );
 
-  const docEquipOptions = useMemo(() => {
-    const options = new Map<string, { value: string; label: string }>();
-    for (const doc of docs) {
-      const value = doc.equipement_id ? `id:${doc.equipement_id}` : `nom:${doc.equipement_nom}`;
-      if (options.has(value)) continue;
-      const equipment = data.find(item => String(item.id) === String(doc.equipement_id))
-        || data.find(item => item.nom === doc.equipement_nom);
-      const details = [
-        equipment?.modele && `Modèle : ${equipment.modele}`,
-        equipment?.numSerie && `N° série : ${equipment.numSerie}`,
-      ].filter(Boolean);
-      options.set(value, {
-        value,
-        label: details.length > 0 ? `${doc.equipement_nom} — ${details.join(' · ')}` : doc.equipement_nom,
-      });
-    }
-    return [{ value: 'Tous', label: 'Tous les équipements' }, ...options.values()];
-  }, [docs, data]);
-  const docClientOptions = useMemo(() => ['Tous', ...Array.from(new Set(docs.map(d => d.client).filter(Boolean)))], [docs]);
+  const documentEquipment = useCallback((doc: DocTechnique) => (
+    data.find(item => String(item.id) === String(doc.equipement_id))
+      || data.find(item => item.nom === doc.equipement_nom)
+  ), [data]);
+
+  const documentFilterRecords = useMemo(() => docs.map(doc => ({
+    domaine: documentEquipment(doc)?.domaine || '',
+    type: doc.equipement_type || '',
+    fabricant: doc.fabricant || '',
+    modele: doc.modele || '',
+  })), [docs, documentEquipment]);
+  const docDomainOptions = useMemo(() => ['Tous', ...uniqueFilterLabels(documentFilterRecords.map(item => item.domaine))], [documentFilterRecords]);
+  const docTypeOptions = useMemo(() => ['Tous', ...uniqueFilterLabels(documentFilterRecords
+    .filter(item => docFilterDomaine === 'Tous' || filterLabelKey(item.domaine) === filterLabelKey(docFilterDomaine))
+    .map(item => item.type))], [documentFilterRecords, docFilterDomaine]);
+  const docFabricantOptions = useMemo(() => ['Tous', ...uniqueFilterLabels(documentFilterRecords
+    .filter(item => (docFilterDomaine === 'Tous' || filterLabelKey(item.domaine) === filterLabelKey(docFilterDomaine))
+      && (docFilterType === 'Tous' || filterLabelKey(item.type) === filterLabelKey(docFilterType)))
+    .map(item => item.fabricant))], [documentFilterRecords, docFilterDomaine, docFilterType]);
+  const docModeleOptions = useMemo(() => ['Tous', ...uniqueFilterLabels(documentFilterRecords
+    .filter(item => (docFilterDomaine === 'Tous' || filterLabelKey(item.domaine) === filterLabelKey(docFilterDomaine))
+      && (docFilterType === 'Tous' || filterLabelKey(item.type) === filterLabelKey(docFilterType))
+      && (docFilterFabricant === 'Tous' || filterLabelKey(item.fabricant) === filterLabelKey(docFilterFabricant)))
+    .map(item => item.modele))], [documentFilterRecords, docFilterDomaine, docFilterType, docFilterFabricant]);
+
+  const uploadCandidates = useMemo(() => data.filter(equipment => (
+    (uploadDocDomaine === 'Tous' || equipment.domaine === uploadDocDomaine)
+    && (uploadDocType === 'Tous' || equipment.type === uploadDocType)
+    && (uploadDocFabricant === 'Tous' || equipment.marque === uploadDocFabricant)
+    && (uploadDocModele === 'Tous' || equipment.modele === uploadDocModele)
+  )), [data, uploadDocDomaine, uploadDocType, uploadDocFabricant, uploadDocModele]);
+  const uploadDomainOptions = useMemo(() => uniqueFilterLabels(data.map(item => item.domaine)), [data]);
+  const uploadTypeOptions = useMemo(() => uniqueFilterLabels(data
+    .filter(item => uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine).map(item => item.type)), [data, uploadDocDomaine]);
+  const uploadFabricantOptions = useMemo(() => uniqueFilterLabels(data
+    .filter(item => (uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine)
+      && (uploadDocType === 'Tous' || item.type === uploadDocType)).map(item => item.marque)), [data, uploadDocDomaine, uploadDocType]);
+  const uploadModeleOptions = useMemo(() => uniqueFilterLabels(data
+    .filter(item => (uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine)
+      && (uploadDocType === 'Tous' || item.type === uploadDocType)
+      && (uploadDocFabricant === 'Tous' || item.marque === uploadDocFabricant)).map(item => item.modele)), [data, uploadDocDomaine, uploadDocType, uploadDocFabricant]);
 
   const loadData = useCallback(async () => {
     try {
@@ -948,7 +988,7 @@ export default function EquipementsPage() {
     setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
   };
 
-  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setDocFiles([]); setCustomDomaineMode(false); setCustomDomaineValue(''); setCustomModele(false); setCustomService(false); };
+  const cancelForm = () => { setShowAddForm(false); setEditingEquip(null); setForm(emptyForm); setCustomDomaineMode(false); setCustomDomaineValue(''); setCustomModele(false); setCustomService(false); };
 
   const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1001,8 +1041,6 @@ export default function EquipementsPage() {
         }
       }
       
-      if (docFiles.length > 0) payload.DocumentTechnique = docFiles.map(f => f.name).join(', ');
-
       // Keep manually entered models in the catalogue as well, so they are
       // available for the next equipment with the same classification.
       if (form.Modele.trim() && String(payload.Domaine || '').trim() && form.Type.trim() && form.Fabricant.trim()) {
@@ -1023,25 +1061,13 @@ export default function EquipementsPage() {
         }
       }
 
-      let targetEquipId: number | null = null;
       if (editingEquip) {
         await equipements.update(Number(editingEquip.id), payload);
-        targetEquipId = Number(editingEquip.id);
       } else {
-        const result = await equipements.create(payload);
-        targetEquipId = result.id;
+        await equipements.create(payload);
       }
 
-      if (targetEquipId && docFiles.length > 0) {
-        for (const file of docFiles) {
-          try {
-            const base64Content = await fileToBase64(file);
-            await documentsTechniques.upload(targetEquipId, file.name, base64Content);
-          } catch (uploadErr) { console.error(`Failed to upload ${file.name}:`, uploadErr); }
-        }
-      }
-
-      setForm(emptyForm); setDocFiles([]); setShowAddForm(false); setEditingEquip(null);
+      setForm(emptyForm); setShowAddForm(false); setEditingEquip(null);
       setCustomFabricant(false);
       setCustomModele(false);
       setCustomService(false);
@@ -1068,7 +1094,74 @@ export default function EquipementsPage() {
     }
   };
 
-  const handleFileDrop = (e: React.DragEvent) => { e.preventDefault(); setDocFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]); };
+  const selectTechnicalDocuments = (files: FileList | null) => {
+    setTechnicalDocumentFeedback('');
+    const selectedFiles = Array.from(files || []);
+    if (selectedFiles.length === 0) {
+      setTechnicalDocumentFiles([]);
+      return;
+    }
+    const oversizedFiles = selectedFiles.filter(file => file.size > TECHNICAL_DOCUMENT_MAX_BYTES);
+    const acceptedFiles = selectedFiles.filter(file => file.size <= TECHNICAL_DOCUMENT_MAX_BYTES);
+    setTechnicalDocumentFiles(acceptedFiles);
+    if (oversizedFiles.length > 0) {
+      setTechnicalDocumentFeedback(`✗ ${oversizedFiles.length} fichier(s) dépassent la limite de 20 Mo : ${oversizedFiles.map(file => file.name).join(', ')}.`);
+    }
+  };
+
+  const resetTechnicalDocumentUpload = () => {
+    setUploadDocDomaine('Tous');
+    setUploadDocType('Tous');
+    setUploadDocFabricant('Tous');
+    setUploadDocModele('Tous');
+    setTechnicalDocumentFiles([]);
+    if (technicalDocumentInputRef.current) technicalDocumentInputRef.current.value = '';
+    setExpandDocumentUpload(false);
+  };
+
+  const handleTechnicalDocumentUpload = async () => {
+    if (uploadCandidates.length === 0 || technicalDocumentFiles.length === 0) return;
+    setIsUploadingTechnicalDocument(true);
+    setTechnicalDocumentFeedback('');
+    try {
+      const failedUploads: string[] = [];
+      let successCount = 0;
+
+      // A technical document belongs to an equipment in the API.  Upload it for
+      // every equipment matching the selected filters, including "all models".
+      for (const file of technicalDocumentFiles) {
+        try {
+          const content = await fileToBase64(file);
+          for (const equipment of uploadCandidates) {
+            try {
+              await documentsTechniques.upload(Number(equipment.id), file.name, content);
+              successCount += 1;
+            } catch {
+              failedUploads.push(`${file.name} — ${equipment.nom || equipment.numSerie || `équipement #${equipment.id}`}`);
+            }
+          }
+        } catch {
+          failedUploads.push(file.name);
+        }
+      }
+
+      const totalUploads = technicalDocumentFiles.length * uploadCandidates.length;
+      if (failedUploads.length > 0) {
+        const failureSummary = failedUploads.slice(0, 3).join(', ');
+        const remainingFailures = failedUploads.length > 3 ? ` (+${failedUploads.length - 3})` : '';
+        setTechnicalDocumentFeedback(`⚠ ${successCount}/${totalUploads} ajout(s) réussi(s). Échec pour : ${failureSummary}${remainingFailures}.`);
+      } else {
+        setTechnicalDocumentFeedback(`✓ ${technicalDocumentFiles.length} document(s) ajouté(s) à ${uploadCandidates.length} équipement(s).`);
+      }
+      if (successCount > 0) resetTechnicalDocumentUpload();
+      await loadDocs();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erreur inconnue lors de l’envoi.';
+      setTechnicalDocumentFeedback(`✗ Échec de l’envoi : ${message}`);
+    } finally {
+      setIsUploadingTechnicalDocument(false);
+    }
+  };
 
   const handleDownloadDoc = async (doc: DocTechnique) => {
     try {
@@ -1081,9 +1174,12 @@ export default function EquipementsPage() {
     } catch (err) { console.error("Download failed", err); }
   };
 
-  const handleDeleteDoc = async (doc: DocTechnique) => {
-    if (!confirm('Supprimer ce document ?')) return;
-    try { await documentsTechniques.delete(doc.id); await loadDocs(); }
+  const handleDeleteDoc = async (documents: DocTechnique[]) => {
+    const label = documents.length > 1
+      ? `Supprimer ce document de ${documents.length} équipements ?`
+      : 'Supprimer ce document ?';
+    if (!confirm(label)) return;
+    try { await Promise.all(documents.map(doc => documentsTechniques.delete(doc.id))); await loadDocs(); }
     catch (err) { console.error("Delete doc failed", err); }
   };
 
@@ -1159,16 +1255,32 @@ export default function EquipementsPage() {
   }), [search, filterType, filterModele, filterClient, filterDomaine, filterStatut, filterService, data, isLecteur, user]);
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
-    if (docFilterEquip !== 'Tous') {
-      const matchesId = docFilterEquip === `id:${doc.equipement_id}`;
-      const matchesName = docFilterEquip === `nom:${doc.equipement_nom}`;
-      if (!matchesId && !matchesName) return false;
-    }
-    if (docFilterClient !== 'Tous' && doc.client !== docFilterClient) return false;
+    const equipment = documentEquipment(doc);
+    if (docFilterDomaine !== 'Tous' && filterLabelKey(equipment?.domaine || '') !== filterLabelKey(docFilterDomaine)) return false;
+    if (docFilterType !== 'Tous' && filterLabelKey(doc.equipement_type) !== filterLabelKey(docFilterType)) return false;
+    if (docFilterFabricant !== 'Tous' && filterLabelKey(doc.fabricant) !== filterLabelKey(docFilterFabricant)) return false;
+    if (docFilterModele !== 'Tous' && filterLabelKey(doc.modele) !== filterLabelKey(docFilterModele)) return false;
     if (docSearch && !doc.nom_fichier.toLowerCase().includes(docSearch.toLowerCase()) &&
-        !doc.equipement_nom?.toLowerCase().includes(docSearch.toLowerCase())) return false;
+        !doc.equipement_nom?.toLowerCase().includes(docSearch.toLowerCase()) &&
+        !doc.fabricant?.toLowerCase().includes(docSearch.toLowerCase()) &&
+        !doc.modele?.toLowerCase().includes(docSearch.toLowerCase())) return false;
     return true;
-  }), [docs, docFilterEquip, docFilterClient, docSearch]);
+  }), [docs, docFilterDomaine, docFilterType, docFilterFabricant, docFilterModele, docSearch, documentEquipment]);
+
+  // The API stores one association per equipment.  Group documents uploaded in
+  // the same minute with the same technical characteristics into one table row.
+  const groupedDocs = useMemo<TechnicalDocumentGroup[]>(() => {
+    const groups = new Map<string, TechnicalDocumentGroup>();
+    filteredDocs.forEach(doc => {
+      const domaine = documentEquipment(doc)?.domaine || '';
+      const uploadedMinute = doc.date_ajout ? new Date(doc.date_ajout).toISOString().slice(0, 16) : '';
+      const key = [doc.nom_fichier, domaine, doc.equipement_type, doc.fabricant, doc.modele, uploadedMinute].join('\u0001');
+      const group = groups.get(key);
+      if (group) group.documents.push(doc);
+      else groups.set(key, { key, document: doc, documents: [doc], domaine });
+    });
+    return Array.from(groups.values());
+  }, [filteredDocs, documentEquipment]);
 
   const totalEquip = data.length;
   const operationnel = data.filter(e => e.statut.toLowerCase().includes('actif') || e.statut.toLowerCase().includes('opérationnel')).length;
@@ -1843,35 +1955,6 @@ export default function EquipementsPage() {
                     </div>
                   </div>
 
-                  {/* ── 5. Documents ── */}
-                  <div>
-                    <h3 className="text-sm font-bold text-savia-text-muted uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-savia-accent" /> Documents techniques
-                    </h3>
-                    <div className="border-2 border-dashed border-savia-border rounded-xl p-6 text-center hover:border-savia-accent/40 transition-colors cursor-pointer"
-                      onDragOver={e => e.preventDefault()} onDrop={handleFileDrop} onClick={() => fileInputRef.current?.click()}>
-                      <input ref={fileInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xlsx" className="hidden"
-                        onChange={e => { if (e.target.files) setDocFiles(prev => [...prev, ...Array.from(e.target.files!)]); }} />
-                      <Upload className="w-8 h-8 mx-auto mb-2 text-savia-text-dim" />
-                      {docFiles.length === 0 ? (
-                        <>
-                          <p className="text-sm text-savia-text-muted">Aucun fichier choisi — drag & drop ici</p>
-                          <p className="text-xs text-savia-text-dim mt-1">PDF, PNG, JPG, WEBP, DOCX, XLSX · max 20MB</p>
-                        </>
-                      ) : (
-                        <div className="space-y-1 text-sm text-savia-text">
-                          {docFiles.map((f, i) => (
-                            <div key={i} className="flex items-center justify-center gap-2">
-                              <FileText className="w-3 h-3 text-savia-accent" /><span>{f.name}</span>
-                              <button onClick={e => { e.stopPropagation(); setDocFiles(prev => prev.filter((_, idx) => idx !== i)); }}
-                                className="text-red-400 hover:text-red-300 cursor-pointer"><X className="w-3 h-3" /></button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
                   {/* ── Save/Cancel ── */}
                   <div className="flex justify-end gap-3 pt-4 border-t border-savia-border/50">
                     <button onClick={cancelForm}
@@ -2518,56 +2601,107 @@ export default function EquipementsPage() {
       {/* ========== TAB: DOCUMENTS TECHNIQUES ========== */}
       {activeTab === 'documents' && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-xl overflow-hidden border-2 border-dashed border-savia-accent/60 bg-savia-accent/5 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+            <button
+              onClick={() => {
+                if (expandDocumentUpload) resetTechnicalDocumentUpload();
+                else {
+                  setTechnicalDocumentFeedback('');
+                  setExpandDocumentUpload(true);
+                }
+              }}
+              aria-expanded={expandDocumentUpload}
+              className="w-full flex items-center justify-between p-4 md:p-5 hover:bg-savia-accent/10 transition-colors cursor-pointer"
+            >
+              <span className="flex items-center gap-3 text-left">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-savia-accent text-savia-bg shadow-lg shadow-savia-accent/30"><Upload className="w-5 h-5" /></span>
+                <span><span className="block font-bold text-savia-text">Cliquer ici pour ajouter un document technique</span><span className="block text-xs text-savia-text-muted mt-0.5">Choisissez les filtres concernés, puis ajoutez un fichier de 20 Mo maximum.</span></span>
+              </span>
+              <span className="rounded-lg bg-savia-accent px-3 py-2 text-xs font-bold text-savia-bg">{expandDocumentUpload ? 'Fermer' : 'Ajouter'}</span>
+            </button>
+            {expandDocumentUpload && (
+              <div className="p-4 pt-0 border-t border-savia-border/50 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  <select value={uploadDocDomaine} onChange={e => { setUploadDocDomaine(e.target.value); setUploadDocType('Tous'); setUploadDocFabricant('Tous'); setUploadDocModele('Tous'); }} className={INPUT_CLS}>
+                    <option value="Tous">Domaine médical : tous</option>{uploadDomainOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                  <select value={uploadDocType} onChange={e => { setUploadDocType(e.target.value); setUploadDocFabricant('Tous'); setUploadDocModele('Tous'); }} className={INPUT_CLS}>
+                    <option value="Tous">Type : tous</option>{uploadTypeOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                  <select value={uploadDocFabricant} onChange={e => { setUploadDocFabricant(e.target.value); setUploadDocModele('Tous'); }} className={INPUT_CLS}>
+                    <option value="Tous">Fabricant : tous</option>{uploadFabricantOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                  <select value={uploadDocModele} onChange={e => setUploadDocModele(e.target.value)} className={INPUT_CLS}>
+                    <option value="Tous">Modèle : tous</option>{uploadModeleOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${uploadCandidates.length > 0 ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-red-500/20 bg-red-500/10 text-red-400'}`}>
+                    {uploadCandidates.length === 0
+                      ? 'Aucun équipement ne correspond à ces filtres.'
+                      : `Le document sera ajouté à ${uploadCandidates.length} équipement(s) correspondant aux filtres.`}
+                  </div>
+                  <input ref={technicalDocumentInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx" className="hidden" onChange={e => selectTechnicalDocuments(e.target.files)} />
+                  <div className="flex items-center gap-3 rounded-lg border border-savia-border bg-savia-bg/50 px-4 py-2 min-h-[46px]">
+                    <button type="button" onClick={() => technicalDocumentInputRef.current?.click()} className="shrink-0 px-3 py-1 rounded-md text-sm font-semibold bg-savia-accent/20 text-savia-accent hover:bg-savia-accent/30 cursor-pointer">Choisir un fichier</button>
+                    <span className="truncate text-sm text-savia-text-muted">{technicalDocumentFiles.length === 0 ? 'Aucun fichier choisi' : technicalDocumentFiles.length === 1 ? technicalDocumentFiles[0].name : `${technicalDocumentFiles.length} fichiers sélectionnés`}</span>
+                  </div>
+                </div>
+                <button onClick={handleTechnicalDocumentUpload} disabled={uploadCandidates.length === 0 || technicalDocumentFiles.length === 0 || isUploadingTechnicalDocument} className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                  {isUploadingTechnicalDocument ? 'Envoi des documents…' : 'Ajouter les documents techniques'}
+                </button>
+              </div>
+            )}
+          </div>
+          {technicalDocumentFeedback && <div className={`mt-3 rounded-lg p-3 text-sm font-semibold ${technicalDocumentFeedback.startsWith('✓') ? 'bg-green-500/10 text-green-400' : technicalDocumentFeedback.startsWith('⚠') ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'}`}>{technicalDocumentFeedback}</div>}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-savia-text-dim" />
               <input type="text" placeholder="Rechercher un document..." value={docSearch} onChange={e => setDocSearch(e.target.value)}
                 className="w-full bg-savia-surface border border-savia-border rounded-lg pl-10 pr-4 py-2.5 text-savia-text focus:ring-2 focus:ring-savia-accent/40 placeholder:text-savia-text-dim" />
             </div>
-            <select value={docFilterEquip} onChange={e => setDocFilterEquip(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {docEquipOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-            <select value={docFilterClient} onChange={e => setDocFilterClient(e.target.value)} className="bg-savia-surface border border-savia-border rounded-lg px-4 py-2.5 text-savia-text">
-              {docClientOptions.map(c => <option key={c} value={c}>{c === 'Tous' ? 'Tous les clients' : c}</option>)}
-            </select>
+            <select value={docFilterDomaine} onChange={e => { setDocFilterDomaine(e.target.value); setDocFilterType('Tous'); setDocFilterFabricant('Tous'); setDocFilterModele('Tous'); }} className={INPUT_CLS}><option value="Tous">Tous les domaines médicaux</option>{docDomainOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
+            <select value={docFilterType} onChange={e => { setDocFilterType(e.target.value); setDocFilterFabricant('Tous'); setDocFilterModele('Tous'); }} className={INPUT_CLS}><option value="Tous">Tous les types</option>{docTypeOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
+            <select value={docFilterFabricant} onChange={e => { setDocFilterFabricant(e.target.value); setDocFilterModele('Tous'); }} className={INPUT_CLS}><option value="Tous">Tous les fabricants</option>{docFabricantOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
+            <select value={docFilterModele} onChange={e => setDocFilterModele(e.target.value)} className={INPUT_CLS}><option value="Tous">Tous les modèles</option>{docModeleOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
           </div>
 
           <div className="glass rounded-xl overflow-hidden">
             {docsLoading ? (
               <div className="flex justify-center items-center h-32"><Loader2 className="w-6 h-6 animate-spin text-savia-accent" /></div>
-            ) : filteredDocs.length === 0 ? (
+            ) : groupedDocs.length === 0 ? (
               <div className="p-8 text-center">
                 <FolderOpen className="w-10 h-10 mx-auto mb-3 text-savia-text-dim" />
                 <p className="text-savia-text-muted">Aucun document technique trouvé.</p>
-                <p className="text-xs text-savia-text-dim mt-1">Les documents sont ajoutés via le formulaire d&apos;équipement.</p>
+                <p className="text-xs text-savia-text-dim mt-1">Utilisez le panneau d’ajout ci-dessus pour associer un document à un équipement.</p>
               </div>
             ) : (
               <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-savia-surface-hover/50">
-                      {['Document', 'Équipement', 'Client', 'Type', 'Date', 'Actions'].map((h, i) => (
-                        <th key={h} className={`px-4 py-3 font-semibold text-savia-text-muted ${i === 5 ? 'text-right' : 'text-left'}`}>{h}</th>
+                      {['Document', 'Domaine', 'Type', 'Fabricant', 'Modèle', 'Date', 'Actions'].map((h, i) => (
+                        <th key={h} className={`px-4 py-3 font-semibold text-savia-text-muted ${i === 6 ? 'text-right' : 'text-left'}`}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-savia-border/30">
-                    {filteredDocs.map(doc => (
-                      <tr key={doc.id} className="hover:bg-savia-surface-hover/30 transition-colors">
+                    {groupedDocs.map(group => {
+                      const { document: doc } = group;
+                      return <tr key={group.key} className="hover:bg-savia-surface-hover/30 transition-colors">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <FileText className="w-4 h-4 text-savia-accent flex-shrink-0" />
                             <span className="font-medium truncate max-w-[200px]">{doc.nom_fichier}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <span className="text-savia-text">{doc.equipement_nom}</span>
-                          {doc.fabricant && <span className="text-savia-text-dim text-xs ml-1">({doc.fabricant})</span>}
-                        </td>
-                        <td className="px-4 py-3 text-savia-text-muted">{doc.client}</td>
+                        <td className="px-4 py-3 text-savia-text-muted">{group.domaine || '—'}</td>
                         <td className="px-4 py-3">
                           <span className="px-2 py-0.5 rounded-full text-xs bg-savia-accent/10 text-savia-accent border border-savia-accent/20">{doc.equipement_type}</span>
                         </td>
+                        <td className="px-4 py-3 text-savia-text">{doc.fabricant || '—'}</td>
+                        <td className="px-4 py-3 text-savia-text">{doc.modele || '—'}</td>
                         <td className="px-4 py-3 text-savia-text-dim text-xs">
                           {doc.date_ajout ? new Date(doc.date_ajout).toLocaleDateString('fr-FR') : 'N/A'}
                         </td>
@@ -2576,20 +2710,20 @@ export default function EquipementsPage() {
                             <button onClick={() => handleDownloadDoc(doc)} className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer" title="Télécharger">
                               <Download className="w-3.5 h-3.5" />
                             </button>
-                            <button onClick={() => handleDeleteDoc(doc)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer" title="Supprimer">
+                            <button onClick={() => handleDeleteDoc(group.documents)} className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer" title={group.documents.length > 1 ? `Supprimer le document des ${group.documents.length} équipements` : 'Supprimer'}>
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>
-                      </tr>
-                    ))}
+                      </tr>;
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
-            {!docsLoading && filteredDocs.length > 0 && (
+            {!docsLoading && groupedDocs.length > 0 && (
               <div className="px-4 py-2 border-t border-savia-border/30 text-xs text-savia-text-dim text-right">
-                {filteredDocs.length} document{filteredDocs.length > 1 ? 's' : ''} trouvé{filteredDocs.length > 1 ? 's' : ''}
+                {groupedDocs.length} document{groupedDocs.length > 1 ? 's' : ''} trouvé{groupedDocs.length > 1 ? 's' : ''}
               </div>
             )}
           </div>
