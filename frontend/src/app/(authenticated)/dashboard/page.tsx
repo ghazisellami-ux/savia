@@ -660,26 +660,26 @@ export default function DashboardPage() {
 
       {/* KPIs Row - Top 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard emphasis loading={showKpiLoading} icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
-        <KpiCard emphasis loading={showKpiLoading} icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (selectedClientEquipmentCount === undefined ? '—' : String(selectedClientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
-        <KpiCard emphasis loading={showKpiLoading} icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(kpis.nb_critiques)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} tooltip="Équipements actuellement hors service, critiques ou en panne." />
-        <KpiCard emphasis loading={showKpiLoading} icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (selectedClientEquipmentCount === undefined ? '—' : String(selectedClientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(kpis.nb_critiques)} label="Équipements en état critique" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} tooltip="Équipements actuellement hors service, critiques ou en panne." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
       </div>
 
       {/* KPIs Row - Opérationnels */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard emphasis loading={showKpiLoading} icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.interventions_ouvertes)} label="Interventions ouvertes" detail={`${kpis.interventions_retard} en retard`} variant={kpis.interventions_retard > 0 ? 'danger' : 'default'} tooltip="Interventions non clôturées ; le sous-indicateur précise celles dont l'échéance est dépassée." />
-        <KpiCard emphasis loading={showKpiLoading} icon={<Calendar className="w-6 h-6 text-yellow-400" />} value={String(kpis.preventives_retard)} label="Préventives en retard" detail={`À 7 j : ${kpis.preventives_7j} · 8–30 j : ${kpis.preventives_30j}`} variant={kpis.preventives_retard > 0 ? 'warning' : 'success'} tooltip="Préventives en retard, puis préventives à réaliser dans les 7 et 30 prochains jours." />
-        <KpiCard emphasis loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.sla_respect_pct}%`} label="Respect SLA" detail={`${kpis.sla_hors_delai} hors SLA · ${kpis.sla_suivies} suivies`} variant={kpis.sla_hors_delai > 0 ? 'warning' : 'success'} tooltip="Part des interventions couvertes par un contrat et traitées dans le délai prévu." />
-        <KpiCard emphasis loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={`${kpis.mttr.toFixed(1)} h`} label="MTTR" tooltip="Durée moyenne de réparation des interventions correctives clôturées." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.interventions_ouvertes)} label="Interventions ouvertes" detail={`${kpis.interventions_retard} en retard`} variant={kpis.interventions_retard > 0 ? 'danger' : 'default'} tooltip="Interventions non clôturées ; le sous-indicateur précise celles dont l'échéance est dépassée." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Calendar className="w-6 h-6 text-yellow-400" />} value={String(kpis.preventives_retard)} label="Préventives en retard" detail={`À 7 j : ${kpis.preventives_7j} · 8–30 j : ${kpis.preventives_30j}`} variant={kpis.preventives_retard > 0 ? 'warning' : 'success'} tooltip="Préventives en retard, puis préventives à réaliser dans les 7 et 30 prochains jours." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.sla_respect_pct}%`} label="Respect SLA" detail={`${kpis.sla_hors_delai} hors SLA · ${kpis.sla_suivies} suivies`} variant={kpis.sla_hors_delai > 0 ? 'warning' : 'success'} tooltip="Part des interventions couvertes par un contrat et traitées dans le délai prévu." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={`${kpis.mttr.toFixed(1)} h`} label="MTTR" tooltip="Durée moyenne de réparation des interventions correctives clôturées." />
       </div>
 
       {/* KPI de qualité et de pilotage */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard emphasis loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF correctif" tooltip="Intervalle moyen entre pannes correctives, calculé équipement par équipement." />
-        <KpiCard emphasis loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux de résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="Pourcentage d'interventions clôturées sur la période sélectionnée." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF correctif" tooltip="Intervalle moyen entre pannes correctives, calculé équipement par équipement." />
+        <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux de résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="Pourcentage d'interventions clôturées sur la période sélectionnée." />
         {canSeeCosts && (
-          <KpiCard emphasis loading={showKpiLoading} icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_correctif_moyen.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} TND`} label="Coût moyen correctif" tooltip="Coût moyen par intervention corrective (main-d'œuvre et pièces). Réservé aux responsables." />
+          <KpiCard emphasis appearance="status-stripe" loading={showKpiLoading} icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_correctif_moyen.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} TND`} label="Coût moyen correctif" tooltip="Coût moyen par intervention corrective (main-d'œuvre et pièces). Réservé aux responsables." />
         )}
       </div>
 
