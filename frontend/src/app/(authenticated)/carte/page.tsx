@@ -3,7 +3,7 @@
 // 🗺️ Carte Géographique — Sites Clients
 // ==========================================
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { SectionCard } from '@/components/ui/cards';
+import { SectionCard, KpiCard } from '@/components/ui/cards';
 import {
   MapPin, Building2, Loader2, Wrench, Heart, Calendar,
   Edit3, Save, X, Search, AlertTriangle, Cpu,
@@ -152,9 +152,9 @@ export default function CartePage() {
     const map = L.map(mapRef.current).setView(mapCenter, mapZoom);
     mapInstanceRef.current = map;
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
-      maxZoom: 18,
+    L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a>',
+      maxZoom: 19,
     }).addTo(map);
 
     // Clear old markers
@@ -316,11 +316,8 @@ export default function CartePage() {
           { label: 'Score Moyen', value: `${avgScore}%`, color: avgScore >= 70 ? 'text-green-400' : 'text-yellow-400', icon: <Heart className="w-5 h-5" /> },
           { label: 'Sites en alerte', value: sitesAlerte, color: 'text-red-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(k => (
-          <div key={k.label} className="glass rounded-xl p-4 text-center">
-            <div className={`${k.color} mx-auto mb-1 flex justify-center`}>{k.icon}</div>
-            <div className={`text-3xl font-black ${k.color}`}>{k.value}</div>
-            <div className="text-xs text-savia-text-muted mt-1">{k.label}</div>
-          </div>
+          <KpiCard key={k.label} appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+            variant={k.label === 'Sites en alerte' ? (sitesAlerte > 0 ? 'danger' : 'success') : k.label === 'Score Moyen' ? (avgScore >= 70 ? 'success' : 'warning') : 'default'} />
         ))}
       </div>
 
@@ -379,8 +376,8 @@ export default function CartePage() {
                     </div>
                     {/* Equipment list */}
                     <div className="flex flex-wrap gap-1 mt-2">
-                      {site.equipements.map(eq => (
-                        <span key={eq.nom} className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                      {site.equipements.map((eq, index) => (
+                        <span key={`${eq.nom}-${eq.statut}-${index}`} className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
                           eq.statut === 'Hors Service' ? 'bg-red-500/10 text-red-400' :
                           eq.statut === 'Critique' ? 'bg-yellow-500/10 text-yellow-400' :
                           'bg-green-500/10 text-green-400'

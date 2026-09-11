@@ -8,7 +8,7 @@ const contentSecurityPolicy = [
   "frame-ancestors 'none'",
   "form-action 'self'",
   "frame-src 'none'",
-  "img-src 'self' blob: data: https://*.tile.openstreetmap.org",
+  "img-src 'self' blob: data: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://services.arcgisonline.com",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline' https://unpkg.com",
   `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"} https://unpkg.com`,

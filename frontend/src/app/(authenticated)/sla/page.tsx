@@ -109,29 +109,34 @@ export default function SlaPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <KpiCard
+          appearance="status-stripe"
           icon={<Timer className="w-6 h-6 text-savia-accent" />}
           value={String(kpis.total_active || 0)}
           label="Engagements SLA actifs"
         />
         <KpiCard
+          appearance="status-stripe"
           icon={<CheckCircle2 className="w-6 h-6 text-green-400" />}
           value={String(kpis.nb_ok || 0)}
           label="Dans les délais"
           variant="success"
         />
         <KpiCard
+          appearance="status-stripe"
           icon={<AlertTriangle className="w-6 h-6 text-yellow-400" />}
           value={String(kpis.nb_danger || 0)}
           label="En danger (>75%)"
           variant="warning"
         />
         <KpiCard
+          appearance="status-stripe"
           icon={<XCircle className="w-6 h-6 text-red-400" />}
           value={String(kpis.nb_breached || 0)}
           label="SLA dépassé"
           variant="danger"
         />
         <KpiCard
+          appearance="status-stripe"
           icon={<TrendingUp className="w-6 h-6 text-blue-400" />}
           value={`${compliancePct}%`}
           label="Taux de conformité"

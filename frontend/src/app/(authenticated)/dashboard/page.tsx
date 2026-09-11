@@ -695,8 +695,8 @@ export default function DashboardPage() {
           </button>
           {showAnomalies && (
             <div className="px-4 pb-4 space-y-2">
-              {healthScores.filter(h => h.score < 30).map(h => (
-                <div key={`${h.machine}-${h.client || ""}`} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
+              {healthScores.filter(h => h.score < 30).map((h, index) => (
+                <div key={`${h.machine}-${h.client || ""}-${index}`} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
                   <div>
                     <span className="font-bold text-sm">{h.machine}</span>
                     {h.client && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-400">{h.client}</span>}
@@ -722,7 +722,7 @@ export default function DashboardPage() {
             {recentInterv.map((interv: any, i: number) => {
               const isCompleted = (interv.statut || '').toLowerCase().includes('tur');
               return (
-                <div key={interv.id || i} className="relative mb-4 ml-4">
+                <div key={`${interv.id ?? 'no-id'}-${i}`} className="relative mb-4 ml-4">
                   <div className={`absolute -left-[22px] top-1 w-3 h-3 rounded-full border-2 ${isCompleted ? 'bg-green-400 border-green-300' : 'bg-yellow-400 border-yellow-300'}`} />
                   <div className="glass rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1">
@@ -866,8 +866,8 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {[...healthScores].sort((a, b) => a.score - b.score).map((h) => (
-                  <tr key={h.machine} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
+                {[...healthScores].sort((a, b) => a.score - b.score).map((h, index) => (
+                  <tr key={`${h.machine}-${index}`} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{h.machine}</td>
                     <td className="py-2.5 px-3 text-xs text-savia-text-muted">{h.client || '—'}</td>
                     <td className="py-2.5 px-3 text-center">

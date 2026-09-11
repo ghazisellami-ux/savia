@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { billing, demandes, equipements, techniciens as techApi, clients as clientsApi } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { KpiCard } from '@/components/ui/cards';
 
 interface Demande {
   id: number;
@@ -425,22 +426,10 @@ export default function DemandesPage() {
       )}
 
       {/* KPIs — 3 statuts */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2"><AlertTriangle className="w-5 h-5 text-red-400" /></div>
-          <div className="text-3xl font-black text-red-400">{nbAttente}</div>
-          <div className="text-xs text-savia-text-muted mt-1">En attente</div>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2"><UserCheck className="w-5 h-5 text-blue-400" /></div>
-          <div className="text-3xl font-black text-blue-400">{nbAssignee}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Assignée</div>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2"><Lock className="w-5 h-5 text-green-400" /></div>
-          <div className="text-3xl font-black text-green-400">{nbCloturee}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Clôturée</div>
-        </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard appearance="status-stripe" icon={<AlertTriangle className="h-5 w-5" />} value={String(nbAttente)} label="En attente" variant={nbAttente > 0 ? 'danger' : 'default'} />
+        <KpiCard appearance="status-stripe" icon={<UserCheck className="h-5 w-5" />} value={String(nbAssignee)} label="Assignée" />
+        <KpiCard appearance="status-stripe" icon={<Lock className="h-5 w-5" />} value={String(nbCloturee)} label="Clôturée" variant="success" />
       </div>
 
       {/* Filters */}
