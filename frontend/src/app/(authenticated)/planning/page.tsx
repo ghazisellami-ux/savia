@@ -581,7 +581,7 @@ export default function PlanningPage() {
           { label: 'Réalisées', value: data.filter(d => !d.is_ghost && !isHistoricalAnchor(d) && (d.statut === 'Réalisée' || d.statut === 'Cloturee')).length, color: 'text-green-400', icon: <CheckCircle className="w-5 h-5" /> },
           { label: 'En retard', value: overdueCount, color: overdueCount > 0 ? 'text-red-400' : 'text-green-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(kpi => (
-          <KpiCard key={kpi.label} emphasis appearance="status-stripe" icon={kpi.icon} value={String(kpi.value)} label={kpi.label}
+          <KpiCard key={kpi.label} appearance="status-stripe" icon={kpi.icon} value={String(kpi.value)} label={kpi.label}
             variant={kpi.label === 'En retard' ? (overdueCount > 0 ? 'danger' : 'success') : kpi.label === 'Réalisées' ? 'success' : 'default'} />
         ))}
       </div>

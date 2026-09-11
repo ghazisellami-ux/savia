@@ -427,9 +427,9 @@ export default function DemandesPage() {
 
       {/* KPIs — 3 statuts */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <KpiCard emphasis appearance="status-stripe" icon={<AlertTriangle className="h-5 w-5" />} value={String(nbAttente)} label="En attente" variant={nbAttente > 0 ? 'danger' : 'default'} />
-        <KpiCard emphasis appearance="status-stripe" icon={<UserCheck className="h-5 w-5" />} value={String(nbAssignee)} label="Assignée" />
-        <KpiCard emphasis appearance="status-stripe" icon={<Lock className="h-5 w-5" />} value={String(nbCloturee)} label="Clôturée" variant="success" />
+        <KpiCard appearance="status-stripe" icon={<AlertTriangle className="h-5 w-5" />} value={String(nbAttente)} label="En attente" variant={nbAttente > 0 ? 'danger' : 'default'} />
+        <KpiCard appearance="status-stripe" icon={<UserCheck className="h-5 w-5" />} value={String(nbAssignee)} label="Assignée" />
+        <KpiCard appearance="status-stripe" icon={<Lock className="h-5 w-5" />} value={String(nbCloturee)} label="Clôturée" variant="success" />
       </div>
 
       {/* Filters */}

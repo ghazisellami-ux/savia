@@ -418,7 +418,7 @@ export default function PublicMarketsPage() {
           { label: 'Marchés achevés', value: kpis.completed, icon: CheckCircle2, color: 'text-green-300', filter: 'completed' },
         ].map(card => {
           const Icon = card.icon;
-          return <KpiCard key={card.label} emphasis className={card.filter && statusFilter === card.filter ? 'ring-2 ring-savia-accent' : undefined}
+          return <KpiCard key={card.label} className={card.filter && statusFilter === card.filter ? 'ring-2 ring-savia-accent' : undefined}
             appearance="status-stripe" icon={<Icon className="h-5 w-5" />} value={String(card.value)} label={card.label}
             variant={card.label === 'Alertes à traiter' ? (card.value > 0 ? 'danger' : 'success') : card.label === 'Marchés achevés' ? 'success' : card.label === 'Dossiers en cours' ? 'warning' : 'default'}
             onClick={card.filter ? () => setStatusFilter(value => value === card.filter ? '' : card.filter) : undefined} />;

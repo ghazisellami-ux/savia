@@ -827,10 +827,10 @@ export default function PiecesPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard emphasis appearance="status-stripe" icon={<Package className="h-5 w-5" />} value={String(data.length)} label="Total pièces" />
-        <KpiCard emphasis appearance="status-stripe" icon={<TrendingDown className="h-5 w-5" />} value={String(lowStock.length)} label="Stock critique" variant={lowStock.length > 0 ? 'danger' : 'success'} />
-        <KpiCard emphasis appearance="status-stripe" icon={<DollarSign className="h-5 w-5" />} value={`${(totalValeur / 1000).toFixed(0)}K`} label={`Valeur stock (${configuredCurrency})`} variant="success" />
-        <KpiCard emphasis appearance="status-stripe" icon={<Factory className="h-5 w-5" />} value={String(fournisseurs)} label="Fournisseurs" />
+        <KpiCard appearance="status-stripe" icon={<Package className="h-5 w-5" />} value={String(data.length)} label="Total pièces" />
+        <KpiCard appearance="status-stripe" icon={<TrendingDown className="h-5 w-5" />} value={String(lowStock.length)} label="Stock critique" variant={lowStock.length > 0 ? 'danger' : 'success'} />
+        <KpiCard appearance="status-stripe" icon={<DollarSign className="h-5 w-5" />} value={`${(totalValeur / 1000).toFixed(0)}K`} label={`Valeur stock (${configuredCurrency})`} variant="success" />
+        <KpiCard appearance="status-stripe" icon={<Factory className="h-5 w-5" />} value={String(fournisseurs)} label="Fournisseurs" />
       </div>
 
       {/* Alerte stock critique */}

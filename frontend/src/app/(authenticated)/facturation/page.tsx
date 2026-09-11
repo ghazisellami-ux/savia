@@ -645,7 +645,7 @@ export default function FacturationPage() {
           { label: 'À vérifier', value: kpis.review, icon: AlertTriangle, color: 'text-fuchsia-300', filter: 'coverage_review' },
         ].map(card => {
           const Icon = card.icon;
-          return <KpiCard key={card.label} emphasis className={statusFilter === card.filter && card.filter ? 'ring-2 ring-savia-accent' : undefined}
+          return <KpiCard key={card.label} className={statusFilter === card.filter && card.filter ? 'ring-2 ring-savia-accent' : undefined}
             appearance="status-stripe" icon={<Icon className="h-5 w-5" />} value={String(card.value)} label={card.label}
             variant={card.label === 'En retard' || card.label === 'À vérifier' ? (Number(card.value) > 0 ? 'danger' : 'success') : card.label === 'Dossiers payés' || card.label === 'Couverts contrat' ? 'success' : card.label === 'Paiement attendu' || card.label === 'Reste à encaisser' ? 'warning' : 'default'}
             onClick={card.filter ? () => setStatusFilter(current => current === card.filter ? '' : card.filter) : undefined} />;
@@ -674,8 +674,8 @@ export default function FacturationPage() {
               <tr><th className="px-3 py-3">Dossier</th><th className="px-3 py-3">Client / équipement</th><th className="px-3 py-3">Progression</th><th className="px-3 py-3">Statut</th><th className="px-3 py-3 text-right">Facture</th><th className="px-3 py-3 text-right">Reste</th><th className="px-3 py-3">Action suivante</th><th className="px-3 py-3"></th></tr>
             </thead>
             <tbody>
-              {filteredCases.map(item => (
-                <tr key={item.id} className={`border-t border-savia-border/40 hover:bg-savia-surface-hover/40 ${item.overdue ? 'bg-red-500/5' : ''}`}>
+              {filteredCases.map((item, rowIndex) => (
+                <tr key={`${item.id}-${rowIndex}`} className={`border-t border-savia-border/40 hover:bg-savia-surface-hover/40 ${item.overdue ? 'bg-red-500/5' : ''}`}>
                   <td className="px-3 py-3"><button onClick={() => setSelected(item)} className="font-mono font-bold text-savia-accent">#{item.id}</button><div className="mt-1 text-[11px] text-savia-text-dim">{item.intervention_id ? `Interv. #${item.intervention_id}` : 'Avant intervention'}</div></td>
                   <td className="px-3 py-3"><div className="font-semibold">{item.client}</div><div className="mt-0.5 text-xs text-savia-text-muted">{item.equipment || 'Équipement non renseigné'}</div></td>
                   <td className="px-3 py-3"><Progress item={item} /></td>

@@ -917,12 +917,12 @@ export default function ContratsPage() {
           { label: 'Expiré', value: expires, color: 'text-red-500', icon: <AlertTriangle className="w-4 h-4" />, span: false },
           { label: 'Expire dans 60j', value: expiringIn60, color: 'text-yellow-400', icon: <Clock className="w-4 h-4" />, span: false },
         ].map(k => (
-          <KpiCard key={k.label} emphasis className="md:col-span-2" appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+          <KpiCard key={k.label} className="md:col-span-2" appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
             variant={k.label === 'Actifs' ? 'success' : k.label === 'Expiré' ? 'danger' : k.label === 'Suspendus' || k.label === 'Expire dans 60j' ? 'warning' : 'default'} />
         ))}
         
         {/* Revenu annuel - larger card (2 columns) */}
-        <KpiCard emphasis className="md:col-span-2" appearance="status-stripe" icon={<DollarSign className="h-6 w-6" />} value={`${(totalRevenu / 1000).toFixed(0)}K TND`} label="Revenu annuel" variant="success" />
+        <KpiCard className="md:col-span-2" appearance="status-stripe" icon={<DollarSign className="h-6 w-6" />} value={`${(totalRevenu / 1000).toFixed(0)}K TND`} label="Revenu annuel" variant="success" />
       </div>
 
       <section className="glass overflow-hidden rounded-xl">

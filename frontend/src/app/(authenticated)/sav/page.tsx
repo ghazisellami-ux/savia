@@ -973,7 +973,7 @@ export default function SavPage() {
           { label: 'MTTR', value: `${mttr}h`, icon: <Timer className="w-5 h-5" />, color: 'text-purple-400' },
           ...(!isClient && !isTechnicien ? [{ label: 'Coût total', value: `${totalCout >= 1000 ? (totalCout/1000).toFixed(0) + 'K' : Math.round(totalCout) + ' TND'}`, icon: <DollarSign className="w-5 h-5" />, color: 'text-red-400' }] : []),
         ].map(k => (
-          <KpiCard key={k.label} emphasis appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+          <KpiCard key={k.label} appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
             variant={k.label === 'Clôturées' || k.label === 'Taux résol.' ? 'success' : k.label === 'En cours' ? 'warning' : k.label === 'Coût total' ? 'danger' : 'default'} />
         ))}
       </div>
@@ -1076,8 +1076,8 @@ export default function SavPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(i => (
-                    <tr key={i.id} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors">
+                  {filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((i, rowIndex) => (
+                    <tr key={`${i.id}-${rowIndex}`} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50 transition-colors">
                       <td className="py-2.5 px-3 font-mono text-xs font-semibold text-savia-accent">#{i.id}</td>
                       <td className="py-2.5 px-3 text-xs">{i.date.substring(0, 10)}</td>
                       <td className="py-2.5 px-3 font-semibold text-sm">{i.machine}</td>
@@ -1168,10 +1168,10 @@ export default function SavPage() {
 
           {/* Summary KPIs */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <KpiCard emphasis appearance="status-stripe" icon={<Wrench className="h-5 w-5" />} value={String(totalInterv)} label="Interventions totales" />
-            <KpiCard emphasis appearance="status-stripe" icon={<Target className="h-5 w-5" />} value={`${tauxResolution}%`} label="Taux résolution" variant="success" />
-            <KpiCard emphasis appearance="status-stripe" icon={<Timer className="h-5 w-5" />} value={`${mttr}h`} label="MTTR moyen" />
-            <KpiCard emphasis appearance="status-stripe" icon={<Clock className="h-5 w-5" />} value={`${totalDureeH}h`} label="Durée totale" variant="warning" />
+            <KpiCard appearance="status-stripe" icon={<Wrench className="h-5 w-5" />} value={String(totalInterv)} label="Interventions totales" />
+            <KpiCard appearance="status-stripe" icon={<Target className="h-5 w-5" />} value={`${tauxResolution}%`} label="Taux résolution" variant="success" />
+            <KpiCard appearance="status-stripe" icon={<Timer className="h-5 w-5" />} value={`${mttr}h`} label="MTTR moyen" />
+            <KpiCard appearance="status-stripe" icon={<Clock className="h-5 w-5" />} value={`${totalDureeH}h`} label="Durée totale" variant="warning" />
           </div>
 
           {/* Ratio correctif/préventif */}
@@ -1347,8 +1347,8 @@ export default function SavPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {pdfFiltered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(i => (
-                          <tr key={i.id} className="border-b border-savia-border/30">
+                        {pdfFiltered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((i, rowIndex) => (
+                          <tr key={`${i.id}-${rowIndex}`} className="border-b border-savia-border/30">
                             <td className="py-1.5 px-2">{i.date.substring(0, 10)}</td>
                             <td className="py-1.5 px-2 font-semibold">{i.machine}</td>
                             <td className="py-1.5 px-2">{i.technicien}</td>

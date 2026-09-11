@@ -95,7 +95,11 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip, deta
       } : undefined}
     >
       {appearance === 'status-stripe' && <div aria-hidden="true" className="absolute left-0 right-0 top-0 z-10" style={{ height: '3px', background: stripeGradient }} />}
-      <div className={clsx(emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl', loading && 'animate-pulse opacity-60', appearance === 'status-stripe' && iconSurface)}>{icon}</div>
+      <div className={clsx(
+        emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl',
+        loading && 'animate-pulse opacity-60',
+        appearance === 'status-stripe' && `${iconSurface} mx-auto inline-flex items-center justify-center`
+      )}>{icon}</div>
       <div className={clsx(emphasis ? 'text-2xl font-extrabold tracking-tight md:text-3xl' : 'text-xl font-extrabold tracking-tight', valueColor, loading && 'animate-pulse')}>{loading ? '—' : value}</div>
       <div className={emphasis ? 'mt-2 text-sm font-semibold leading-tight text-savia-text-muted' : 'text-xs text-savia-text-muted mt-1 leading-tight'}>{label}</div>
       {detail && <div className="mt-2 text-xs leading-tight text-savia-text-muted">{loading ? 'Chargement…' : detail}</div>}

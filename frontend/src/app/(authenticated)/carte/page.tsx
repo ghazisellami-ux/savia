@@ -316,7 +316,7 @@ export default function CartePage() {
           { label: 'Score Moyen', value: `${avgScore}%`, color: avgScore >= 70 ? 'text-green-400' : 'text-yellow-400', icon: <Heart className="w-5 h-5" /> },
           { label: 'Sites en alerte', value: sitesAlerte, color: 'text-red-400', icon: <AlertTriangle className="w-5 h-5" /> },
         ].map(k => (
-          <KpiCard key={k.label} emphasis appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
+          <KpiCard key={k.label} appearance="status-stripe" icon={k.icon} value={String(k.value)} label={k.label}
             variant={k.label === 'Sites en alerte' ? (sitesAlerte > 0 ? 'danger' : 'success') : k.label === 'Score Moyen' ? (avgScore >= 70 ? 'success' : 'warning') : 'default'} />
         ))}
       </div>
