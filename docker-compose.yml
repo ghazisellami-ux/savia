@@ -78,6 +78,12 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: ["python", "-m", "workers.scheduler"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     environment:
       NODE_ENV: production
       JWT_SECRET: ${SERVICE_REALBASE64_64_JWT}
