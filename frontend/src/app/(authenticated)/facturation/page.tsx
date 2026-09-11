@@ -12,6 +12,7 @@ import { billing, clients as clientsApi, equipements, interventions, settings as
 import { Modal } from '@/components/ui/modal';
 import { useAuth } from '@/lib/auth-context';
 import { useRoleGuard } from '@/lib/use-role-guard';
+import { KpiCard } from '@/components/ui/cards';
 
 
 type StepType = 'quote' | 'purchase_order' | 'delivery_note' | 'invoice';
@@ -642,13 +643,13 @@ export default function FacturationPage() {
           { label: 'Dossiers payés', value: kpis.paid, icon: CheckCircle2, color: 'text-green-300', filter: 'paid' },
           { label: 'Couverts contrat', value: kpis.covered, icon: CheckCircle2, color: 'text-emerald-300', filter: 'covered_by_contract' },
           { label: 'À vérifier', value: kpis.review, icon: AlertTriangle, color: 'text-fuchsia-300', filter: 'coverage_review' },
-        ].map(card => (
-          <button key={card.label} onClick={() => card.filter && setStatusFilter(current => current === card.filter ? '' : card.filter)} className={`glass rounded-xl p-4 text-left transition hover:-translate-y-0.5 ${statusFilter === card.filter && card.filter ? 'ring-2 ring-savia-accent' : ''}`}>
-            <card.icon className={`mb-2 h-5 w-5 ${card.color}`} />
-            <div className={`text-xl font-black ${card.color}`}>{card.value}</div>
-            <div className="mt-1 text-xs text-savia-text-muted">{card.label}</div>
-          </button>
-        ))}
+        ].map(card => {
+          const Icon = card.icon;
+          return <KpiCard key={card.label} emphasis className={statusFilter === card.filter && card.filter ? 'ring-2 ring-savia-accent' : undefined}
+            appearance="status-stripe" icon={<Icon className="h-5 w-5" />} value={String(card.value)} label={card.label}
+            variant={card.label === 'En retard' || card.label === 'À vérifier' ? (Number(card.value) > 0 ? 'danger' : 'success') : card.label === 'Dossiers payés' || card.label === 'Couverts contrat' ? 'success' : card.label === 'Paiement attendu' || card.label === 'Reste à encaisser' ? 'warning' : 'default'}
+            onClick={card.filter ? () => setStatusFilter(current => current === card.filter ? '' : card.filter) : undefined} />;
+        })}
       </div>
 
       <div className="glass grid grid-cols-1 gap-3 rounded-xl p-3 xl:grid-cols-[minmax(260px,1fr)_minmax(180px,0.55fr)_minmax(180px,0.55fr)_minmax(210px,0.65fr)_auto]">

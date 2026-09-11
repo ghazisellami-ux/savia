@@ -10,6 +10,7 @@ import { clients as clientsApi, publicMarkets } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
 import { useAuth } from '@/lib/auth-context';
 import { useRoleGuard } from '@/lib/use-role-guard';
+import { KpiCard } from '@/components/ui/cards';
 
 type CaseState = 'active' | 'blocked' | 'cancelled';
 type StepType = 'signature' | 'equipment_reception' | 'delivery_note' | 'invoice' | 'provisional_acceptance' | 'final_acceptance';
@@ -415,7 +416,13 @@ export default function PublicMarketsPage() {
           { label: 'Dossiers en cours', value: kpis.active, icon: CalendarClock, color: 'text-blue-300', filter: '' },
           { label: 'Alertes à traiter', value: kpis.alerts, icon: AlertTriangle, color: 'text-red-300', filter: 'alert' },
           { label: 'Marchés achevés', value: kpis.completed, icon: CheckCircle2, color: 'text-green-300', filter: 'completed' },
-        ].map(card => <button key={card.label} onClick={() => card.filter && setStatusFilter(value => value === card.filter ? '' : card.filter)} className={`glass rounded-xl p-4 text-left transition hover:-translate-y-0.5 ${card.filter && statusFilter === card.filter ? 'ring-2 ring-savia-accent' : ''}`}><card.icon className={`mb-2 h-5 w-5 ${card.color}`} /><div className={`text-xl font-black ${card.color}`}>{card.value}</div><div className="mt-1 text-xs text-savia-text-muted">{card.label}</div></button>)}
+        ].map(card => {
+          const Icon = card.icon;
+          return <KpiCard key={card.label} emphasis className={card.filter && statusFilter === card.filter ? 'ring-2 ring-savia-accent' : undefined}
+            appearance="status-stripe" icon={<Icon className="h-5 w-5" />} value={String(card.value)} label={card.label}
+            variant={card.label === 'Alertes à traiter' ? (card.value > 0 ? 'danger' : 'success') : card.label === 'Marchés achevés' ? 'success' : card.label === 'Dossiers en cours' ? 'warning' : 'default'}
+            onClick={card.filter ? () => setStatusFilter(value => value === card.filter ? '' : card.filter) : undefined} />;
+        })}
       </div>
 
       <div className="glass grid grid-cols-1 gap-3 rounded-xl p-3 xl:grid-cols-[minmax(260px,1fr)_minmax(180px,0.55fr)_minmax(180px,0.55fr)_minmax(210px,0.65fr)_auto]">

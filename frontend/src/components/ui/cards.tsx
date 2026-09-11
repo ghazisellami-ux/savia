@@ -14,9 +14,11 @@ interface KpiCardProps {
   loading?: boolean;
   appearance?: 'default' | 'status-stripe';
   emphasis?: boolean;
+  className?: string;
+  onClick?: () => void;
 }
 
-export function KpiCard({ icon, value, label, variant = 'default', tooltip, detail, loading = false, appearance = 'default', emphasis = false }: KpiCardProps) {
+export function KpiCard({ icon, value, label, variant = 'default', tooltip, detail, loading = false, appearance = 'default', emphasis = false, className, onClick }: KpiCardProps) {
   // Skeleton variant - shows grayed out placeholder
   if (variant === 'skeleton') {
     return (
@@ -77,9 +79,20 @@ export function KpiCard({ icon, value, label, variant = 'default', tooltip, deta
         emphasis ? 'flex min-h-40 flex-col items-center justify-center p-5' : 'p-4',
         borderColor, glowColor,
         appearance === 'status-stripe' && 'relative overflow-hidden',
-        'hover:scale-[1.02] hover:-translate-y-0.5'
+        'hover:scale-[1.02] hover:-translate-y-0.5',
+        onClick && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-savia-accent',
+        className
       )}
       title={tooltip}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
     >
       {appearance === 'status-stripe' && <div aria-hidden="true" className="absolute left-0 right-0 top-0 z-10" style={{ height: '3px', background: stripeGradient }} />}
       <div className={clsx(emphasis ? 'mb-2 scale-110' : 'mb-1 text-2xl', loading && 'animate-pulse opacity-60', appearance === 'status-stripe' && iconSurface)}>{icon}</div>

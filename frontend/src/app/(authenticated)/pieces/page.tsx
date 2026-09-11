@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { SectionCard } from '@/components/ui/cards';
+import { SectionCard, KpiCard } from '@/components/ui/cards';
 import { Modal } from '@/components/ui/modal';
 import { Plus, Search, Package, AlertTriangle, Loader2, Save, Trash2, Edit, Sparkles,
   Wrench, Building2, TrendingDown, DollarSign, CheckCircle2, XCircle, History,
@@ -826,27 +826,11 @@ export default function PiecesPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2 text-savia-accent"><Package className="w-5 h-5" /></div>
-          <div className="text-3xl font-black text-savia-accent">{data.length}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Total pièces</div>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2 text-red-400"><TrendingDown className="w-5 h-5" /></div>
-          <div className="text-3xl font-black text-red-400">{lowStock.length}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Stock critique</div>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2 text-green-400"><DollarSign className="w-5 h-5" /></div>
-          <div className="text-3xl font-black text-green-400">{(totalValeur / 1000).toFixed(0)}K</div>
-          <div className="text-xs text-savia-text-muted mt-1">Valeur stock ({configuredCurrency})</div>
-        </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <div className="flex justify-center mb-2 text-purple-400"><Factory className="w-5 h-5" /></div>
-          <div className="text-3xl font-black text-purple-400">{fournisseurs}</div>
-          <div className="text-xs text-savia-text-muted mt-1">Fournisseurs</div>
-        </div>
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <KpiCard emphasis appearance="status-stripe" icon={<Package className="h-5 w-5" />} value={String(data.length)} label="Total pièces" />
+        <KpiCard emphasis appearance="status-stripe" icon={<TrendingDown className="h-5 w-5" />} value={String(lowStock.length)} label="Stock critique" variant={lowStock.length > 0 ? 'danger' : 'success'} />
+        <KpiCard emphasis appearance="status-stripe" icon={<DollarSign className="h-5 w-5" />} value={`${(totalValeur / 1000).toFixed(0)}K`} label={`Valeur stock (${configuredCurrency})`} variant="success" />
+        <KpiCard emphasis appearance="status-stripe" icon={<Factory className="h-5 w-5" />} value={String(fournisseurs)} label="Fournisseurs" />
       </div>
 
       {/* Alerte stock critique */}
@@ -1009,22 +993,10 @@ export default function PiecesPage() {
       {/* TAB 1: TRAÇABILITÉ */}
       {activeTab === 1 && (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="glass rounded-xl p-4 text-center">
-              <div className="flex justify-center mb-2 text-savia-accent"><Wrench className="w-5 h-5" /></div>
-              <div className="text-2xl font-black text-savia-accent">{new Set(traceData.map(t => t.piece)).size}</div>
-              <div className="text-xs text-savia-text-muted mt-1">Pièces différentes</div>
-            </div>
-            <div className="glass rounded-xl p-4 text-center">
-              <div className="flex justify-center mb-2 text-blue-400"><Building2 className="w-5 h-5" /></div>
-              <div className="text-2xl font-black text-blue-400">{new Set(traceData.map(t => t.equipement)).size}</div>
-              <div className="text-xs text-savia-text-muted mt-1">Équipements</div>
-            </div>
-            <div className="glass rounded-xl p-4 text-center">
-              <div className="flex justify-center mb-2 text-purple-400"><Boxes className="w-5 h-5" /></div>
-              <div className="text-2xl font-black text-purple-400">{traceData.length}</div>
-              <div className="text-xs text-savia-text-muted mt-1">Utilisations totales</div>
-            </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <KpiCard appearance="status-stripe" icon={<Wrench className="h-5 w-5" />} value={String(new Set(traceData.map(t => t.piece)).size)} label="Pièces différentes" />
+            <KpiCard appearance="status-stripe" icon={<Building2 className="h-5 w-5" />} value={String(new Set(traceData.map(t => t.equipement)).size)} label="Équipements" />
+            <KpiCard appearance="status-stripe" icon={<Boxes className="h-5 w-5" />} value={String(traceData.length)} label="Utilisations totales" />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

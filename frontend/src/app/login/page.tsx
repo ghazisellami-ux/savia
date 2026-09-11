@@ -57,7 +57,7 @@ export default function LoginPage() {
                 height={60}
                 priority
                 className="object-contain"
-                style={{ maxWidth: '60%', height: 'auto' }}
+                style={{ maxWidth: '60%', width: 'auto', height: 'auto' }}
               />
             </div>
           </div>

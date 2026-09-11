@@ -266,18 +266,19 @@ export default function FinancesPage() {
 
       {/* Global KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <KpiCard icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={moneyK(kpis.revenu_total || 0)} label="Revenu Contrats" variant="success" />
-        <KpiCard icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={moneyK(kpis.cout_total || 0)} label="Coûts Totaux" variant="danger" />
-        <KpiCard
+        <KpiCard emphasis appearance="status-stripe" icon={<TrendingUp className="w-6 h-6 text-green-400" />} value={moneyK(kpis.revenu_total || 0)} label="Revenu Contrats" variant="success" />
+        <KpiCard emphasis appearance="status-stripe" icon={<TrendingDown className="w-6 h-6 text-red-400" />} value={moneyK(kpis.cout_total || 0)} label="Coûts Totaux" variant="danger" />
+        <KpiCard emphasis
+          appearance="status-stripe"
           icon={<DollarSign className="w-6 h-6" style={{ color: (kpis.marge_globale || 0) >= 0 ? COLORS.green : COLORS.red }} />}
           value={moneyK(kpis.marge_globale || 0)}
           label="Marge Globale"
           variant={(kpis.marge_globale || 0) >= 0 ? 'success' : 'danger'}
         />
-        <KpiCard icon={<PieChartIcon className="w-6 h-6 text-blue-400" />} value={`${kpis.marge_pct || 0}%`} label="Taux de Marge" />
-        <KpiCard icon={<Building2 className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_clients || 0)} label="Clients" />
-        <KpiCard icon={<CheckCircle2 className="w-6 h-6 text-green-400" />} value={String(kpis.nb_rentables || 0)} label="Rentables" variant="success" />
-        <KpiCard icon={<AlertTriangle className="w-6 h-6 text-red-400" />} value={String(kpis.nb_deficitaires || 0)} label="Déficitaires" variant="danger" />
+        <KpiCard emphasis appearance="status-stripe" icon={<PieChartIcon className="w-6 h-6 text-blue-400" />} value={`${kpis.marge_pct || 0}%`} label="Taux de Marge" />
+        <KpiCard emphasis appearance="status-stripe" icon={<Building2 className="w-6 h-6 text-savia-accent" />} value={String(kpis.nb_clients || 0)} label="Clients" />
+        <KpiCard emphasis appearance="status-stripe" icon={<CheckCircle2 className="w-6 h-6 text-green-400" />} value={String(kpis.nb_rentables || 0)} label="Rentables" variant="success" />
+        <KpiCard emphasis appearance="status-stripe" icon={<AlertTriangle className="w-6 h-6 text-red-400" />} value={String(kpis.nb_deficitaires || 0)} label="Déficitaires" variant="danger" />
       </div>
 
       {/* Charts Row */}
