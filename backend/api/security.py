@@ -76,8 +76,8 @@ _RESOURCE_CLIENT_QUERIES = {
     "contrat": "SELECT client FROM contrats WHERE id = %s",
     "demande": "SELECT client FROM demandes_intervention WHERE id = %s",
     "conformite": "SELECT client FROM conformite WHERE id = %s",
-    "document_technique": """SELECT e.client FROM documents_techniques d
-                              JOIN equipements e ON e.id = d.equipement_id
+    "document_technique": """SELECT COALESCE(e.client, '') AS client FROM documents_techniques d
+                              LEFT JOIN equipements e ON e.id = d.equipement_id
                               WHERE d.id = %s""",
 }
 

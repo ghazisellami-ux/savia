@@ -998,24 +998,38 @@ def lire_equipement_par_id(equip_id):
 # FONCTIONS CRUD — DOCUMENTS TECHNIQUES
 # ==========================================
 
-def ajouter_document_technique(equipement_id, nom_fichier, contenu_base64, *, storage_key=None,
+def ajouter_document_technique(nom_fichier, contenu_base64, *, domaine, type_equipement,
+                              fabricant, modele="", equipement_id=None, storage_key=None,
                               content_type=None, size_bytes=None, sha256=None):
-    """Save document metadata; new files live in private object storage."""
+    """Save one catalog document for an equipment classification."""
     with get_db() as conn:
         conn.execute("""
             INSERT INTO documents_techniques
-            (equipement_id, nom_fichier, contenu_base64, storage_key, content_type, size_bytes, sha256)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (equipement_id, nom_fichier, contenu_base64, storage_key, content_type, size_bytes, sha256))
+            (equipement_id, nom_fichier, contenu_base64, domaine, type_equipement, fabricant, modele,
+             storage_key, content_type, size_bytes, sha256)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (equipement_id, nom_fichier, contenu_base64, domaine, type_equipement, fabricant, modele,
+              storage_key, content_type, size_bytes, sha256))
     return True
 
 
 def lire_documents_techniques(equipement_id):
-    """Lit les documents techniques d'un équipement (métadonnées sans contenu pour la perf)."""
+    """List catalog documents matching an equipment, plus its legacy attachments."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, nom_fichier, date_ajout FROM documents_techniques WHERE equipement_id = %s ORDER BY date_ajout DESC",
-            (equipement_id,)
+            """SELECT d.id, d.nom_fichier, d.date_ajout, d.domaine, d.type_equipement,
+                      d.fabricant, d.modele
+               FROM documents_techniques d
+               JOIN equipements e ON e.id = %s
+               WHERE d.equipement_id = e.id
+                  OR (
+                    LOWER(d.domaine) = LOWER(e.domaine)
+                    AND LOWER(d.type_equipement) = LOWER(e.type)
+                    AND LOWER(d.fabricant) = LOWER(e.fabricant)
+                    AND (NULLIF(BTRIM(d.modele), '') IS NULL OR LOWER(d.modele) = LOWER(e.modele))
+                  )
+               ORDER BY d.date_ajout DESC""",
+            (equipement_id,),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1049,14 +1063,18 @@ def lire_document_technique_stockage(doc_id):
 
 
 def lire_tous_documents_techniques():
-    """Lit tous les documents techniques avec les infos de l'équipement associé."""
+    """List catalog documents, retaining legacy asset context when it exists."""
     with get_db() as conn:
         rows = conn.execute("""
             SELECT d.id, d.nom_fichier, d.date_ajout, d.equipement_id,
-                   e.nom AS equipement_nom, e.fabricant, e.modele, e.type AS equipement_type,
-                   e.client
+                   COALESCE(e.nom, '') AS equipement_nom,
+                   COALESCE(NULLIF(d.domaine, ''), e.domaine, '') AS domaine,
+                   COALESCE(NULLIF(d.fabricant, ''), e.fabricant, '') AS fabricant,
+                   COALESCE(NULLIF(d.modele, ''), e.modele, '') AS modele,
+                   COALESCE(NULLIF(d.type_equipement, ''), e.type, '') AS equipement_type,
+                   COALESCE(e.client, '') AS client
             FROM documents_techniques d
-            JOIN equipements e ON d.equipement_id = e.id
+            LEFT JOIN equipements e ON d.equipement_id = e.id
             ORDER BY d.date_ajout DESC
         """).fetchall()
         return [dict(r) for r in rows]

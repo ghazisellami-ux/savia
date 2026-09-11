@@ -225,10 +225,17 @@ export const equipements = {
 export const documentsTechniques = {
   listAll: () => request<Array<Record<string, unknown>>>('/api/documents-techniques'),
   listByEquipment: (equipId: number) => request<Array<Record<string, unknown>>>(`/api/documents-techniques/${equipId}`),
-  upload: (equipementId: number, nomFichier: string, contenuBase64: string) =>
+  upload: (data: { nomFichier: string; contenuBase64: string; domaine: string; typeEquipement: string; fabricant: string; modele?: string }) =>
     request<{ok: boolean}>('/api/documents-techniques/upload', {
       method: 'POST',
-      body: { equipement_id: equipementId, nom_fichier: nomFichier, contenu_base64: contenuBase64 },
+      body: {
+        nom_fichier: data.nomFichier,
+        contenu_base64: data.contenuBase64,
+        domaine: data.domaine,
+        type_equipement: data.typeEquipement,
+        fabricant: data.fabricant,
+        modele: data.modele || '',
+      },
       timeoutMs: 120000,
     }),
   download: (docId: number) => request<{ contenu_base64: string; nom_fichier: string }>(`/api/documents-techniques/download/${docId}`),
