@@ -28,6 +28,15 @@ interface KpiData {
   nb_interventions: number;
   nb_clients: number;
   taux_resolution: number;
+  interventions_ouvertes: number;
+  interventions_retard: number;
+  preventives_retard: number;
+  preventives_7j: number;
+  preventives_30j: number;
+  sla_respect_pct: number;
+  sla_hors_delai: number;
+  sla_suivies: number;
+  cout_correctif_moyen: number;
 }
 
 interface HealthScore {
@@ -133,7 +142,9 @@ export default function DashboardPage() {
 
   // --- Data state ---
   const [kpis, setKpis] = useState<KpiData>({
-    nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0, nb_clients: 0, taux_resolution: 0
+    nb_equipements: 0, nb_critiques: 0, disponibilite: 100, mtbf: 0, mttr: 0, cout_total: 0, nb_interventions: 0, nb_clients: 0, taux_resolution: 0,
+    interventions_ouvertes: 0, interventions_retard: 0, preventives_retard: 0, preventives_7j: 0, preventives_30j: 0,
+    sla_respect_pct: 100, sla_hors_delai: 0, sla_suivies: 0, cout_correctif_moyen: 0,
   });
   const [clientEquipmentCounts, setClientEquipmentCounts] = useState<Record<string, number>>({});
   const [healthScores, setHealthScores] = useState<HealthScore[]>([]);
@@ -216,11 +227,24 @@ export default function DashboardPage() {
 
   // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
-    // Clear cache when date range changes to force fresh data
-    localStorage.removeItem('dashboard_kpi_cache');
+    const cacheKey = `dashboard_kpi_cache:${dateRange.date_start}:${dateRange.date_end}`;
+    let hasCachedData = false;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.kpis && Array.isArray(parsed.healthScores)) {
+          setFullData({ kpis: parsed.kpis, healthScores: parsed.healthScores, interventions: [] });
+          setIsInitialLoading(false);
+          hasCachedData = true;
+        }
+      }
+    } catch (err) {
+      console.warn('Unable to read dashboard KPI cache', err);
+    }
     
     const loadFullData = async () => {
-      setIsInitialLoading(true);
+      if (!hasCachedData) setIsInitialLoading(true);
       
       try {
         // ALWAYS load with date range parameters, even without filters
@@ -234,6 +258,16 @@ export default function DashboardPage() {
           healthScores: healthData,
           interventions: [],
         };
+
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({
+            kpis: kpiData,
+            healthScores: healthData,
+            cachedAt: new Date().toISOString(),
+          }));
+        } catch (err) {
+          console.warn('Unable to write dashboard KPI cache', err);
+        }
         
         // Set data immediately with empty interventions
         setFullData(newData);
@@ -261,106 +295,35 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!fullData) return;
 
-    // If only client filter is applied, filter client-side (instant)
+    // A client filter is resolved by the API so all operational KPI rules stay consistent.
     if (selectedClient && !selectedEquipType) {
       setIsLoading(true);
-      try {
-        // Filter health scores by client
-        const filteredHealth = fullData.healthScores.filter((h: any) => h.client === selectedClient);
-
-        // Filter interventions by client machines
-        const validMachines = filteredHealth.map((h: any) => h.machine);
-        let filteredInterv = fullData.interventions;
-        if (validMachines.length > 0) {
-          filteredInterv = filteredInterv.filter((i: any) => validMachines.includes(i.machine));
-        } else {
-          filteredInterv = [];
+      // Fetch the scoped dashboard from the API so operational KPIs (planning
+      // and SLA) use the same server-side rules as the unfiltered view.
+      const loadClientData = async () => {
+        try {
+          const params = { client: selectedClient, date_start: dateRange.date_start, date_end: dateRange.date_end };
+          const [kpiData, healthData, intervData] = await Promise.all([
+            dashboard.kpis(params), dashboard.healthScores(params), interventionsApi.list(),
+          ]);
+          setKpis(kpiData as unknown as KpiData);
+          setHealthScores(healthData);
+          const machines = new Set(healthData.map((h: any) => h.machine));
+          const scopedInterventions = (intervData || []).filter((i: any) => machines.has(i.machine));
+          setAllInterventions(scopedInterventions);
+          setRecentInterv(
+            scopedInterventions
+              .filter((i: any) => String(i.date || '').substring(0, 10) >= dateRange.date_start && String(i.date || '').substring(0, 10) <= dateRange.date_end)
+              .sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || '')))
+              .slice(0, 10),
+          );
+        } catch (err) {
+          console.error("Failed to load client dashboard", err);
+        } finally {
+          setIsLoading(false);
         }
-
-        const dateFilteredInterv = filteredInterv.filter((i: any) => {
-          const dateToCheck = i.date ? i.date.substring(0, 10) : '';
-          return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
-        });
-
-        const activityAvailability = (() => {
-          const start = new Date(`${dateRange.date_start}T00:00:00`);
-          const end = new Date(`${dateRange.date_end}T00:00:00`);
-          if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 100;
-
-          const monthlyValues: number[] = [];
-          const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-          const endMonth = new Date(end.getFullYear(), end.getMonth(), 1);
-
-          while (cursor <= endMonth) {
-            const monthKey = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
-            const monthInterv = dateFilteredInterv.filter((i: any) => (i.date || '').substring(0, 7) === monthKey);
-            const unfinished = monthInterv.filter((i: any) => String(i.statut || '').toLowerCase() !== 'terminée').length;
-            monthlyValues.push(Math.max(0, 100 - unfinished * 2));
-            cursor.setMonth(cursor.getMonth() + 1);
-          }
-
-          return monthlyValues.length > 0
-            ? Math.round((monthlyValues.reduce((a, b) => a + b, 0) / monthlyValues.length) * 10) / 10
-            : 100;
-        })();
-
-        // Health scores are de-duplicated by machine name. They remain useful
-        // for health and availability, but not for the fleet-size card.
-        const nb_eq = filteredHealth.length;
-        const nb_critiques = filteredHealth.filter((h: any) => h.score < 30).length;
-        const statusAvailability = nb_eq > 0 ? Math.round(((nb_eq - nb_critiques) / nb_eq) * 100) : 100;
-        const disponibilite = Math.min(statusAvailability, activityAvailability);
-        const nb_interventions = dateFilteredInterv.length;
-        const nb_cloturees = dateFilteredInterv.filter((i: any) => (i.statut || '').toLowerCase().includes('clotur')).length;
-        const taux_resolution = nb_interventions > 0 ? Math.round((nb_cloturees / nb_interventions) * 1000) / 10 : 0;
-
-        // Calculate MTBF and MTTR from filtered interventions
-        let mtbf = 0, mttr = 0;
-        if (dateFilteredInterv.length > 0) {
-          const durations = dateFilteredInterv
-            .filter((i: any) => i.duree_intervention)
-            .map((i: any) => parseFloat(i.duree_intervention) || 0);
-          if (durations.length > 0) {
-            mttr = durations.reduce((a: number, b: number) => a + b, 0) / durations.length;
-          }
-          // MTBF = average time between failures (simplified: total days / number of interventions)
-          if (dateFilteredInterv.length > 1) {
-            const dates = dateFilteredInterv
-              .map((i: any) => new Date(i.date).getTime())
-              .sort((a: number, b: number) => a - b);
-            const daysBetween = [];
-            for (let i = 1; i < dates.length; i++) {
-              daysBetween.push((dates[i] - dates[i - 1]) / (1000 * 60 * 60 * 24));
-            }
-            if (daysBetween.length > 0) {
-              mtbf = daysBetween.reduce((a: number, b: number) => a + b, 0) / daysBetween.length * 24; // convert to hours
-            }
-          }
-        }
-
-        setKpis({
-          nb_equipements: nb_eq,
-          nb_critiques: nb_critiques,
-          disponibilite: disponibilite,
-          mtbf: mtbf,
-          mttr: mttr,
-          cout_total: 0, // Can't calculate from client-side data
-          nb_interventions: nb_interventions,
-          nb_clients: 1, // Only 1 client selected
-          taux_resolution: taux_resolution,
-        });
-        setHealthScores(filteredHealth);
-        setAllInterventions(filteredInterv);
-
-        setRecentInterv(
-          dateFilteredInterv.sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '')).slice(0, 10)
-        );
-
-      } catch (err) {
-        console.error("Failed to filter data", err);
-      } finally {
-        setIsLoading(false);
-      }
+      };
+      loadClientData();
       return;
     }
 
@@ -369,12 +332,12 @@ export default function DashboardPage() {
       // No filters - use full data but filter by date range
       setIsLoading(true);
       try {
-        setKpis(fullData.kpis);
-        setHealthScores(fullData.healthScores);
-        setAllInterventions(fullData.interventions);
+        setKpis(fullData!.kpis);
+        setHealthScores(fullData!.healthScores);
+        setAllInterventions(fullData!.interventions);
         
         // Filter interventions by date range for display
-        const dateFilteredInterv = fullData.interventions.filter((i: any) => {
+        const dateFilteredInterv = fullData!.interventions.filter((i: any) => {
           const dateToCheck = i.date ? i.date.substring(0, 10) : '';
           return dateToCheck >= dateRange.date_start && dateToCheck <= dateRange.date_end;
         });
@@ -476,6 +439,7 @@ export default function DashboardPage() {
   const mtbfStr = kpis.mtbf >= 24
     ? `${Math.floor(kpis.mtbf / 24)}j ${Math.round(kpis.mtbf % 24)}h`
     : `${kpis.mtbf.toFixed(0)}h`;
+  const showKpiLoading = !fullData || isInitialLoading;
 
   // Monthly bar chart data — compute from real interventions
   const monthlyChartData = useMemo(() => {
@@ -696,72 +660,42 @@ export default function DashboardPage() {
 
       {/* KPIs Row - Top 4 */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard emphasis icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
-        <KpiCard emphasis icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (selectedClientEquipmentCount === undefined ? '—' : String(selectedClientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
-        <KpiCard emphasis icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(healthScores.filter(h => h.score < 40).length)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} />
-        <KpiCard emphasis icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Building2 className="w-6 h-6 text-purple-400" />} value={String(kpis.nb_clients)} label="Clients" />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Cpu className="w-6 h-6 text-savia-accent" />} value={selectedClient ? (selectedClientEquipmentCount === undefined ? '—' : String(selectedClientEquipmentCount)) : String(kpis.nb_equipements)} label="Équipements" />
+        <KpiCard emphasis loading={showKpiLoading} icon={<CircleAlert className="w-6 h-6 text-red-400" />} value={String(kpis.nb_critiques)} label="Alertes Critiques" variant={kpis.nb_critiques > 0 ? 'danger' : 'default'} tooltip="Équipements actuellement hors service, critiques ou en panne." />
+        <KpiCard emphasis loading={showKpiLoading} icon={<CircleCheck className="w-6 h-6 text-green-400" />} value={`${kpis.disponibilite}%`} label="Disponibilité" variant="success" />
       </div>
 
-      {/* KPIs Row - Bottom 4 */}
+      {/* KPIs Row - Opérationnels */}
       <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 transition-opacity duration-300 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
-        <KpiCard emphasis icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.nb_interventions)} label="Interventions" />
-        <KpiCard emphasis icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux Résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="% interventions clôturées" />
-        <KpiCard emphasis icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF" tooltip="Temps moyen entre pannes" />
-        {canSeeCosts && (
-          <KpiCard emphasis icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${(kpis.cout_total / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} K TND`} label="Coût Maintenance (indicatif)" tooltip="Valeur indicative, exprimée en milliers de TND." />
-        )}
-        {!canSeeCosts && (
-          <KpiCard emphasis icon={<Wrench className="w-6 h-6 text-orange-400" />} value={`${kpis.mttr.toFixed(1)}h`} label="MTTR" tooltip="Temps moyen de réparation" />
-        )}
+        <KpiCard emphasis loading={showKpiLoading} icon={<Wrench className="w-6 h-6 text-orange-400" />} value={String(kpis.interventions_ouvertes)} label="Interventions ouvertes" detail={`${kpis.interventions_retard} en retard`} variant={kpis.interventions_retard > 0 ? 'danger' : 'default'} tooltip="Interventions non clôturées ; le sous-indicateur précise celles dont l'échéance est dépassée." />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Calendar className="w-6 h-6 text-yellow-400" />} value={String(kpis.preventives_retard)} label="Préventives en retard" detail={`À 7 j : ${kpis.preventives_7j} · 8–30 j : ${kpis.preventives_30j}`} variant={kpis.preventives_retard > 0 ? 'warning' : 'success'} tooltip="Préventives en retard, puis préventives à réaliser dans les 7 et 30 prochains jours." />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.sla_respect_pct}%`} label="Respect SLA" detail={`${kpis.sla_hors_delai} hors SLA · ${kpis.sla_suivies} suivies`} variant={kpis.sla_hors_delai > 0 ? 'warning' : 'success'} tooltip="Part des interventions couvertes par un contrat et traitées dans le délai prévu." />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={`${kpis.mttr.toFixed(1)} h`} label="MTTR" tooltip="Durée moyenne de réparation des interventions correctives clôturées." />
       </div>
 
-      {/* Score Santé + Gamification */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Score Santé du Jour */}
-        <SectionCard title={<span className="flex items-center gap-2"><Activity className="w-5 h-5 text-savia-accent" /> Score Santé du Jour</span>}>
-          <div className="text-center">
-            <div className={`text-5xl font-black ${scoreGlobal >= 60 ? 'text-savia-success' : scoreGlobal >= 30 ? 'text-savia-warning' : 'text-savia-danger'}`}>
-              {scoreGlobal}%
-            </div>
-            <div className="text-savia-text-muted text-sm mt-2">→ stable</div>
-            <div className="w-full bg-savia-bg rounded-full h-2 mt-4 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-1000 ${scoreGlobal >= 60 ? 'bg-savia-success' : scoreGlobal >= 30 ? 'bg-savia-warning' : 'bg-savia-danger'}`}
-                style={{ width: `${scoreGlobal}%` }}
-              />
-            </div>
-          </div>
-        </SectionCard>
-
-        {/* Gamification */}
-        <SectionCard title={<span className="flex items-center gap-2"><Trophy className="w-5 h-5 text-yellow-400" /> Gamification — Équipe</span>}>
-          <div className="text-center">
-            <div className="text-5xl font-black text-savia-warning">
-              {kpis.nb_interventions} <span className="text-lg">interventions</span>
-            </div>
-            <div className="text-savia-warning text-sm font-semibold mt-2">
-              ■ Niveau : Pro
-            </div>
-            <div className="text-savia-text-dim text-xs mt-1">
-              Total réalisé: {kpis.nb_interventions} | Belle performance !
-            </div>
-          </div>
-        </SectionCard>
+      {/* KPI de qualité et de pilotage */}
+      <div className={`grid gap-4 grid-cols-2 md:grid-cols-3 ${isLoading ? 'opacity-60' : 'opacity-100'}`}>
+        <KpiCard emphasis loading={showKpiLoading} icon={<Timer className="w-6 h-6 text-blue-400" />} value={mtbfStr} label="MTBF correctif" tooltip="Intervalle moyen entre pannes correctives, calculé équipement par équipement." />
+        <KpiCard emphasis loading={showKpiLoading} icon={<Target className="w-6 h-6 text-emerald-400" />} value={`${kpis.taux_resolution}%`} label="Taux de résolution" variant={kpis.taux_resolution >= 80 ? 'success' : kpis.taux_resolution >= 60 ? 'default' : 'danger'} tooltip="Pourcentage d'interventions clôturées sur la période sélectionnée." />
+        {canSeeCosts && (
+          <KpiCard emphasis loading={showKpiLoading} icon={<DollarSign className="w-6 h-6 text-yellow-400" />} value={`${kpis.cout_correctif_moyen.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} TND`} label="Coût moyen correctif" tooltip="Coût moyen par intervention corrective (main-d'œuvre et pièces). Réservé aux responsables." />
+        )}
       </div>
 
       {/* 🚨 Anomalies Detected */}
-      {healthScores.filter(h => h.score < 40).length > 0 && (
+      {healthScores.filter(h => h.score < 30).length > 0 && (
         <div className="bg-red-500/5 border border-red-500/20 rounded-xl overflow-hidden">
           <button onClick={() => setShowAnomalies(!showAnomalies)} className="w-full flex items-center justify-between p-4 cursor-pointer hover:bg-red-500/5 transition-colors">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-400" />
-              <span className="font-bold text-red-400">{healthScores.filter(h => h.score < 40).length} anomalie(s) détectée(s)</span>
+              <span className="font-bold text-red-400">{healthScores.filter(h => h.score < 30).length} anomalie(s) santé critique(s)</span>
             </div>
             {showAnomalies ? <ChevronUp className="w-4 h-4 text-savia-text-muted" /> : <ChevronDown className="w-4 h-4 text-savia-text-muted" />}
           </button>
           {showAnomalies && (
             <div className="px-4 pb-4 space-y-2">
-              {healthScores.filter(h => h.score < 40).map(h => (
+              {healthScores.filter(h => h.score < 30).map(h => (
                 <div key={`${h.machine}-${h.client || ""}`} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border-l-4 border-red-500">
                   <div>
                     <span className="font-bold text-sm">{h.machine}</span>
@@ -808,17 +742,6 @@ export default function DashboardPage() {
         )}
       </SectionCard>
 
-
-      {/* Health Animation Banner */}
-      <div className="glass rounded-xl p-4 flex items-center gap-5">
-        <div className="w-12 h-12 flex-shrink-0 rounded-xl bg-gradient-to-br from-savia-accent/20 to-savia-success/20 flex items-center justify-center">
-          <Activity className="w-6 h-6 text-savia-accent" />
-        </div>
-        <div>
-          <div className="text-lg font-extrabold gradient-text flex items-center gap-2"><Heart className="w-5 h-5 text-red-400" /> Santé du Parc d&apos;Équipements</div>
-          <div className="text-savia-text-muted text-sm flex items-center gap-1"><Satellite className="w-3.5 h-3.5" /> Monitoring en temps réel — Analyse prédictive active</div>
-        </div>
-      </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
