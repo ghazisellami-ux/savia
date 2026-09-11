@@ -665,17 +665,18 @@ def delete_domaine_custom(nom: str, user: dict = Depends(_verify_token)):
 
 @app.post("/api/documents-techniques/upload")
 def upload_document(body: dict, user: dict = Depends(_verify_token)):
-    """Upload a technical document (base64 encoded) for an equipment."""
+    """Upload one catalog document for an equipment classification."""
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
     from db_engine import ajouter_document_technique
-    equip_id = body.get("equipement_id")
     nom_fichier = body.get("nom_fichier", "")
     contenu_base64 = body.get("contenu_base64", "")
-    if not equip_id or not nom_fichier or not contenu_base64:
-        raise HTTPException(status_code=400, detail="equipement_id, nom_fichier et contenu_base64 requis")
-    with get_db() as conn:
-        assert_resource_client_access(conn, "equipement", int(equip_id), user)
+    domaine = str(body.get("domaine", "")).strip()
+    type_equipement = str(body.get("type_equipement", "")).strip()
+    fabricant = str(body.get("fabricant", "")).strip()
+    modele = str(body.get("modele", "")).strip()
+    if not nom_fichier or not contenu_base64 or not domaine or not type_equipement or not fabricant:
+        raise HTTPException(status_code=400, detail="nom_fichier, contenu_base64, domaine, type_equipement et fabricant requis")
     validated = decode_and_validate_base64(nom_fichier, contenu_base64, "document_technique")
     from s3_storage import upload_private_file
     stored = upload_private_file(
@@ -685,12 +686,19 @@ def upload_document(body: dict, user: dict = Depends(_verify_token)):
         content_type=validated.content_type,
         original_name=validated.display_name,
         content_hash=validated.sha256,
-        metadata={"equipment-id": equip_id, "uploaded-by": user.get("sub", "unknown")},
+        metadata={
+            "domaine": domaine,
+            "type-equipement": type_equipement,
+            "fabricant": fabricant,
+            "modele": modele or "tous-les-modeles",
+            "uploaded-by": user.get("sub", "unknown"),
+        },
     )
     if not stored:
         raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
     ajouter_document_technique(
-        equip_id, validated.display_name, "", storage_key=stored["s3_key"],
+        validated.display_name, "", domaine=domaine, type_equipement=type_equipement,
+        fabricant=fabricant, modele=modele, storage_key=stored["s3_key"],
         content_type=validated.content_type, size_bytes=stored["size_bytes"], sha256=validated.sha256,
     )
     return {"ok": True, "filename": validated.display_name}

@@ -898,6 +898,33 @@ def _migration_026_contract_signature_date(conn) -> None:
     conn.execute("ALTER TABLE contrats ADD COLUMN IF NOT EXISTS date_signature DATE")
 
 
+def _migration_027_technical_document_catalog(conn) -> None:
+    """Store technical documents once per equipment classification, not per asset."""
+    statements = (
+        "ALTER TABLE documents_techniques ALTER COLUMN equipement_id DROP NOT NULL",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS domaine TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS type_equipement TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS fabricant TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE documents_techniques ADD COLUMN IF NOT EXISTS modele TEXT NOT NULL DEFAULT ''",
+    )
+    for statement in statements:
+        conn.execute(statement)
+    # Preserve the search context of documents created before this migration.
+    conn.execute(
+        """UPDATE documents_techniques d
+           SET domaine = COALESCE(NULLIF(d.domaine, ''), e.domaine, ''),
+               type_equipement = COALESCE(NULLIF(d.type_equipement, ''), e.type, ''),
+               fabricant = COALESCE(NULLIF(d.fabricant, ''), e.fabricant, ''),
+               modele = COALESCE(NULLIF(d.modele, ''), e.modele, '')
+           FROM equipements e
+           WHERE d.equipement_id = e.id"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_documents_techniques_catalog
+           ON documents_techniques (domaine, type_equipement, fabricant, modele)"""
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -925,6 +952,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("024", "spare-part USD and EUR purchase prices", _migration_024_spare_part_multi_currency_prices),
     ("025", "historical contract maintenance anchor", _migration_025_contract_historical_maintenance),
     ("026", "contract signature date", _migration_026_contract_signature_date),
+    ("027", "technical document catalog classification", _migration_027_technical_document_catalog),
 )
 
 

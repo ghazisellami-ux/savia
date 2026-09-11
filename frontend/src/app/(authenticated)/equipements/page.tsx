@@ -51,8 +51,9 @@ interface DocTechnique {
   id: number;
   nom_fichier: string;
   date_ajout: string;
-  equipement_id: number;
+  equipement_id?: number | null;
   equipement_nom: string;
+  domaine: string;
   fabricant: string;
   modele: string;
   equipement_type: string;
@@ -247,6 +248,7 @@ export default function EquipementsPage() {
   const [uploadDocType, setUploadDocType] = useState('Tous');
   const [uploadDocFabricant, setUploadDocFabricant] = useState('Tous');
   const [uploadDocModele, setUploadDocModele] = useState('Tous');
+  const [uploadCatalogModels, setUploadCatalogModels] = useState<string[]>([]);
   const [technicalDocumentFiles, setTechnicalDocumentFiles] = useState<File[]>([]);
   const [technicalDocumentFeedback, setTechnicalDocumentFeedback] = useState('');
   const [isUploadingTechnicalDocument, setIsUploadingTechnicalDocument] = useState(false);
@@ -528,7 +530,7 @@ export default function EquipementsPage() {
   ), [data]);
 
   const documentFilterRecords = useMemo(() => docs.map(doc => ({
-    domaine: documentEquipment(doc)?.domaine || '',
+    domaine: doc.domaine || documentEquipment(doc)?.domaine || '',
     type: doc.equipement_type || '',
     fabricant: doc.fabricant || '',
     modele: doc.modele || '',
@@ -550,25 +552,35 @@ export default function EquipementsPage() {
   const uploadScopeIsComplete = uploadDocDomaine !== 'Tous'
     && uploadDocType !== 'Tous'
     && uploadDocFabricant !== 'Tous';
-  const uploadCandidates = useMemo(() => {
-    if (!uploadScopeIsComplete) return [];
-    return data.filter(equipment => (
-      equipment.domaine === uploadDocDomaine
-      && equipment.type === uploadDocType
-      && equipment.marque === uploadDocFabricant
-      && (uploadDocModele === 'Tous' || equipment.modele === uploadDocModele)
-    ));
-  }, [data, uploadScopeIsComplete, uploadDocDomaine, uploadDocType, uploadDocFabricant, uploadDocModele]);
   const uploadDomainOptions = useMemo(() => uniqueFilterLabels(data.map(item => item.domaine)), [data]);
   const uploadTypeOptions = useMemo(() => uniqueFilterLabels(data
     .filter(item => uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine).map(item => item.type)), [data, uploadDocDomaine]);
   const uploadFabricantOptions = useMemo(() => uniqueFilterLabels(data
     .filter(item => (uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine)
       && (uploadDocType === 'Tous' || item.type === uploadDocType)).map(item => item.marque)), [data, uploadDocDomaine, uploadDocType]);
-  const uploadModeleOptions = useMemo(() => uniqueFilterLabels(data
+  const uploadModeleOptions = useMemo(() => uniqueFilterLabels([
+    ...data
     .filter(item => (uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine)
       && (uploadDocType === 'Tous' || item.type === uploadDocType)
-      && (uploadDocFabricant === 'Tous' || item.marque === uploadDocFabricant)).map(item => item.modele)), [data, uploadDocDomaine, uploadDocType, uploadDocFabricant]);
+      && (uploadDocFabricant === 'Tous' || item.marque === uploadDocFabricant)).map(item => item.modele),
+    ...uploadCatalogModels,
+  ]), [data, uploadDocDomaine, uploadDocType, uploadDocFabricant, uploadCatalogModels]);
+
+  useEffect(() => {
+    if (!uploadScopeIsComplete) {
+      setUploadCatalogModels([]);
+      return;
+    }
+    let cancelled = false;
+    void modelesApi.list({ domaine: uploadDocDomaine, type: uploadDocType, fabricant: uploadDocFabricant })
+      .then(models => {
+        if (!cancelled) setUploadCatalogModels(models.map(model => model.nom).filter(Boolean));
+      })
+      .catch(() => {
+        if (!cancelled) setUploadCatalogModels([]);
+      });
+    return () => { cancelled = true; };
+  }, [uploadScopeIsComplete, uploadDocDomaine, uploadDocType, uploadDocFabricant]);
 
   const loadData = useCallback(async () => {
     try {
@@ -1128,41 +1140,39 @@ export default function EquipementsPage() {
   };
 
   const handleTechnicalDocumentUpload = async () => {
-    if (!uploadScopeIsComplete || uploadCandidates.length === 0 || technicalDocumentFiles.length === 0) return;
-    if (uploadCandidates.length > 1 && !window.confirm(
-      `${technicalDocumentFiles.length} document(s) seront ajoutés à ${uploadCandidates.length} équipements. Continuer ?`,
-    )) return;
+    if (!uploadScopeIsComplete || technicalDocumentFiles.length === 0) return;
     setIsUploadingTechnicalDocument(true);
     setTechnicalDocumentFeedback('');
     try {
-      const failedUploads: string[] = [];
+      const failedFiles: string[] = [];
       let successCount = 0;
 
-      // A technical document belongs to an equipment in the API.  Upload it for
-      // every equipment matching the selected filters, including "all models".
+      // A document is stored once in the technical catalog, then found through
+      // its domain, type, manufacturer and optional model.
       for (const file of technicalDocumentFiles) {
         try {
           const content = await fileToBase64(file);
-          for (const equipment of uploadCandidates) {
-            try {
-              await documentsTechniques.upload(Number(equipment.id), file.name, content);
-              successCount += 1;
-            } catch {
-              failedUploads.push(`${file.name} — ${equipment.nom || equipment.numSerie || `équipement #${equipment.id}`}`);
-            }
-          }
+          await documentsTechniques.upload({
+            nomFichier: file.name,
+            contenuBase64: content,
+            domaine: uploadDocDomaine,
+            typeEquipement: uploadDocType,
+            fabricant: uploadDocFabricant,
+            modele: uploadDocModele === 'Tous' ? '' : uploadDocModele,
+          });
+          successCount += 1;
         } catch {
-          failedUploads.push(file.name);
+          failedFiles.push(file.name);
         }
       }
 
-      const totalUploads = technicalDocumentFiles.length * uploadCandidates.length;
-      if (failedUploads.length > 0) {
-        const failureSummary = failedUploads.slice(0, 3).join(', ');
-        const remainingFailures = failedUploads.length > 3 ? ` (+${failedUploads.length - 3})` : '';
-        setTechnicalDocumentFeedback(`⚠ ${successCount}/${totalUploads} ajout(s) réussi(s). Échec pour : ${failureSummary}${remainingFailures}.`);
+      if (failedFiles.length > 0) {
+        const failureSummary = failedFiles.slice(0, 3).join(', ');
+        const remainingFailures = failedFiles.length > 3 ? ` (+${failedFiles.length - 3})` : '';
+        setTechnicalDocumentFeedback(`⚠ ${successCount}/${technicalDocumentFiles.length} document(s) ajouté(s). Échec pour : ${failureSummary}${remainingFailures}.`);
       } else {
-        setTechnicalDocumentFeedback(`✓ ${technicalDocumentFiles.length} document(s) ajouté(s) à ${uploadCandidates.length} équipement(s).`);
+        const modelLabel = uploadDocModele === 'Tous' ? 'tous les modèles' : uploadDocModele;
+        setTechnicalDocumentFeedback(`✓ ${technicalDocumentFiles.length} document(s) ajouté(s) pour ${uploadDocDomaine} · ${uploadDocType} · ${uploadDocFabricant} · ${modelLabel}.`);
       }
       if (successCount > 0) resetTechnicalDocumentUpload();
       await loadDocs();
@@ -1187,7 +1197,7 @@ export default function EquipementsPage() {
 
   const handleDeleteDoc = async (documents: DocTechnique[]) => {
     const label = documents.length > 1
-      ? `Supprimer ce document de ${documents.length} équipements ?`
+      ? `Supprimer ces ${documents.length} documents techniques ?`
       : 'Supprimer ce document ?';
     if (!confirm(label)) return;
     try { await Promise.all(documents.map(doc => documentsTechniques.delete(doc.id))); await loadDocs(); }
@@ -1267,10 +1277,11 @@ export default function EquipementsPage() {
 
   const filteredDocs = useMemo(() => docs.filter(doc => {
     const equipment = documentEquipment(doc);
-    if (docFilterDomaine !== 'Tous' && filterLabelKey(equipment?.domaine || '') !== filterLabelKey(docFilterDomaine)) return false;
+    const domaine = doc.domaine || equipment?.domaine || '';
+    if (docFilterDomaine !== 'Tous' && filterLabelKey(domaine) !== filterLabelKey(docFilterDomaine)) return false;
     if (docFilterType !== 'Tous' && filterLabelKey(doc.equipement_type) !== filterLabelKey(docFilterType)) return false;
     if (docFilterFabricant !== 'Tous' && filterLabelKey(doc.fabricant) !== filterLabelKey(docFilterFabricant)) return false;
-    if (docFilterModele !== 'Tous' && filterLabelKey(doc.modele) !== filterLabelKey(docFilterModele)) return false;
+    if (docFilterModele !== 'Tous' && doc.modele && filterLabelKey(doc.modele) !== filterLabelKey(docFilterModele)) return false;
     if (docSearch && !doc.nom_fichier.toLowerCase().includes(docSearch.toLowerCase()) &&
         !doc.equipement_nom?.toLowerCase().includes(docSearch.toLowerCase()) &&
         !doc.fabricant?.toLowerCase().includes(docSearch.toLowerCase()) &&
@@ -1278,12 +1289,11 @@ export default function EquipementsPage() {
     return true;
   }), [docs, docFilterDomaine, docFilterType, docFilterFabricant, docFilterModele, docSearch, documentEquipment]);
 
-  // The API stores one association per equipment.  Group documents uploaded in
-  // the same minute with the same technical characteristics into one table row.
+  // Group legacy duplicates that share the same file and classification.
   const groupedDocs = useMemo<TechnicalDocumentGroup[]>(() => {
     const groups = new Map<string, TechnicalDocumentGroup>();
     filteredDocs.forEach(doc => {
-      const domaine = documentEquipment(doc)?.domaine || '';
+      const domaine = doc.domaine || documentEquipment(doc)?.domaine || '';
       const uploadedMinute = doc.date_ajout ? new Date(doc.date_ajout).toISOString().slice(0, 16) : '';
       const key = [doc.nom_fichier, domaine, doc.equipement_type, doc.fabricant, doc.modele, uploadedMinute].join('\u0001');
       const group = groups.get(key);
@@ -2686,12 +2696,10 @@ export default function EquipementsPage() {
                   </select>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${uploadScopeIsComplete && uploadCandidates.length > 0 ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-amber-500/20 bg-amber-500/10 text-amber-400'}`}>
+                  <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${uploadScopeIsComplete ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-amber-500/20 bg-amber-500/10 text-amber-400'}`}>
                     {!uploadScopeIsComplete
                       ? 'Sélectionnez le domaine, le type et le fabricant. « Tous les modèles » reste autorisé.'
-                      : uploadCandidates.length === 0
-                        ? 'Aucun équipement ne correspond à ces filtres.'
-                        : `Le document sera ajouté à ${uploadCandidates.length} équipement(s) correspondant aux filtres.`}
+                      : `Le document sera enregistré une seule fois pour : ${uploadDocDomaine} · ${uploadDocType} · ${uploadDocFabricant} · ${uploadDocModele === 'Tous' ? 'tous les modèles' : uploadDocModele}.`}
                   </div>
                   <input ref={technicalDocumentInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx" className="hidden" onChange={e => selectTechnicalDocuments(e.target.files)} />
                   <div className="flex items-center gap-3 rounded-lg border border-savia-border bg-savia-bg/50 px-4 py-2 min-h-[46px]">
@@ -2699,7 +2707,7 @@ export default function EquipementsPage() {
                     <span className="truncate text-sm text-savia-text-muted">{technicalDocumentFiles.length === 0 ? 'Aucun fichier choisi' : technicalDocumentFiles.length === 1 ? technicalDocumentFiles[0].name : `${technicalDocumentFiles.length} fichiers sélectionnés`}</span>
                   </div>
                 </div>
-                <button onClick={handleTechnicalDocumentUpload} disabled={!uploadScopeIsComplete || uploadCandidates.length === 0 || technicalDocumentFiles.length === 0 || isUploadingTechnicalDocument} className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onClick={handleTechnicalDocumentUpload} disabled={!uploadScopeIsComplete || technicalDocumentFiles.length === 0 || isUploadingTechnicalDocument} className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                   {isUploadingTechnicalDocument ? 'Envoi des documents…' : 'Ajouter les documents techniques'}
                 </button>
               </div>
@@ -2768,7 +2776,7 @@ export default function EquipementsPage() {
                           <span className="px-2 py-0.5 rounded-full text-xs bg-savia-accent/10 text-savia-accent border border-savia-accent/20">{doc.equipement_type}</span>
                         </td>
                         <td className="px-4 py-3 text-savia-text">{doc.fabricant || '—'}</td>
-                        <td className="px-4 py-3 text-savia-text">{doc.modele || '—'}</td>
+                        <td className="px-4 py-3 text-savia-text">{doc.modele || 'Tous les modèles'}</td>
                         <td className="px-4 py-3 text-savia-text-dim text-xs">
                           {doc.date_ajout ? new Date(doc.date_ajout).toLocaleDateString('fr-FR') : 'N/A'}
                         </td>
