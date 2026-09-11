@@ -250,6 +250,8 @@ export default function EquipementsPage() {
   const [technicalDocumentFiles, setTechnicalDocumentFiles] = useState<File[]>([]);
   const [technicalDocumentFeedback, setTechnicalDocumentFeedback] = useState('');
   const [isUploadingTechnicalDocument, setIsUploadingTechnicalDocument] = useState(false);
+  const [isDeletingFilteredDocs, setIsDeletingFilteredDocs] = useState(false);
+  const [bulkDeleteFeedback, setBulkDeleteFeedback] = useState('');
 
   // Form state
   const emptyForm = {
@@ -545,12 +547,18 @@ export default function EquipementsPage() {
       && (docFilterFabricant === 'Tous' || filterLabelKey(item.fabricant) === filterLabelKey(docFilterFabricant)))
     .map(item => item.modele))], [documentFilterRecords, docFilterDomaine, docFilterType, docFilterFabricant]);
 
-  const uploadCandidates = useMemo(() => data.filter(equipment => (
-    (uploadDocDomaine === 'Tous' || equipment.domaine === uploadDocDomaine)
-    && (uploadDocType === 'Tous' || equipment.type === uploadDocType)
-    && (uploadDocFabricant === 'Tous' || equipment.marque === uploadDocFabricant)
-    && (uploadDocModele === 'Tous' || equipment.modele === uploadDocModele)
-  )), [data, uploadDocDomaine, uploadDocType, uploadDocFabricant, uploadDocModele]);
+  const uploadScopeIsComplete = uploadDocDomaine !== 'Tous'
+    && uploadDocType !== 'Tous'
+    && uploadDocFabricant !== 'Tous';
+  const uploadCandidates = useMemo(() => {
+    if (!uploadScopeIsComplete) return [];
+    return data.filter(equipment => (
+      equipment.domaine === uploadDocDomaine
+      && equipment.type === uploadDocType
+      && equipment.marque === uploadDocFabricant
+      && (uploadDocModele === 'Tous' || equipment.modele === uploadDocModele)
+    ));
+  }, [data, uploadScopeIsComplete, uploadDocDomaine, uploadDocType, uploadDocFabricant, uploadDocModele]);
   const uploadDomainOptions = useMemo(() => uniqueFilterLabels(data.map(item => item.domaine)), [data]);
   const uploadTypeOptions = useMemo(() => uniqueFilterLabels(data
     .filter(item => uploadDocDomaine === 'Tous' || item.domaine === uploadDocDomaine).map(item => item.type)), [data, uploadDocDomaine]);
@@ -1120,7 +1128,10 @@ export default function EquipementsPage() {
   };
 
   const handleTechnicalDocumentUpload = async () => {
-    if (uploadCandidates.length === 0 || technicalDocumentFiles.length === 0) return;
+    if (!uploadScopeIsComplete || uploadCandidates.length === 0 || technicalDocumentFiles.length === 0) return;
+    if (uploadCandidates.length > 1 && !window.confirm(
+      `${technicalDocumentFiles.length} document(s) seront ajoutés à ${uploadCandidates.length} équipements. Continuer ?`,
+    )) return;
     setIsUploadingTechnicalDocument(true);
     setTechnicalDocumentFeedback('');
     try {
@@ -1281,6 +1292,45 @@ export default function EquipementsPage() {
     });
     return Array.from(groups.values());
   }, [filteredDocs, documentEquipment]);
+
+  const hasDocumentDeleteScope = Boolean(
+    docSearch.trim()
+    || docFilterDomaine !== 'Tous'
+    || docFilterType !== 'Tous'
+    || docFilterFabricant !== 'Tous'
+    || docFilterModele !== 'Tous',
+  );
+
+  const handleBulkDeleteDocs = async () => {
+    if (user?.role !== 'Admin' || !hasDocumentDeleteScope || filteredDocs.length === 0) return;
+    const confirmed = window.confirm(
+      `Supprimer définitivement ${filteredDocs.length} document(s) correspondant aux filtres actuels ?\n\nLes fichiers seront aussi supprimés du stockage sécurisé. Cette action est irréversible.`,
+    );
+    if (!confirmed) return;
+
+    setIsDeletingFilteredDocs(true);
+    setBulkDeleteFeedback(`Suppression de ${filteredDocs.length} document(s)…`);
+    let deletedCount = 0;
+    const failedDocuments: string[] = [];
+
+    for (const doc of filteredDocs) {
+      try {
+        await documentsTechniques.delete(doc.id);
+        deletedCount += 1;
+        if (deletedCount % 10 === 0) setBulkDeleteFeedback(`Suppression en cours : ${deletedCount}/${filteredDocs.length} document(s)…`);
+      } catch {
+        failedDocuments.push(doc.nom_fichier || `document #${doc.id}`);
+      }
+    }
+
+    if (failedDocuments.length === 0) {
+      setBulkDeleteFeedback(`✓ ${deletedCount} document(s) supprimé(s), y compris les fichiers stockés.`);
+    } else {
+      setBulkDeleteFeedback(`⚠ ${deletedCount}/${filteredDocs.length} document(s) supprimé(s). Échec pour : ${failedDocuments.slice(0, 3).join(', ')}${failedDocuments.length > 3 ? ` (+${failedDocuments.length - 3})` : ''}.`);
+    }
+    await loadDocs();
+    setIsDeletingFilteredDocs(false);
+  };
 
   const totalEquip = data.length;
   const operationnel = data.filter(e => e.statut.toLowerCase().includes('actif') || e.statut.toLowerCase().includes('opérationnel')).length;
@@ -2636,10 +2686,12 @@ export default function EquipementsPage() {
                   </select>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${uploadCandidates.length > 0 ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-red-500/20 bg-red-500/10 text-red-400'}`}>
-                    {uploadCandidates.length === 0
-                      ? 'Aucun équipement ne correspond à ces filtres.'
-                      : `Le document sera ajouté à ${uploadCandidates.length} équipement(s) correspondant aux filtres.`}
+                  <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${uploadScopeIsComplete && uploadCandidates.length > 0 ? 'border-green-500/20 bg-green-500/10 text-green-400' : 'border-amber-500/20 bg-amber-500/10 text-amber-400'}`}>
+                    {!uploadScopeIsComplete
+                      ? 'Sélectionnez le domaine, le type et le fabricant. « Tous les modèles » reste autorisé.'
+                      : uploadCandidates.length === 0
+                        ? 'Aucun équipement ne correspond à ces filtres.'
+                        : `Le document sera ajouté à ${uploadCandidates.length} équipement(s) correspondant aux filtres.`}
                   </div>
                   <input ref={technicalDocumentInputRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx" className="hidden" onChange={e => selectTechnicalDocuments(e.target.files)} />
                   <div className="flex items-center gap-3 rounded-lg border border-savia-border bg-savia-bg/50 px-4 py-2 min-h-[46px]">
@@ -2647,7 +2699,7 @@ export default function EquipementsPage() {
                     <span className="truncate text-sm text-savia-text-muted">{technicalDocumentFiles.length === 0 ? 'Aucun fichier choisi' : technicalDocumentFiles.length === 1 ? technicalDocumentFiles[0].name : `${technicalDocumentFiles.length} fichiers sélectionnés`}</span>
                   </div>
                 </div>
-                <button onClick={handleTechnicalDocumentUpload} disabled={uploadCandidates.length === 0 || technicalDocumentFiles.length === 0 || isUploadingTechnicalDocument} className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onClick={handleTechnicalDocumentUpload} disabled={!uploadScopeIsComplete || uploadCandidates.length === 0 || technicalDocumentFiles.length === 0 || isUploadingTechnicalDocument} className="w-full py-2.5 rounded-lg font-bold text-savia-text bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
                   {isUploadingTechnicalDocument ? 'Envoi des documents…' : 'Ajouter les documents techniques'}
                 </button>
               </div>
@@ -2666,6 +2718,21 @@ export default function EquipementsPage() {
             <select value={docFilterFabricant} onChange={e => { setDocFilterFabricant(e.target.value); setDocFilterModele('Tous'); }} className={INPUT_CLS}><option value="Tous">Tous les fabricants</option>{docFabricantOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
             <select value={docFilterModele} onChange={e => setDocFilterModele(e.target.value)} className={INPUT_CLS}><option value="Tous">Tous les modèles</option>{docModeleOptions.filter(value => value !== 'Tous').map(value => <option key={value} value={value}>{value}</option>)}</select>
           </div>
+          {user?.role === 'Admin' && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-savia-text-dim">La suppression groupée nécessite au moins une recherche ou un filtre.</p>
+              <button
+                type="button"
+                onClick={handleBulkDeleteDocs}
+                disabled={!hasDocumentDeleteScope || filteredDocs.length === 0 || isDeletingFilteredDocs}
+                className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isDeletingFilteredDocs ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {isDeletingFilteredDocs ? 'Suppression en cours…' : `Supprimer les ${filteredDocs.length} documents trouvés`}
+              </button>
+            </div>
+          )}
+          {bulkDeleteFeedback && <div className={`mt-3 rounded-lg p-3 text-sm font-semibold ${bulkDeleteFeedback.startsWith('✓') ? 'bg-green-500/10 text-green-400' : bulkDeleteFeedback.startsWith('⚠') ? 'bg-amber-500/10 text-amber-400' : 'bg-savia-accent/10 text-savia-accent'}`}>{bulkDeleteFeedback}</div>}
 
           <div className="glass rounded-xl overflow-hidden">
             {docsLoading ? (
