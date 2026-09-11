@@ -1144,8 +1144,15 @@ export default function ContratsPage() {
                   </span>
                 </div>
               </div>
-              {c.conditions && (
-                <p className="text-xs text-savia-text-muted mt-2 italic border-l-2 border-savia-border pl-2 line-clamp-2">{c.conditions}</p>
+              {(c.conditions || c.notes) && (
+                <div className="mt-2 space-y-1.5 border-l-2 border-savia-border pl-2 text-xs text-savia-text-muted">
+                  {c.conditions && (
+                    <p className="font-bold line-clamp-2"><span className="font-semibold">Conditions : </span>{c.conditions}</p>
+                  )}
+                  {c.notes && (
+                    <p className="italic line-clamp-2"><span className="font-semibold not-italic">Notes : </span>{c.notes}</p>
+                  )}
+                </div>
               )}
               {/* Action buttons */}
               <div className="flex items-center gap-2 mt-3 pt-2 border-t border-savia-border/40">
@@ -1357,14 +1364,14 @@ export default function ContratsPage() {
                 {c.conditions && (
                   <div className="bg-savia-surface-hover/40 rounded-xl p-4">
                     <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><ShieldCheck className="w-3.5 h-3.5 text-savia-accent" /> Conditions contractuelles</p>
-                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap">{c.conditions}</p>
+                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap font-bold">{c.conditions}</p>
                   </div>
                 )}
                 {/* Notes */}
                 {c.notes && (
                   <div className="bg-savia-surface-hover/40 rounded-xl p-4">
                     <p className="text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2"><StickyNote className="w-3.5 h-3.5 text-savia-accent" /> Notes internes</p>
-                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap">{c.notes}</p>
+                    <p className="text-sm text-savia-text leading-relaxed whitespace-pre-wrap italic">{c.notes}</p>
                   </div>
                 )}
               </div>
