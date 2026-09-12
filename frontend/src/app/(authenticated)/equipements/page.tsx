@@ -1184,14 +1184,16 @@ export default function EquipementsPage() {
     }
   };
 
-  const handleDownloadDoc = async (doc: DocTechnique) => {
-    try {
-      const result = await documentsTechniques.download(doc.id);
-      downloadBlob(result.blob, result.filename || doc.nom_fichier || 'document');
-    } catch (err: any) {
-      console.error("Download failed", err);
-      alert(`Impossible de télécharger le document : ${err?.message || 'erreur inconnue'}`);
-    }
+  const handleDownloadDoc = (doc: DocTechnique) => {
+    // Let the browser stream the attachment directly.  Fetching it first
+    // would buffer the complete file in JavaScript before starting a download.
+    const link = document.createElement('a');
+    link.href = `/api/documents-techniques/download/${encodeURIComponent(String(doc.id))}`;
+    link.download = doc.nom_fichier || 'document';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   };
 
   const handleDeleteDoc = async (documents: DocTechnique[]) => {

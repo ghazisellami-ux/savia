@@ -238,24 +238,6 @@ export const documentsTechniques = {
       },
       timeoutMs: 120000,
     }),
-  download: async (docId: number) => {
-    const res = await fetch(`/api/documents-techniques/download/${docId}`, {
-      credentials: 'same-origin',
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new ApiError(data.error || data.detail || `HTTP ${res.status}`, res.status);
-    }
-    const blob = await res.blob();
-    if (blob.size === 0) throw new ApiError('Le document téléchargé est vide', 500);
-    const disposition = res.headers.get('Content-Disposition') || '';
-    const utf8Name = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-    let filename = '';
-    try { filename = utf8Name ? decodeURIComponent(utf8Name) : (plainName || ''); }
-    catch { filename = plainName || ''; }
-    return { blob, filename };
-  },
   delete: (docId: number) => request<{ok: boolean}>(`/api/documents-techniques/${docId}`, { method: 'DELETE' }),
 };
 
