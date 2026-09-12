@@ -1187,12 +1187,11 @@ export default function EquipementsPage() {
   const handleDownloadDoc = async (doc: DocTechnique) => {
     try {
       const result = await documentsTechniques.download(doc.id);
-      const byteChars = atob(result.contenu_base64);
-      const byteArray = new Uint8Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
-      const blob = new Blob([byteArray], { type: 'application/octet-stream' });
-      downloadBlob(blob, result.nom_fichier || doc.nom_fichier);
-    } catch (err) { console.error("Download failed", err); }
+      downloadBlob(result.blob, result.filename || doc.nom_fichier || 'document');
+    } catch (err: any) {
+      console.error("Download failed", err);
+      alert(`Impossible de télécharger le document : ${err?.message || 'erreur inconnue'}`);
+    }
   };
 
   const handleDeleteDoc = async (documents: DocTechnique[]) => {

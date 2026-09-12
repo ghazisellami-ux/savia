@@ -1,6 +1,6 @@
 """Equipment, catalogue, and technical-document routes."""
 
-import base64
+from urllib.parse import quote
 
 from api.runtime import (
     Body,
@@ -8,6 +8,7 @@ from api.runtime import (
     HTTPException,
     Optional,
     Query,
+    Response,
     ajouter_equipement,
     ajouter_fabricant,
     ajouter_type_equipement_custom,
@@ -729,7 +730,7 @@ def get_documents_by_equipment(equip_id: int, user: dict = Depends(_verify_token
 
 @app.get("/api/documents-techniques/download/{doc_id}")
 def download_document(doc_id: int, user: dict = Depends(_verify_token)):
-    """Download a specific technical document (returns base64 content)."""
+    """Download a specific technical document as a binary attachment."""
     from db_engine import lire_document_technique_contenu
     with get_db() as conn:
         assert_resource_client_access(conn, "document_technique", doc_id, user)
@@ -740,10 +741,23 @@ def download_document(doc_id: int, user: dict = Depends(_verify_token)):
         if not stored:
             raise HTTPException(status_code=503, detail="Le stockage sécurisé des fichiers est momentanément indisponible")
         content, _ = stored
-        return {
-            "contenu_base64": base64.b64encode(content).decode("ascii"),
-            "nom_fichier": doc["nom_fichier"],
-        }
+        filename = str(doc.get("nom_fichier") or "document")
+        ascii_filename = "".join(
+            char if char.isascii() and (char.isalnum() or char in "._- ") else "_"
+            for char in filename
+        ) or "document"
+        return Response(
+            content=content,
+            media_type=doc.get("content_type") or "application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{ascii_filename}"; '
+                    f"filename*=UTF-8''{quote(filename)}"
+                ),
+                "Content-Length": str(len(content)),
+                "Cache-Control": "no-store",
+            },
+        )
     if not doc:
         raise HTTPException(status_code=404, detail="Document non trouvé")
     return doc
