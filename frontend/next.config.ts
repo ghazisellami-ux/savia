@@ -20,6 +20,13 @@ const contentSecurityPolicy = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  experimental: {
+    // Documents techniques are sent as JSON/base64 through the rewrite below.
+    // A 20 MiB file therefore occupies about 26.7 MiB in transit.  Keep the
+    // proxy allowance just above that transport size; the Python API remains
+    // the authority that enforces the real 20 MiB file limit.
+    proxyClientMaxBodySize: '28mb',
+  },
   // Proxy API requests to the Python backend
   async rewrites() {
     return [
