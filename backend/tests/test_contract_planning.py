@@ -55,7 +55,7 @@ def test_non_planning_change_does_not_replan_contract_visits():
     assert not contract_planning_settings_changed(existing, ["Respirateur"], updated)
 
 
-def test_historical_contract_starts_after_the_last_maintenance():
+def test_historical_contract_keeps_the_first_overdue_visit_after_last_maintenance():
     result = _next_contract_maintenance_date(
         date(2025, 11, 1),
         date(2027, 9, 30),
@@ -64,7 +64,7 @@ def test_historical_contract_starts_after_the_last_maintenance():
         today=date(2026, 9, 8),
     )
 
-    assert result == date(2026, 12, 1)
+    assert result == date(2026, 9, 1)
 
 
 def test_recent_historical_anchor_is_shown_as_completed_visit():
@@ -81,7 +81,7 @@ def test_old_historical_anchor_is_not_added_to_the_planning():
     )
 
 
-def test_past_automatic_visits_are_not_generated_without_an_anchor():
+def test_first_overdue_automatic_visit_is_kept_in_the_planning():
     result = _next_contract_maintenance_date(
         date(2025, 11, 1),
         date(2027, 9, 30),
@@ -89,4 +89,16 @@ def test_past_automatic_visits_are_not_generated_without_an_anchor():
         today=date(2026, 9, 8),
     )
 
-    assert result == date(2026, 11, 1)
+    assert result == date(2025, 11, 1)
+
+
+def test_next_visit_after_last_maintenance_is_kept_when_overdue():
+    result = _next_contract_maintenance_date(
+        date(2026, 3, 3),
+        date(2027, 1, 25),
+        relativedelta(months=6),
+        date_derniere=date(2026, 3, 3),
+        today=date(2026, 9, 16),
+    )
+
+    assert result == date(2026, 9, 3)

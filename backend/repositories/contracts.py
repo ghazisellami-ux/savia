@@ -355,11 +355,14 @@ def ajouter_contrat(contrat_dict):
 
 
 def _next_contract_maintenance_date(date_premiere, date_fin, delta, *, date_derniere=None, today=None):
-    """Return the first non-past date to plan, preserving a future first visit."""
-    today = today or date.today()
+    """Return the next contractual due date, including an overdue visit.
+
+    A missed maintenance must remain visible as overdue. Advancing through
+    every past date would silently discard the first outstanding visit and
+    could leave a contract with no planning row when its next cycle exceeds
+    the contract end date.
+    """
     current_date = date_derniere + delta if date_derniere else date_premiere
-    while current_date < today:
-        current_date += delta
     return current_date if current_date <= date_fin else None
 
 
@@ -489,7 +492,8 @@ def generer_planning_from_contrat(contrat_id):
             
             try:
                 equipements_rows = conn.execute(
-                    f"""SELECT e.nom as equipement_nom FROM contrats_equipements ce
+                    f"""SELECT e.id AS equipement_id, e.nom AS equipement_nom
+                        FROM contrats_equipements ce
                         JOIN equipements e ON ce.equipement_id = e.id
                         WHERE ce.contrat_id = {ph}
                         ORDER BY ce.id""",
@@ -497,7 +501,13 @@ def generer_planning_from_contrat(contrat_id):
                 ).fetchall()
                 
                 if equipements_rows:
-                    equipements = [dict(row)["equipement_nom"] for row in equipements_rows]
+                    equipements = [
+                        {
+                            "id": int(dict(row)["equipement_id"]),
+                            "nom": dict(row)["equipement_nom"],
+                        }
+                        for row in equipements_rows
+                    ]
                     logger.debug(f"Retrieved {len(equipements)} equipment(s) for planning generation")
             except Exception as e:
                 logger.error(f"Error retrieving equipements for planning generation: {e}")
@@ -530,7 +540,9 @@ def generer_planning_from_contrat(contrat_id):
             count = 0
 
             # Générer planning pour CHAQUE équipement
-            for equipement in equipements:
+            for equipment in equipements:
+                equipement_id = equipment["id"]
+                equipement = equipment["nom"]
                 if not equipement:
                     logger.warning(f"generer_planning: Skipping empty equipement name for contrat #{contrat_id}")
                     continue
@@ -542,19 +554,20 @@ def generer_planning_from_contrat(contrat_id):
                     try:
                         existing_anchor = conn.execute(
                             f"""SELECT 1 FROM planning_maintenance
-                                WHERE contrat_id = {ph} AND machine = {ph} AND date_prevue = {ph}
+                                WHERE contrat_id = {ph} AND equipement_id = {ph} AND date_prevue = {ph}
                                   AND notes LIKE {ph}
                                 LIMIT 1""",
-                            (contrat_id, equipement, date_derniere.isoformat(), "%[Ancre historique SAVIA]%"),
+                            (contrat_id, equipement_id, date_derniere.isoformat(), "%[Ancre historique SAVIA]%"),
                         ).fetchone()
                         if not existing_anchor:
                             conn.execute(f"""
                                 INSERT INTO planning_maintenance
-                                    (machine, client, type_maintenance, description,
+                                    (machine, equipement_id, client, type_maintenance, description,
                                      date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
-                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                             """, (
                                 equipement,
+                                equipement_id,
                                 client,
                                 "Préventive",
                                 f"MP Contrat #{contrat_id} — {equipement}",
@@ -577,11 +590,12 @@ def generer_planning_from_contrat(contrat_id):
                     try:
                         conn.execute(f"""
                             INSERT INTO planning_maintenance
-                                (machine, client, type_maintenance, description,
+                                (machine, equipement_id, client, type_maintenance, description,
                                  date_prevue, technicien_assigne, recurrence, contrat_id, statut, notes)
-                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                         """, (
                             equipement,
+                            equipement_id,
                             client,
                             "Préventive",
                             f"MP Contrat #{contrat_id} — {equipement}",
