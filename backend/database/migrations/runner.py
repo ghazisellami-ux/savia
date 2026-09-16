@@ -1050,8 +1050,14 @@ def _migration_028_equipment_identity_and_exact_dedup(conn) -> None:
            FROM contrats_equipements ce
            JOIN equipment_dedup_map m ON m.duplicate_id = ce.equipement_id
            WHERE m.duplicate_id <> m.canonical_id
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM contrats_equipements existing
+                 WHERE existing.contrat_id = ce.contrat_id
+                   AND existing.equipement_id = m.canonical_id
+             )
            GROUP BY ce.contrat_id, m.canonical_id
-           ON CONFLICT (contrat_id, equipement_id) DO NOTHING"""
+           """
     )
     conn.execute(
         """DELETE FROM contrats_equipements ce
