@@ -730,14 +730,14 @@ def update_planning_status(planning_id: int, body: dict, user: dict = Depends(_v
 @app.put("/api/planning/{planning_id}/reschedule")
 def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_verify_token)):
     """Reschedule an intervention (change date and/or technicians).
-    Only Admin and Manager can perform this action.
+    Admin, Manager, and Responsable Technique can perform this action.
     Creates a greyed-out "Décalé" entry at the old date for audit trail.
     """
-    # Check authorization (Admin or Manager only)
-    if user.get("role") not in ["Admin", "Manager"]:
+    # Check authorization for planning assignment and rescheduling.
+    if user.get("role") not in ["Admin", "Manager", "Responsable Technique"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Admin and Manager can reschedule interventions"
+            detail="Seuls les Admins, Managers et Responsables Techniques peuvent assigner ou décaler une intervention"
         )
     
     ph = "%s"  # PostgreSQL placeholder

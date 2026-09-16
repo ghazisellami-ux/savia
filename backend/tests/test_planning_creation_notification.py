@@ -90,3 +90,21 @@ def test_delete_planning_rejects_a_contract_generated_entry(monkeypatch):
 
     assert error.value.status_code == 400
     assert "contrat de maintenance" in error.value.detail
+
+
+@pytest.mark.parametrize("role", ["Admin", "Manager", "Responsable Technique"])
+def test_planning_assignment_and_reschedule_roles_are_authorized(role):
+    with pytest.raises(HTTPException) as error:
+        # The request is intentionally incomplete so the test stops after the
+        # role check without opening a database connection.
+        planning.reschedule_planning(73, {}, user={"role": role, "sub": "planner"})
+
+    assert error.value.status_code == 400
+    assert "date_planifiee" in error.value.detail
+
+
+def test_technician_cannot_assign_or_reschedule_from_planning():
+    with pytest.raises(HTTPException) as error:
+        planning.reschedule_planning(73, {}, user={"role": "Technicien", "sub": "tech"})
+
+    assert error.value.status_code == 403

@@ -1258,9 +1258,9 @@ export default function PlanningPage() {
                     )}
                     
                     {/* Action buttons for planning managers */}
-                    {(((user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev)) || (canCreate && !ev.contrat_id && !ev.is_ghost && !isHistoricalAnchor(ev))) && (
+                    {((canCreate && canReschedule(ev)) || (canCreate && !ev.contrat_id && !ev.is_ghost && !isHistoricalAnchor(ev))) && (
                       <div className="flex items-center gap-2 pt-2 border-t border-savia-border">
-                        {(user?.role === 'Admin' || user?.role === 'Manager') && canReschedule(ev) && (
+                        {canCreate && canReschedule(ev) && (
                           <button
                             onClick={() => handleOpenReschedule(ev)}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-savia-accent bg-savia-accent/10 hover:bg-savia-accent/20 border border-savia-accent/30 transition-all cursor-pointer flex-1"
