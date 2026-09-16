@@ -925,6 +925,152 @@ def _migration_027_technical_document_catalog(conn) -> None:
     )
 
 
+def _migration_028_equipment_identity_and_exact_dedup(conn) -> None:
+    """Use equipment IDs and remove only exact duplicate equipment rows.
+
+    Equipment names are not unique: two real devices can share a model/name.
+    The cleanup therefore fingerprints the complete business record and only
+    merges byte-for-byte equivalent records. All known references are moved to
+    the lowest surviving ID before the duplicate row is deleted.
+    """
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS equipement_id INTEGER")
+    conn.execute("ALTER TABLE demandes_intervention ADD COLUMN IF NOT EXISTS equipement_id INTEGER")
+    conn.execute("ALTER TABLE planning_maintenance ADD COLUMN IF NOT EXISTS equipement_id INTEGER")
+
+    for table, constraint in (
+        ("interventions", "interventions_equipement_id_fkey"),
+        ("demandes_intervention", "demandes_intervention_equipement_id_fkey"),
+        ("planning_maintenance", "planning_maintenance_equipement_id_fkey"),
+    ):
+        conn.execute(
+            f"""DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = '{constraint}'
+                    ) THEN
+                        ALTER TABLE {table}
+                        ADD CONSTRAINT {constraint}
+                        FOREIGN KEY (equipement_id) REFERENCES equipements(id) ON DELETE SET NULL;
+                    END IF;
+                END $$"""
+        )
+
+    # First attach legacy rows to one deterministic equipment ID. Ambiguous
+    # same-name devices are no longer multiplied by the read query; old rows
+    # use the oldest matching ID until a future edit supplies the exact ID.
+    for table, name_column in (
+        ("interventions", "machine"),
+        ("demandes_intervention", "equipement"),
+        ("planning_maintenance", "machine"),
+    ):
+        conn.execute(
+            f"""UPDATE {table} item
+               SET equipement_id = (
+                   SELECT e.id
+                   FROM equipements e
+                   WHERE LOWER(BTRIM(e.nom)) = LOWER(BTRIM(item.{name_column}))
+                     AND (
+                         NULLIF(BTRIM(item.client), '') IS NULL
+                         OR LOWER(BTRIM(e.client)) = LOWER(BTRIM(item.client))
+                     )
+                   ORDER BY e.id
+                   LIMIT 1
+               )
+               WHERE item.equipement_id IS NULL"""
+        )
+
+    # Fingerprint only equipment business fields. IDs and creation timestamps
+    # are intentionally excluded so repeated imports can be merged safely.
+    conn.execute(
+        """CREATE TEMP TABLE equipment_dedup_map ON COMMIT DROP AS
+           WITH fingerprints AS (
+               SELECT e.id,
+                      md5(jsonb_build_object(
+                          'nom', e.nom, 'type', e.type, 'fabricant', e.fabricant,
+                          'modele', e.modele, 'num_serie', e.num_serie,
+                          'date_installation', e.date_installation,
+                          'derniere_maintenance', e.derniere_maintenance,
+                          'statut', e.statut, 'notes', e.notes, 'client', e.client,
+                          'matricule_fiscale', e.matricule_fiscale,
+                          'document_technique', e.document_technique,
+                          'domaine', e.domaine, 'est_annexe', e.est_annexe,
+                          'garantie_debut', e.garantie_debut,
+                          'garantie_duree', e.garantie_duree, 'ville', e.ville,
+                          'region', e.region, 'service', e.service,
+                          'adresse', e.adresse, 'latitude', e.latitude,
+                          'longitude', e.longitude
+                      )::text) AS fingerprint
+               FROM equipements e
+           )
+           SELECT id AS duplicate_id,
+                  MIN(id) OVER (PARTITION BY fingerprint) AS canonical_id
+           FROM fingerprints"""
+    )
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS equipements_doublons_supprimes (
+               original_id INTEGER PRIMARY KEY,
+               canonical_id INTEGER NOT NULL,
+               snapshot JSONB NOT NULL,
+               deleted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """INSERT INTO equipements_doublons_supprimes (original_id, canonical_id, snapshot)
+           SELECT m.duplicate_id, m.canonical_id, to_jsonb(e)
+           FROM equipment_dedup_map m
+           JOIN equipements e ON e.id = m.duplicate_id
+           WHERE m.duplicate_id <> m.canonical_id
+           ON CONFLICT (original_id) DO NOTHING"""
+    )
+
+    # Repoint every equipment-ID reference before deleting duplicate rows.
+    for table, column in (
+        ("interventions", "equipement_id"),
+        ("demandes_intervention", "equipement_id"),
+        ("planning_maintenance", "equipement_id"),
+        ("documents_techniques", "equipement_id"),
+        ("equipement_statut_historique", "equipement_id"),
+        ("logs_uploaded", "equipement_id"),
+        ("prediction_feedback", "equipment_id"),
+    ):
+        conn.execute(
+            f"""UPDATE {table} item
+               SET {column} = m.canonical_id
+               FROM equipment_dedup_map m
+               WHERE item.{column} = m.duplicate_id
+                 AND m.duplicate_id <> m.canonical_id"""
+        )
+
+    # The contract junction has a uniqueness constraint. Insert the canonical
+    # relation first, then remove the duplicate relation if it already exists.
+    conn.execute(
+        """INSERT INTO contrats_equipements (contrat_id, equipement_id, created_at)
+           SELECT ce.contrat_id, m.canonical_id, MIN(ce.created_at)
+           FROM contrats_equipements ce
+           JOIN equipment_dedup_map m ON m.duplicate_id = ce.equipement_id
+           WHERE m.duplicate_id <> m.canonical_id
+           GROUP BY ce.contrat_id, m.canonical_id
+           ON CONFLICT (contrat_id, equipement_id) DO NOTHING"""
+    )
+    conn.execute(
+        """DELETE FROM contrats_equipements ce
+           USING equipment_dedup_map m
+           WHERE ce.equipement_id = m.duplicate_id
+             AND m.duplicate_id <> m.canonical_id"""
+    )
+    conn.execute(
+        """DELETE FROM equipements e
+           USING equipment_dedup_map m
+           WHERE e.id = m.duplicate_id
+             AND m.duplicate_id <> m.canonical_id"""
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_interventions_equipement_id ON interventions(equipement_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_demandes_equipement_id ON demandes_intervention(equipement_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_planning_equipement_id ON planning_maintenance(equipement_id)")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     ("001", "integrity and client-scope indexes", _migration_001_integrity_and_indexes),
     ("002", "private object-storage file metadata", _migration_002_private_file_metadata),
@@ -953,6 +1099,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("025", "historical contract maintenance anchor", _migration_025_contract_historical_maintenance),
     ("026", "contract signature date", _migration_026_contract_signature_date),
     ("027", "technical document catalog classification", _migration_027_technical_document_catalog),
+    ("028", "equipment identity and exact duplicate cleanup", _migration_028_equipment_identity_and_exact_dedup),
 )
 
 

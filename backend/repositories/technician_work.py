@@ -536,7 +536,7 @@ def lire_child_interventions_for_technician(technician_name):
                    COALESCE(e.client, '') AS client,
                    i.parent_intervention_id
             FROM interventions i
-            LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+            LEFT JOIN equipements e ON e.id = i.equipement_id
             WHERE i.is_temporary = 1 AND i.technicien ILIKE %s
             ORDER BY i.date DESC
         """

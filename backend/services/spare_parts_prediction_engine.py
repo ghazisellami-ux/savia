@@ -104,7 +104,7 @@ def _intervention_rows(conn: Any) -> list[dict[str, Any]]:
                   i.date, i.planning_id, i.pieces_utilisees, i.type_intervention,
                   i.probleme, i.cause, i.solution, i.description, i.statut
            FROM interventions i
-           LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+           LEFT JOIN equipements e ON e.id = i.equipement_id
            WHERE COALESCE(i.is_temporary, 0) = 0
            ORDER BY i.date"""
     ).fetchall()
