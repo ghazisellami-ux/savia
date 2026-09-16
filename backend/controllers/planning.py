@@ -1038,10 +1038,10 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                         
                         conn.execute(
                             """INSERT INTO interventions
-                               (date, machine, technicien, type_intervention, description,
+                               (date, machine, equipement_id, technicien, type_intervention, description,
                                 statut, priorite, notes, planning_id)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (date_prevue, machine, new_technicians, type_maintenance, description,
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (date_prevue, machine, current.get("equipement_id"), new_technicians, type_maintenance, description,
                              "En cours", "Moyenne", notes, planning_id)
                         )
                         

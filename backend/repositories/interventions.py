@@ -34,7 +34,7 @@ def lire_interventions(machine=None):
         # Select only necessary columns to reduce data transfer
         # Note: start_time, end_time are TIME columns for shift tracking
         base_query = """
-            SELECT i.id, i.date, i.machine, i.technicien, i.type_intervention,
+            SELECT i.id, i.date, i.machine, i.equipement_id, i.technicien, i.type_intervention,
                    i.description, i.probleme, i.cause, i.solution,
                    i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
                    i.duree_deplacement,
@@ -50,10 +50,18 @@ def lire_interventions(machine=None):
                    COALESCE(i.fiche_validation, 'En attente') AS fiche_validation,
                    (NULLIF(i.fiche_storage_key, '') IS NOT NULL OR
                     (i.fiche_photo_data IS NOT NULL AND octet_length(i.fiche_photo_data) > 0)) AS has_fiche,
-                   COALESCE(NULLIF(i.client, ''), e.client, '') AS client
+                   COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
+                   e.nom AS equipement_nom,
+                   e.num_serie AS equipement_num_serie
             FROM interventions i
-            LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
-            LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
+            LEFT JOIN equipements e ON e.id = i.equipement_id
+            LEFT JOIN LATERAL (
+                SELECT d.id, d.date_planifiee
+                FROM demandes_intervention d
+                WHERE d.intervention_id = i.id
+                ORDER BY d.id DESC
+                LIMIT 1
+            ) d ON TRUE
             LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
             WHERE i.is_temporary = 0
         """
@@ -124,16 +132,17 @@ def ajouter_intervention(intervention_dict):
     intervention_id = None
     with get_db() as conn:
         new_intervention = conn.execute("""
-            INSERT INTO interventions (date, machine, technicien, type_intervention,
+            INSERT INTO interventions (date, machine, equipement_id, technicien, type_intervention,
                                        description, probleme, cause, solution,
                                        pieces_utilisees, cout, cout_pieces, duree_minutes,
                                        code_erreur, statut, notes, type_erreur, priorite,
                                        duree_deplacement, start_time, end_time, fiche_validation, client)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
+            intervention_dict.get("equipement_id"),
             intervention_dict.get("technicien") or "",
             intervention_dict.get("type_intervention", "Corrective"),
             intervention_dict.get("description") or "",
@@ -280,13 +289,24 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
 def ajouter_planning(planning_dict):
     """Ajoute une maintenance planifiée."""
     with get_db() as conn:
+        equipement_id = planning_dict.get("equipement_id")
+        if equipement_id in (None, "") and planning_dict.get("machine"):
+            equipment = conn.execute(
+                """SELECT id FROM equipements
+                   WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
+                     AND (%s = '' OR LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s)))
+                   ORDER BY id LIMIT 1""",
+                (planning_dict.get("machine", ""), planning_dict.get("client", ""), planning_dict.get("client", "")),
+            ).fetchone()
+            equipement_id = equipment["id"] if equipment else None
         row = conn.execute("""
-            INSERT INTO planning_maintenance (machine, client, type_maintenance, description,
+            INSERT INTO planning_maintenance (machine, equipement_id, client, type_maintenance, description,
                                               date_prevue, technicien_assigne, recurrence, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             planning_dict.get("machine", ""),
+            equipement_id,
             planning_dict.get("client", ""),
             planning_dict.get("type_maintenance", "Préventive"),
             planning_dict.get("description", ""),

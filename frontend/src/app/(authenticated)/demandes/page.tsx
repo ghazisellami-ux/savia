@@ -316,6 +316,9 @@ export default function DemandesPage() {
     const payload = {
       ...formToSend,
       date_planifiee: formToSend.date_planifiee || todayIso(),
+      ...(Number.isInteger(Number(selectedEquipmentId))
+        ? { equipement_id: Number(selectedEquipmentId) }
+        : {}),
       ...(billingSource ? { billing_case_id: billingSource.id } : {}),
     };
     setIsSaving(true);

@@ -176,7 +176,7 @@ def sync_planning_to_interventions(*, notify=True):
         today_str = today.isoformat()
         with get_db() as conn:
             planned = conn.execute(
-                """SELECT pm.id, pm.machine, pm.client, pm.technicien_assigne,
+                """SELECT pm.id, pm.machine, pm.equipement_id, pm.client, pm.technicien_assigne,
                           pm.description, pm.type_maintenance, pm.date_prevue,
                           pm.statut, pm.notes, pm.is_ghost
                    FROM planning_maintenance pm
@@ -232,10 +232,10 @@ def sync_planning_to_interventions(*, notify=True):
                 if is_new:
                     conn.execute(
                         """INSERT INTO interventions
-                           (date, machine, client, technicien, type_intervention, description, probleme,
+                           (date, machine, equipement_id, client, technicien, type_intervention, description, probleme,
                             statut, priorite, notes, planning_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (planned_date, machine, client, technicien, type_maintenance, description, probleme,
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (planned_date, machine, pm.get('equipement_id'), client, technicien, type_maintenance, description, probleme,
                          'Assignée' if is_intervention_request else 'En cours', 'Moyenne', notes, pm_id)
                     )
                     linked = conn.execute(
