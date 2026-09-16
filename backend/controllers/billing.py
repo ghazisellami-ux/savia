@@ -191,9 +191,7 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
                 LIMIT 1
             ) d ON TRUE
             LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
-            LEFT JOIN equipements e
-              ON LOWER(e.nom) = LOWER(i.machine)
-             AND LOWER(e.client) = LOWER(COALESCE(NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, '')))
+            LEFT JOIN equipements e ON e.id = i.equipement_id
             LEFT JOIN contrats c ON c.id=bc.contract_id
             {where}
             ORDER BY bc.updated_at DESC, bc.id DESC""",
@@ -314,8 +312,7 @@ def _sync_missing_intervention_cases(conn) -> None:
                SELECT i.id, d.id, COALESCE(NULLIF(i.client, ''), e.client, ''), i.machine,
                       'system', 'system'
                FROM interventions i
-               LEFT JOIN equipements e
-                 ON LOWER(e.nom) = LOWER(i.machine) AND LOWER(e.client) = LOWER(i.client)
+               LEFT JOIN equipements e ON e.id = i.equipement_id
                LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
                WHERE COALESCE(i.is_temporary, 0) = 0
                ON CONFLICT (intervention_id) DO NOTHING
@@ -420,8 +417,7 @@ def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_tok
                 """SELECT i.id, COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
                           i.machine
                    FROM interventions i
-                   LEFT JOIN equipements e
-                     ON LOWER(e.nom) = LOWER(i.machine) AND LOWER(e.client) = LOWER(i.client)
+                   LEFT JOIN equipements e ON e.id = i.equipement_id
                    WHERE i.id = %s""",
                 (intervention_id,),
             ).fetchone()
@@ -506,9 +502,7 @@ def update_billing_case(case_id: int, body: dict = Body(...), user: dict = Depen
                     """SELECT i.id, COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
                               i.machine, d.id AS request_id
                        FROM interventions i
-                       LEFT JOIN equipements e
-                         ON LOWER(e.nom) = LOWER(i.machine)
-                        AND LOWER(e.client) = LOWER(i.client)
+                       LEFT JOIN equipements e ON e.id = i.equipement_id
                        LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
                        WHERE i.id=%s""",
                     (intervention_id,),
