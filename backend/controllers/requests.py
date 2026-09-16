@@ -154,6 +154,14 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     demandeur          = body.get("demandeur") or user.get("username", "")
     client             = resolve_client_scope(user, body.get("client") or "") or ""
     equipement         = body.get("equipement") or ""
+    equipement_id      = body.get("equipement_id")
+    if equipement_id in (None, ""):
+        equipement_id = None
+    else:
+        try:
+            equipement_id = int(equipement_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Identifiant d'équipement invalide")
     priorite           = body.get("priorite") or body.get("urgence") or "Moyenne"
     urgence            = priorite
     description        = body.get("description") or ""
@@ -228,14 +236,48 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                     detail="L'équipement de la demande doit correspondre au dossier de facturation",
                 )
 
+        if equipement_id is not None:
+            equipment_row = conn.execute(
+                "SELECT id, nom, client FROM equipements WHERE id = %s",
+                (equipement_id,),
+            ).fetchone()
+            if not equipment_row:
+                raise HTTPException(status_code=404, detail="Équipement introuvable")
+            equipment_client = str(equipment_row.get("client") or "").strip()
+            if client and equipment_client and client.casefold() != equipment_client.casefold():
+                raise HTTPException(status_code=409, detail="L'équipement ne correspond pas au client sélectionné")
+            equipement = str(equipment_row.get("nom") or equipement).strip()
+            client = client or equipment_client
+        elif client.strip() and equipement.strip():
+            # Compatibility with older clients: resolve the name once and
+            # persist the selected ID so subsequent reads never join by name.
+            equipment_row = conn.execute(
+                """SELECT id, nom, client FROM equipements
+                   WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
+                     AND LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s))
+                   ORDER BY id LIMIT 1""",
+                (equipement, client),
+            ).fetchone()
+            if equipment_row:
+                equipement_id = equipment_row["id"]
+
         # One equipment cannot have two simultaneous intervention requests.
         # The transaction-scoped advisory lock also closes the race between
         # two users submitting the same request at nearly the same time.
         if client.strip() and equipement.strip():
-            duplicate_key = f"{client.strip().casefold()}::{equipement.strip().casefold()}"
+            duplicate_key = (
+                f"equipment::{equipement_id}"
+                if equipement_id is not None
+                else f"name::{client.strip().casefold()}::{equipement.strip().casefold()}"
+            )
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (duplicate_key,))
+            equipment_match = "d.equipement_id = %s" if equipement_id is not None else (
+                "LOWER(BTRIM(d.client)) = LOWER(BTRIM(%s)) "
+                "AND LOWER(BTRIM(d.equipement)) = LOWER(BTRIM(%s))"
+            )
+            equipment_params = (equipement_id,) if equipement_id is not None else (client, equipement)
             existing_request = conn.execute(
-                """SELECT d.id, d.intervention_id, d.statut,
+                f"""SELECT d.id, d.intervention_id, d.statut,
                           COALESCE(
                               (SELECT bc.id FROM billing_cases bc
                                WHERE bc.request_id = d.id ORDER BY bc.id LIMIT 1),
@@ -244,13 +286,12 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                           ) AS billing_case_id
                    FROM demandes_intervention d
                    LEFT JOIN interventions i ON i.id = d.intervention_id
-                   WHERE LOWER(BTRIM(d.client)) = LOWER(BTRIM(%s))
-                     AND LOWER(BTRIM(d.equipement)) = LOWER(BTRIM(%s))
+                   WHERE {equipment_match}
                      AND COALESCE(d.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
                      AND COALESCE(i.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
                    ORDER BY d.id DESC
                    LIMIT 1""",
-                (client, equipement),
+                equipment_params,
             ).fetchone()
             if existing_request:
                 existing_case = existing_request.get("billing_case_id")
@@ -266,14 +307,14 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         # Create the DEMAND
         new_demande = conn.execute(f"""
             INSERT INTO demandes_intervention
-              (date_demande, demandeur, client, equipement, urgence, priorite,
+              (date_demande, demandeur, client, equipement, equipement_id, urgence, priorite,
                description, code_erreur, contact_nom, contact_tel,
                statut, technicien_assigne, date_planifiee, notes_traitement, type_intervention)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             RETURNING id
         """, (
             body.get("date_demande") or now_str,
-            demandeur, client, equipement, urgence, priorite,
+            demandeur, client, equipement, equipement_id, urgence, priorite,
             description, code_erreur, contact_nom, contact_tel,
             statut, ", ".join(techniciens_fullnames), date_planifiee,  # All techs in the demand
             body.get("notes_traitement") or "",
@@ -289,12 +330,12 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         if demande_id:
             planning = conn.execute(
                 """INSERT INTO planning_maintenance
-                   (machine, client, type_maintenance, description, date_prevue,
+                   (machine, equipement_id, client, type_maintenance, description, date_prevue,
                     technicien_assigne, recurrence, statut, notes)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    equipement,
+                    equipement, equipement_id,
                     client,
                     type_intervention,
                     description,
@@ -318,13 +359,14 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         
         conn.execute(f"""
             INSERT INTO interventions
-              (date, machine, technicien, type_intervention, description,
+              (date, machine, equipement_id, technicien, type_intervention, description,
                probleme, code_erreur, statut, priorite, notes,
                is_temporary, parent_intervention_id, client, planning_id)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             now,
             equipement,
+            equipement_id,
             all_techs_str,  # Store all technician names
             type_intervention,
             description[:500],
@@ -1548,8 +1590,10 @@ def refuse_intervention(intervention_id: int, request: Request, body: dict, user
         _assert_intervention_action_access(conn, intervention_id, user)
         row = conn.execute(
             """SELECT id, machine, technicien, statut, notes,
-                      (SELECT e.client FROM equipements e WHERE LOWER(e.nom) = LOWER(interventions.machine) LIMIT 1) AS client
-               FROM interventions WHERE id = %s""",
+                      COALESCE(NULLIF(interventions.client, ''), e.client, '') AS client
+               FROM interventions
+               LEFT JOIN equipements e ON e.id = interventions.equipement_id
+               WHERE interventions.id = %s""",
             (intervention_id,)
         ).fetchone()
         if not row:

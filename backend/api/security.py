@@ -71,7 +71,7 @@ _RESOURCE_CLIENT_QUERIES = {
     "equipement": "SELECT client FROM equipements WHERE id = %s",
     "intervention": """SELECT COALESCE(NULLIF(i.client, ''), e.client, '') AS client
                          FROM interventions i
-                         LEFT JOIN equipements e ON LOWER(e.nom) = LOWER(i.machine)
+                         LEFT JOIN equipements e ON e.id = i.equipement_id
                          WHERE i.id = %s""",
     "contrat": "SELECT client FROM contrats WHERE id = %s",
     "demande": "SELECT client FROM demandes_intervention WHERE id = %s",

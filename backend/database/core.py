@@ -573,6 +573,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             machine TEXT NOT NULL,
+            equipement_id INTEGER,
             technicien TEXT DEFAULT '',
             type_intervention TEXT DEFAULT 'Corrective',
             description TEXT DEFAULT '',
@@ -662,6 +663,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS planning_maintenance (
             id SERIAL PRIMARY KEY,
             machine TEXT NOT NULL,
+            equipement_id INTEGER,
             client TEXT DEFAULT '',
             type_maintenance TEXT DEFAULT 'Préventive',
             description TEXT DEFAULT '',
@@ -1253,6 +1255,7 @@ def init_db():
             demandeur TEXT DEFAULT '',
             client TEXT DEFAULT '',
             equipement TEXT DEFAULT '',
+            equipement_id INTEGER,
             urgence TEXT DEFAULT 'Moyenne',
             description TEXT DEFAULT '',
             code_erreur TEXT DEFAULT '',

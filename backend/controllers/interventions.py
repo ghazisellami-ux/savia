@@ -403,16 +403,36 @@ def get_child_interventions_endpoint(
 def create_intervention(body: dict, user: dict = Depends(_verify_token)):
     require_roles(user, "Admin", "Manager", "Responsable Technique")
     body["client"] = resolve_client_scope(user, body.get("client")) or ""
-    if not body["client"] and body.get("machine"):
+    equipment_id = body.get("equipement_id")
+    if equipment_id not in (None, ""):
         with get_db() as conn:
-            rows = conn.execute(
-                """SELECT DISTINCT client FROM equipements
-                   WHERE LOWER(nom) = LOWER(%s)
-                     AND NULLIF(BTRIM(client), '') IS NOT NULL""",
+            try:
+                equipment_id = int(equipment_id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="Identifiant d'équipement invalide")
+            equipment = conn.execute(
+                "SELECT id, nom, client FROM equipements WHERE id = %s",
+                (equipment_id,),
+            ).fetchone()
+            if not equipment:
+                raise HTTPException(status_code=404, detail="Équipement introuvable")
+            if body.get("client") and equipment.get("client") and body["client"].casefold() != str(equipment["client"]).casefold():
+                raise HTTPException(status_code=409, detail="L'équipement ne correspond pas au client sélectionné")
+            body["machine"] = equipment["nom"]
+            body["client"] = body["client"] or equipment["client"] or ""
+        body["equipement_id"] = equipment_id
+    elif not body["client"] and body.get("machine"):
+        with get_db() as conn:
+            equipment = conn.execute(
+                """SELECT id, nom, client FROM equipements
+                   WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
+                     AND NULLIF(BTRIM(client), '') IS NOT NULL
+                   ORDER BY id""",
                 (body["machine"],),
             ).fetchall()
-        if len(rows) == 1:
-            body["client"] = rows[0]["client"]
+        if len(equipment) == 1:
+            body["equipement_id"] = equipment[0]["id"]
+            body["client"] = equipment[0]["client"] or ""
     
     # Convert technicien username to full name (nom + prenom)
     technicien_username = body.get("technicien", "")
