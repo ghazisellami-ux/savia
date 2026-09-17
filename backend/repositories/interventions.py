@@ -14,12 +14,67 @@ from repositories.equipment_status import synchroniser_statut_equipement
 __all__ = [
     "lire_interventions",
     "ajouter_intervention",
+    "InterventionAlreadyOpenError",
+    "lock_equipment_intervention_key",
+    "find_open_intervention",
     "lire_planning",
     "ajouter_planning",
     "update_planning_statut",
     "supprimer_planning",
     "reprogrammer_planning",
 ]
+
+
+CLOSED_INTERVENTION_STATUSES = (
+    "Cloturee",
+    "Clôturée",
+    "ClÃ´turÃ©e",
+    "Terminée",
+    "TerminÃ©e",
+    "Réalisée",
+    "Annulée",
+    "Annulee",
+    "Refusé",
+    "Refusee",
+    "Résolue",
+    "Resolue",
+)
+
+
+class InterventionAlreadyOpenError(ValueError):
+    """Raised when an equipment already has an open intervention."""
+
+    def __init__(self, intervention_id: int):
+        self.intervention_id = int(intervention_id)
+        super().__init__(
+            f"Une intervention est déjà ouverte #{self.intervention_id} pour cet équipement."
+        )
+
+
+def lock_equipment_intervention_key(conn, equipment_id: int) -> None:
+    """Serialize intervention creation for one equipment within the transaction."""
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (f"open-intervention-equipment::{int(equipment_id)}",),
+    )
+
+
+def find_open_intervention(conn, equipment_id: int, client: str):
+    """Return the newest open intervention for an equipment ID and client."""
+    closed_placeholders = ", ".join(["%s"] * len(CLOSED_INTERVENTION_STATUSES))
+    return conn.execute(
+        f"""
+        SELECT i.id, i.statut, i.machine, COALESCE(NULLIF(i.client, ''), e.client, '') AS client
+        FROM interventions i
+        LEFT JOIN equipements e ON e.id = i.equipement_id
+        WHERE i.equipement_id = %s
+          AND LOWER(BTRIM(COALESCE(NULLIF(i.client, ''), e.client, ''))) = LOWER(BTRIM(%s))
+          AND COALESCE(i.statut, '') NOT IN ({closed_placeholders})
+        ORDER BY i.id DESC
+        LIMIT 1
+        """,
+        (int(equipment_id), client, *CLOSED_INTERVENTION_STATUSES),
+    ).fetchone()
 
 # ==========================================
 # FONCTIONS CRUD — INTERVENTIONS
@@ -131,6 +186,15 @@ def ajouter_intervention(intervention_dict):
     """Ajoute une intervention."""
     intervention_id = None
     with get_db() as conn:
+        equipment_id = intervention_dict.get("equipement_id")
+        if equipment_id not in (None, ""):
+            equipment_id = int(equipment_id)
+            client = str(intervention_dict.get("client") or "").strip()
+            lock_equipment_intervention_key(conn, equipment_id)
+            existing = find_open_intervention(conn, equipment_id, client)
+            if existing:
+                raise InterventionAlreadyOpenError(existing["id"])
+
         new_intervention = conn.execute("""
             INSERT INTO interventions (date, machine, equipement_id, technicien, type_intervention,
                                        description, probleme, cause, solution,
@@ -142,7 +206,7 @@ def ajouter_intervention(intervention_dict):
         """, (
             intervention_dict.get("date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             intervention_dict.get("machine") or "",
-            intervention_dict.get("equipement_id"),
+            equipment_id,
             intervention_dict.get("technicien") or "",
             intervention_dict.get("type_intervention", "Corrective"),
             intervention_dict.get("description") or "",

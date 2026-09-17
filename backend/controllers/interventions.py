@@ -73,6 +73,9 @@ from services.idempotency import (
     operation_id_from_request,
     save_idempotent_response,
 )
+from repositories.interventions import (
+    InterventionAlreadyOpenError,
+)
 
 
 async def _store_fiche(upload: UploadFile, intervention_id: int, username: str) -> dict:
@@ -430,16 +433,53 @@ def create_intervention(body: dict, user: dict = Depends(_verify_token)):
                    ORDER BY id""",
                 (body["machine"],),
             ).fetchall()
+        if len(equipment) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Plusieurs équipements portent ce nom. Sélectionnez l'équipement par son identifiant.",
+            )
         if len(equipment) == 1:
             body["equipement_id"] = equipment[0]["id"]
             body["client"] = equipment[0]["client"] or ""
+    elif body.get("client") and body.get("machine"):
+        # Legacy callers may still send a name. Resolve it only when that
+        # name identifies one equipment for this client; never guess between
+        # duplicate equipment names.
+        with get_db() as conn:
+            equipment = conn.execute(
+                """
+                SELECT id, nom, client
+                FROM equipements
+                WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
+                  AND LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s))
+                ORDER BY id
+                """,
+                (body["machine"], body["client"]),
+            ).fetchall()
+        if len(equipment) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Plusieurs équipements portent ce nom pour ce client. Sélectionnez l'équipement par son identifiant.",
+            )
+        if len(equipment) == 1:
+            body["equipement_id"] = equipment[0]["id"]
+            body["machine"] = equipment[0]["nom"]
+
+    if body.get("equipement_id") not in (None, ""):
+        try:
+            body["equipement_id"] = int(body["equipement_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Identifiant d'équipement invalide")
     
     # Convert technicien username to full name (nom + prenom)
     technicien_username = body.get("technicien", "")
     if technicien_username:
         body["technicien"] = _get_technician_fullname(technicien_username)
     
-    intervention_id = ajouter_intervention(body)
+    try:
+        intervention_id = ajouter_intervention(body)
+    except InterventionAlreadyOpenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     
     # Log audit
     username = user.get("sub", "unknown")
