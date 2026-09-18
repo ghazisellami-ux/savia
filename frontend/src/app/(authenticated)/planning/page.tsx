@@ -6,7 +6,7 @@ import {
   Plus, ChevronLeft, ChevronRight, Loader2, Save, AlertTriangle,
   Calendar, Building2, Server, User, RefreshCw, FileText, StickyNote,
   Wrench, CheckCircle, Trash2, X, Scan, Activity, Microscope, Wind,
-  ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3
+  ChevronDown, Check, Download, MapPin, Stethoscope, BarChart3, Hash
 } from 'lucide-react';
 import { planning, equipements, clients as clientsApi, paysCustom as paysCustomApi, techniciens as techApi, typesIntervention } from '@/lib/api';
 import { downloadBlob } from '@/lib/download';
@@ -100,6 +100,7 @@ interface PlanItem {
   id: number;
   date_planifiee: string;
   machine: string;
+  equipement_num_serie: string;
   client: string;
   description: string;
   technicien: string;
@@ -144,7 +145,7 @@ export default function PlanningPage() {
   const [currentYear, setCurrentYear] = useState(now.getFullYear());
   const [data, setData] = useState<PlanItem[]>([]);
   const [clientsList, setClientsList] = useState<string[]>([]);
-  const [equipsAll, setEquipsAll] = useState<{nom: string; client: string; domaine: string}[]>([]);
+  const [equipsAll, setEquipsAll] = useState<{nom: string; client: string; domaine: string; numSerie: string}[]>([]);
   const [techsList, setTechsList] = useState<string[]>([]);
   const [domainesCustom, setDomainesCustom] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -261,11 +262,30 @@ export default function PlanningPage() {
         domaines_custom.list().catch(() => []),
       ]);
 
+      const equipsFlat = (eqRes as any[]).map((e: any) => ({
+        nom: e.Nom || e.nom || '',
+        client: e.Client || e.client || '',
+        domaine: e.domaine || e.Domaine || '', // Don't default to Radiologie - keep empty if not set
+        numSerie: e.NumSerie || e.num_serie || e.numero_serie || e.serial_number || '',
+      })).filter(e => e.nom);
+
+      const normalize = (value: unknown) => String(value || '').trim().toLocaleLowerCase('fr-FR');
+      const serialForPlanningItem = (item: any) => {
+        const directSerial = item.equipement_num_serie || item.num_serie || item.numero_serie || item.serial_number;
+        if (directSerial) return directSerial;
+
+        const machine = normalize(item.machine);
+        const client = normalize(item.client);
+        const equipment = equipsFlat.find(e => normalize(e.nom) === machine && (!client || normalize(e.client) === client));
+        return equipment?.numSerie || '';
+      };
+
       const mapped = (planRes as any[]).map((item: any) => ({
         id: item.id || 0,
         // La colonne BD s'appelle date_prevue, pas date_planifiee
         date_planifiee: item.date_prevue || item.date_planifiee || item.Date || '',
         machine: item.machine || '',
+        equipement_num_serie: serialForPlanningItem(item),
         client: item.client || '',
         description: item.description || '',
         technicien: item.technicien_assigne || item.technicien || '',
@@ -279,11 +299,6 @@ export default function PlanningPage() {
       }));
       setData(mapped);
 
-      const equipsFlat = (eqRes as any[]).map((e: any) => ({
-        nom: e.Nom || e.nom || '',
-        client: e.Client || e.client || '',
-        domaine: e.domaine || e.Domaine || '', // Don't default to Radiologie - keep empty if not set
-      })).filter(e => e.nom);
       setEquipsAll(equipsFlat);
 
       // Load custom domains
@@ -872,14 +887,14 @@ export default function PlanningPage() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-savia-surface z-10">
                 <tr className="border-b border-savia-border">
-                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'Technicien', 'Type', 'Récurrence', 'Statut', 'Actions'].map(h => (
+                  {['#ID', 'Date prévue', 'Client', 'Équipement', 'N° série', 'Technicien', 'Type', 'Récurrence', 'Statut', 'Actions'].map(h => (
                     <th key={h} className="text-left py-2 px-3 text-savia-text-muted text-xs whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filteredData.length === 0 ? (
-                  <tr><td colSpan={9} className="text-center py-8 text-savia-text-muted text-sm">Aucune maintenance ne correspond aux filtres sélectionnés.</td></tr>
+                  <tr><td colSpan={10} className="text-center py-8 text-savia-text-muted text-sm">Aucune maintenance ne correspond aux filtres sélectionnés.</td></tr>
                 ) : filteredData
                   .slice()
                   .sort((a, b) => {
@@ -903,6 +918,7 @@ export default function PlanningPage() {
                         </td>
                         <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.client || '—'}</td>
                         <td className="py-2 px-3 font-semibold text-sm">{ev.machine}</td>
+                        <td className="py-2 px-3 text-xs text-savia-text-muted">{ev.equipement_num_serie || '—'}</td>
                         <td className="py-2 px-3 text-xs">{ev.technicien || '—'}</td>
                         <td className="py-2 px-3 text-xs whitespace-nowrap">
                           {ev.type_maintenance}
@@ -1221,6 +1237,13 @@ export default function PlanningPage() {
                           <Building2 className="w-3.5 h-3.5 text-savia-text-muted" />
                           <span className="text-savia-text-muted">Client :</span>
                           <span className="font-semibold text-savia-text">{ev.client}</span>
+                        </div>
+                      )}
+                      {ev.equipement_num_serie && (
+                        <div className="flex items-center gap-1.5">
+                          <Hash className="w-3.5 h-3.5 text-savia-text-muted" />
+                          <span className="text-savia-text-muted">N° série :</span>
+                          <span className="font-semibold text-savia-text">{ev.equipement_num_serie}</span>
                         </div>
                       )}
                       {ev.technicien && (

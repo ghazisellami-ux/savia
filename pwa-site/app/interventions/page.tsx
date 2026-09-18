@@ -132,6 +132,7 @@ export default function InterventionsPage() {
               statut={i.statut || 'En cours'}
               type={i.type_intervention || i.type || ''}
               date={i.date || i.date_intervention || i.created_at || ''}
+              serialNumber={i.equipement_num_serie || i.num_serie || i.numero_serie || i.serial_number || ''}
               technicien={i.technicien || i.technicien_assigne || ''}
               priorite={i.priorite || ''}
               offline={Boolean(i.offline_pending)}
