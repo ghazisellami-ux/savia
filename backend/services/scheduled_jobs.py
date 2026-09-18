@@ -222,6 +222,17 @@ def sync_planning_to_interventions(*, notify=True):
             )
 
             with get_db() as conn:
+                # Re-read and lock the planning row because the initial list
+                # was loaded before this loop. A manual intervention deletion
+                # can close the planning row in the meantime; without this
+                # guard, this worker could recreate the deleted intervention.
+                current_planning = conn.execute(
+                    "SELECT statut FROM planning_maintenance WHERE id = %s FOR UPDATE",
+                    (pm_id,),
+                ).fetchone()
+                if not current_planning or normalized_status(current_planning.get('statut')) in closed_statuses:
+                    continue
+
                 linked = conn.execute(
                     """SELECT id, statut, technicien, probleme
                        FROM interventions

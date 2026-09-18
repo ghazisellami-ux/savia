@@ -1066,7 +1066,7 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
         with get_db() as conn:
             # Vérifier que l'intervention existe et récupérer ses infos
             row = conn.execute(
-                "SELECT id, machine, type_intervention FROM interventions WHERE id = %s",
+                "SELECT id, machine, type_intervention, planning_id FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             if not row:
@@ -1075,7 +1075,38 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
             row_dict = dict(row)
             machine = row_dict.get("machine", "Unknown")
             type_intervention = row_dict.get("type_intervention", "Unknown")
+            planning_id = row_dict.get("planning_id")
+            normalized_type = str(type_intervention or "").casefold()
+            is_preventive = "prévent" in normalized_type or "prevent" in normalized_type
+
+            # Une maintenance préventive est pilotée depuis le planning.
+            # La suppression directe laisserait sa ligne active et le worker
+            # pourrait recréer une nouvelle intervention avec un nouvel ID.
+            if is_preventive:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cette intervention est préventive. Supprimez-la depuis la page Planning ou en supprimant le contrat associé.",
+                )
+
+            # Une corrective peut aussi avoir été créée depuis une demande et
+            # être liée au planning. Supprimer ses lignes de planning empêche
+            # le worker de la recréer et retire la maintenance de l'affichage.
+            if planning_id:
+                conn.execute(
+                    """DELETE FROM planning_maintenance
+                       WHERE id = %s OR original_planning_id = %s""",
+                    (planning_id, planning_id),
+                )
             
+            # Le dossier de suivi de facturation utilise SET NULL sur
+            # intervention_id pour préserver les dossiers lors d'autres
+            # opérations. Ici, la suppression de l'intervention doit aussi
+            # supprimer explicitement son dossier et ses éléments associés.
+            conn.execute(
+                "DELETE FROM billing_cases WHERE intervention_id = %s",
+                (intervention_id,),
+            )
+
             # Supprimer l'intervention
             conn.execute("DELETE FROM interventions WHERE id = %s", (intervention_id,))
             

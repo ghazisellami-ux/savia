@@ -718,17 +718,67 @@ def supprimer_contrat(contrat_id):
     """Supprime un contrat et toutes ses données associées (planning, interventions, équipements)."""
     with get_db() as conn:
         try:
-            # 1. Delete planning entries for this contract
-            conn.execute("DELETE FROM planning_maintenance WHERE contrat_id = %s", (contrat_id,))
-            
-            # 2. Delete interventions associated through planning entries
-            # First, get all interventions that are linked through planning
-            # (Note: interventions may not have direct contrat_id, but are linked via planning)
-            
-            # 3. Delete equipment associations
+            # Les interventions préventives sont liées au contrat via leurs
+            # lignes de planning. Il faut les récupérer avant de supprimer le
+            # planning, puis supprimer leurs dossiers de facturation afin de
+            # ne laisser ni intervention ni dossier orphelin.
+            contract_reference_pattern = rf"contrat #{int(contrat_id)}([^0-9]|$)"
+            planning_rows = conn.execute(
+                """SELECT id
+                   FROM planning_maintenance
+                   WHERE contrat_id = %s
+                      OR notes ~* %s
+                      OR description ~* %s""",
+                (contrat_id, contract_reference_pattern, contract_reference_pattern),
+            ).fetchall()
+            planning_ids = [row["id"] for row in planning_rows]
+
+            all_planning_ids = list(planning_ids)
+            if planning_ids:
+                ghost_rows = conn.execute(
+                    "SELECT id FROM planning_maintenance WHERE original_planning_id = ANY(%s)",
+                    (planning_ids,),
+                ).fetchall()
+                all_planning_ids.extend(row["id"] for row in ghost_rows)
+
+            intervention_rows = conn.execute(
+                """SELECT id
+                   FROM interventions
+                   WHERE planning_id = ANY(%s)
+                      OR notes ~* %s
+                      OR description ~* %s""",
+                (all_planning_ids, contract_reference_pattern, contract_reference_pattern),
+            ).fetchall()
+            intervention_ids = [row["id"] for row in intervention_rows]
+
+            if intervention_ids:
+                conn.execute(
+                    "DELETE FROM billing_cases WHERE intervention_id = ANY(%s)",
+                    (intervention_ids,),
+                )
+                conn.execute(
+                    "UPDATE demandes_intervention SET intervention_id = NULL WHERE intervention_id = ANY(%s)",
+                    (intervention_ids,),
+                )
+                conn.execute(
+                    "DELETE FROM interventions WHERE id = ANY(%s)",
+                    (intervention_ids,),
+                )
+
+            if all_planning_ids:
+                conn.execute(
+                    "DELETE FROM planning_maintenance WHERE id = ANY(%s)",
+                    (all_planning_ids,),
+                )
+
+            # Supprimer également les éventuels dossiers explicitement liés
+            # au contrat mais sans intervention encore rattachée.
+            conn.execute("DELETE FROM billing_cases WHERE contract_id = %s", (contrat_id,))
+
+            # Delete equipment associations
             conn.execute("DELETE FROM contrats_equipements WHERE contrat_id = %s", (contrat_id,))
             
-            # 4. Delete the contract itself
+            # Delete the contract itself
             conn.execute("DELETE FROM contrats WHERE id = %s", (contrat_id,))
             
             conn.commit()
