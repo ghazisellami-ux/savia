@@ -165,6 +165,7 @@ def sync_planning_to_interventions(*, notify=True):
     """
     from datetime import date
     import unicodedata
+    from repositories.interventions import find_open_intervention, lock_equipment_intervention_key
 
     def normalized_status(value):
         return unicodedata.normalize("NFKD", str(value or "")).encode(
@@ -230,6 +231,18 @@ def sync_planning_to_interventions(*, notify=True):
                 ).fetchone()
                 is_new = not linked
                 if is_new:
+                    equipment_id = pm.get('equipement_id')
+                    if equipment_id not in (None, ''):
+                        lock_equipment_intervention_key(conn, int(equipment_id))
+                        existing_open = find_open_intervention(conn, int(equipment_id), str(client or ''))
+                        if existing_open:
+                            logger.info(
+                                "Planning #%s skipped: equipment #%s already has open intervention #%s",
+                                pm_id,
+                                equipment_id,
+                                existing_open['id'],
+                            )
+                            continue
                     conn.execute(
                         """INSERT INTO interventions
                            (date, machine, equipement_id, client, technicien, type_intervention, description, probleme,

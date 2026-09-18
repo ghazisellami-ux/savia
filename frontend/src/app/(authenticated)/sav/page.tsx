@@ -124,7 +124,8 @@ export default function SavPage() {
   });
   const [pdfDateTo, setPdfDateTo] = useState(() => new Date().toISOString().substring(0, 10));
 
-  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '', start_time: '08:00', end_time: '09:00' };
+  const emptyForm = { date: new Date().toISOString().substring(0, 10), client: '', machine: '', equipement_id: '' as number | '', technicien: '', type_intervention: 'Corrective', probleme: '', description: '', statut: 'En cours', duree_heures: '1', duree_deplacement: '0', code_erreur: '', type_erreur: 'Hardware', priorite: 'Moyenne', pieces_utilisees: '', start_time: '08:00', end_time: '09:00' };
+  const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [statusForm, setStatusForm] = useState({ statut: '', probleme: '', cause: '', solution: '', duree_heures: '', duree_deplacement: '', start_time: '08:00', end_time: '09:00' });
 
@@ -466,6 +467,7 @@ export default function SavPage() {
 
   const handleSave = async () => {
     if (!form.machine.trim()) return;
+    setSaveError('');
     setIsSaving(true);
     try {
       // Calculate duration from times if both are provided
@@ -489,6 +491,7 @@ export default function SavPage() {
       await loadData();
     } catch (err) {
       console.error("Save failed", err);
+      setSaveError(err instanceof Error ? err.message : 'Erreur lors de la création de l’intervention');
     } finally {
       setIsSaving(false);
     }
@@ -1537,17 +1540,25 @@ export default function SavPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Date</label><input type="date" className={INPUT_CLS} value={form.date} onChange={e => setForm({...form, date: e.target.value})} /></div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> Client *</label>
-            <select className={INPUT_CLS} value={form.client} onChange={e => setForm({...form, client: e.target.value, machine: ''})}>
+          <select className={INPUT_CLS} value={form.client} onChange={e => setForm({...form, client: e.target.value, machine: '', equipement_id: ''})}>
               <option value="">— Sélectionner un client —</option>
               {clientsData.map((c: any) => <option key={c.id || c.nom} value={c.nom}>{c.nom}</option>)}
             </select>
           </div>
           <div><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Server className="w-3.5 h-3.5" /> Équipement *</label>
-            <select className={INPUT_CLS} value={form.machine} onChange={e => { setForm({...form, machine: e.target.value}); setSelectedPieces([]); setPiecesDropdownOpen(false); }} disabled={!form.client}>
+            <select className={INPUT_CLS} value={form.equipement_id} onChange={e => {
+              const equipmentId = Number(e.target.value);
+              const equipment = equipementsData.find((item: any) => Number(item.id) === equipmentId);
+              setForm({...form, machine: equipment?.Nom || equipment?.nom || '', equipement_id: equipmentId || '',});
+              setSelectedPieces([]);
+              setPiecesDropdownOpen(false);
+            }} disabled={!form.client}>
               <option value="">{form.client ? '— Sélectionner un équipement —' : '← Choisir un client d\'abord'}</option>
               {equipementsData
                 .filter((eq: any) => (eq.Client || eq.client || '') === form.client)
-                .map((eq: any) => <option key={eq.id || eq.Nom || eq.nom} value={eq.Nom || eq.nom}>{eq.Nom || eq.nom}</option>)}
+                .map((eq: any) => <option key={eq.id} value={eq.id}>
+                  {eq.Nom || eq.nom}{(eq.NumSerie || eq.Num_Serie || eq.num_serie) ? ` · SN: ${eq.NumSerie || eq.Num_Serie || eq.num_serie}` : ''}
+                </option>)}
             </select>
           </div>
           <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Techniciens</label>
@@ -1676,7 +1687,7 @@ export default function SavPage() {
                 <ChevronDown className={`w-4 h-4 transition-transform ${piecesDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
               {piecesDropdownOpen && (() => {
-                const selectedEquip = equipementsData.find((eq: any) => (eq.Nom || eq.nom) === form.machine);
+                const selectedEquip = equipementsData.find((eq: any) => Number(eq.id) === Number(form.equipement_id));
                 const equipType = selectedEquip?.Type || selectedEquip?.type || '';
                 const filteredPieces = allPieces.filter((p: any) => {
                   if (!equipType) return true;
@@ -1717,6 +1728,11 @@ export default function SavPage() {
           </div>
           <div className="md:col-span-2"><label className="block text-sm text-savia-text-muted mb-1 flex items-center gap-1"><ClipboardList className="w-3.5 h-3.5" /> Description</label><textarea className={INPUT_CLS + " h-20 resize-none"} placeholder="Décrivez le problème..." value={form.probleme} onChange={e => setForm({...form, probleme: e.target.value})} /></div>
         </div>
+        {saveError && (
+          <div role="alert" className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">
+            {saveError}
+          </div>
+        )}
         <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-savia-border/30">
           <button onClick={() => setShowAddModal(false)} className="px-4 py-2 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">Annuler</button>
           <button onClick={handleSave} disabled={isSaving || !form.machine.trim()} className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
