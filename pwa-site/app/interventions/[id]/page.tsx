@@ -945,6 +945,14 @@ export default function InterventionDetailPage() {
     );
   }, [allPieces, allEquipements, intervention?.machine, searchRuptureMultiTech]);
 
+  const equipmentSerial = intervention?.equipement_num_serie
+    || intervention?.num_serie
+    || intervention?.numero_serie
+    || intervention?.serial_number
+    || allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention?.machine)?.NumSerie
+    || allEquipements.find((eq: any) => (eq.Nom || eq.nom) === intervention?.machine)?.num_serie
+    || '';
+
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: 'var(--beige)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center' }}>
@@ -975,7 +983,9 @@ export default function InterventionDetailPage() {
           <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: 'var(--teal)', fontSize: '1.1rem', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}><ChevronLeft style={{ width: 20, height: 20 }} /></button>
           <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--navy)', margin: 0 }}>
-              {intervention?.machine} — {intervention?.client}
+              {intervention?.machine}
+              {equipmentSerial && <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)' }}> · N° série : {equipmentSerial}</span>}
+              {' — '}{intervention?.client}
             </h1>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
               #{id} · {intervention?.date ? new Date(intervention.date).toLocaleDateString('fr-FR') : ''}

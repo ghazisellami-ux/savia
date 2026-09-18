@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { Building2, User, Wrench, AlertOctagon, Calendar, ChevronRight } from 'lucide-react';
+import { Building2, User, Wrench, AlertOctagon, Calendar, ChevronRight, Hash } from 'lucide-react';
 
 const STATUT_STYLES: Record<string, { bg: string; color: string }> = {
   'En maintenance':     { bg: 'rgba(245,158,11,0.12)',  color: '#B45309'        },
@@ -20,12 +20,13 @@ interface InterventionCardProps {
   statut: string;
   type: string;
   date: string;
+  serialNumber?: string;
   technicien?: string;
   priorite?: string;
   offline?: boolean;
 }
 
-export default function InterventionCard({ id, machine, client, statut, type, date, technicien, priorite, offline }: InterventionCardProps) {
+export default function InterventionCard({ id, machine, client, statut, type, date, serialNumber, technicien, priorite, offline }: InterventionCardProps) {
   const router = useRouter();
   const s = STATUT_STYLES[statut] || { bg: 'rgba(47,65,86,0.08)', color: 'var(--navy)' };
 
@@ -60,6 +61,7 @@ export default function InterventionCard({ id, machine, client, statut, type, da
       {/* Infos */}
       <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Building2 style={{ width: 13, height: 13 }} /> {client}</span>
+        {serialNumber && <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Hash style={{ width: 13, height: 13 }} /> N° série : {serialNumber}</span>}
         {technicien && <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><User style={{ width: 13, height: 13 }} /> {technicien}</span>}
         <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><Wrench style={{ width: 13, height: 13 }} /> {type}</span>
         {priorite && priorite !== '' && (
