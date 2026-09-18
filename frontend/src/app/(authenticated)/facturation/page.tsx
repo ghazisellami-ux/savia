@@ -6,7 +6,7 @@ import {
   AlertTriangle, ArrowRight, Banknote, Ban, Building2, Calendar,
   Check, CheckCircle2, Circle, Clock3, Eye, FileCheck2, FileText, History,
   Loader2, PackageCheck, Plus, Receipt, RefreshCw, Search, Send,
-  Users, WalletCards, Wrench, X,
+  Trash2, Users, WalletCards, Wrench, X,
 } from 'lucide-react';
 import { billing, clients as clientsApi, equipements, interventions, settings as settingsApi } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
@@ -53,6 +53,7 @@ interface BillingCase {
   currency: string;
   case_state: 'active' | 'blocked' | 'cancelled';
   block_reason: string;
+  created_by?: string;
   contract_id?: number | null;
   contract_type?: string;
   coverage_status: 'unassessed' | 'covered' | 'partial' | 'billable' | 'review';
@@ -187,6 +188,7 @@ const formatDateTime = (value?: string | null) => value ? new Date(value).toLoca
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 const stepCompleted = (step?: BillingStep) => Boolean(step && (step.id || step.not_required));
 const billingActivityCount = (item: BillingCase) => Object.keys(item.steps || {}).length + (item.payments || []).length;
+const isAutomaticBillingCase = (item: BillingCase) => ['system', 'system-migration'].includes(String(item.created_by || ''));
 const interventionProgressScore = (item: BillingCase) => {
   if (item.intervention_closed_at) return 4;
   if (item.intervention_started_at) return 3;
@@ -592,6 +594,29 @@ export default function FacturationPage() {
     }
   };
 
+  const deleteCase = async (item: BillingCase) => {
+    if (isAutomaticBillingCase(item)) return;
+    if (!window.confirm(`Supprimer définitivement le dossier #${item.id} ? Cette action supprimera aussi ses étapes, paiements et son historique.`)) return;
+    setSaving(true);
+    setError('');
+    try {
+      const result = await billing.delete(item.id);
+      setCases(previous => previous.filter(candidate => candidate.id !== item.id));
+      setSelected(null);
+      setHistory([]);
+      if (result.replacement_case_id) {
+        setNotice(`Le dossier #${item.id} a été supprimé. Le dossier automatique #${result.replacement_case_id} a été recréé pour l'intervention #${item.intervention_id}.`);
+        await load();
+      } else {
+        setNotice(`Le dossier #${item.id} a été supprimé.`);
+      }
+    } catch (err: unknown) {
+      setError(errorMessage(err, 'Impossible de supprimer le dossier.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const primaryAction = (item: BillingCase) => {
     if (!item.next_step) return null;
     if (item.next_step === 'intervention' || item.next_step === 'intervention_close') {
@@ -693,7 +718,7 @@ export default function FacturationPage() {
       </div>
 
       <Modal isOpen={!!selected} onClose={() => { setSelected(null); setHistory([]); }} title={selected ? `Dossier de facturation #${selected.id}` : ''} size="xl">
-        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} onReassess={reassessCoverage} />}
+        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} canDeleteCase={(user?.role === 'Admin' || user?.role === 'Manager') && !isAutomaticBillingCase(selected)} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} onReassess={reassessCoverage} onDeleteCase={deleteCase} />}
       </Modal>
 
       <Modal isOpen={!!stepDialog} onClose={() => setStepDialog(null)} title={stepDialog ? STEP_META[stepDialog.type].label : ''} size="md">
@@ -846,11 +871,12 @@ function InterventionPreview({ item }: { item: BillingCase }) {
   </div>;
 }
 
-function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate, onReassess }: {
+function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, canDeleteCase, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate, onReassess, onDeleteCase }: {
   item: BillingCase;
   interventionOptions: InterventionOption[];
   duplicateCases: BillingCase[];
   canResolveDuplicates: boolean;
+  canDeleteCase: boolean;
   history: HistoryItem[];
   historyLoading: boolean;
   onStep: (item: BillingCase, type: StepType) => void;
@@ -860,6 +886,7 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
   onLinkIntervention: (item: BillingCase, interventionId: number) => void;
   onResolveDuplicate: (first: BillingCase, second: BillingCase) => void;
   onReassess: (item: BillingCase) => void;
+  onDeleteCase: (item: BillingCase) => void;
 }) {
   const [interventionPreviewOpen, setInterventionPreviewOpen] = useState(false);
   const matchingInterventions = interventionOptions.filter(option =>
@@ -899,6 +926,6 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
 
     <section><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-bold"><History className="h-4 w-4 text-savia-accent" /> Historique des opérations</h3><button onClick={() => onHistory(item)} className="text-xs font-semibold text-savia-accent">{history.length ? 'Actualiser' : 'Afficher'}</button></div>{historyLoading ? <Loader2 className="mx-auto h-5 w-5 animate-spin text-savia-accent" /> : history.length > 0 && <div className="max-h-52 space-y-2 overflow-y-auto">{history.map(event => <div key={event.id} className="rounded-lg border border-savia-border p-2.5 text-xs"><div className="flex justify-between gap-3"><strong>{historyLabel(event)}</strong><span className="text-savia-text-dim">{formatDateTime(event.occurred_at)}</span></div><div className="mt-1 text-savia-text-muted">{event.actor_username}{event.change_reason ? ` · ${event.change_reason}` : ''}</div></div>)}</div>}</section>
 
-    <div className="flex justify-end border-t border-savia-border pt-3"><button onClick={() => onToggleBlocked(item)} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold ${item.case_state === 'blocked' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/10 text-red-300'}`}>{item.case_state === 'blocked' ? <RefreshCw className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}{item.case_state === 'blocked' ? 'Remettre en activité' : 'Bloquer le dossier'}</button></div>
+    <div className="flex flex-wrap justify-end gap-2 border-t border-savia-border pt-3">{canDeleteCase && <button onClick={() => onDeleteCase(item)} className="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /> Supprimer le dossier</button>}<button onClick={() => onToggleBlocked(item)} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold ${item.case_state === 'blocked' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/10 text-red-300'}`}>{item.case_state === 'blocked' ? <RefreshCw className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}{item.case_state === 'blocked' ? 'Remettre en activité' : 'Bloquer le dossier'}</button></div>
   </div>;
 }

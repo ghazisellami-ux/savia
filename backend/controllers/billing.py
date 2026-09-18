@@ -25,6 +25,7 @@ from services.contract_billing import (
 
 
 BILLING_ROLES = ("Admin", "Manager", "Responsable Technique", "Gestionnaire")
+AUTOMATIC_CASE_CREATORS = ("system", "system-migration")
 
 
 @app.get("/api/billing/responsibles")
@@ -292,7 +293,18 @@ def _load_case(conn, case_id: int) -> dict[str, Any]:
     return _hydrate_cases(conn, _load_rows(conn, case_id))[0]
 
 
+def _cleanup_orphan_automatic_cases(conn) -> None:
+    """Delete traceability cases whose source intervention no longer exists."""
+    conn.execute(
+        """DELETE FROM billing_cases
+           WHERE intervention_id IS NULL
+             AND created_by IN (%s, %s)""",
+        AUTOMATIC_CASE_CREATORS,
+    )
+
+
 def _sync_missing_intervention_cases(conn) -> None:
+    _cleanup_orphan_automatic_cases(conn)
     conn.execute(
         """UPDATE billing_cases bc
            SET request_id = d.id, updated_at = CURRENT_TIMESTAMP
@@ -382,7 +394,89 @@ def list_billing_cases(
 def get_billing_case(case_id: int, user: dict = Depends(_verify_token)):
     require_roles(user, *BILLING_ROLES)
     with get_db() as conn:
+        _cleanup_orphan_automatic_cases(conn)
         return _load_case(conn, case_id)
+
+
+@app.delete("/api/billing/cases/{case_id}")
+def delete_billing_case(case_id: int, user: dict = Depends(_verify_token)):
+    """Delete a billing-only case created manually from the billing page."""
+    require_roles(user, "Admin", "Manager")
+    actor = _username(user)
+    with get_db() as conn:
+        case = conn.execute(
+            """SELECT id, intervention_id, created_by, client, equipment
+               FROM billing_cases
+               WHERE id = %s
+               FOR UPDATE""",
+            (case_id,),
+        ).fetchone()
+        if not case:
+            raise HTTPException(status_code=404, detail="Dossier de facturation introuvable")
+        if case["created_by"] in AUTOMATIC_CASE_CREATORS:
+            raise HTTPException(
+                status_code=409,
+                detail="Ce dossier est automatique. Supprimez l'intervention ou le contrat associé.",
+            )
+        replacement_case_id = None
+        intervention_id = case["intervention_id"]
+        if intervention_id:
+            intervention = conn.execute(
+                """SELECT i.id,
+                          COALESCE(NULLIF(i.client, ''), e.client, %s) AS client,
+                          i.machine,
+                          (SELECT d.id
+                           FROM demandes_intervention d
+                           WHERE d.intervention_id = i.id
+                           ORDER BY d.id DESC
+                           LIMIT 1) AS request_id
+                   FROM interventions i
+                   LEFT JOIN equipements e ON e.id = i.equipement_id
+                   WHERE i.id = %s""",
+                (case["client"] or "", intervention_id),
+            ).fetchone()
+        else:
+            intervention = None
+        replacement_request_id = intervention["request_id"] if intervention else None
+        if replacement_request_id:
+            request_owner = conn.execute(
+                """SELECT id
+                   FROM billing_cases
+                   WHERE request_id = %s AND id <> %s
+                   LIMIT 1""",
+                (replacement_request_id, case_id),
+            ).fetchone()
+            if request_owner:
+                replacement_request_id = None
+        conn.execute("DELETE FROM billing_cases WHERE id = %s", (case_id,))
+        if intervention:
+            replacement = conn.execute(
+                """INSERT INTO billing_cases (
+                       intervention_id, request_id, client, equipment, created_by, updated_by
+                   ) VALUES (%s, %s, %s, %s, 'system', 'system')
+                   ON CONFLICT (intervention_id) DO UPDATE SET
+                       request_id = COALESCE(billing_cases.request_id, EXCLUDED.request_id),
+                       client = CASE WHEN NULLIF(BTRIM(billing_cases.client), '') IS NULL
+                                     THEN EXCLUDED.client ELSE billing_cases.client END,
+                       equipment = CASE WHEN NULLIF(BTRIM(billing_cases.equipment), '') IS NULL
+                                        THEN EXCLUDED.equipment ELSE billing_cases.equipment END,
+                       updated_at = CURRENT_TIMESTAMP
+                   RETURNING id""",
+                (intervention["id"], replacement_request_id, intervention["client"], intervention["machine"]),
+            ).fetchone()
+            replacement_case_id = replacement["id"] if replacement else None
+            if replacement_case_id:
+                conn.execute(
+                    """INSERT INTO billing_history (
+                           case_id, action, entity_type, entity_id, after_data, actor_username
+                       ) VALUES (
+                           %s, 'RECREATE_AUTOMATIC_CASE', 'case', %s,
+                           jsonb_build_object('intervention_id', %s, 'source_case_id', %s), %s
+                       )""",
+                    (replacement_case_id, replacement_case_id, intervention["id"], case_id, actor),
+                )
+    log_audit(actor, "DELETE_BILLING_CASE", json.dumps({"case_id": case_id}), "facturation")
+    return {"ok": True, "case_id": case_id, "replacement_case_id": replacement_case_id}
 
 
 @app.post("/api/billing/cases/{case_id}/reassess-coverage")

@@ -753,7 +753,15 @@ def supprimer_contrat(contrat_id):
 
             if intervention_ids:
                 conn.execute(
-                    "DELETE FROM billing_cases WHERE intervention_id = ANY(%s)",
+                    """DELETE FROM billing_cases
+                       WHERE intervention_id = ANY(%s)
+                         AND created_by IN ('system', 'system-migration')""",
+                    (intervention_ids,),
+                )
+                conn.execute(
+                    """UPDATE billing_cases
+                       SET intervention_id = NULL, updated_at = CURRENT_TIMESTAMP
+                       WHERE intervention_id = ANY(%s)""",
                     (intervention_ids,),
                 )
                 conn.execute(
@@ -773,7 +781,12 @@ def supprimer_contrat(contrat_id):
 
             # Supprimer également les éventuels dossiers explicitement liés
             # au contrat mais sans intervention encore rattachée.
-            conn.execute("DELETE FROM billing_cases WHERE contract_id = %s", (contrat_id,))
+            conn.execute(
+                """DELETE FROM billing_cases
+                   WHERE contract_id = %s
+                     AND created_by IN ('system', 'system-migration')""",
+                (contrat_id,),
+            )
 
             # Delete equipment associations
             conn.execute("DELETE FROM contrats_equipements WHERE contrat_id = %s", (contrat_id,))
