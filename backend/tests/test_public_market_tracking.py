@@ -32,8 +32,37 @@ def test_market_status_follows_documentary_progress():
     assert compute_status(market(delivery_note_date="2026-01-03"), today=date(2026, 8, 31)) == "invoice_pending"
     assert compute_status(market(invoice_date="2026-01-04"), today=date(2026, 8, 31)) == "provisional_acceptance_pending"
     assert compute_status(market(provisional_acceptance_date="2026-08-20", warranty_retention_days=60), today=date(2026, 8, 31)) == "warranty_in_progress"
-    assert compute_status(market(provisional_acceptance_date="2026-08-20", warranty_retention_days=20), today=date(2026, 8, 31)) == "warranty_expiring"
+    assert compute_status(market(provisional_acceptance_date="2026-08-20", warranty_retention_days=20), today=date(2026, 8, 31)) == "warranty_in_progress"
     assert compute_status(market(final_acceptance_date="2026-08-30"), today=date(2026, 8, 31)) == "completed"
+
+
+def test_provisional_acceptance_stays_active_without_alert_until_final_acceptance():
+    case = market(
+        signature_date="2026-01-01",
+        execution_delay_days=30,
+        provisional_acceptance_date="2026-02-01",
+        warranty_retention_days=1,
+    )
+    assert compute_status(case, today=date(2026, 8, 31)) == "warranty_in_progress"
+    assert compute_alert(case, today=date(2026, 8, 31)) is None
+
+
+def test_partial_delivery_keeps_the_delivery_step_open():
+    case = market(delivery_notes=[
+        {"delivery_note_date": "2026-01-03", "is_total_delivery": False},
+        {"delivery_note_date": "2026-01-10", "is_total_delivery": False},
+    ])
+    assert compute_status(case, today=date(2026, 8, 31)) == "delivery_note_partial"
+    assert progress_count(case) == 0
+
+
+def test_total_delivery_turns_the_delivery_step_green():
+    case = market(delivery_notes=[
+        {"delivery_note_date": "2026-01-03", "is_total_delivery": False},
+        {"delivery_note_date": "2026-01-10", "is_total_delivery": True},
+    ])
+    assert compute_status(case, today=date(2026, 8, 31)) == "invoice_pending"
+    assert progress_count(case) == 1
 
 
 def test_blocked_and_cancelled_market_states_override_progress():
@@ -57,13 +86,12 @@ def test_execution_alerts_change_at_thirty_and_fifteen_days():
     assert overdue and overdue["severity"] == "overdue" and overdue["days_remaining"] == -2
 
 
-def test_warranty_reminder_starts_thirty_days_before_its_deadline():
+def test_provisional_acceptance_does_not_create_a_warranty_alert():
     case = market(
         provisional_acceptance_date="2026-08-01",
         warranty_retention_days=60,
     )
-    alert = compute_alert(case, today=date(2026, 9, 1))
-    assert alert and alert["type"] == "warranty" and alert["days_remaining"] == 29
+    assert compute_alert(case, today=date(2026, 9, 1)) is None
 
 
 def test_progress_counts_the_six_expected_milestones():
@@ -92,3 +120,9 @@ def test_public_market_invoice_migration_is_registered():
     migrations = [migration for migration in MIGRATIONS if migration[0] == "021"]
     assert len(migrations) == 1
     assert "invoice" in migrations[0][1]
+
+
+def test_public_market_multiple_delivery_notes_migration_is_registered():
+    migrations = [migration for migration in MIGRATIONS if migration[0] == "029"]
+    assert len(migrations) == 1
+    assert "delivery notes" in migrations[0][1]

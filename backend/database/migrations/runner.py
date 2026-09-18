@@ -753,6 +753,40 @@ def _migration_021_public_market_invoice_step(conn) -> None:
     conn.execute("ALTER TABLE public_market_cases ADD COLUMN IF NOT EXISTS invoice_reference TEXT NOT NULL DEFAULT ''")
 
 
+def _migration_029_public_market_multiple_delivery_notes(conn) -> None:
+    """Allow several BLs and track when a delivery is complete."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS public_market_delivery_notes (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES public_market_cases(id) ON DELETE CASCADE,
+               delivery_note_date DATE NOT NULL,
+               delivery_note_reference TEXT NOT NULL DEFAULT '',
+               is_total_delivery BOOLEAN NOT NULL DEFAULT FALSE,
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_public_market_delivery_notes_case
+           ON public_market_delivery_notes (case_id, delivery_note_date, id)"""
+    )
+    # Existing records predate partial-delivery support. Their single BL is
+    # the milestone that previously unlocked the invoice, so preserve that
+    # behaviour as a total delivery.
+    conn.execute(
+        """INSERT INTO public_market_delivery_notes (
+               case_id, delivery_note_date, delivery_note_reference, is_total_delivery
+           )
+           SELECT pm.id, pm.delivery_note_date, pm.delivery_note_reference, TRUE
+           FROM public_market_cases pm
+           WHERE pm.delivery_note_date IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM public_market_delivery_notes note
+                 WHERE note.case_id = pm.id
+             )"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1106,6 +1140,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("026", "contract signature date", _migration_026_contract_signature_date),
     ("027", "technical document catalog classification", _migration_027_technical_document_catalog),
     ("028", "equipment identity and exact duplicate cleanup", _migration_028_equipment_identity_and_exact_dedup),
+    ("029", "multiple public market delivery notes", _migration_029_public_market_multiple_delivery_notes),
 )
 
 
