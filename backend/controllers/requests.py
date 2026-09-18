@@ -55,6 +55,7 @@ from services.idempotency import (
     save_idempotent_response,
 )
 from repositories.equipment_status import retour_site_confirmation_requise
+from repositories.interventions import find_open_intervention, lock_equipment_intervention_key
 
 
 _INTERVENTION_ACTION_ROLES = (
@@ -251,20 +252,38 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         elif client.strip() and equipement.strip():
             # Compatibility with older clients: resolve the name once and
             # persist the selected ID so subsequent reads never join by name.
-            equipment_row = conn.execute(
+            # Never choose arbitrarily when duplicate names exist.
+            equipment_rows = conn.execute(
                 """SELECT id, nom, client FROM equipements
                    WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
                      AND LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s))
-                   ORDER BY id LIMIT 1""",
+                   ORDER BY id""",
                 (equipement, client),
-            ).fetchone()
-            if equipment_row:
-                equipement_id = equipment_row["id"]
+            ).fetchall()
+            if len(equipment_rows) > 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Plusieurs équipements portent ce nom pour ce client. Sélectionnez l'équipement par son identifiant.",
+                )
+            if len(equipment_rows) == 1:
+                equipement_id = equipment_rows[0]["id"]
 
         # One equipment cannot have two simultaneous intervention requests.
         # The transaction-scoped advisory lock also closes the race between
         # two users submitting the same request at nearly the same time.
         if client.strip() and equipement.strip():
+            if equipement_id is not None:
+                lock_equipment_intervention_key(conn, equipement_id)
+                existing_intervention = find_open_intervention(conn, equipement_id, client)
+                if existing_intervention:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Une intervention est déjà ouverte #{existing_intervention['id']} "
+                            "pour cet équipement. Utilisez l'intervention existante."
+                        ),
+                    )
+
             duplicate_key = (
                 f"equipment::{equipement_id}"
                 if equipement_id is not None

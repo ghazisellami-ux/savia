@@ -23,6 +23,13 @@ interface MarketAlert {
   severity: 'warning' | 'critical' | 'overdue';
 }
 
+interface DeliveryNote {
+  id?: number;
+  delivery_note_date: string;
+  delivery_note_reference: string;
+  is_total_delivery: boolean;
+}
+
 interface PublicMarketCase {
   id: number;
   client: string;
@@ -36,6 +43,9 @@ interface PublicMarketCase {
   equipment_reception_note: string;
   delivery_note_date?: string | null;
   delivery_note_reference: string;
+  delivery_notes?: DeliveryNote[];
+  delivery_note_complete?: boolean;
+  delivery_note_status?: 'pending' | 'partial' | 'complete';
   invoice_date?: string | null;
   invoice_reference: string;
   provisional_acceptance_date?: string | null;
@@ -80,8 +90,7 @@ interface MarketForm {
   execution_delay_days: string;
   equipment_reception_date: string;
   equipment_reception_note: string;
-  delivery_note_date: string;
-  delivery_note_reference: string;
+  delivery_notes: DeliveryNote[];
   invoice_date: string;
   invoice_reference: string;
   provisional_acceptance_date: string;
@@ -119,6 +128,7 @@ const STATUS_STYLE: Record<string, string> = {
   signature_pending: 'border-slate-500/25 bg-slate-500/15 text-slate-300',
   equipment_reception_pending: 'border-blue-500/25 bg-blue-500/15 text-blue-300',
   delivery_note_pending: 'border-cyan-500/25 bg-cyan-500/15 text-cyan-300',
+  delivery_note_partial: 'border-orange-500/25 bg-orange-500/15 text-orange-300',
   invoice_pending: 'border-amber-500/25 bg-amber-500/15 text-amber-300',
   provisional_acceptance_pending: 'border-amber-500/25 bg-amber-500/15 text-amber-300',
   warranty_in_progress: 'border-violet-500/25 bg-violet-500/15 text-violet-300',
@@ -132,7 +142,7 @@ const STATUS_STYLE: Record<string, string> = {
 const emptyForm = (): MarketForm => ({
   client: '', market_number: '', market_object: '', owner_username: '',
   signature_date: '', execution_delay_days: '', equipment_reception_date: '',
-  equipment_reception_note: '', delivery_note_date: '', delivery_note_reference: '',
+  equipment_reception_note: '', delivery_notes: [],
   invoice_date: '', invoice_reference: '',
   provisional_acceptance_date: '', provisional_acceptance_reference: '',
   warranty_retention_days: '', final_acceptance_date: '', final_acceptance_reference: '',
@@ -145,8 +155,16 @@ const formFromCase = (item: PublicMarketCase): MarketForm => ({
   execution_delay_days: item.execution_delay_days?.toString() || '',
   equipment_reception_date: item.equipment_reception_date?.slice(0, 10) || '',
   equipment_reception_note: item.equipment_reception_note || '',
-  delivery_note_date: item.delivery_note_date?.slice(0, 10) || '',
-  delivery_note_reference: item.delivery_note_reference || '',
+  delivery_notes: (item.delivery_notes?.length ? item.delivery_notes : item.delivery_note_date ? [{
+    delivery_note_date: item.delivery_note_date.slice(0, 10),
+    delivery_note_reference: item.delivery_note_reference || '',
+    is_total_delivery: true,
+  }] : []).map(note => ({
+    id: note.id,
+    delivery_note_date: note.delivery_note_date?.slice(0, 10) || '',
+    delivery_note_reference: note.delivery_note_reference || '',
+    is_total_delivery: Boolean(note.is_total_delivery),
+  })),
   invoice_date: item.invoice_date?.slice(0, 10) || '',
   invoice_reference: item.invoice_reference || '',
   provisional_acceptance_date: item.provisional_acceptance_date?.slice(0, 10) || '',
@@ -198,7 +216,7 @@ const historyActionLabel = (event: MarketHistoryItem) => {
     client: 'client', market_number: 'numéro du marché', market_object: 'objet du marché',
     owner_username: 'responsable', signature_date: 'signature', execution_delay_days: 'délai d’exécution',
     equipment_reception_date: 'réception', equipment_reception_note: 'détail de réception',
-    delivery_note_date: 'date du BL', delivery_note_reference: 'référence du BL',
+    delivery_notes: 'BL',
     invoice_date: 'date de facture', invoice_reference: 'référence de facture',
     provisional_acceptance_date: 'date du PV provisoire', provisional_acceptance_reference: 'référence du PV provisoire',
     warranty_retention_days: 'retenue de garantie', final_acceptance_date: 'date du PV définitif',
@@ -221,24 +239,28 @@ const addDays = (value: string, days: string) => {
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
 function Progress({ item }: { item: PublicMarketCase }) {
+  const hasDeliveryNotes = Boolean(item.delivery_notes?.length || item.delivery_note_date);
+  const deliveryComplete = item.delivery_note_complete ?? Boolean(item.delivery_note_date);
+  const deliveryPartial = hasDeliveryNotes && !deliveryComplete;
   return (
     <div className="min-w-[285px]">
       <div className="flex items-center">
         {STEPS.map((step, index) => {
-          const complete = Boolean(item[step.field]);
+          const complete = step.key === 'delivery_note' ? deliveryComplete : Boolean(item[step.field]);
+          const partial = step.key === 'delivery_note' && deliveryPartial;
           const active = item.next_step === step.key;
           return (
-            <div key={step.key} className="flex flex-1 items-center last:flex-none" title={`${step.label} : ${formatDate(item[step.field] as string | null)}`}>
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${complete ? 'border-green-400/40 bg-green-500/20 text-green-300' : active ? 'border-savia-accent bg-savia-accent/15 text-savia-accent' : 'border-savia-border text-savia-text-dim'}`}>
+            <div key={step.key} className="flex flex-1 items-center last:flex-none" title={`${step.label} : ${partial ? 'livraison partielle' : formatDate(item[step.field] as string | null)}`}>
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${complete ? 'border-green-400/40 bg-green-500/20 text-green-300' : partial ? 'border-orange-400/50 bg-orange-500/20 text-orange-300' : active ? 'border-savia-accent bg-savia-accent/15 text-savia-accent' : 'border-savia-border text-savia-text-dim'}`}>
                 {complete ? <Check className="h-3.5 w-3.5" /> : <Circle className="h-2.5 w-2.5" />}
               </span>
-              {index < STEPS.length - 1 && <span className={`h-0.5 flex-1 ${complete ? 'bg-green-500/40' : 'bg-savia-border'}`} />}
+              {index < STEPS.length - 1 && <span className={`h-0.5 flex-1 ${complete ? 'bg-green-500/40' : partial ? 'bg-orange-500/40' : 'bg-savia-border'}`} />}
             </div>
           );
         })}
       </div>
       <div className="mt-1.5 flex justify-between text-[10px] text-savia-text-dim">
-        <span>Signature</span><span>Réception</span><span>BL</span><span>Facture</span><span>PV prov.</span><span>PV déf.</span>
+        <span>Signature</span><span>Réception</span><span className={deliveryPartial ? 'font-bold text-orange-300' : deliveryComplete ? 'font-bold text-green-300' : undefined}>BL</span><span>Facture</span><span>PV prov.</span><span>PV déf.</span>
       </div>
     </div>
   );
@@ -481,9 +503,24 @@ export default function PublicMarketsPage() {
             <div className="space-y-4">
               <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><FileSignature className="h-4 w-4 text-blue-300" /> Signature</div><label><span className={LABEL}>Date de signature</span><input type="date" value={form.signature_date} onChange={event => setForm(value => ({ ...value, signature_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Délai d’exécution (jours)</span><input type="number" min="0" value={form.execution_delay_days} onChange={event => setForm(value => ({ ...value, execution_delay_days: event.target.value }))} className={INPUT} /></label>{executionDeadline && <div className="md:col-start-2 md:col-span-2 text-xs text-blue-200">Échéance d’exécution calculée : <strong>{formatDate(executionDeadline)}</strong> · rappels à J‑30 et J‑15</div>}</div>
               <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><PackageCheck className="h-4 w-4 text-cyan-300" /> Réception</div><label><span className={LABEL}>Date de réception</span><input type="date" value={form.equipment_reception_date} onChange={event => setForm(value => ({ ...value, equipment_reception_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Matériel / équipement reçu</span><input value={form.equipment_reception_note} onChange={event => setForm(value => ({ ...value, equipment_reception_note: event.target.value }))} className={INPUT} placeholder="Détail ou observation" /></label></div>
-              <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><FileCheck2 className="h-4 w-4 text-amber-300" /> Bon de livraison</div><label><span className={LABEL}>Date du BL</span><input type="date" value={form.delivery_note_date} onChange={event => setForm(value => ({ ...value, delivery_note_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Référence du BL</span><input value={form.delivery_note_reference} onChange={event => setForm(value => ({ ...value, delivery_note_reference: event.target.value }))} className={INPUT} /></label></div>
+              <div className="rounded-lg bg-savia-surface-hover/50 p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold"><FileCheck2 className="h-4 w-4 text-amber-300" /> Bons de livraison</div>
+                  <button type="button" onClick={() => setForm(value => ({ ...value, delivery_notes: [...value.delivery_notes, { delivery_note_date: '', delivery_note_reference: '', is_total_delivery: false }] }))} className="inline-flex items-center gap-1.5 rounded-lg border border-savia-border px-2.5 py-1.5 text-xs font-bold text-savia-accent hover:bg-savia-accent/10"><Plus className="h-3.5 w-3.5" /> Ajouter un BL</button>
+                </div>
+                {form.delivery_notes.length === 0 && <p className="text-xs text-savia-text-muted">Aucun BL enregistré. Ajoutez chaque livraison partielle séparément.</p>}
+                <div className="space-y-2">
+                  {form.delivery_notes.map((note, index) => <div key={note.id || index} className="grid gap-2 rounded-lg border border-savia-border/70 p-2 md:grid-cols-[1fr_1.4fr_auto_auto] md:items-end">
+                    <label><span className={LABEL}>Date du BL {index + 1}</span><input required type="date" value={note.delivery_note_date} onChange={event => setForm(value => ({ ...value, delivery_notes: value.delivery_notes.map((current, currentIndex) => currentIndex === index ? { ...current, delivery_note_date: event.target.value } : current) }))} className={INPUT} /></label>
+                    <label><span className={LABEL}>Référence</span><input value={note.delivery_note_reference} onChange={event => setForm(value => ({ ...value, delivery_notes: value.delivery_notes.map((current, currentIndex) => currentIndex === index ? { ...current, delivery_note_reference: event.target.value } : current) }))} className={INPUT} /></label>
+                    <label className="flex items-center gap-2 pb-2 text-xs font-semibold text-savia-text-muted"><input type="checkbox" checked={note.is_total_delivery} onChange={event => setForm(value => ({ ...value, delivery_notes: value.delivery_notes.map((current, currentIndex) => currentIndex === index ? { ...current, is_total_delivery: event.target.checked } : current) }))} /> Livraison totale</label>
+                    <button type="button" onClick={() => setForm(value => ({ ...value, delivery_notes: value.delivery_notes.filter((_, currentIndex) => currentIndex !== index) }))} className="mb-1 justify-self-end rounded-lg p-2 text-savia-text-dim hover:bg-red-500/10 hover:text-red-300" title="Supprimer ce BL"><X className="h-4 w-4" /></button>
+                  </div>)}
+                </div>
+                {form.delivery_notes.length > 0 && !form.delivery_notes.some(note => note.is_total_delivery) && <p className="mt-2 text-xs font-semibold text-orange-300">Livraison partielle : l’indicateur BL restera orange jusqu’à la livraison totale.</p>}
+              </div>
               <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-orange-300" /> Facture</div><label><span className={LABEL}>Date de facture</span><input type="date" value={form.invoice_date} onChange={event => setForm(value => ({ ...value, invoice_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Référence de facture</span><input value={form.invoice_reference} onChange={event => setForm(value => ({ ...value, invoice_reference: event.target.value }))} className={INPUT} /></label></div>
-              <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><ClipboardCheck className="h-4 w-4 text-violet-300" /> PV provisoire</div><label><span className={LABEL}>Date du PV provisoire</span><input type="date" value={form.provisional_acceptance_date} onChange={event => setForm(value => ({ ...value, provisional_acceptance_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Référence</span><input value={form.provisional_acceptance_reference} onChange={event => setForm(value => ({ ...value, provisional_acceptance_reference: event.target.value }))} className={INPUT} /></label><label className="md:col-start-2"><span className={LABEL}>Retenue de garantie (jours)</span><input type="number" min="0" value={form.warranty_retention_days} onChange={event => setForm(value => ({ ...value, warranty_retention_days: event.target.value }))} className={INPUT} /></label>{warrantyDeadline && <div className="self-end pb-3 text-xs text-violet-200">Fin de garantie : <strong>{formatDate(warrantyDeadline)}</strong> · rappel à J‑30</div>}</div>
+              <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><ClipboardCheck className="h-4 w-4 text-violet-300" /> PV provisoire</div><label><span className={LABEL}>Date du PV provisoire</span><input type="date" value={form.provisional_acceptance_date} onChange={event => setForm(value => ({ ...value, provisional_acceptance_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Référence</span><input value={form.provisional_acceptance_reference} onChange={event => setForm(value => ({ ...value, provisional_acceptance_reference: event.target.value }))} className={INPUT} /></label><label className="md:col-start-2"><span className={LABEL}>Retenue de garantie (jours)</span><input type="number" min="0" value={form.warranty_retention_days} onChange={event => setForm(value => ({ ...value, warranty_retention_days: event.target.value }))} className={INPUT} /></label>{warrantyDeadline && <div className="self-end pb-3 text-xs text-violet-200">Fin de garantie (information) : <strong>{formatDate(warrantyDeadline)}</strong></div>}</div>
               <div className="grid gap-3 rounded-lg bg-savia-surface-hover/50 p-3 md:grid-cols-3"><div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4 text-green-300" /> PV définitif</div><label><span className={LABEL}>Date du PV définitif</span><input type="date" value={form.final_acceptance_date} onChange={event => setForm(value => ({ ...value, final_acceptance_date: event.target.value }))} className={INPUT} /></label><label><span className={LABEL}>Référence</span><input value={form.final_acceptance_reference} onChange={event => setForm(value => ({ ...value, final_acceptance_reference: event.target.value }))} className={INPUT} /></label></div>
             </div>
           </section>

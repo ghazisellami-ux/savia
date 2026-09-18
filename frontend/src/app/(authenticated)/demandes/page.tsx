@@ -26,6 +26,7 @@ interface Demande {
   contact_tel: string;
   technicien_assigne: string;
   notes_traitement: string;
+  equipement_id?: number | null;
   intervention_id?: number | null;
   billing_case_id?: number | null;
 }
@@ -191,6 +192,7 @@ export default function DemandesPage() {
         contact_tel: item.contact_tel || '',
         technicien_assigne: item.technicien_assigne || '',
         notes_traitement: item.notes_traitement || '',
+        equipement_id: item.equipement_id ? Number(item.equipement_id) : null,
         intervention_id: item.intervention_id ? Number(item.intervention_id) : null,
         billing_case_id: item.billing_case_id ? Number(item.billing_case_id) : null,
       }));
@@ -279,15 +281,13 @@ export default function DemandesPage() {
   }, [billingSource?.equipment, form.client, isLecteur]);
 
   const duplicateRequest = useMemo(() => {
-    const client = form.client.trim().toLocaleLowerCase('fr');
-    const equipment = form.equipement.trim().toLocaleLowerCase('fr');
-    if (!client || !equipment) return null;
+    const selectedId = Number(selectedEquipmentId);
+    if (!Number.isInteger(selectedId) || selectedId <= 0) return null;
     return data.find(item => (
       item.statut !== 'Clôturée'
-      && item.client.trim().toLocaleLowerCase('fr') === client
-      && item.machine.trim().toLocaleLowerCase('fr') === equipment
+      && item.equipement_id === selectedId
     )) || null;
-  }, [data, form.client, form.equipement]);
+  }, [data, selectedEquipmentId]);
 
   const openNewModal = () => {
     setBillingSource(null);
@@ -316,7 +316,7 @@ export default function DemandesPage() {
     const payload = {
       ...formToSend,
       date_planifiee: formToSend.date_planifiee || todayIso(),
-      ...(Number.isInteger(Number(selectedEquipmentId))
+      ...(Number.isInteger(Number(selectedEquipmentId)) && Number(selectedEquipmentId) > 0
         ? { equipement_id: Number(selectedEquipmentId) }
         : {}),
       ...(billingSource ? { billing_case_id: billingSource.id } : {}),

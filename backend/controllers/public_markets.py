@@ -15,6 +15,7 @@ from services.public_market_tracking import (
     compute_alert,
     compute_status,
     deadline_from,
+    has_total_delivery,
     progress_count,
 )
 
@@ -63,6 +64,34 @@ def _serialize(value: Any) -> Any:
 
 def _row_dict(row: Any) -> dict[str, Any]:
     return _serialize(dict(row)) if row else {}
+
+
+def _delivery_notes(conn, case_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT id, delivery_note_date, delivery_note_reference,
+                  is_total_delivery, created_at
+           FROM public_market_delivery_notes
+           WHERE case_id=%s
+           ORDER BY delivery_note_date, id""",
+        (case_id,),
+    ).fetchall()
+    return [_row_dict(row) for row in rows]
+
+
+def _replace_delivery_notes(conn, case_id: int, notes: list[dict[str, Any]]) -> None:
+    conn.execute("DELETE FROM public_market_delivery_notes WHERE case_id=%s", (case_id,))
+    for note in notes:
+        conn.execute(
+            """INSERT INTO public_market_delivery_notes (
+                   case_id, delivery_note_date, delivery_note_reference, is_total_delivery
+               ) VALUES (%s, %s, %s, %s)""",
+            (
+                case_id,
+                note["delivery_note_date"],
+                note["delivery_note_reference"],
+                note["is_total_delivery"],
+            ),
+        )
 
 
 def _parse_date(value: Any, label: str) -> date | None:
@@ -149,8 +178,30 @@ def _update_action(before: dict[str, Any], values: dict[str, Any], changed_field
     return "UPDATE_CASE"
 
 
-def _hydrate(raw: Any) -> dict[str, Any]:
+def _hydrate(raw: Any, delivery_note_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     item = _row_dict(raw)
+    notes = delivery_note_rows if delivery_note_rows is not None else []
+    if not notes and item.get("delivery_note_date"):
+        # Defensive fallback for databases upgraded before migration 029 was
+        # applied: keep the former single-BL milestone usable.
+        notes = [{
+            "delivery_note_date": item["delivery_note_date"],
+            "delivery_note_reference": item.get("delivery_note_reference") or "",
+            "is_total_delivery": True,
+        }]
+    if notes:
+        # Keep the legacy fields populated for old consumers while exposing
+        # the complete list to the new tracking UI.
+        latest = notes[-1]
+        item["delivery_note_date"] = latest.get("delivery_note_date")
+        item["delivery_note_reference"] = latest.get("delivery_note_reference") or ""
+    item["delivery_notes"] = notes
+    item["delivery_note_complete"] = has_total_delivery(item)
+    item["delivery_note_status"] = (
+        "complete" if item["delivery_note_complete"]
+        else "partial" if notes
+        else "pending"
+    )
     status = compute_status(item)
     execution_deadline = deadline_from(item.get("signature_date"), item.get("execution_delay_days"))
     warranty_deadline = deadline_from(
@@ -173,7 +224,7 @@ def _get_case(conn, case_id: int) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM public_market_cases WHERE id=%s", (case_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Dossier de marché introuvable")
-    return _hydrate(row)
+    return _hydrate(row, _delivery_notes(conn, case_id))
 
 
 def _validated_values(body: dict, previous: dict | None = None) -> dict[str, Any]:
@@ -192,6 +243,38 @@ def _validated_values(body: dict, previous: dict | None = None) -> dict[str, Any
         body.get("warranty_retention_days", previous.get("warranty_retention_days")),
         "La retenue de garantie",
     )
+    raw_delivery_notes = body.get("delivery_notes")
+    if raw_delivery_notes is None:
+        raw_delivery_notes = previous.get("delivery_notes")
+    if raw_delivery_notes is None:
+        legacy_date = values["delivery_note_date"]
+        raw_delivery_notes = ([{
+            "delivery_note_date": legacy_date,
+            "delivery_note_reference": values["delivery_note_reference"],
+            "is_total_delivery": True,
+        }] if legacy_date else [])
+    if not isinstance(raw_delivery_notes, list):
+        raise HTTPException(status_code=422, detail="La liste des BL est invalide")
+    parsed_delivery_notes = []
+    for index, note in enumerate(raw_delivery_notes, start=1):
+        if not isinstance(note, dict):
+            raise HTTPException(status_code=422, detail=f"Le BL n°{index} est invalide")
+        note_date = _parse_date(note.get("delivery_note_date"), f"la date du BL n°{index}")
+        if not note_date:
+            raise HTTPException(status_code=422, detail=f"La date du BL n°{index} est obligatoire")
+        parsed_delivery_notes.append({
+            "delivery_note_date": note_date,
+            "delivery_note_reference": str(note.get("delivery_note_reference") or "").strip(),
+            "is_total_delivery": note.get("is_total_delivery") in (True, 1, "1", "true", "True"),
+        })
+    parsed_delivery_notes.sort(key=lambda note: note["delivery_note_date"])
+    values["delivery_notes"] = parsed_delivery_notes
+    if parsed_delivery_notes:
+        values["delivery_note_date"] = parsed_delivery_notes[-1]["delivery_note_date"]
+        values["delivery_note_reference"] = parsed_delivery_notes[-1]["delivery_note_reference"]
+    else:
+        values["delivery_note_date"] = None
+        values["delivery_note_reference"] = ""
     values["case_state"] = values["case_state"] or "active"
     if not values["client"]:
         raise HTTPException(status_code=422, detail="Le client est obligatoire")
@@ -201,6 +284,11 @@ def _validated_values(body: dict, previous: dict | None = None) -> dict[str, Any
         raise HTTPException(status_code=422, detail="État de dossier invalide")
     if values["case_state"] in {"blocked", "cancelled"} and not values["block_reason"]:
         raise HTTPException(status_code=422, detail="Un motif est obligatoire pour bloquer ou annuler")
+
+    if values["invoice_date"] and parsed_delivery_notes and not any(
+        note["is_total_delivery"] for note in parsed_delivery_notes
+    ):
+        raise HTTPException(status_code=422, detail="La facture ne peut être renseignée qu’après la livraison totale")
 
     chronological = [values[field] for field in DATE_FIELDS if values[field]]
     if chronological != sorted(chronological):
@@ -236,7 +324,17 @@ def list_public_market_cases(
         rows = conn.execute(
             "SELECT * FROM public_market_cases ORDER BY updated_at DESC, id DESC"
         ).fetchall()
-    cases = [_hydrate(row) for row in rows]
+        note_rows = conn.execute(
+            """SELECT id, case_id, delivery_note_date, delivery_note_reference,
+                      is_total_delivery, created_at
+               FROM public_market_delivery_notes
+               ORDER BY delivery_note_date, id"""
+        ).fetchall()
+    notes_by_case: dict[int, list[dict[str, Any]]] = {}
+    for note_row in note_rows:
+        note = _row_dict(note_row)
+        notes_by_case.setdefault(int(note["case_id"]), []).append(note)
+    cases = [_hydrate(row, notes_by_case.get(int(row["id"]), [])) for row in rows]
     if status == "alert":
         cases = [item for item in cases if item.get("alert")]
     elif status:
@@ -301,6 +399,7 @@ def create_public_market_case(body: dict = Body(...), user: dict = Depends(_veri
                 "final_acceptance_reference", "case_state", "block_reason", "notes",
             )) + (actor, actor),
         ).fetchone()
+        _replace_delivery_notes(conn, row["id"], values["delivery_notes"])
         created = _get_case(conn, row["id"])
         _history(conn, created["id"], "CREATE_CASE", actor, after=created)
     log_audit(actor, "CREATE_PUBLIC_MARKET", json.dumps({"case_id": created["id"], "market_number": created["market_number"]}, ensure_ascii=False), "marches")
@@ -348,6 +447,7 @@ def update_public_market_case(case_id: int, body: dict = Body(...), user: dict =
                 "final_acceptance_reference", "case_state", "block_reason", "notes",
             )) + (actor, case_id),
         )
+        _replace_delivery_notes(conn, case_id, values["delivery_notes"])
         updated = _get_case(conn, case_id)
         if changed_fields:
             history_after = dict(updated)
