@@ -787,6 +787,101 @@ def _migration_029_public_market_multiple_delivery_notes(conn) -> None:
     )
 
 
+def _migration_030_remove_deleted_intervention_planning_orphans(conn) -> None:
+    """Remove planning rows left by the former manual intervention deletion flow."""
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS planning_id INTEGER")
+    conn.execute("ALTER TABLE planning_maintenance ADD COLUMN IF NOT EXISTS contrat_id INTEGER")
+    conn.execute("ALTER TABLE planning_maintenance ADD COLUMN IF NOT EXISTS original_planning_id INTEGER")
+    conn.execute(
+        """DELETE FROM planning_maintenance pm
+           WHERE (
+               pm.notes LIKE %s
+               OR pm.notes LIKE %s
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM interventions i
+               WHERE i.planning_id = pm.id
+           )""",
+        (
+            "%[Intervention corrective supprimée manuellement]%",
+            "%[Intervention supprimée manuellement]%",
+        ),
+    )
+
+
+def _migration_031_cleanup_orphan_contract_interventions(conn) -> None:
+    """Remove interventions and planning rows left after deleting a contract."""
+    conn.execute("ALTER TABLE interventions ADD COLUMN IF NOT EXISTS planning_id INTEGER")
+    conn.execute("DROP TABLE IF EXISTS savia_orphan_contract_intervention_ids")
+    conn.execute("DROP TABLE IF EXISTS savia_orphan_contract_planning_ids")
+    conn.execute(
+        """CREATE TEMP TABLE savia_orphan_contract_planning_ids ON COMMIT DROP AS
+           SELECT DISTINCT pm.id
+           FROM planning_maintenance pm
+           WHERE (
+               pm.contrat_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM contrats c WHERE c.id = pm.contrat_id
+               )
+           )
+           OR (
+               (
+                   pm.notes ~* 'contrat #[0-9]+'
+                   OR pm.description ~* 'contrat #[0-9]+'
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM contrats c
+                   WHERE pm.contrat_id = c.id
+                      OR pm.notes ~* ('contrat #' || c.id::text || '([^0-9]|$)')
+                      OR pm.description ~* ('contrat #' || c.id::text || '([^0-9]|$)')
+               )
+           )"""
+    )
+    conn.execute(
+        """CREATE TEMP TABLE savia_orphan_contract_intervention_ids ON COMMIT DROP AS
+           SELECT DISTINCT i.id
+           FROM interventions i
+           JOIN savia_orphan_contract_planning_ids p ON p.id = i.planning_id
+           UNION
+           SELECT DISTINCT i.id
+           FROM interventions i
+           WHERE (
+               i.notes ~* 'contrat #[0-9]+'
+               OR i.description ~* 'contrat #[0-9]+'
+           )
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM contrats c
+                 WHERE i.notes ~* ('contrat #' || c.id::text || '([^0-9]|$)')
+                    OR i.description ~* ('contrat #' || c.id::text || '([^0-9]|$)')
+             )"""
+    )
+    conn.execute(
+        """DELETE FROM billing_cases bc
+           USING savia_orphan_contract_intervention_ids orphan
+           WHERE bc.intervention_id = orphan.id"""
+    )
+    conn.execute(
+        """UPDATE demandes_intervention d
+           SET intervention_id = NULL
+           FROM savia_orphan_contract_intervention_ids orphan
+           WHERE d.intervention_id = orphan.id"""
+    )
+    conn.execute(
+        """DELETE FROM interventions i
+           USING savia_orphan_contract_intervention_ids orphan
+           WHERE i.id = orphan.id"""
+    )
+    conn.execute(
+        """DELETE FROM planning_maintenance pm
+           USING savia_orphan_contract_planning_ids orphan
+           WHERE pm.id = orphan.id
+              OR pm.original_planning_id = orphan.id"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1141,6 +1236,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("027", "technical document catalog classification", _migration_027_technical_document_catalog),
     ("028", "equipment identity and exact duplicate cleanup", _migration_028_equipment_identity_and_exact_dedup),
     ("029", "multiple public market delivery notes", _migration_029_public_market_multiple_delivery_notes),
+    ("030", "remove deleted intervention planning orphans", _migration_030_remove_deleted_intervention_planning_orphans),
+    ("031", "cleanup orphan contract interventions", _migration_031_cleanup_orphan_contract_interventions),
 )
 
 

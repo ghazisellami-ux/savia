@@ -31,6 +31,7 @@ interface Intervention {
   duree_deplacement: number;
   start_time?: string;
   end_time?: string;
+  planning_id?: number | null;
   statut: string;
   date_transfert_atelier?: string;
   retour_site_confirme?: boolean;
@@ -291,6 +292,7 @@ export default function SavPage() {
         date: item.date || 'N/A',
         machine: item.machine || '',
         client: item.client || '',
+        planning_id: item.planning_id ?? null,
         type: item.type_intervention || 'Corrective',
         technicien: item.technicien || 'Non assigné',
         duree: Math.round((Number(item.duree_minutes) || 0) / 60),
@@ -1114,7 +1116,7 @@ export default function SavPage() {
                               <Download className="w-3.5 h-3.5" />
                             </button>
                           )}
-                          {canDelete && (
+                          {canDelete && !i.type.toLowerCase().includes('prévent') && !i.type.toLowerCase().includes('prevent') && (
                             <button onClick={() => setDeleteConfirm(i)}
                               title="Supprimer l'intervention"
                               className="p-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer transition-colors">
