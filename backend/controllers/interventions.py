@@ -1098,12 +1098,19 @@ def delete_intervention(intervention_id: int, user: dict = Depends(_verify_token
                     (planning_id, planning_id),
                 )
             
-            # Le dossier de suivi de facturation utilise SET NULL sur
-            # intervention_id pour préserver les dossiers lors d'autres
-            # opérations. Ici, la suppression de l'intervention doit aussi
-            # supprimer explicitement son dossier et ses éléments associés.
+            # Les dossiers créés automatiquement suivent l'intervention.
+            # Un dossier créé manuellement depuis la facturation est conservé
+            # mais détaché afin de ne pas perdre son historique financier.
             conn.execute(
-                "DELETE FROM billing_cases WHERE intervention_id = %s",
+                """DELETE FROM billing_cases
+                   WHERE intervention_id = %s
+                     AND created_by IN ('system', 'system-migration')""",
+                (intervention_id, ),
+            )
+            conn.execute(
+                """UPDATE billing_cases
+                   SET intervention_id = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE intervention_id = %s""",
                 (intervention_id,),
             )
 

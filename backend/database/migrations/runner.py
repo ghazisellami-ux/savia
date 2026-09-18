@@ -861,6 +861,13 @@ def _migration_031_cleanup_orphan_contract_interventions(conn) -> None:
     conn.execute(
         """DELETE FROM billing_cases bc
            USING savia_orphan_contract_intervention_ids orphan
+           WHERE bc.intervention_id = orphan.id
+             AND bc.created_by IN ('system', 'system-migration')"""
+    )
+    conn.execute(
+        """UPDATE billing_cases bc
+           SET intervention_id = NULL, updated_at = CURRENT_TIMESTAMP
+           FROM savia_orphan_contract_intervention_ids orphan
            WHERE bc.intervention_id = orphan.id"""
     )
     conn.execute(
@@ -879,6 +886,15 @@ def _migration_031_cleanup_orphan_contract_interventions(conn) -> None:
            USING savia_orphan_contract_planning_ids orphan
            WHERE pm.id = orphan.id
               OR pm.original_planning_id = orphan.id"""
+    )
+
+
+def _migration_032_cleanup_orphan_automatic_billing_cases(conn) -> None:
+    """Remove automatic billing cases whose source intervention was deleted."""
+    conn.execute(
+        """DELETE FROM billing_cases
+           WHERE intervention_id IS NULL
+             AND created_by IN ('system', 'system-migration')"""
     )
 
 
@@ -1238,6 +1254,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("029", "multiple public market delivery notes", _migration_029_public_market_multiple_delivery_notes),
     ("030", "remove deleted intervention planning orphans", _migration_030_remove_deleted_intervention_planning_orphans),
     ("031", "cleanup orphan contract interventions", _migration_031_cleanup_orphan_contract_interventions),
+    ("032", "cleanup orphan automatic billing cases", _migration_032_cleanup_orphan_automatic_billing_cases),
 )
 
 

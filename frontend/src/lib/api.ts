@@ -563,6 +563,7 @@ export const billing = {
     return request<Array<Record<string, unknown>>>(`/api/billing/cases${qs ? `?${qs}` : ''}`);
   },
   get: (caseId: number) => request<Record<string, unknown>>(`/api/billing/cases/${caseId}`),
+  delete: (caseId: number) => request<{ ok: boolean; case_id: number; replacement_case_id?: number | null }>(`/api/billing/cases/${caseId}`, { method: 'DELETE' }),
   reassessCoverage: (caseId: number) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}/reassess-coverage`, { method: 'POST' }),
   create: (data: Record<string, unknown>) =>
