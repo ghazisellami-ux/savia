@@ -493,6 +493,31 @@ def get_clients_by_region(region: Optional[str] = None, user: dict = Depends(_ve
         return []
 
 
+def _ensure_matricule_fiscale_available(body: dict, *, exclude_client_id: int | None = None) -> None:
+    """Reject a tax identifier already assigned to another client."""
+    matricule = str(body.get("matricule_fiscale") or "").strip()
+    if not matricule:
+        return
+
+    query = """SELECT id, nom
+               FROM clients
+               WHERE NULLIF(BTRIM(matricule_fiscale), '') IS NOT NULL
+                 AND LOWER(BTRIM(matricule_fiscale)) = LOWER(BTRIM(%s))"""
+    params: tuple = (matricule,)
+    if exclude_client_id is not None:
+        query += " AND id <> %s"
+        params = (matricule, exclude_client_id)
+
+    with get_db() as conn:
+        existing = conn.execute(query, params).fetchone()
+    if existing:
+        existing_client = str(existing.get("nom") or "client inconnu").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cette matricule fiscale appartient déjà au client « {existing_client} ».",
+        )
+
+
 @app.post("/api/clients")
 def create_client(body: dict, user: dict = Depends(_verify_token)):
     """Create a new client."""
@@ -502,6 +527,8 @@ def create_client(body: dict, user: dict = Depends(_verify_token)):
             status_code=403,
             detail="Cette action est réservée aux Responsables, Managers et Admins"
         )
+
+    _ensure_matricule_fiscale_available(body)
     
     ajouter_client(body)
     
@@ -744,6 +771,7 @@ def update_client_api(client_id: int, body: dict, user: dict = Depends(_verify_t
     """Update an existing client."""
     if not _check_create_permission(user):
         raise HTTPException(status_code=403, detail="Cette action est réservée aux Responsables, Managers et Admins")
+    _ensure_matricule_fiscale_available(body, exclude_client_id=client_id)
     modifier_client(client_id, body)
     return {"ok": True}
 
