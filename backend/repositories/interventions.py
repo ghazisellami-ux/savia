@@ -443,9 +443,13 @@ def supprimer_planning(planning_id):
         intervention_ids = [row["id"] for row in intervention_rows]
 
         if intervention_ids:
-            # Preserve the request/billing records while removing their
-            # erroneous intervention reference. Other intervention details
-            # are deleted through their database cascades.
+            # Keep the request history, but remove the billing files attached
+            # to the interventions being deleted. billing_cases uses SET NULL
+            # on intervention_id, so this cleanup must be explicit.
+            conn.execute(
+                "DELETE FROM billing_cases WHERE intervention_id = ANY(%s)",
+                (intervention_ids,),
+            )
             conn.execute(
                 "UPDATE demandes_intervention SET intervention_id=NULL WHERE intervention_id = ANY(%s)",
                 (intervention_ids,),
