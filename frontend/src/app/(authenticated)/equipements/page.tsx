@@ -365,7 +365,7 @@ export default function EquipementsPage() {
   }, [data, filterDomaine]);
 
   // Fixed status options (matching form options)
-  const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'En maintenance', 'Hors Service', 'En atelier'], []);
+  const dynamicStatuts = useMemo(() => ['Tous', 'Opérationnel', 'En maintenance', 'Hors Service', 'En atelier', 'En arrêt/Panne'], []);
   const dynamicServices = useMemo(
     () => ['Tous', ...Array.from(new Set(data.map(equipment => equipment.service).filter(Boolean))).sort()],
     [data],
@@ -416,6 +416,7 @@ export default function EquipementsPage() {
   const [clientRegionFilter, setClientRegionFilter] = useState('');
   const [clientVilleFilter, setClientVilleFilter] = useState('');
   const [savingClient, setSavingClient] = useState(false);
+  const [clientFormError, setClientFormError] = useState('');
   const [customClientTypes, setCustomClientTypes] = useState<string[]>([]);
   const [customClientTypeMode, setCustomClientTypeMode] = useState(false);
   const [customClientTypeValue, setCustomClientTypeValue] = useState('');
@@ -517,6 +518,18 @@ export default function EquipementsPage() {
       .filter(Boolean);
     return ['Privé', 'Public', ...Array.from(new Set(savedTypes.filter(type => type !== 'Privé' && type !== 'Public'))).sort()];
   }, [clientsList, customClientTypes]);
+
+  const matriculeFiscalError = useMemo(() => {
+    const matricule = clientForm.matricule_fiscale.trim().toLocaleLowerCase('fr');
+    if (!matricule) return '';
+    const duplicate = clientsList.find(client =>
+      client.id !== editingClient?.id
+      && client.matricule_fiscale.trim().toLocaleLowerCase('fr') === matricule,
+    );
+    return duplicate
+      ? `Cette matricule fiscale appartient déjà au client « ${duplicate.nom} ».`
+      : '';
+  }, [clientForm.matricule_fiscale, clientsList, editingClient]);
 
   // Computed warranty end date from form state
   const formGarantieFin = useMemo(
@@ -874,6 +887,11 @@ export default function EquipementsPage() {
 
   const handleSaveClient = async () => {
     if (!clientForm.nom.trim()) return;
+    if (matriculeFiscalError) {
+      setClientFormError(matriculeFiscalError);
+      return;
+    }
+    setClientFormError('');
     setSavingClient(true);
     try {
       // Auto-generate code_client for new clients if not already set
@@ -894,12 +912,17 @@ export default function EquipementsPage() {
       }
       setClientForm(emptyClientForm); setShowClientForm(false); setEditingClient(null);
       await loadClients();
-    } catch (err) { console.error('Save client failed', err); }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Impossible d’enregistrer le client.';
+      setClientFormError(message);
+      console.error('Save client failed', err);
+    }
     finally { setSavingClient(false); }
   };
 
   const startEditClient = (c: ClientRecord) => {
     setEditingClient(c);
+    setClientFormError('');
     setClientForm({ nom: c.nom, code_client: c.code_client, matricule_fiscale: c.matricule_fiscale, country_code: c.country_code || country, ville: c.ville, region: c.region, contact: c.contact, telephone: c.telephone, adresse: c.adresse, type_client: c.type_client || 'Privé', international: c.international });
     setCustomClientTypeMode(false);
     setCustomClientTypeValue('');
@@ -1269,7 +1292,10 @@ export default function EquipementsPage() {
     if (filterModele !== 'Tous' && filterLabelKey(eq.modele) !== filterLabelKey(filterModele)) return false;
     if (filterClient !== 'Tous' && eq.client !== filterClient) return false;
     if (filterDomaine !== 'Tous' && eq.domaine !== filterDomaine) return false;
-    if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
+    if (filterStatut === 'En arrêt/Panne') {
+      const status = eq.statut.toLocaleLowerCase('fr');
+      if (!status.includes('maintenance') && !status.includes('hors service')) return false;
+    } else if (filterStatut !== 'Tous' && eq.statut !== filterStatut) return false;
     if (filterService !== 'Tous' && eq.service !== filterService) return false;
     if (search && !eq.nom.toLowerCase().includes(search.toLowerCase()) &&
         !eq.numSerie.toLowerCase().includes(search.toLowerCase())) return false;
@@ -1345,7 +1371,11 @@ export default function EquipementsPage() {
 
   const totalEquip = data.length;
   const operationnel = data.filter(e => e.statut.toLowerCase().includes('actif') || e.statut.toLowerCase().includes('opérationnel')).length;
-  const maintenance = totalEquip - operationnel;
+  const enArretPanne = data.filter(equipment => {
+    const status = equipment.statut.toLocaleLowerCase('fr');
+    return status.includes('maintenance') || status.includes('hors service');
+  }).length;
+  const enAtelier = data.filter(equipment => equipment.statut.toLocaleLowerCase('fr').includes('atelier')).length;
   const avgHealth = totalEquip > 0 ? Math.round(data.reduce((a, b) => a + b.healthScore, 0) / totalEquip) : 0;
   const totalClients = useMemo(() => {
     // Count unique clients from both equipements and imported clients
@@ -1391,6 +1421,17 @@ export default function EquipementsPage() {
     setActiveTab('equipements');
   };
 
+  const showEquipmentStatus = (status: 'En atelier' | 'En arrêt/Panne') => {
+    setSearch('');
+    setFilterDomaine('Tous');
+    setFilterType('Tous');
+    setFilterModele('Tous');
+    setFilterClient('Tous');
+    setFilterService('Tous');
+    setFilterStatut(current => current === status ? 'Tous' : status);
+    setActiveTab('equipements');
+  };
+
   if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-savia-accent" /></div>;
 
   return (
@@ -1404,19 +1445,26 @@ export default function EquipementsPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
         {[
-          { label: 'Total Clients',     value: totalClients,    color: 'text-purple-400',   icon: <Building2 className="w-5 h-5" /> },
-          { label: 'Total Équipements', value: totalEquip,      color: 'text-savia-accent', icon: <Server className="w-5 h-5" /> },
-          { label: 'Opérationnels',     value: operationnel,    color: 'text-green-400',    icon: <CheckCircle2 className="w-5 h-5" /> },
-          { label: 'En arrêt/Panne',   value: maintenance,     color: 'text-red-400',      icon: <AlertTriangle className="w-5 h-5" /> },
+          { label: 'Total Clients',     value: totalClients,     color: 'text-purple-400',   icon: <Building2 className="w-5 h-5" /> },
+          { label: 'Total Équipements', value: totalEquip,       color: 'text-savia-accent', icon: <Server className="w-5 h-5" /> },
+          { label: 'Opérationnels',     value: operationnel,     color: 'text-green-400',    icon: <CheckCircle2 className="w-5 h-5" /> },
+          { label: 'En arrêt/Panne',    value: enArretPanne,    color: 'text-red-400',      icon: <AlertTriangle className="w-5 h-5" />, filter: 'En arrêt/Panne' as const },
+          { label: 'En atelier',        value: enAtelier,       color: 'text-amber-400',    icon: <Factory className="w-5 h-5" />, filter: 'En atelier' as const },
           { label: 'Santé Moy.',        value: `${avgHealth}%`, color: avgHealth >= 80 ? 'text-green-400' : 'text-yellow-400', icon: <Activity className="w-5 h-5" /> },
         ].map(kpi => (
-          <div key={kpi.label} className="glass rounded-xl p-4 text-center">
+          <button
+            key={kpi.label}
+            type="button"
+            onClick={kpi.filter ? () => showEquipmentStatus(kpi.filter!) : undefined}
+            className={`glass rounded-xl p-4 text-center transition-all ${kpi.filter ? 'cursor-pointer hover:-translate-y-0.5 hover:border-savia-accent/50 hover:bg-savia-surface-hover/60' : ''}`}
+            title={kpi.filter ? `Afficher les équipements : ${kpi.label}` : undefined}
+          >
             <div className={`flex justify-center mb-2 ${kpi.color}`}>{kpi.icon}</div>
             <div className={`text-3xl font-black ${kpi.color}`}>{kpi.value}</div>
             <div className="text-xs text-savia-text-muted mt-1">{kpi.label}</div>
-          </div>
+          </button>
         ))}
       </div>
 
@@ -1895,14 +1943,7 @@ export default function EquipementsPage() {
                         <input type="date" className={INPUT_CLS} value={form.DateInstallation}
                           onChange={e => setForm({ ...form, DateInstallation: e.target.value })} />
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <Settings className="w-3.5 h-3.5" /> Dernière maintenance
-                        </label>
-                        <input type="date" className={INPUT_CLS} value={form.DernieresMaintenance}
-                          onChange={e => setForm({ ...form, DernieresMaintenance: e.target.value })} />
-                      </div>
-                      <div>
+                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Activity className="w-3.5 h-3.5" /> Statut *
                         </label>
@@ -2110,9 +2151,9 @@ export default function EquipementsPage() {
 
                 <div className="grid grid-cols-2 gap-3 text-sm mb-3">
                   <div className="flex items-center gap-2"><Building2 className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.client}</div>
-                  <div className="flex items-center gap-2"><StickyNote className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.localisation || 'N/A'}</div>
-                  <div className="flex items-center gap-2"><Hash className="w-3.5 h-3.5 text-savia-text-dim" /> <code className="text-xs">{eq.numSerie || 'N/A'}</code></div>
-                  <div className="flex items-center gap-2"><Calendar className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.derniereMaintenance}</div>
+                   <div className="flex items-center gap-2"><StickyNote className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.localisation || 'N/A'}</div>
+                   <div className="flex items-center gap-2"><Hash className="w-3.5 h-3.5 text-savia-text-dim" /> <code className="text-xs">{eq.numSerie || 'N/A'}</code></div>
+                   <div className="flex items-center gap-2"><Stethoscope className="w-3.5 h-3.5 text-savia-text-dim" /> {eq.service || 'Service non renseigné'}</div>
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -2221,9 +2262,11 @@ export default function EquipementsPage() {
                     setShowClientForm(false); 
                     setEditingClient(null); 
                     setClientForm(emptyClientForm);
+                    setClientFormError('');
                     setIsCodeAutoGenerated(false);
                   } else { 
                     setEditingClient(null);
+                    setClientFormError('');
                     // Auto-generate code_client for new client
                     const nextNumber = clientsList.length + 1;
                     const autoCode = `CL${String(nextNumber).padStart(3, '0')}`;
@@ -2267,8 +2310,9 @@ export default function EquipementsPage() {
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
                           <Hash className="w-3.5 h-3.5" /> Matricule Fiscale *
                         </label>
-                        <input className={INPUT_CLS} placeholder="Ex: 1234567/A/P/M/000"
-                          value={clientForm.matricule_fiscale} onChange={e => setClientForm({ ...clientForm, matricule_fiscale: e.target.value })} />
+                        <input className={`${INPUT_CLS} ${matriculeFiscalError ? 'border-red-500/70 focus:border-red-500' : ''}`} placeholder="Ex: 1234567/A/P/M/000"
+                          value={clientForm.matricule_fiscale} onChange={e => { setClientForm({ ...clientForm, matricule_fiscale: e.target.value }); setClientFormError(''); }} aria-invalid={Boolean(matriculeFiscalError)} />
+                        {(matriculeFiscalError || clientFormError) && <p className="mt-1 text-xs font-semibold text-red-400">{matriculeFiscalError || clientFormError}</p>}
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -2474,11 +2518,11 @@ export default function EquipementsPage() {
 
                   {/* Save/Cancel */}
                   <div className="flex justify-end gap-3 pt-4 border-t border-savia-border/50">
-                    <button onClick={() => { setShowClientForm(false); setEditingClient(null); setClientForm(emptyClientForm); }}
+                    <button onClick={() => { setShowClientForm(false); setEditingClient(null); setClientForm(emptyClientForm); setClientFormError(''); }}
                       className="px-4 py-2.5 rounded-lg text-savia-text-muted hover:text-savia-text hover:bg-savia-surface-hover transition-colors cursor-pointer">
                       Annuler
                     </button>
-                    <button onClick={handleSaveClient} disabled={savingClient || !clientForm.nom.trim() || !clientForm.matricule_fiscale.trim() || !clientForm.contact.trim() || !clientForm.telephone.trim() || !clientForm.type_client || (!clientForm.international && (!clientForm.ville || (clientIsTunisia && !clientForm.region) || !clientForm.adresse.trim()))}
+                    <button onClick={handleSaveClient} disabled={savingClient || Boolean(matriculeFiscalError) || !clientForm.nom.trim() || !clientForm.matricule_fiscale.trim() || !clientForm.contact.trim() || !clientForm.telephone.trim() || !clientForm.type_client || (!clientForm.international && (!clientForm.ville || (clientIsTunisia && !clientForm.region) || !clientForm.adresse.trim()))}
                       className="flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-white bg-gradient-to-r from-savia-accent to-savia-accent-blue hover:opacity-90 disabled:opacity-50 transition-all cursor-pointer">
                       {savingClient ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       {editingClient ? 'Mettre à jour' : 'Sauvegarder'}
