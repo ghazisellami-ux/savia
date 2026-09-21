@@ -48,26 +48,40 @@ def _is_out_of_service(status: Any) -> bool:
     return value in {"hors service", "hors-service"}
 
 
-def _equipment_rows(conn, machine: str, client: str):
+def _equipment_rows(conn, machine: str, client: str, equipment_id: int | None = None):
     """Find the equipment targeted by an intervention.
 
     Equipment names are not globally unique, so a client is used whenever it
-    is available. If a legacy intervention has no client and the name is
-    duplicated, no automatic update is performed rather than risking a
-    cross-client status change.
+    is available. For a legacy intervention without an equipment ID, the
+    name/client pair must identify exactly one equipment; otherwise no
+    automatic update is performed.
     """
-    rows = conn.execute(
-        """
-        SELECT id, statut, client
-        FROM equipements
-        WHERE LOWER(nom) = LOWER(%s)
-          AND (%s = '' OR LOWER(COALESCE(client, '')) = LOWER(%s))
-        ORDER BY id
-        FOR UPDATE
-        """,
-        (machine, client, client),
-    ).fetchall()
-    if not client and len(rows) != 1:
+    if equipment_id is not None:
+        rows = conn.execute(
+            """
+            SELECT id, statut, client
+            FROM equipements
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (equipment_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, statut, client
+            FROM equipements
+            WHERE LOWER(nom) = LOWER(%s)
+              AND (%s = '' OR LOWER(COALESCE(client, '')) = LOWER(%s))
+            ORDER BY id
+            FOR UPDATE
+            """,
+            (machine, client, client),
+        ).fetchall()
+    # A legacy intervention without equipement_id is safe only when the
+    # machine/client pair identifies exactly one equipment. Never propagate a
+    # status to every homonymous equipment.
+    if len(rows) != 1:
         return []
     return rows
 
@@ -80,16 +94,41 @@ def _has_other_active_intervention(conn, intervention_id: int, machine: str, equ
         FROM interventions i
         LEFT JOIN equipements e ON e.id = %s
         WHERE i.id <> %s
-          AND LOWER(i.machine) = LOWER(%s)
           AND i.statut IN ({placeholders})
           AND (
-                %s <> ''
-                AND LOWER(COALESCE(NULLIF(i.client, ''), e.client, '')) = LOWER(%s)
-              OR %s = ''
+                i.equipement_id = %s
+                OR (
+                    i.equipement_id IS NULL
+                    AND LOWER(i.machine) = LOWER(%s)
+                    AND (
+                        %s <> ''
+                        AND LOWER(COALESCE(NULLIF(i.client, ''), e.client, '')) = LOWER(%s)
+                        OR %s = ''
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM equipements duplicate_equipment
+                        WHERE duplicate_equipment.id <> %s
+                          AND LOWER(duplicate_equipment.nom) = LOWER(%s)
+                          AND LOWER(COALESCE(duplicate_equipment.client, '')) = LOWER(%s)
+                    )
+                )
           )
         LIMIT 1
         """,
-        (equipment_id, intervention_id, machine, *ACTIVE_INTERVENTION_STATUSES, client, client, client),
+        (
+            equipment_id,
+            intervention_id,
+            *ACTIVE_INTERVENTION_STATUSES,
+            equipment_id,
+            machine,
+            client,
+            client,
+            client,
+            equipment_id,
+            machine,
+            client,
+        ),
     ).fetchone()
     return bool(row)
 
@@ -149,7 +188,8 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
         return
 
     intervention = conn.execute(
-        "SELECT machine, COALESCE(client, '') AS client FROM interventions WHERE id = %s",
+        """SELECT machine, COALESCE(client, '') AS client, equipement_id
+           FROM interventions WHERE id = %s""",
         (intervention_id,),
     ).fetchone()
     if not intervention:
@@ -157,10 +197,13 @@ def synchroniser_statut_equipement(conn, intervention_id: int, intervention_stat
 
     machine = str(intervention.get("machine") or "").strip()
     client = str(intervention.get("client") or "").strip()
+    intervention_equipment_id = intervention.get("equipement_id")
+    if intervention_equipment_id is not None:
+        intervention_equipment_id = int(intervention_equipment_id)
     if not machine:
         return
 
-    for equipment in _equipment_rows(conn, machine, client):
+    for equipment in _equipment_rows(conn, machine, client, intervention_equipment_id):
         equipment_id = equipment["id"]
         current_status = equipment.get("statut") or ""
         if _is_out_of_service(current_status):
@@ -227,12 +270,34 @@ def reconcilier_statuts_equipements() -> int:
                 f"""
                 SELECT 1
                 FROM interventions i
-                WHERE LOWER(i.machine) = LOWER(%s)
-                  AND i.statut IN ({placeholders})
-                  AND LOWER(COALESCE(NULLIF(i.client, ''), %s)) = LOWER(%s)
+                WHERE i.statut IN ({placeholders})
+                  AND (
+                        i.equipement_id = %s
+                        OR (
+                            i.equipement_id IS NULL
+                            AND LOWER(i.machine) = LOWER(%s)
+                            AND LOWER(COALESCE(NULLIF(i.client, ''), %s)) = LOWER(%s)
+                            AND NOT EXISTS (
+                                SELECT 1
+                                FROM equipements duplicate_equipment
+                                WHERE duplicate_equipment.id <> %s
+                                  AND LOWER(duplicate_equipment.nom) = LOWER(%s)
+                                  AND LOWER(COALESCE(duplicate_equipment.client, '')) = LOWER(%s)
+                            )
+                        )
+                  )
                 LIMIT 1
                 """,
-                (machine, *ACTIVE_INTERVENTION_STATUSES, client, client),
+                (
+                    *ACTIVE_INTERVENTION_STATUSES,
+                    equipment["id"],
+                    machine,
+                    client,
+                    client,
+                    equipment["id"],
+                    machine,
+                    client,
+                ),
             ).fetchone()
 
             has_active_intervention = bool(active)
