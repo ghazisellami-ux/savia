@@ -206,8 +206,10 @@ export default function InterventionDetailPage() {
       const found = (all as any[]).find(i => Number(i.id) === id);
       if (!found) { setError('Intervention introuvable.'); setLoading(false); return; }
 
+      const availablePieces = Array.isArray(pieces) ? pieces : [];
+
       setIntervention(found);
-      setAllPieces(Array.isArray(pieces) ? pieces : []);
+      setAllPieces(availablePieces);
       setAllEquipements(Array.isArray(equipements) ? equipements : []);
       
       // DEBUG: Show equipment info
@@ -328,7 +330,7 @@ export default function InterventionDetailPage() {
               const qty = parseInt(qtyMatch[1], 10);
               
               // Find piece by reference
-              const piece = allPieces.find(p => 
+              const piece = availablePieces.find(p =>
                 (p.reference || '').toLowerCase() === ref.toLowerCase()
               );
               
@@ -399,7 +401,7 @@ export default function InterventionDetailPage() {
                     const qty = parseInt(p.qty || p.quantite || 0, 10);
                     
                     // Find piece by reference
-                    const piece = allPieces.find(pc => 
+                    const piece = availablePieces.find(pc =>
                       (pc.reference || '').toLowerCase() === (ref || '').toLowerCase()
                     );
                     

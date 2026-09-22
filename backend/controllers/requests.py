@@ -941,32 +941,6 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                 },
             )
 
-        # Deduct stock if technician marked as Cloturee and pieces are provided
-        if body.get("statut") == "Cloturee" and body.get("pieces_a_deduire"):
-            try:
-                pieces_list = body.get("pieces_a_deduire", [])
-                logger.info(f"   📦 Deducting stock for {len(pieces_list)} pieces...")
-                
-                with get_db() as conn:
-                    for piece in pieces_list:
-                        if not isinstance(piece, dict):
-                            continue
-                        ref = piece.get('ref') or piece.get('reference') or ''
-                        qty = int(piece.get('qty') or piece.get('quantite') or 0)
-                        
-                        if qty > 0 and ref:
-                            logger.info(f"      Deducting: {ref} qty={qty}")
-                            conn.execute("""
-                                UPDATE pieces_rechange
-                                SET stock_actuel = stock_actuel - %s
-                                WHERE reference = %s
-                            """, (qty, ref))
-                
-                logger.info(f"   ✅ Stock deducted successfully")
-            except Exception as e:
-                logger.warning(f"   ⚠️ Error deducting stock: {e}")
-                # Don't fail the whole request if stock deduction fails
-
         # Handle pieces_rupture if technician marked as "En attente de piece"
         if body.get("statut") == "En attente de piece" and (body.get("pieces_rupture") or body.get("pieces_a_deduire")):
             try:

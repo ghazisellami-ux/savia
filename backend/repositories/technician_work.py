@@ -42,6 +42,9 @@ def _ensure_workshop_transfer_status_constraint(conn):
     conn.execute(
         "ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS pieces_a_deduire TEXT DEFAULT ''"
     )
+    conn.execute(
+        "ALTER TABLE interventions_techniciens ADD COLUMN IF NOT EXISTS stock_deducted BOOLEAN NOT NULL DEFAULT FALSE"
+    )
 
     rows = conn.execute(
         """SELECT c.conname, pg_get_constraintdef(c.oid) AS definition
@@ -238,12 +241,12 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
             logger.warning(f"  ⚠️ No fields to update!")
             return False
         
-        params.append(record_id)
+        params.extend([record_id, intervention_id])
         
         query = f"""
             UPDATE interventions_techniciens 
             SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = {ph}
+            WHERE id = {ph} AND intervention_id = {ph}
         """
         
         logger.info(f"  🔄 Executing UPDATE for record ID {record_id}")
@@ -251,9 +254,83 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         logger.debug(f"     Params: {params}")
         
         result = conn.execute(query, params)
+        if result.rowcount != 1:
+            logger.warning(
+                "❌ Technician record %s does not belong to intervention %s",
+                record_id,
+                intervention_id,
+            )
+            return False
+
+        _deduct_stock_once_for_completed_technician(conn, intervention_id, record_id)
         logger.info(f"  ✅ Updated technician record ID {record_id} in intervention {intervention_id}")
         _trigger_backup()
         return True
+
+
+def _deduct_stock_once_for_completed_technician(conn, intervention_id, record_id):
+    """Deduct a technician's saved parts exactly once when they close work.
+
+    The PWA can retry a save (or reopen the page), so inventory changes must
+    be tied to the persisted technician-assignment row rather than each HTTP
+    request. The row lock and ``stock_deducted`` marker keep the update
+    transactional and idempotent.
+    """
+    row = conn.execute(
+        """SELECT statut, pieces_a_deduire, COALESCE(stock_deducted, FALSE) AS stock_deducted
+             FROM interventions_techniciens
+            WHERE id = %s AND intervention_id = %s
+            FOR UPDATE""",
+        (record_id, intervention_id),
+    ).fetchone()
+    if not row or row.get("statut") != "Cloturee" or row.get("stock_deducted"):
+        return
+
+    raw_pieces = row.get("pieces_a_deduire") or ""
+    try:
+        pieces = json.loads(raw_pieces) if isinstance(raw_pieces, str) else raw_pieces
+    except (TypeError, json.JSONDecodeError):
+        logger.warning(
+            "Cannot deduct stock for technician record %s: invalid saved parts payload",
+            record_id,
+        )
+        return
+
+    if not isinstance(pieces, list):
+        return
+
+    valid_pieces = []
+    for piece in pieces:
+        if not isinstance(piece, dict):
+            continue
+        reference = str(piece.get("ref") or piece.get("reference") or "").strip()
+        try:
+            quantity = int(piece.get("qty") or piece.get("quantite") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if reference and quantity > 0:
+            valid_pieces.append((reference, quantity))
+
+    if not valid_pieces:
+        return
+
+    for reference, quantity in valid_pieces:
+        result = conn.execute(
+            """UPDATE pieces_rechange
+                  SET stock_actuel = stock_actuel - %s
+                WHERE LOWER(BTRIM(reference)) = LOWER(BTRIM(%s))""",
+            (quantity, reference),
+        )
+        if result.rowcount != 1:
+            raise ValueError(f"Pièce introuvable pour la référence '{reference}'")
+
+    conn.execute(
+        """UPDATE interventions_techniciens
+              SET stock_deducted = TRUE, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND intervention_id = %s""",
+        (record_id, intervention_id),
+    )
+    logger.info("📦 Stock deducted for technician record %s", record_id)
 
 
 def get_interventions_techniciens(intervention_id):

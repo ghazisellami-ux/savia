@@ -869,26 +869,6 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     detail="Une intervention déjà clôturée ne peut pas être reportée"
                 )
 
-            # Legacy rows created before planning_id was populated can still
-            # be matched by machine/date. Protect those closed interventions
-            # before changing the planning entry.
-            if not linked_interventions and current.get("machine") and current.get("date_prevue"):
-                legacy_intervention = conn.execute(
-                    """
-                    SELECT statut
-                    FROM interventions
-                    WHERE machine = %s AND date = %s
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (current.get("machine"), str(current.get("date_prevue"))[:10])
-                ).fetchone()
-                if legacy_intervention and is_closed_status(legacy_intervention.get("statut")):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Une intervention déjà clôturée ne peut pas être reportée"
-                    )
-            
             old_date = current.get("date_prevue")
             old_date_iso = date_only(old_date)
             target_date = date_only(new_date or old_date)
