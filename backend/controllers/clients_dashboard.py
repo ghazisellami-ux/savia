@@ -90,13 +90,13 @@ def get_clients(user: dict = Depends(_verify_token)):
             
             # Get intervention stats by client
             int_stats_query = """
-            SELECT 
-                e.client,
+            SELECT
+                COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
                 COUNT(DISTINCT i.id) as nb_int
             FROM interventions i
-            JOIN equipements e ON e.nom = i.machine
-            WHERE e.client IS NOT NULL AND e.client != ''
-            GROUP BY e.client
+            LEFT JOIN equipements e ON e.id = i.equipement_id
+            WHERE COALESCE(NULLIF(i.client, ''), e.client, '') != ''
+            GROUP BY COALESCE(NULLIF(i.client, ''), e.client, '')
             """
             df_int_stats = read_sql(int_stats_query, conn)
             

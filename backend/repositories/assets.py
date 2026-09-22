@@ -563,13 +563,10 @@ def remettre_equipement_en_service(equip_id, change_par="", raison="Remise en se
         active = conn.execute(
             f"""SELECT 1
                 FROM interventions i
-                LEFT JOIN equipements e ON e.id = %s
-                WHERE LOWER(i.machine) = LOWER(%s)
-                  AND LOWER(COALESCE(NULLIF(i.client, ''), e.client, '')) =
-                      LOWER(COALESCE(%s, ''))
+                WHERE i.equipement_id = %s
                   AND i.statut IN ({active_placeholders})
                 LIMIT 1""",
-            (equip_id, row["nom"], row.get("client") or "", *ACTIVE_INTERVENTION_STATUSES),
+            (equip_id, *ACTIVE_INTERVENTION_STATUSES),
         ).fetchone()
         if active:
             raise ValueError("Impossible de remettre l'équipement en service : une intervention est encore active")

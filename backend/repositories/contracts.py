@@ -251,12 +251,18 @@ def _resolve_contract_equipment_rows(conn, contrat_dict):
     for name in names:
         if not name:
             continue
-        row = conn.execute(
+        rows = conn.execute(
             """SELECT id, nom FROM equipements
                WHERE nom = %s AND LOWER(TRIM(client)) = LOWER(TRIM(%s))
-               ORDER BY id LIMIT 1""",
+               ORDER BY id""",
             (name, client),
-        ).fetchone()
+        ).fetchall()
+        if len(rows) > 1:
+            raise ValueError(
+                f"Plusieurs équipements portent le nom '{name}' pour ce client. "
+                "Sélectionnez l'équipement par son identifiant."
+            )
+        row = rows[0] if rows else None
         resolved.append((int(row["id"]) if row else None, name))
     return resolved
 
