@@ -170,7 +170,7 @@ export default function PlanningPage() {
   // Reschedule modal
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<PlanItem | null>(null);
-  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '', newTechIds: [] as number[], reason: '' });
+  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newEquipmentId: '', newTechs: '', newTechIds: [] as number[], reason: '' });
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
@@ -430,6 +430,7 @@ export default function PlanningPage() {
     setSelectedIntervention(intervention);
     setRescheduleForm({
       newDate: intervention.date_planifiee,
+      newEquipmentId: intervention.equipement_id ? String(intervention.equipement_id) : '',
       newTechs: intervention.technicien,
       newTechIds: intervention.technicien_ids || (intervention.technicien_id ? [Number(intervention.technicien_id)] : []),
       reason: '',
@@ -451,13 +452,14 @@ export default function PlanningPage() {
     try {
       await planning.reschedule(selectedIntervention.id, {
         date_planifiee: rescheduleForm.newDate,
+        equipement_id: rescheduleForm.newEquipmentId ? Number(rescheduleForm.newEquipmentId) : undefined,
         technicien_assigne: rescheduleForm.newTechs,
         technicien_ids: rescheduleForm.newTechIds,
         reason: rescheduleForm.reason,
       });
       setShowRescheduleModal(false);
       setSelectedIntervention(null);
-      setRescheduleForm({ newDate: '', newTechs: '', newTechIds: [], reason: '' });
+      setRescheduleForm({ newDate: '', newEquipmentId: '', newTechs: '', newTechIds: [], reason: '' });
       await loadData();
     } catch (err: any) {
       console.error(err);
@@ -1420,6 +1422,28 @@ export default function PlanningPage() {
                   <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {rescheduleError}
                 </div>
               )}
+
+              {/* Exact equipment */}
+              <div>
+                <label className="block text-xs font-semibold text-savia-text-muted uppercase tracking-wider mb-2 flex items-center gap-2">
+                  <Server className="w-3.5 h-3.5 text-savia-accent" /> Équipement exact
+                </label>
+                <select
+                  className={INPUT_CLS}
+                  value={rescheduleForm.newEquipmentId}
+                  onChange={e => setRescheduleForm({...rescheduleForm, newEquipmentId: e.target.value})}
+                >
+                  <option value="">— Conserver l'équipement actuel —</option>
+                  {equipsAll
+                    .filter(e => !selectedIntervention?.client || e.client === selectedIntervention.client)
+                    .map(e => (
+                      <option key={e.id} value={e.id}>
+                        {e.nom}{e.numSerie ? ` · SN: ${e.numSerie}` : ''}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[11px] text-savia-text-dim mt-1">Sélectionnez le numéro de série pour corriger un ancien planning mal lié.</p>
+              </div>
 
               {/* New date */}
               <div>
