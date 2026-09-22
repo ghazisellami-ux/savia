@@ -251,7 +251,8 @@ def change_password(body: ChangePasswordRequest, request: Request, response: Res
     log_audit(user_data["username"], "PASSWORD_CHANGED", "Mot de passe modifié par l'utilisateur", "auth", ip_address)
     token = _issue_access_token(user_data)
     _set_auth_cookie(response, token)
-    return _login_response(user_data)
+    is_pwa_client = request.headers.get("X-SAVIA-Client", "").lower() == "pwa"
+    return _login_response(user_data, token if is_pwa_client else None)
 
 
 def _get_client_filter(user: dict) -> Optional[str]:

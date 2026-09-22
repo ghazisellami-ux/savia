@@ -72,11 +72,19 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export const api = {
   // Auth
   login: (username: string, password: string) =>
-    req<{ token: string; user: { username: string; nom: string; nom_complet?: string; role: string } }>(
+    req<{ token: string; password_change_required?: boolean; user: { username: string; nom: string; nom_complet?: string; role: string; password_change_required?: boolean } }>(
       '/api/auth/login', {
         method: 'POST',
         headers: { 'X-SAVIA-Client': 'pwa' },
         body: JSON.stringify({ username, password }),
+      }
+    ),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    req<{ token?: string; password_change_required: boolean; user: { username: string; nom: string; role: string } }>(
+      '/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'X-SAVIA-Client': 'pwa' },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
       }
     ),
 

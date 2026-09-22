@@ -100,10 +100,13 @@ interface PlanItem {
   id: number;
   date_planifiee: string;
   machine: string;
+  equipement_id?: number | null;
   equipement_num_serie: string;
   client: string;
   description: string;
   technicien: string;
+  technicien_id?: number | null;
+  technicien_ids?: number[];
   statut: string;
   type_maintenance: string;
   recurrence: string;
@@ -126,10 +129,12 @@ const emptyForm = {
   domaine: 'Radiologie' as string,
   client: '',
   machine: '',
+  equipement_id: '',
   type_maintenance: 'Préventive',
   recurrence: 'Aucune',
   date_planifiee: '',
   technicien_assigne: '',
+  technicien_ids: [] as number[],
   description: '',
   notes: '',
 };
@@ -145,8 +150,8 @@ export default function PlanningPage() {
   const [currentYear, setCurrentYear] = useState(now.getFullYear());
   const [data, setData] = useState<PlanItem[]>([]);
   const [clientsList, setClientsList] = useState<string[]>([]);
-  const [equipsAll, setEquipsAll] = useState<{nom: string; client: string; domaine: string; numSerie: string}[]>([]);
-  const [techsList, setTechsList] = useState<string[]>([]);
+  const [equipsAll, setEquipsAll] = useState<{id: number; nom: string; client: string; domaine: string; numSerie: string}[]>([]);
+  const [techsList, setTechsList] = useState<{id: number; name: string; username: string}[]>([]);
   const [domainesCustom, setDomainesCustom] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -165,7 +170,7 @@ export default function PlanningPage() {
   // Reschedule modal
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [selectedIntervention, setSelectedIntervention] = useState<PlanItem | null>(null);
-  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '', reason: '' });
+  const [rescheduleForm, setRescheduleForm] = useState({ newDate: '', newTechs: '', newTechIds: [] as number[], reason: '' });
   const [rescheduleError, setRescheduleError] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [rescheduleDropdownOpen, setRescheduleDropdownOpen] = useState(false);
@@ -248,8 +253,8 @@ export default function PlanningPage() {
   }, [equipsForDomaine, form.domaine, clientsList]);
 
   const filteredEquips = useMemo(() => {
-    if (!form.client) return equipsForDomaine.map(e => e.nom);
-    return equipsForDomaine.filter(e => e.client === form.client).map(e => e.nom);
+    if (!form.client) return equipsForDomaine;
+    return equipsForDomaine.filter(e => e.client === form.client);
   }, [equipsForDomaine, form.client]);
 
   const loadData = useCallback(async () => {
@@ -263,11 +268,12 @@ export default function PlanningPage() {
       ]);
 
       const equipsFlat = (eqRes as any[]).map((e: any) => ({
+        id: Number(e.id || e.ID || 0),
         nom: e.Nom || e.nom || '',
         client: e.Client || e.client || '',
         domaine: e.domaine || e.Domaine || '', // Don't default to Radiologie - keep empty if not set
         numSerie: e.NumSerie || e.num_serie || e.numero_serie || e.serial_number || '',
-      })).filter(e => e.nom);
+      })).filter(e => e.nom && e.id > 0);
 
       const normalize = (value: unknown) => String(value || '').trim().toLocaleLowerCase('fr-FR');
       const serialForPlanningItem = (item: any) => {
@@ -285,10 +291,15 @@ export default function PlanningPage() {
         // La colonne BD s'appelle date_prevue, pas date_planifiee
         date_planifiee: item.date_prevue || item.date_planifiee || item.Date || '',
         machine: item.machine || '',
+        equipement_id: item.equipement_id ?? null,
         equipement_num_serie: serialForPlanningItem(item),
         client: item.client || '',
         description: item.description || '',
         technicien: item.technicien_assigne || item.technicien || '',
+        technicien_id: item.technicien_id ?? null,
+        technicien_ids: Array.isArray(item.technicien_ids)
+          ? item.technicien_ids.map(Number)
+          : (() => { try { return JSON.parse(item.technicien_ids || '[]').map(Number); } catch { return item.technicien_id ? [Number(item.technicien_id)] : []; } })(),
         statut: item.statut || 'Planifiée',
         type_maintenance: item.type_maintenance || 'Préventive',
         recurrence: item.recurrence || 'Aucune',
@@ -311,10 +322,12 @@ export default function PlanningPage() {
       ])].filter(Boolean).sort();
       setClientsList(uniqueClients);
 
-      const techNames = (techRes as any[]).map((t: any) =>
-        `${t.prenom || ''} ${t.nom || ''}`.trim()
-      ).filter(Boolean);
-      setTechsList(techNames);
+      const technicians = (techRes as any[]).map((t: any) => ({
+        id: Number(t.id),
+        name: `${t.prenom || ''} ${t.nom || ''}`.trim() || t.username || '',
+        username: t.username || '',
+      })).filter(t => t.id > 0 && t.name);
+      setTechsList(technicians);
       setClientsFullData(clRes as any[]);
     } catch (err) {
       console.error('Failed to fetch planning', err);
@@ -389,11 +402,13 @@ export default function PlanningPage() {
     try {
       await planning.create({
         machine: form.machine,
+        equipement_id: Number(form.equipement_id),
         client: form.client,
         type_maintenance: form.type_maintenance,
         recurrence: form.recurrence,
         date_prevue: form.date_planifiee,
         technicien_assigne: form.technicien_assigne,
+        technicien_ids: form.technicien_ids,
         description: form.description,
         notes: form.notes,
         statut: 'Planifiée',
@@ -416,6 +431,7 @@ export default function PlanningPage() {
     setRescheduleForm({
       newDate: intervention.date_planifiee,
       newTechs: intervention.technicien,
+      newTechIds: intervention.technicien_ids || (intervention.technicien_id ? [Number(intervention.technicien_id)] : []),
       reason: '',
     });
     setRescheduleError('');
@@ -436,11 +452,12 @@ export default function PlanningPage() {
       await planning.reschedule(selectedIntervention.id, {
         date_planifiee: rescheduleForm.newDate,
         technicien_assigne: rescheduleForm.newTechs,
+        technicien_ids: rescheduleForm.newTechIds,
         reason: rescheduleForm.reason,
       });
       setShowRescheduleModal(false);
       setSelectedIntervention(null);
-      setRescheduleForm({ newDate: '', newTechs: '', reason: '' });
+      setRescheduleForm({ newDate: '', newTechs: '', newTechIds: [], reason: '' });
       await loadData();
     } catch (err: any) {
       console.error(err);
@@ -971,7 +988,7 @@ export default function PlanningPage() {
               {/* All domains (default + custom) */}
               {allDomaines.map(d => (
                 <button key={d} type="button"
-                  onClick={() => setForm({...form, domaine: d, client: '', machine: ''})}
+                    onClick={() => setForm({...form, domaine: d, client: '', machine: '', equipement_id: ''})}
                   className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl text-xs font-semibold transition-all cursor-pointer border ${
                     form.domaine === d
                       ? DOMAINE_ACTIVE_CLS[d] || 'bg-indigo-600/40 border-indigo-400/70 text-white'
@@ -997,7 +1014,7 @@ export default function PlanningPage() {
                 )}
               </label>
               <select className={INPUT_CLS} value={form.client}
-                onChange={e => setForm({...form, client: e.target.value, machine: ''})}>
+                onChange={e => setForm({...form, client: e.target.value, machine: '', equipement_id: ''})}>
                 <option value="">— Sélectionner un client —</option>
                 {clientsForDomaine.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -1059,10 +1076,13 @@ export default function PlanningPage() {
               <Server className="w-3.5 h-3.5 text-savia-accent" /> Équipement *
               {filteredEquips.length > 0 && <span className="text-savia-text-dim font-normal normal-case text-[11px]">({filteredEquips.length} disponible{filteredEquips.length > 1 ? 's' : ''})</span>}
             </label>
-            <select className={INPUT_CLS} value={form.machine}
-              onChange={e => setForm({...form, machine: e.target.value})}>
+            <select className={INPUT_CLS} value={form.equipement_id}
+              onChange={e => {
+                const equipment = equipsAll.find(item => item.id === Number(e.target.value));
+                setForm({...form, equipement_id: e.target.value, machine: equipment?.nom || ''});
+              }}>
               <option value="">— Sélectionner un équipement —</option>
-              {filteredEquips.map(e => <option key={e} value={e}>{e}</option>)}
+              {filteredEquips.map(e => <option key={e.id} value={e.id}>{e.nom}{e.numSerie ? ` · SN: ${e.numSerie}` : ''}</option>)}
               {filteredEquips.length === 0 && form.client && (
                 <option disabled>Aucun équipement pour ce client dans ce domaine</option>
               )}
@@ -1105,7 +1125,8 @@ export default function PlanningPage() {
                     {t}
                     <button type="button" onClick={() => {
                       const updated = form.technicien_assigne.split(', ').filter(x => x !== t).join(', ');
-                      setForm({...form, technicien_assigne: updated});
+                      const tech = techsList.find(item => item.name === t);
+                      setForm({...form, technicien_assigne: updated, technicien_ids: tech ? form.technicien_ids.filter(id => id !== tech.id) : form.technicien_ids});
                     }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
                   </span>
                 ))}
@@ -1123,12 +1144,13 @@ export default function PlanningPage() {
               {techDropdownOpen && (
                 <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
                   {techsList.map(t => {
-                    const selected = form.technicien_assigne.split(', ').filter(Boolean).includes(t);
+                    const selected = form.technicien_ids.includes(t.id);
                     return (
-                      <button key={t} type="button" onClick={() => {
-                        const current = form.technicien_assigne.split(', ').filter(Boolean);
-                        const updated = selected ? current.filter(x => x !== t) : [...current, t];
-                        setForm({...form, technicien_assigne: updated.join(', ')});
+                      <button key={t.id} type="button" onClick={() => {
+                        const currentIds = form.technicien_ids;
+                        const updatedIds = selected ? currentIds.filter(id => id !== t.id) : [...currentIds, t.id];
+                        const updatedNames = techsList.filter(item => updatedIds.includes(item.id)).map(item => item.name);
+                        setForm({...form, technicien_ids: updatedIds, technicien_assigne: updatedNames.join(', ')});
                       }}
                         className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
                           selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
@@ -1138,7 +1160,7 @@ export default function PlanningPage() {
                         }`}>
                           {selected && <Check className="w-3 h-3 text-white" />}
                         </div>
-                        {t}
+                        {t.name}
                       </button>
                     );
                   })}
@@ -1425,7 +1447,8 @@ export default function PlanningPage() {
                         {t}
                         <button type="button" onClick={() => {
                           const updated = rescheduleForm.newTechs.split(', ').filter(x => x !== t).join(', ');
-                          setRescheduleForm({...rescheduleForm, newTechs: updated});
+                          const tech = techsList.find(item => item.name === t);
+                          setRescheduleForm({...rescheduleForm, newTechs: updated, newTechIds: tech ? rescheduleForm.newTechIds.filter(id => id !== tech.id) : rescheduleForm.newTechIds});
                         }} className="hover:text-red-400 cursor-pointer ml-0.5"><X className="w-3 h-3" /></button>
                       </span>
                     ))}
@@ -1443,12 +1466,13 @@ export default function PlanningPage() {
                   {rescheduleDropdownOpen && (
                     <div className="absolute z-30 mt-1 w-full bg-savia-surface border border-savia-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
                       {techsList.map(t => {
-                        const selected = rescheduleForm.newTechs.split(', ').filter(Boolean).includes(t);
+                        const selected = rescheduleForm.newTechIds.includes(t.id);
                         return (
-                          <button key={t} type="button" onClick={() => {
-                            const current = rescheduleForm.newTechs.split(', ').filter(Boolean);
-                            const updated = selected ? current.filter(x => x !== t) : [...current, t];
-                            setRescheduleForm({...rescheduleForm, newTechs: updated.join(', ')});
+                          <button key={t.id} type="button" onClick={() => {
+                            const currentIds = rescheduleForm.newTechIds;
+                            const updatedIds = selected ? currentIds.filter(id => id !== t.id) : [...currentIds, t.id];
+                            const updatedNames = techsList.filter(item => updatedIds.includes(item.id)).map(item => item.name);
+                            setRescheduleForm({...rescheduleForm, newTechs: updatedNames.join(', '), newTechIds: updatedIds});
                           }}
                             className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-savia-surface-hover transition-colors cursor-pointer ${
                               selected ? 'text-savia-accent font-semibold' : 'text-savia-text'
@@ -1458,7 +1482,7 @@ export default function PlanningPage() {
                             }`}>
                               {selected && <Check className="w-3 h-3 text-white" />}
                             </div>
-                            {t}
+                            {t.name}
                           </button>
                         );
                       })}
