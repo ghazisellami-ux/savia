@@ -72,7 +72,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export const api = {
   // Auth
   login: (username: string, password: string) =>
-    req<{ token: string; password_change_required?: boolean; user: { username: string; nom: string; nom_complet?: string; role: string; password_change_required?: boolean } }>(
+    req<{ token: string; password_change_required?: boolean; user: { username: string; nom: string; nom_complet?: string; role: string; technicien_id?: number | null; password_change_required?: boolean } }>(
       '/api/auth/login', {
         method: 'POST',
         headers: { 'X-SAVIA-Client': 'pwa' },

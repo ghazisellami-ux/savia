@@ -280,7 +280,30 @@ def _contract_row(conn: Any, contract_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def _equipment_is_covered(conn: Any, contract: dict[str, Any], machine: str, client: str) -> bool:
+def _equipment_is_covered(
+    conn: Any,
+    contract: dict[str, Any],
+    equipment_id: Any,
+    machine: str,
+    client: str,
+) -> bool:
+    if equipment_id is not None:
+        row = conn.execute(
+            "SELECT 1 FROM contrats_equipements WHERE contrat_id = %s AND equipement_id = %s",
+            (contract["id"], equipment_id),
+        ).fetchone()
+        if row:
+            return True
+        linked_equipment = conn.execute(
+            "SELECT 1 FROM contrats_equipements WHERE contrat_id = %s LIMIT 1",
+            (contract["id"],),
+        ).fetchone()
+        if linked_equipment:
+            return False
+        # A legacy single-equipment contract has no junction row, so its text
+        # fallback remains necessary until that contract is migrated.
+        legacy_equipment = str(contract.get("equipement") or "").strip()
+        return bool(legacy_equipment and _key(legacy_equipment) == _key(machine))
     row = conn.execute(
         """SELECT 1
            FROM contrats_equipements ce
@@ -298,6 +321,20 @@ def _equipment_is_covered(conn: Any, contract: dict[str, Any], machine: str, cli
 
 
 def _candidate_contracts(conn: Any, intervention: dict[str, Any], service_date: date) -> list[dict[str, Any]]:
+    equipment_id = intervention.get("equipement_id")
+    if equipment_id is not None:
+        rows = conn.execute(
+            """SELECT DISTINCT c.*
+               FROM contrats c
+               JOIN contrats_equipements ce ON ce.contrat_id = c.id
+               WHERE LOWER(BTRIM(c.client)) = LOWER(BTRIM(%s))
+                 AND %s BETWEEN c.date_debut AND c.date_fin
+                 AND LOWER(BTRIM(c.statut)) IN ('actif', 'active')
+                 AND ce.equipement_id = %s
+               ORDER BY c.date_fin DESC, c.id DESC""",
+            (intervention.get("client") or "", service_date, equipment_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
     rows = conn.execute(
         """SELECT DISTINCT c.*
            FROM contrats c
@@ -319,7 +356,7 @@ def _candidate_contracts(conn: Any, intervention: dict[str, Any], service_date: 
 def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, actor: str = "system") -> dict[str, Any]:
     """Resolve the applicable contract, assess coverage, and persist a snapshot."""
     row = conn.execute(
-        """SELECT i.id, i.client, i.machine, i.type_intervention, i.date,
+        """SELECT i.id, i.client, i.machine, i.equipement_id, i.type_intervention, i.date,
                   i.date_cloture, i.planning_id, COALESCE(i.cout, 0) AS labor_amount,
                   COALESCE(i.cout_pieces, 0) AS parts_amount, i.pieces_utilisees,
                   COALESCE(pm.contrat_id, original_pm.contrat_id) AS planning_contract_id
@@ -368,7 +405,11 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
             and (end is None or service_date <= end)
         )
         equipment_covered = _equipment_is_covered(
-            conn, contract, str(intervention.get("machine") or ""), str(intervention.get("client") or "")
+            conn,
+            contract,
+            intervention.get("equipement_id"),
+            str(intervention.get("machine") or ""),
+            str(intervention.get("client") or ""),
         )
         raw_limit = contract.get("interventions_incluses")
         included_limit = int(raw_limit) if raw_limit not in (None, "") else -1

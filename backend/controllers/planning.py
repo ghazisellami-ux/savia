@@ -75,21 +75,17 @@ def get_planning(
     if user.get("role") == "Technicien" and not df.empty:
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
-        technician_id = None
-        try:
-            with get_db() as conn:
-                tech_row = conn.execute(
-                    """SELECT id FROM techniciens
-                       WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
-                          OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
-                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
-                       ORDER BY id LIMIT 1""",
-                    (user_username, user_nom_complet, user_nom_complet),
-                ).fetchone()
-                technician_id = int(tech_row["id"]) if tech_row else None
-        except Exception as exc:
-            logger.warning("Unable to resolve planning technician ID for %s: %s", user_username, exc)
-        # Filter by name (primary) or username (secondary)
+        technician_id = user.get("technicien_id")
+        if technician_id is None:
+            try:
+                with get_db() as conn:
+                    tech_row = conn.execute(
+                        "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+                        (user_username,),
+                    ).fetchone()
+                    technician_id = int(tech_row["id"]) if tech_row else None
+            except Exception as exc:
+                logger.warning("Unable to resolve planning technician ID for %s: %s", user_username, exc)
         if technician_id is not None and "technicien_ids" in df.columns:
             def contains_technician(value):
                 try:
@@ -102,7 +98,14 @@ def get_planning(
             name_matches = df["technicien_assigne"].astype(str).apply(
                 lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
             ) if "technicien_assigne" in df.columns else False
-            df = df[id_matches | name_matches]
+            def has_technician_ids(value):
+                try:
+                    values = json.loads(value) if isinstance(value, str) else value
+                    return bool(values)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return False
+            legacy_name_matches = ~df["technicien_ids"].apply(has_technician_ids) & name_matches
+            df = df[id_matches | legacy_name_matches]
         elif user_nom_complet and "technicien_assigne" in df.columns:
             df = df[df["technicien_assigne"].astype(str).apply(
                 lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
@@ -869,6 +872,26 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     detail="Une intervention déjà clôturée ne peut pas être reportée"
                 )
 
+            # Validate a replacement before modifying the planning row. A
+            # completed per-technician record is part of the intervention
+            # history and cannot be silently removed.
+            if new_technicians is not None and linked_interventions:
+                linked_ids = [row["id"] for row in linked_interventions]
+                removed_closed = conn.execute(
+                    """SELECT 1
+                       FROM interventions_techniciens
+                       WHERE intervention_id = ANY(%s)
+                         AND LOWER(BTRIM(COALESCE(statut, ''))) = 'cloturee'
+                         AND (technicien_id IS NULL OR NOT (technicien_id = ANY(%s)))
+                       LIMIT 1""",
+                    (linked_ids, new_technician_ids),
+                ).fetchone()
+                if removed_closed:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Une affectation déjà clôturée ne peut pas être retirée du planning.",
+                    )
+
             old_date = current.get("date_prevue")
             old_date_iso = date_only(old_date)
             target_date = date_only(new_date or old_date)
@@ -965,6 +988,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                                 conn.commit()
                                 logger.info(f"Ghost {ghost_id} notes updated with reschedule reason")
                         logger.info(f"Ghost already exists for planning {planning_id}, notes accumulated")
+                except HTTPException:
+                    raise
                 except Exception as e:
                     logger.warning(f"Could not create ghost entry for planning {planning_id}: {e}")
                     # Don't fail if ghost entry creation fails - main update already succeeded
@@ -1098,36 +1123,99 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                             f"  ⏳ Future planning #{planning_id}: intervention creation deferred to {date_prevue}"
                         )
                     
-                    # Now add technicians to interventions_techniciens
-                    if intervention_id and new_technicians:
-                        tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
-                        logger.info(f"  Adding {len(tech_list)} technician(s) to interventions_techniciens: {tech_list}")
-                        
-                        for index, tech_name in enumerate(tech_list):
-                            tech_id = new_technician_ids[index] if index < len(new_technician_ids) else None
-                            # Check if technician is already assigned
+                    # Replace the assignment set rather than only appending to
+                    # it. Otherwise a technician removed in the planning UI
+                    # stays assigned in the PWA via interventions_techniciens.
+                    if intervention_id and new_technicians is not None:
+                        selected_technicians = []
+                        if new_technician_ids:
+                            tech_rows = conn.execute(
+                                """SELECT id, nom, prenom, username FROM techniciens
+                                   WHERE id = ANY(%s) ORDER BY id""",
+                                (new_technician_ids,),
+                            ).fetchall()
+                            by_id = {int(row["id"]): row for row in tech_rows}
+                            missing_ids = [tech_id for tech_id in new_technician_ids if tech_id not in by_id]
+                            if missing_ids:
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=f"Technicien(s) introuvable(s) : {', '.join(map(str, missing_ids))}",
+                                )
+                            selected_technicians = [
+                                (
+                                    tech_id,
+                                    " ".join(filter(None, [by_id[tech_id].get("prenom"), by_id[tech_id].get("nom")])).strip()
+                                    or by_id[tech_id].get("username", ""),
+                                )
+                                for tech_id in new_technician_ids
+                            ]
+                        elif new_technicians.strip():
+                            # Old API clients can still send names, but must
+                            # resolve each one uniquely before replacement.
+                            for tech_name in [name.strip() for name in new_technicians.split(",") if name.strip()]:
+                                matches = conn.execute(
+                                    """SELECT id, nom, prenom, username FROM techniciens
+                                       WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))
+                                          OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+                                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+                                       ORDER BY id""",
+                                    (tech_name, tech_name, tech_name),
+                                ).fetchall()
+                                if len(matches) != 1:
+                                    raise HTTPException(
+                                        status_code=422,
+                                        detail=f"Sélectionnez le technicien '{tech_name}' par son identifiant.",
+                                    )
+                                match = matches[0]
+                                selected_technicians.append(
+                                    (int(match["id"]), " ".join(filter(None, [match.get("prenom"), match.get("nom")])).strip() or match.get("username", ""))
+                                )
+
+                        selected_ids = [tech_id for tech_id, _ in selected_technicians]
+                        existing_assignments = conn.execute(
+                            """SELECT id, technicien_id, statut
+                               FROM interventions_techniciens
+                               WHERE intervention_id = %s
+                               FOR UPDATE""",
+                            (intervention_id,),
+                        ).fetchall()
+                        removed_assignments = [
+                            assignment for assignment in existing_assignments
+                            if assignment.get("technicien_id") not in selected_ids
+                        ]
+                        if any(is_closed_status(assignment.get("statut")) for assignment in removed_assignments):
+                            raise HTTPException(
+                                status_code=409,
+                                detail="Une affectation déjà clôturée ne peut pas être retirée du planning.",
+                            )
+                        if removed_assignments:
+                            conn.execute(
+                                "DELETE FROM interventions_techniciens WHERE id = ANY(%s)",
+                                ([assignment["id"] for assignment in removed_assignments],),
+                            )
+
+                        for tech_id, tech_name in selected_technicians:
                             existing = conn.execute(
-                                """SELECT id FROM interventions_techniciens 
-                                   WHERE intervention_id = %s
-                                     AND ((%s IS NOT NULL AND technicien_id = %s)
-                                          OR (%s IS NULL AND technicien_nom ILIKE %s))""",
-                                (intervention_id, tech_id, tech_id, tech_id, f"%{tech_name}%")
+                                """SELECT id FROM interventions_techniciens
+                                   WHERE intervention_id = %s AND technicien_id = %s""",
+                                (intervention_id, tech_id),
                             ).fetchone()
-                            
                             if not existing:
-                                # Create new assignment
                                 conn.execute(
-                                    """INSERT INTO interventions_techniciens 
+                                    """INSERT INTO interventions_techniciens
                                        (intervention_id, technicien_id, technicien_nom, statut)
                                        VALUES (%s, %s, %s, %s)""",
-                                    (intervention_id, tech_id, tech_name, "Assigné")
+                                    (intervention_id, tech_id, tech_name, "Assigné"),
                                 )
-                                logger.info(f"    ✅ Added '{tech_name}' to interventions_techniciens")
-                            else:
-                                logger.info(f"    ℹ️ '{tech_name}' already assigned")
-                        
+
                         conn.commit()
-                        logger.info(f"  ✅ All technician assignments committed")
+                        logger.info(
+                            "Planning #%s assignments replaced with technician IDs %s",
+                            planning_id,
+                            selected_ids,
+                        )
+                except HTTPException:
+                    raise
                 except Exception as e:
                     logger.error(f"❌ Error in technician assignment: {e}", exc_info=True)
                     # Don't fail the whole request - continue

@@ -1100,9 +1100,9 @@ def _migration_028_equipment_identity_and_exact_dedup(conn) -> None:
                 END $$"""
         )
 
-    # First attach legacy rows to one deterministic equipment ID. Ambiguous
-    # same-name devices are no longer multiplied by the read query; old rows
-    # use the oldest matching ID until a future edit supplies the exact ID.
+    # Attach legacy rows only when their name/client pair identifies one
+    # equipment. Never invent an ID for homonymous devices: a wrong persisted
+    # link is worse than a legacy row waiting for an explicit repair.
     for table, name_column in (
         ("interventions", "machine"),
         ("demandes_intervention", "equipement"),
@@ -1121,7 +1121,16 @@ def _migration_028_equipment_identity_and_exact_dedup(conn) -> None:
                    ORDER BY e.id
                    LIMIT 1
                )
-               WHERE item.equipement_id IS NULL"""
+               WHERE item.equipement_id IS NULL
+                 AND (
+                     SELECT COUNT(*)
+                     FROM equipements e
+                     WHERE LOWER(BTRIM(e.nom)) = LOWER(BTRIM(item.{name_column}))
+                       AND (
+                           NULLIF(BTRIM(item.client), '') IS NULL
+                           OR LOWER(BTRIM(e.client)) = LOWER(BTRIM(item.client))
+                       )
+                 ) = 1"""
         )
 
     # Fingerprint only equipment business fields. IDs and creation timestamps

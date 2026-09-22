@@ -5,6 +5,7 @@ import { syncOfflineSession } from './offline-db';
 
 export interface SaviaUser {
   id: number;
+  technicien_id?: number | null;
   nom: string;
   role: string;
   username: string;
