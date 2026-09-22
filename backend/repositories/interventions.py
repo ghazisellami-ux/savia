@@ -245,7 +245,17 @@ def ajouter_intervention(intervention_dict):
 
 def lire_planning(machine=None, statut=None, region=None, ville=None):
     """Lit le planning de maintenance avec filtres optionnels."""
-    query = "SELECT * FROM planning_maintenance WHERE 1=1"
+    # The machine name is not a stable equipment identifier: several
+    # equipment records may legitimately share it.  Join on equipement_id so
+    # the API can expose the serial number belonging to the exact equipment
+    # attached to each planning row.  The frontend keeps a name-based
+    # fallback for legacy rows, but must prefer this value whenever present.
+    query = """
+        SELECT pm.*, e.num_serie AS equipement_num_serie
+        FROM planning_maintenance pm
+        LEFT JOIN equipements e ON e.id = pm.equipement_id
+        WHERE 1=1
+    """
     params = []
     if machine:
         query += " AND machine = %s"
