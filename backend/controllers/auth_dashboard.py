@@ -158,7 +158,8 @@ def root():
 @app.post("/api/auth/login")
 def login(body: LoginRequest, request: Request, response: Response):
     ip_address = request.client.host if request.client else "unknown"
-    username_key = body.username.strip().casefold()
+    login_username = body.username.strip()
+    username_key = login_username.casefold()
     ip_key = f"ip:{ip_address}"
     account_key = f"account:{username_key}"
     if _consume_login_attempts(ip_key, account_key):
@@ -170,12 +171,12 @@ def login(body: LoginRequest, request: Request, response: Response):
     
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM utilisateurs WHERE username = %s AND actif = 1",
-            (body.username,)
+            "SELECT * FROM utilisateurs WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s)) AND actif = 1",
+            (login_username,)
         ).fetchone()
 
     if not row or not _verify_password(body.password, row["password_hash"]):
-        log_audit(body.username, "LOGIN_FAILED", f"Identifiants incorrects", "auth", ip_address)
+        log_audit(login_username, "LOGIN_FAILED", f"Identifiants incorrects", "auth", ip_address)
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
     user_data = dict(row)
@@ -194,7 +195,7 @@ def login(body: LoginRequest, request: Request, response: Response):
         )
     
     # Log successful login
-    log_audit(body.username, "LOGIN", "Connexion réussie", "auth", ip_address)
+    log_audit(user_data.get("username", login_username), "LOGIN", "Connexion réussie", "auth", ip_address)
     _clear_login_attempts(ip_key, account_key)
     
     is_pwa_client = request.headers.get("X-SAVIA-Client", "").lower() == "pwa"
