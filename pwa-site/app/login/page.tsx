@@ -32,7 +32,7 @@ export default function LoginPage() {
         role: res.user.role,
         username,
       });
-      router.replace('/interventions');
+      router.replace(res.password_change_required || res.user.password_change_required ? '/change-password' : '/interventions');
     } catch {
       setError('Identifiant ou mot de passe incorrect.');
       setLoading(false);

@@ -149,11 +149,32 @@ def get_interventions(
     if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
+        technician_id = None
+        try:
+            with get_db() as conn:
+                tech_row = conn.execute(
+                    """SELECT id FROM techniciens
+                       WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+                       ORDER BY id LIMIT 1""",
+                    (user_username, user_nom_complet, user_nom_complet),
+                ).fetchone()
+                technician_id = int(tech_row["id"]) if tech_row else None
+        except Exception as exc:
+            logger.warning("Unable to resolve technician ID for %s: %s", user_username, exc)
         # Filter by name (primary) or username (secondary)
-        if user_nom_complet and not df.empty and "technicien" in df.columns:
-            df = df[df["technicien"].astype(str).apply(
-                lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
-            )]
+        if not df.empty:
+            if technician_id is not None and "technicien_id" in df.columns:
+                id_matches = df["technicien_id"].apply(lambda value: str(value).isdigit() and int(value) == technician_id)
+                name_matches = df["technicien"].astype(str).apply(
+                    lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
+                ) if "technicien" in df.columns else False
+                df = df[id_matches | name_matches]
+            elif user_nom_complet and "technicien" in df.columns:
+                df = df[df["technicien"].astype(str).apply(
+                    lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
+                )]
         
         # Also fetch child interventions assigned to this technician
         try:
@@ -173,9 +194,10 @@ def get_interventions(
             with get_db() as conn:
                 # Find intervention IDs where this technician is assigned
                 tech_intervention_ids = conn.execute(
-                    """SELECT DISTINCT intervention_id FROM interventions_techniciens 
-                       WHERE technicien_nom ILIKE %s OR technicien_nom ILIKE %s""",
-                    (f"%{user_nom_complet}%", f"%{user_username}%")
+                    """SELECT DISTINCT intervention_id FROM interventions_techniciens
+                       WHERE (%s IS NOT NULL AND technicien_id = %s)
+                          OR (%s IS NULL AND (technicien_nom ILIKE %s OR technicien_nom ILIKE %s))""",
+                    (technician_id, technician_id, technician_id, f"%{user_nom_complet}%", f"%{user_username}%")
                 ).fetchall()
                 
                 if tech_intervention_ids:

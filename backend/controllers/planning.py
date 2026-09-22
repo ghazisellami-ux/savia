@@ -75,8 +75,35 @@ def get_planning(
     if user.get("role") == "Technicien" and not df.empty:
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
+        technician_id = None
+        try:
+            with get_db() as conn:
+                tech_row = conn.execute(
+                    """SELECT id FROM techniciens
+                       WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+                       ORDER BY id LIMIT 1""",
+                    (user_username, user_nom_complet, user_nom_complet),
+                ).fetchone()
+                technician_id = int(tech_row["id"]) if tech_row else None
+        except Exception as exc:
+            logger.warning("Unable to resolve planning technician ID for %s: %s", user_username, exc)
         # Filter by name (primary) or username (secondary)
-        if user_nom_complet and "technicien_assigne" in df.columns:
+        if technician_id is not None and "technicien_ids" in df.columns:
+            def contains_technician(value):
+                try:
+                    import json
+                    values = json.loads(value) if isinstance(value, str) else value
+                    return technician_id in [int(item) for item in (values or [])]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return False
+            id_matches = df["technicien_ids"].apply(contains_technician)
+            name_matches = df["technicien_assigne"].astype(str).apply(
+                lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
+            ) if "technicien_assigne" in df.columns else False
+            df = df[id_matches | name_matches]
+        elif user_nom_complet and "technicien_assigne" in df.columns:
             df = df[df["technicien_assigne"].astype(str).apply(
                 lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
             )]
@@ -103,7 +130,10 @@ def create_planning(body: dict, user: dict = Depends(_verify_token)):
             detail="Cette action est réservée aux Responsables, Managers et Admins"
         )
     
-    planning_id = ajouter_planning(body)
+    try:
+        planning_id = ajouter_planning(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def notification_value(key: str, fallback: str = "", *, limit: int = 800) -> str:
         raw_value = str(body.get(key, fallback) or "").strip()
@@ -733,6 +763,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
     Admin, Manager, and Responsable Technique can perform this action.
     Creates a greyed-out "Décalé" entry at the old date for audit trail.
     """
+    import json
+
     # Check authorization for planning assignment and rescheduling.
     if user.get("role") not in ["Admin", "Manager", "Responsable Technique"]:
         raise HTTPException(
@@ -756,6 +788,13 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
     
     new_date = body.get("date_planifiee")
     new_technicians = body.get("technicien_assigne")
+    new_technician_ids = body.get("technicien_ids") or []
+    if isinstance(new_technician_ids, str):
+        try:
+            new_technician_ids = json.loads(new_technician_ids)
+        except (TypeError, ValueError):
+            new_technician_ids = []
+    new_technician_ids = [int(value) for value in new_technician_ids if str(value).isdigit() and int(value) > 0]
     reason = body.get("reason", "").strip()  # ← Add reason support
     
     if not new_date and new_technicians is None:
@@ -843,6 +882,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 update_data["date_prevue"] = new_date
             if new_technicians is not None:
                 update_data["technicien_assigne"] = new_technicians
+                update_data["technicien_id"] = new_technician_ids[0] if new_technician_ids else None
+                update_data["technicien_ids"] = json.dumps(new_technician_ids)
             
             # ← Add reason to notes if provided
             if reason:
@@ -1014,6 +1055,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                         if new_technicians is not None:
                             intervention_updates.append("technicien = %s")
                             intervention_values.append(new_technicians)
+                            intervention_updates.append("technicien_id = %s")
+                            intervention_values.append(new_technician_ids[0] if new_technician_ids else None)
                         if linked_intervention.get("planning_id") != planning_id:
                             intervention_updates.append("planning_id = %s")
                             intervention_values.append(planning_id)
@@ -1038,10 +1081,10 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                         
                         conn.execute(
                             """INSERT INTO interventions
-                               (date, machine, equipement_id, technicien, type_intervention, description,
+                               (date, machine, equipement_id, technicien_id, technicien, type_intervention, description,
                                 statut, priorite, notes, planning_id)
-                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (date_prevue, machine, current.get("equipement_id"), new_technicians, type_maintenance, description,
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (date_prevue, machine, current.get("equipement_id"), new_technician_ids[0] if new_technician_ids else None, new_technicians, type_maintenance, description,
                              "En cours", "Moyenne", notes, planning_id)
                         )
                         
@@ -1068,21 +1111,24 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                         tech_list = [t.strip() for t in new_technicians.split(",") if t.strip()]
                         logger.info(f"  Adding {len(tech_list)} technician(s) to interventions_techniciens: {tech_list}")
                         
-                        for tech_name in tech_list:
+                        for index, tech_name in enumerate(tech_list):
+                            tech_id = new_technician_ids[index] if index < len(new_technician_ids) else None
                             # Check if technician is already assigned
                             existing = conn.execute(
                                 """SELECT id FROM interventions_techniciens 
-                                   WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
-                                (intervention_id, f"%{tech_name}%")
+                                   WHERE intervention_id = %s
+                                     AND ((%s IS NOT NULL AND technicien_id = %s)
+                                          OR (%s IS NULL AND technicien_nom ILIKE %s))""",
+                                (intervention_id, tech_id, tech_id, tech_id, f"%{tech_name}%")
                             ).fetchone()
                             
                             if not existing:
                                 # Create new assignment
                                 conn.execute(
                                     """INSERT INTO interventions_techniciens 
-                                       (intervention_id, technicien_nom, statut) 
-                                       VALUES (%s, %s, %s)""",
-                                    (intervention_id, tech_name, "Assigné")
+                                       (intervention_id, technicien_id, technicien_nom, statut)
+                                       VALUES (%s, %s, %s, %s)""",
+                                    (intervention_id, tech_id, tech_name, "Assigné")
                                 )
                                 logger.info(f"    ✅ Added '{tech_name}' to interventions_techniciens")
                             else:

@@ -574,6 +574,7 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             machine TEXT NOT NULL,
             equipement_id INTEGER,
+            technicien_id INTEGER,
             technicien TEXT DEFAULT '',
             type_intervention TEXT DEFAULT 'Corrective',
             description TEXT DEFAULT '',
@@ -664,6 +665,8 @@ def init_db():
             id SERIAL PRIMARY KEY,
             machine TEXT NOT NULL,
             equipement_id INTEGER,
+            technicien_id INTEGER,
+            technicien_ids TEXT DEFAULT '[]',
             client TEXT DEFAULT '',
             type_maintenance TEXT DEFAULT 'Préventive',
             description TEXT DEFAULT '',
@@ -1048,6 +1051,9 @@ def init_db():
         _safe_add_column("interventions", "duree_deplacement", "INTEGER", "0")
         _safe_add_column("interventions", "is_temporary", "INTEGER", "0")
         _safe_add_column("interventions", "parent_intervention_id", "INTEGER", "NULL")
+        _safe_add_column("interventions", "technicien_id", "INTEGER", "NULL")
+        _safe_add_column("planning_maintenance", "technicien_id", "INTEGER", "NULL")
+        _safe_add_column("planning_maintenance", "technicien_ids", "TEXT", "'[]'")
 
         # Interventions_techniciens table migration (per-technician tracking)
         try:
@@ -1082,6 +1088,43 @@ def init_db():
             except Exception:
                 pass
             logger.debug(f"⚠️  Erreur lors de la création de interventions_techniciens: {e}")
+
+        # Backfill technician identifiers for legacy name-based assignments.
+        # Keep the text columns for display and backwards compatibility.
+        try:
+            conn.execute("""
+                UPDATE planning_maintenance pm
+                   SET technicien_id = t.id,
+                       technicien_ids = CASE WHEN pm.technicien_ids IS NULL OR pm.technicien_ids = '[]'
+                                             THEN '[' || t.id::text || ']' ELSE pm.technicien_ids END
+                  FROM techniciens t
+                 WHERE pm.technicien_id IS NULL
+                   AND pm.technicien_assigne NOT LIKE '%,%'
+                   AND (LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(t.username)))
+            """)
+            conn.execute("""
+                UPDATE interventions i
+                   SET technicien_id = t.id
+                  FROM techniciens t
+                 WHERE i.technicien_id IS NULL
+                   AND i.technicien NOT LIKE '%,%'
+                   AND (LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(t.username)))
+            """)
+            conn.execute("""
+                UPDATE interventions_techniciens it
+                   SET technicien_id = t.id
+                  FROM techniciens t
+                 WHERE it.technicien_id IS NULL
+                   AND (LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(t.username)))
+            """)
+        except Exception as e:
+            logger.debug(f"Technician ID backfill skipped: {e}")
 
         # Ensure commit after all _safe_add_column migrations
         try:
