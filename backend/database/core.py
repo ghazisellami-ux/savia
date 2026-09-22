@@ -783,6 +783,9 @@ def init_db():
             duree_minutes_tech INTEGER DEFAULT 0,
             duree_deplacement_tech INTEGER DEFAULT 0,
             notes_tech TEXT DEFAULT '',
+            type_erreur_tech TEXT DEFAULT '',
+            pieces_a_deduire TEXT DEFAULT '',
+            stock_deducted BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
@@ -1073,6 +1076,9 @@ def init_db():
                     duree_minutes_tech INTEGER DEFAULT 0,
                     duree_deplacement_tech INTEGER DEFAULT 0,
                     notes_tech TEXT DEFAULT '',
+                    type_erreur_tech TEXT DEFAULT '',
+                    pieces_a_deduire TEXT DEFAULT '',
+                    stock_deducted BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (intervention_id) REFERENCES interventions(id) ON DELETE CASCADE
@@ -1088,6 +1094,10 @@ def init_db():
             except Exception:
                 pass
             logger.debug(f"⚠️  Erreur lors de la création de interventions_techniciens: {e}")
+
+        _safe_add_column("interventions_techniciens", "type_erreur_tech", "TEXT", "''")
+        _safe_add_column("interventions_techniciens", "pieces_a_deduire", "TEXT", "''")
+        _safe_add_column("interventions_techniciens", "stock_deducted", "BOOLEAN", "FALSE")
 
         # Backfill technician identifiers for legacy name-based assignments.
         # Keep the text columns for display and backwards compatibility.

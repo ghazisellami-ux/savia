@@ -251,9 +251,24 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
     # attached to each planning row.  The frontend keeps a name-based
     # fallback for legacy rows, but must prefer this value whenever present.
     query = """
-        SELECT pm.*, e.num_serie AS equipement_num_serie
+        SELECT pm.*,
+               COALESCE(e.num_serie, legacy_e.num_serie) AS equipement_num_serie,
+               COALESCE(pm.equipement_id, legacy_e.id) AS resolved_equipement_id
         FROM planning_maintenance pm
         LEFT JOIN equipements e ON e.id = pm.equipement_id
+        LEFT JOIN LATERAL (
+            SELECT candidate.id, candidate.num_serie
+            FROM equipements candidate
+            WHERE pm.equipement_id IS NULL
+              AND LOWER(BTRIM(candidate.nom)) = LOWER(BTRIM(pm.machine))
+              AND LOWER(BTRIM(COALESCE(candidate.client, ''))) = LOWER(BTRIM(COALESCE(pm.client, '')))
+              AND (
+                  SELECT COUNT(*) FROM equipements same_name
+                  WHERE LOWER(BTRIM(same_name.nom)) = LOWER(BTRIM(pm.machine))
+                    AND LOWER(BTRIM(COALESCE(same_name.client, ''))) = LOWER(BTRIM(COALESCE(pm.client, '')))
+              ) = 1
+            LIMIT 1
+        ) legacy_e ON TRUE
         WHERE 1=1
     """
     params = []
@@ -267,6 +282,20 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
 
     with get_db() as conn:
         df = read_sql(query, conn, params=params)
+        if not df.empty and "resolved_equipement_id" in df.columns:
+            missing_ids = df["equipement_id"].isna() & df["resolved_equipement_id"].notna()
+            if missing_ids.any():
+                # Persist only unambiguous legacy links. Never overwrite an
+                # existing ID: it is the source of truth for duplicate names.
+                for planning_id, equipment_id in zip(
+                    df.loc[missing_ids, "id"], df.loc[missing_ids, "resolved_equipement_id"]
+                ):
+                    conn.execute(
+                        "UPDATE planning_maintenance SET equipement_id = %s WHERE id = %s AND equipement_id IS NULL",
+                        (int(equipment_id), int(planning_id)),
+                    )
+                df.loc[missing_ids, "equipement_id"] = df.loc[missing_ids, "resolved_equipement_id"]
+            df.drop(columns=["resolved_equipement_id"], inplace=True)
 
         # A rescheduled maintenance keeps a historical ghost row at its
         # original date. Once the linked maintenance is closed, expose that
