@@ -184,6 +184,10 @@ def _authenticated_user(
                FROM utilisateurs WHERE username = %s""",
             (payload.get("sub", ""),),
         ).fetchone()
+        technician = conn.execute(
+            "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+            (payload.get("sub", ""),),
+        ).fetchone()
     if not row or not row["actif"]:
         raise HTTPException(status_code=401, detail="Compte indisponible")
     if payload.get("pv") != row["password_version"]:
@@ -195,6 +199,7 @@ def _authenticated_user(
         "client": row["client"] or "",
         "pages_autorisees": row["pages_autorisees"] or "",
         "password_change_required": bool(row["must_change_password"]),
+        "technicien_id": int(technician["id"]) if technician else None,
     })
     return payload
 

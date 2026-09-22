@@ -736,7 +736,7 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         
         with get_db() as conn:
             intervention = conn.execute(
-                """SELECT id, machine, technicien, statut,
+                """SELECT id, machine, equipement_id, client, technicien, technicien_id, statut,
                           date_transfert_atelier, retour_site_confirme
                    FROM interventions WHERE id = %s""",
                 (intervention_id,)
@@ -753,29 +753,27 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                 intervention.get("retour_site_confirme"),
             )
             
-            # Get client from equipements table (joined by machine name)
-            try:
+            client = str(intervention.get("client") or "").strip()
+            if not client and intervention.get("equipement_id") is not None:
                 eq_row = conn.execute(
-                    "SELECT client FROM equipements WHERE nom = %s LIMIT 1",
-                    (machine,)
+                    "SELECT client FROM equipements WHERE id = %s",
+                    (intervention["equipement_id"],),
                 ).fetchone()
-                if eq_row:
-                    client = dict(eq_row).get('client', '') or ''
-            except Exception:
-                client = ''
+                client = str(eq_row.get("client") or "") if eq_row else ""
             
             # Verify technician permissions
             if user.get("role") == "Technicien":
                 current_tech = str(intervention.get("technicien") or "").strip()
                 user_nom_complet = (user.get("nom") or "").strip()
                 user_username = (user.get("sub") or "").strip()
+                technician_id = user.get("technicien_id")
                 
                 is_assigned = False
                 
                 # Cas 1: Vérifier d'abord dans interventions_techniciens (priorité multi-tech)
                 logger.info(f"🔐 Permission check: checking interventions_techniciens table first (multi-tech priority)")
                 tech_rows = conn.execute(
-                    "SELECT technicien_nom, statut FROM interventions_techniciens WHERE intervention_id = %s",
+                    "SELECT technicien_id, technicien_nom, statut FROM interventions_techniciens WHERE intervention_id = %s",
                     (intervention_id,)
                 ).fetchall()
                 
@@ -783,7 +781,11 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                     # Vérifier si le technicien actuel est dans la liste
                     for row_tech in tech_rows:
                         stored_tech_nom = str(row_tech.get("technicien_nom") or "").strip()
-                        if (stored_tech_nom and 
+                        if technician_id is not None and row_tech.get("technicien_id") == technician_id:
+                            is_assigned = True
+                            current_tech_status = row_tech.get("statut")
+                            break
+                        if (row_tech.get("technicien_id") is None and stored_tech_nom and
                             (_tech_name_or_username_matches(user_nom_complet, stored_tech_nom) or
                              _tech_name_or_username_matches(user_username, stored_tech_nom))):
                             is_assigned = True
@@ -792,7 +794,9 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                             break
                 
                 # Cas 2: Si pas trouvé en multi-tech, vérifier le champ technicien (single-tech)
-                if not is_assigned and current_tech:
+                if not is_assigned and technician_id is not None and intervention.get("technicien_id") == technician_id:
+                    is_assigned = True
+                elif not is_assigned and intervention.get("technicien_id") is None and current_tech:
                     logger.info(f"🔐 Not in interventions_techniciens, checking single-tech column: technicien='{current_tech}'")
                     is_assigned = (
                         _tech_name_or_username_matches(user_nom_complet, current_tech) or
@@ -855,10 +859,11 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
         tech_nom = body.get("technicien_nom") or user.get("nom", "Unknown")
         logger.info(f"   ✓ Tech name: {tech_nom}")
         
-        get_or_create_interventions_techniciens(intervention_id, tech_nom)
+        technician_id = user.get("technicien_id")
+        get_or_create_interventions_techniciens(intervention_id, tech_nom, technician_id)
         
         # Update the per-technician data
-        success = update_interventions_techniciens(intervention_id, tech_nom, body)
+        success = update_interventions_techniciens(intervention_id, tech_nom, body, technician_id)
         logger.info(f"   ✓ Update result: {success}")
         
         if not success:

@@ -74,7 +74,7 @@ def _ensure_workshop_transfer_status_constraint(conn):
                              'En attente de pièce'))"""
     )
 
-def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
+def get_or_create_interventions_techniciens(intervention_id, technicien_nom, technician_id=None):
     """
     Récupère ou crée un enregistrement interventions_techniciens pour un technicien.
     Uses robust name matching to handle reversed name orders (e.g., "Ghazi Sellami" vs "Sellami Ghazi").
@@ -109,7 +109,6 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
         return (all(w in words2 for w in words1) and 
                 all(w in words1 for w in words2))
     
-    # Use correct placeholder based on database type
     ph = "%s"
     
     with get_db() as conn:
@@ -119,29 +118,53 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom):
             WHERE intervention_id = {ph}
         """, (intervention_id,)).fetchall()
         
-        # Check if entry exists (using robust name matching)
+        if technician_id is not None:
+            try:
+                technician_id = int(technician_id)
+            except (TypeError, ValueError):
+                technician_id = None
+
+        # The assigned technician ID is authoritative. A name is only used to
+        # repair a legacy assignment that has not yet been backfilled.
         for row in rows:
-            if names_match(row['technicien_nom'], technicien_nom):
-                return dict(row)
+            row_dict = dict(row)
+            if technician_id is not None and row_dict.get("technicien_id") == technician_id:
+                return row_dict
+            if (
+                technician_id is not None
+                and row_dict.get("technicien_id") is None
+                and names_match(row_dict.get("technicien_nom"), technicien_nom)
+            ):
+                conn.execute(
+                    "UPDATE interventions_techniciens SET technicien_id = %s WHERE id = %s",
+                    (technician_id, row_dict["id"]),
+                )
+                row_dict["technicien_id"] = technician_id
+                return row_dict
+            if technician_id is None and names_match(row_dict.get("technicien_nom"), technicien_nom):
+                return row_dict
         
         # Create new entry if not found
         conn.execute(f"""
             INSERT INTO interventions_techniciens 
-            (intervention_id, technicien_nom, statut)
-            VALUES ({ph}, {ph}, 'Assigné')
-        """, (intervention_id, technicien_nom))
+            (intervention_id, technicien_id, technicien_nom, statut)
+            VALUES ({ph}, {ph}, {ph}, 'Assigné')
+        """, (intervention_id, technician_id, technicien_nom))
         
         # Fetch and return the new entry
         row = conn.execute(f"""
             SELECT * FROM interventions_techniciens 
-            WHERE intervention_id = {ph} AND technicien_nom = {ph}
-        """, (intervention_id, technicien_nom)).fetchone()
+            WHERE intervention_id = {ph}
+              AND ({ph} IS NOT NULL AND technicien_id = {ph}
+                   OR {ph} IS NULL AND technicien_nom = {ph})
+            ORDER BY id DESC LIMIT 1
+        """, (intervention_id, technician_id, technician_id, technician_id, technicien_nom)).fetchone()
         
         _trigger_backup()
         return dict(row) if row else None
 
 
-def update_interventions_techniciens(intervention_id, technicien_nom, data):
+def update_interventions_techniciens(intervention_id, technicien_nom, data, technician_id=None):
     """
     Met à jour les données per-technician pour une intervention.
     Now uses ID-based lookup instead of name matching for reliability.
@@ -150,7 +173,8 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         intervention_id: ID de l'intervention
         technicien_nom: Nom complet du technicien (used to find the ID)
         data: Dict with keys like probleme_tech, solution_tech, duree_minutes_tech, etc.
-              Can optionally include 'technicien_id' to bypass name matching
+              Can include 'intervention_technicien_id' to target its assignment.
+        technician_id: authenticated technician ID; never accepted from data.
     
     Returns:
         bool: Success
@@ -184,17 +208,19 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
         # Ensure the record exists first. The helper uses a separate
         # connection; run the DDL compatibility guard only after it has
         # released its transaction, otherwise the table lock can block it.
-        get_or_create_interventions_techniciens(intervention_id, technicien_nom)
+        get_or_create_interventions_techniciens(intervention_id, technicien_nom, technician_id)
         _ensure_workshop_transfer_status_constraint(conn)
         
-        # Try to find the record ID first - use the ID if provided in data
-        record_id = data.get('technicien_id')
-        logger.info(f"🔍 update_interventions_techniciens: looking for tech '{technicien_nom}' (provided ID: {record_id})")
+        # The browser may identify the assignment row, but the authenticated
+        # technician ID still scopes that row to its owner.
+        record_id = data.get('intervention_technicien_id') or data.get('technicien_id')
+        logger.info(f"🔍 update_interventions_techniciens: looking for tech '{technicien_nom}' (assignment ID: {record_id})")
         
         if not record_id:
-            # Find matching technician using fuzzy matching by name
+            # Find by technician ID. Name matching is restricted to legacy
+            # rows which do not have an ID yet.
             rows = conn.execute(f"""
-                SELECT id, technicien_nom FROM interventions_techniciens 
+                SELECT id, technicien_id, technicien_nom FROM interventions_techniciens
                 WHERE intervention_id = {ph}
             """, (intervention_id,)).fetchall()
             
@@ -203,11 +229,16 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
             for row in rows:
                 row_dict = dict(row)
                 tech_name_in_db = row_dict.get('technicien_nom')
-                logger.info(f"    Checking: '{tech_name_in_db}' vs '{technicien_nom}' -> {names_match(tech_name_in_db, technicien_nom)}")
-                
-                if tech_name_in_db and names_match(tech_name_in_db, technicien_nom):
+                if technician_id is not None and row_dict.get("technicien_id") == technician_id:
                     record_id = row_dict['id']
-                    logger.info(f"    ✅ MATCHED! Using record ID: {record_id}")
+                    logger.info(f"    ✅ Matched technician ID; using assignment {record_id}")
+                    break
+                if (
+                    technician_id is None
+                    and tech_name_in_db
+                    and names_match(tech_name_in_db, technicien_nom)
+                ):
+                    record_id = row_dict['id']
                     break
         
         if not record_id:
@@ -241,12 +272,17 @@ def update_interventions_techniciens(intervention_id, technicien_nom, data):
             logger.warning(f"  ⚠️ No fields to update!")
             return False
         
-        params.extend([record_id, intervention_id])
+        where_params = [record_id, intervention_id]
+        ownership_clause = ""
+        if technician_id is not None:
+            ownership_clause = f" AND technicien_id = {ph}"
+            where_params.append(technician_id)
+        params.extend(where_params)
         
         query = f"""
             UPDATE interventions_techniciens 
             SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = {ph} AND intervention_id = {ph}
+            WHERE id = {ph} AND intervention_id = {ph}{ownership_clause}
         """
         
         logger.info(f"  🔄 Executing UPDATE for record ID {record_id}")
@@ -588,7 +624,7 @@ def get_child_interventions(parent_intervention_id):
         return [dict(r) for r in rows]
 
 
-def lire_child_interventions_for_technician(technician_name):
+def lire_child_interventions_for_technician(technician_name, technician_id=None):
     """
     Récupère toutes les interventions enfants assignées à un technicien spécifique.
     Utilisé par les techniciens sur PWA pour voir leurs interventions enfants.
@@ -614,18 +650,20 @@ def lire_child_interventions_for_technician(technician_name):
                    i.parent_intervention_id
             FROM interventions i
             LEFT JOIN equipements e ON e.id = i.equipement_id
-            WHERE i.is_temporary = 1 AND i.technicien ILIKE %s
+            WHERE i.is_temporary = 1
+              AND ((%s IS NOT NULL AND i.technicien_id = %s)
+                   OR (%s IS NULL AND i.technicien_id IS NULL AND i.technicien ILIKE %s))
             ORDER BY i.date DESC
         """
         
         # Use ILIKE for initial broad match, then filter precisely in Python
         search_pattern = f"%{technician_name}%"
-        df = read_sql(base_query, conn, params=(search_pattern,))
+        df = read_sql(base_query, conn, params=(technician_id, technician_id, technician_id, search_pattern))
     
     # Post-filter: ensure ALL words from technician_name appear as whole words
     # in the technicien field (prevents "al" in "Salah Al Salah" from matching "Ahmed Ben Salah")
     # Strip punctuation (commas, etc.) before splitting to handle "Salah Al Salah, Other Tech"
-    if not df.empty and "technicien" in df.columns:
+    if technician_id is None and not df.empty and "technicien" in df.columns:
         import re as _re
         def _extract_words_db(text):
             cleaned = _re.sub(r'[,;/\-_\.\(\)\[\]]+', ' ', text.lower())

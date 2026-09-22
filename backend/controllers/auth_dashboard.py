@@ -106,6 +106,7 @@ def _issue_access_token(user_data: dict) -> str:
         "nom": user_data.get("nom_complet", ""),
         "client": user_data.get("client", "") or "",
         "pages_autorisees": user_data.get("pages_autorisees", "") or "",
+        "technicien_id": user_data.get("technicien_id"),
         "pv": int(user_data.get("password_version") or 1),
         "iss": JWT_ISSUER,
         "iat": now,
@@ -125,6 +126,7 @@ def _login_response(user_data: dict, token: str | None = None) -> dict:
             "role": user_data["role"],
             "client": user_data.get("client", "") or "",
             "pages_autorisees": user_data.get("pages_autorisees", "") or "",
+            "technicien_id": user_data.get("technicien_id"),
             "password_change_required": password_change_required,
         },
     }
@@ -180,6 +182,12 @@ def login(body: LoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
 
     user_data = dict(row)
+    with get_db() as conn:
+        technician = conn.execute(
+            "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+            (user_data["username"],),
+        ).fetchone()
+    user_data["technicien_id"] = int(technician["id"]) if technician else None
     request.state.access_username = user_data.get("username", "")
     request.state.access_role = user_data.get("role", "")
     rotation_due = _password_rotation_due(user_data.get("password_changed_at"))

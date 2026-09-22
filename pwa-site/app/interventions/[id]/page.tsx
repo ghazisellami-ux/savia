@@ -126,7 +126,8 @@ export default function InterventionDetailPage() {
   // Per-technician data state
   const [technicianRecords, setTechnicianRecords] = useState<any[]>([]);
   const [currentUserName, setCurrentUserName] = useState('');
-  const [currentUserTechId, setCurrentUserTechId] = useState<number | null>(null); // Store the tech ID
+  const [currentUserTechId, setCurrentUserTechId] = useState<number | null>(null); // Assignment ID
+  const [currentUserTechnicianId, setCurrentUserTechnicianId] = useState<number | null>(null);
   const [usePerTechnicianMode, setUsePerTechnicianMode] = useState(false);
   const [activeTabTech, setActiveTabTech] = useState(''); // Track active technician tab
   const [allTechnicians, setAllTechnicians] = useState<string[]>([]); // All technicians for this intervention
@@ -163,7 +164,8 @@ export default function InterventionDetailPage() {
     const user = getUser();
     const userName = user?.nom || '';
     setCurrentUserName(userName);
-    console.log('📝 Current user from auth:', { userName, user });
+    setCurrentUserTechnicianId(Number(user?.technicien_id) || null);
+    console.log('📝 Current user from auth:', { userName, technicianId: user?.technicien_id });
   }, []);
 
   // Next.js may restore the previous scroll position when navigating from the
@@ -357,7 +359,9 @@ export default function InterventionDetailPage() {
           setTechnicianRecords(techRecords || []);
           
           // Find current user's tech record and store the ID
-          const currentUserRec = techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
+          const currentUserRec = techRecords?.find((r: any) =>
+            currentUserTechnicianId !== null && Number(r.technicien_id) === currentUserTechnicianId
+          ) || techRecords?.find((r: any) => namesMatch(r.technicien_nom || '', currentUserName));
           setInitialTechnicianStatus(currentUserRec?.statut || 'En cours');
           if (currentUserRec?.id) {
             setCurrentUserTechId(currentUserRec.id);
@@ -690,7 +694,7 @@ export default function InterventionDetailPage() {
 
       const payload = {
         technicien_nom: currentUserName,
-        technicien_id: currentUserTechId, // Send the ID for reliable updating
+        intervention_technicien_id: currentUserTechId,
         probleme: form.probleme,
         cause: form.cause,
         solution: form.solution,

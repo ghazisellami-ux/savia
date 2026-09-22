@@ -149,28 +149,25 @@ def get_interventions(
     if user.get("role") == "Technicien":
         user_nom_complet = (user.get("nom") or "").strip()
         user_username = (user.get("sub") or "").strip()
-        technician_id = None
-        try:
-            with get_db() as conn:
-                tech_row = conn.execute(
-                    """SELECT id FROM techniciens
-                       WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
-                          OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
-                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
-                       ORDER BY id LIMIT 1""",
-                    (user_username, user_nom_complet, user_nom_complet),
-                ).fetchone()
-                technician_id = int(tech_row["id"]) if tech_row else None
-        except Exception as exc:
-            logger.warning("Unable to resolve technician ID for %s: %s", user_username, exc)
-        # Filter by name (primary) or username (secondary)
+        technician_id = user.get("technicien_id")
+        if technician_id is None:
+            try:
+                with get_db() as conn:
+                    tech_row = conn.execute(
+                        "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+                        (user_username,),
+                    ).fetchone()
+                    technician_id = int(tech_row["id"]) if tech_row else None
+            except Exception as exc:
+                logger.warning("Unable to resolve technician ID for %s: %s", user_username, exc)
         if not df.empty:
             if technician_id is not None and "technicien_id" in df.columns:
                 id_matches = df["technicien_id"].apply(lambda value: str(value).isdigit() and int(value) == technician_id)
                 name_matches = df["technicien"].astype(str).apply(
                     lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
                 ) if "technicien" in df.columns else False
-                df = df[id_matches | name_matches]
+                legacy_name_matches = df["technicien_id"].isna() & name_matches
+                df = df[id_matches | legacy_name_matches]
             elif user_nom_complet and "technicien" in df.columns:
                 df = df[df["technicien"].astype(str).apply(
                     lambda t: _tech_name_or_username_matches(user_nom_complet, t) or _tech_name_or_username_matches(user_username, t)
@@ -178,7 +175,7 @@ def get_interventions(
         
         # Also fetch child interventions assigned to this technician
         try:
-            df_children = lire_child_interventions_for_technician(user_nom_complet)
+            df_children = lire_child_interventions_for_technician(user_nom_complet, technician_id)
             if not df_children.empty:
                 # Combine parent and child interventions
                 import pandas as pd
@@ -196,7 +193,8 @@ def get_interventions(
                 tech_intervention_ids = conn.execute(
                     """SELECT DISTINCT intervention_id FROM interventions_techniciens
                        WHERE (%s IS NOT NULL AND technicien_id = %s)
-                          OR (%s IS NULL AND (technicien_nom ILIKE %s OR technicien_nom ILIKE %s))""",
+                          OR (%s IS NULL AND technicien_id IS NULL
+                              AND (technicien_nom ILIKE %s OR technicien_nom ILIKE %s))""",
                     (technician_id, technician_id, technician_id, f"%{user_nom_complet}%", f"%{user_username}%")
                 ).fetchall()
                 
@@ -560,7 +558,7 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
     if user.get("role") == "Technicien":
         with get_db() as conn:
             row = conn.execute(
-                "SELECT technicien, statut FROM interventions WHERE id = %s",
+                "SELECT technicien, technicien_id, statut FROM interventions WHERE id = %s",
                 (intervention_id,)
             ).fetchone()
             if not row:
@@ -569,13 +567,14 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
             current_tech = str(row.get("technicien") or "").strip()
             user_nom_complet = (user.get("nom") or "").strip()
             user_username = (user.get("sub") or "").strip()
+            technician_id = user.get("technicien_id")
             
             is_assigned = False
             
             # Cas 1: Vérifier d'abord dans interventions_techniciens (priorité multi-tech)
             logger.info(f"🔐 Permission check: checking interventions_techniciens table first (multi-tech priority)")
             tech_rows = conn.execute(
-                "SELECT technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
+                "SELECT technicien_id, technicien_nom FROM interventions_techniciens WHERE intervention_id = %s",
                 (intervention_id,)
             ).fetchall()
             
@@ -583,7 +582,10 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                 # Vérifier si le technicien actuel est dans la liste
                 for row_tech in tech_rows:
                     stored_tech_nom = str(row_tech.get("technicien_nom") or "").strip()
-                    if (stored_tech_nom and 
+                    if technician_id is not None and row_tech.get("technicien_id") == technician_id:
+                        is_assigned = True
+                        break
+                    if (row_tech.get("technicien_id") is None and stored_tech_nom and
                         (_tech_name_or_username_matches(user_nom_complet, stored_tech_nom) or
                          _tech_name_or_username_matches(user_username, stored_tech_nom))):
                         is_assigned = True
@@ -591,7 +593,9 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                         break
             
             # Cas 2: Si pas trouvé en multi-tech, vérifier le champ technicien (single-tech)
-            if not is_assigned and current_tech:
+            if not is_assigned and technician_id is not None and row.get("technicien_id") == technician_id:
+                is_assigned = True
+            elif not is_assigned and row.get("technicien_id") is None and current_tech:
                 logger.info(f"🔐 Not in interventions_techniciens, checking single-tech column: technicien='{current_tech}'")
                 is_assigned = (
                     _tech_name_or_username_matches(user_nom_complet, current_tech) or
@@ -695,7 +699,7 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
             try:
                 with get_db() as conn:
                     row = conn.execute(
-                        """SELECT i.machine, i.technicien, i.probleme, i.cause, i.solution,
+                        """SELECT i.machine, i.equipement_id, i.client, i.technicien, i.probleme, i.cause, i.solution,
                                   i.duree_minutes, i.duree_deplacement, i.notes, i.pieces_utilisees,
                                   bc.coverage_status, bc.coverage_reason,
                                   bc.contract_id
@@ -721,19 +725,9 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                     duree_h = round((d.get('duree_minutes') or 0) / 60, 1)
                     deplacement_h = round((d.get('duree_deplacement') or 0) / 60, 1)
                     notes_raw = str(d.get('notes', '') or '')
-                    # Extraire client depuis notes [Client]
-                    client_name = notes_raw[1:notes_raw.index(']')] if notes_raw.startswith('[') and ']' in notes_raw else ''
-                    # Si pas de client dans notes, chercher via equipement
-                    if not client_name:
-                        try:
-                            eq_row = conn.execute(
-                                "SELECT \"Client\" FROM equipements WHERE \"Nom\" = %s LIMIT 1",
-                                (d.get('machine', ''),)
-                            ).fetchone()
-                            if eq_row:
-                                client_name = eq_row['Client'] or ''
-                        except Exception:
-                            pass
+                    client_name = str(d.get("client") or "").strip()
+                    if not client_name and notes_raw.startswith('[') and ']' in notes_raw:
+                        client_name = notes_raw[1:notes_raw.index(']')]
                     pieces = str(d.get('pieces_utilisees', '') or '').strip()
                     notes_line = f"\n📌 Notes : {notes_raw}" if notes_raw and not notes_raw.startswith('[') else ""
                     client_line = f"\n👤 Client : <b>{client_name}</b>" if client_name else ""
@@ -847,7 +841,7 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
         try:
             with get_db() as conn:
                 row = conn.execute(
-                    "SELECT machine, technicien, notes, probleme FROM interventions WHERE id = %s",
+                    "SELECT machine, equipement_id, client, technicien, notes, probleme FROM interventions WHERE id = %s",
                     (intervention_id,)
                 ).fetchone()
             if row:
@@ -856,21 +850,10 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                 # Convert technicien username to full name
                 if technicien:
                     technicien = _get_technician_fullname(technicien)
-                # Extraire client depuis notes [Client]
                 notes = str(row.get("notes") or "")
-                client = notes[1:notes.index("]")] if notes.startswith("[") and "]" in notes else ""
-                # Si pas de client dans notes, chercher via equipement
-                if not client:
-                    try:
-                        with get_db() as conn2:
-                            eq_row = conn2.execute(
-                                'SELECT client FROM equipements WHERE nom = %s LIMIT 1',
-                                (machine,)
-                            ).fetchone()
-                            if eq_row:
-                                client = dict(eq_row).get('client', '') or ''
-                    except Exception:
-                        pass
+                client = str(row.get("client") or "").strip()
+                if not client and notes.startswith("[") and "]" in notes:
+                    client = notes[1:notes.index("]")]
                 for piece in pieces_attente:
                     if not isinstance(piece, dict):
                         continue
