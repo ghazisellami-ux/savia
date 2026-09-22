@@ -787,6 +787,12 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
         return value is True or str(value).strip().lower() in {"1", "true", "t", "yes"}
     
     new_date = body.get("date_planifiee")
+    new_equipment_id = body.get("equipement_id")
+    if new_equipment_id not in (None, ""):
+        try:
+            new_equipment_id = int(new_equipment_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Identifiant d'équipement invalide")
     new_technicians = body.get("technicien_assigne")
     new_technician_ids = body.get("technicien_ids") or []
     if isinstance(new_technician_ids, str):
@@ -797,7 +803,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
     new_technician_ids = [int(value) for value in new_technician_ids if str(value).isdigit() and int(value) > 0]
     reason = body.get("reason", "").strip()  # ← Add reason support
     
-    if not new_date and new_technicians is None:
+    if not new_date and new_technicians is None and new_equipment_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least date_planifiee or technicien_assigne must be provided"
@@ -816,6 +822,18 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Planning item not found"
                 )
+
+            if new_equipment_id is not None:
+                equipment_row = conn.execute(
+                    "SELECT id, nom, client FROM equipements WHERE id = %s",
+                    (new_equipment_id,),
+                ).fetchone()
+                if not equipment_row:
+                    raise HTTPException(status_code=404, detail="Équipement introuvable")
+                equipment_client = str(equipment_row.get("client") or "").strip()
+                current_client = str(current.get("client") or "").strip()
+                if equipment_client and current_client and equipment_client.casefold() != current_client.casefold():
+                    raise HTTPException(status_code=409, detail="L'équipement ne correspond pas au client du planning")
 
             import unicodedata
 
@@ -884,6 +902,8 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                 update_data["technicien_assigne"] = new_technicians
                 update_data["technicien_id"] = new_technician_ids[0] if new_technician_ids else None
                 update_data["technicien_ids"] = json.dumps(new_technician_ids)
+            if new_equipment_id is not None:
+                update_data["equipement_id"] = new_equipment_id
             
             # ← Add reason to notes if provided
             if reason:
@@ -977,7 +997,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             )
             
             # Notify the technician bot about assignment and/or rescheduling.
-            if date_has_changed or new_technicians:
+            if date_has_changed or new_technicians or new_equipment_id is not None:
                 try:
                     machine = current.get("machine", "?")
                     client = current.get("client", "")
@@ -1015,7 +1035,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
             
             # Keep a linked intervention aligned with the new planning date.
             # Future interventions are created only when their planned day is reached.
-            if date_has_changed or new_technicians is not None:
+            if date_has_changed or new_technicians is not None or new_equipment_id is not None:
                 logger.info(f"🔧 Processing technician assignment: {new_technicians} for planning #{planning_id}")
                 try:
                     machine = current.get("machine", "")
@@ -1027,22 +1047,9 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                         (planning_id,)
                     ).fetchone()
                     
-                    # If not found by planning_id, try to find by machine + date (in case it was manually created)
-                    if not linked_intervention and machine:
-                        lookup_dates = [str(old_date or "")[:10]]
-                        if date_prevue not in lookup_dates:
-                            lookup_dates.append(date_prevue)
-                        for lookup_date in lookup_dates:
-                            if not lookup_date:
-                                continue
-                            logger.info(f"  No planning_id match, searching by machine '{machine}' on date '{lookup_date}'")
-                            linked_intervention = conn.execute(
-                                "SELECT id, planning_id FROM interventions WHERE machine = %s AND date = %s ORDER BY id DESC LIMIT 1",
-                                (machine, lookup_date)
-                            ).fetchone()
-                            if linked_intervention:
-                                logger.info(f"  Found intervention by machine+date: #{linked_intervention['id']}")
-                                break
+                    # Do not fall back to machine + date: duplicate equipment
+                    # names can point to another serial number. Legacy rows
+                    # without planning_id are repaired only explicitly.
                     
                     # Existing interventions follow the new planning date.
                     if linked_intervention:
@@ -1057,6 +1064,11 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                             intervention_values.append(new_technicians)
                             intervention_updates.append("technicien_id = %s")
                             intervention_values.append(new_technician_ids[0] if new_technician_ids else None)
+                        if new_equipment_id is not None:
+                            intervention_updates.append("equipement_id = %s")
+                            intervention_values.append(new_equipment_id)
+                            intervention_updates.append("machine = %s")
+                            intervention_values.append(equipment_row["nom"])
                         if linked_intervention.get("planning_id") != planning_id:
                             intervention_updates.append("planning_id = %s")
                             intervention_values.append(planning_id)
@@ -1084,7 +1096,7 @@ def reschedule_planning(planning_id: int, body: dict, user: dict = Depends(_veri
                                (date, machine, equipement_id, technicien_id, technicien, type_intervention, description,
                                 statut, priorite, notes, planning_id)
                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                            (date_prevue, machine, current.get("equipement_id"), new_technician_ids[0] if new_technician_ids else None, new_technicians, type_maintenance, description,
+                            (date_prevue, equipment_row["nom"] if new_equipment_id is not None else machine, new_equipment_id if new_equipment_id is not None else current.get("equipement_id"), new_technician_ids[0] if new_technician_ids else None, new_technicians, type_maintenance, description,
                              "En cours", "Moyenne", notes, planning_id)
                         )
                         
