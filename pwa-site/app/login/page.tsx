@@ -33,8 +33,8 @@ export default function LoginPage() {
         username,
       });
       router.replace(res.password_change_required || res.user.password_change_required ? '/change-password' : '/interventions');
-    } catch {
-      setError('Identifiant ou mot de passe incorrect.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Impossible de contacter le serveur.');
       setLoading(false);
     }
   };
