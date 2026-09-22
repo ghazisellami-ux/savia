@@ -165,6 +165,7 @@ def sync_planning_to_interventions(*, notify=True):
     """
     from datetime import date
     import unicodedata
+    import json
     from repositories.interventions import find_open_intervention, lock_equipment_intervention_key
 
     def normalized_status(value):
@@ -177,7 +178,8 @@ def sync_planning_to_interventions(*, notify=True):
         today_str = today.isoformat()
         with get_db() as conn:
             planned = conn.execute(
-                """SELECT pm.id, pm.machine, pm.equipement_id, pm.client, pm.technicien_assigne,
+                """SELECT pm.id, pm.machine, pm.equipement_id, pm.client, pm.technicien_id,
+                          pm.technicien_ids, pm.technicien_assigne,
                           pm.description, pm.type_maintenance, pm.date_prevue,
                           pm.statut, pm.notes, pm.is_ghost
                    FROM planning_maintenance pm
@@ -202,6 +204,16 @@ def sync_planning_to_interventions(*, notify=True):
 
             machine = pm.get('machine', '')
             client = pm.get('client', '')
+            technician_ids = pm.get('technicien_ids') or []
+            if isinstance(technician_ids, str):
+                try:
+                    technician_ids = json.loads(technician_ids)
+                except (TypeError, ValueError):
+                    technician_ids = []
+            technician_ids = [int(value) for value in technician_ids if str(value).isdigit() and int(value) > 0]
+            primary_technician_id = pm.get('technicien_id') or (technician_ids[0] if technician_ids else None)
+            if primary_technician_id is not None:
+                primary_technician_id = int(primary_technician_id)
             planned_date = str(pm.get('date_prevue') or today_str)[:10]
             # Intervention requests are deliberately accepted by the
             # technician on day J, not auto-started by the maintenance
@@ -256,10 +268,10 @@ def sync_planning_to_interventions(*, notify=True):
                             continue
                     conn.execute(
                         """INSERT INTO interventions
-                           (date, machine, equipement_id, client, technicien, type_intervention, description, probleme,
+                           (date, machine, equipement_id, client, technicien_id, technicien, type_intervention, description, probleme,
                             statut, priorite, notes, planning_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (planned_date, machine, pm.get('equipement_id'), client, technicien, type_maintenance, description, probleme,
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (planned_date, machine, pm.get('equipement_id'), client, primary_technician_id, technicien, type_maintenance, description, probleme,
                          'Assignée' if is_intervention_request else 'En cours', 'Moyenne', notes, pm_id)
                     )
                     linked = conn.execute(
@@ -299,18 +311,22 @@ def sync_planning_to_interventions(*, notify=True):
 
                 # Toujours conserver les affectations multi-techniciens, y
                 # compris lors d'un rattrapage effectué après le jour J.
-                for tech_name in [t.strip() for t in technicien.split(',') if t.strip()]:
+                tech_names = [t.strip() for t in technicien.split(',') if t.strip()]
+                assignments = list(zip(technician_ids, tech_names)) if technician_ids else [(None, name) for name in tech_names]
+                for tech_id, tech_name in assignments:
                     existing_tech = conn.execute(
                         """SELECT id FROM interventions_techniciens
-                           WHERE intervention_id = %s AND technicien_nom ILIKE %s""",
-                        (intervention_id, f"%{tech_name}%")
+                           WHERE intervention_id = %s
+                             AND ((%s IS NOT NULL AND technicien_id = %s)
+                                  OR (%s IS NULL AND technicien_nom ILIKE %s))""",
+                        (intervention_id, tech_id, tech_id, tech_id, f"%{tech_name}%")
                     ).fetchone()
                     if not existing_tech:
                         conn.execute(
                             """INSERT INTO interventions_techniciens
-                               (intervention_id, technicien_nom, statut)
-                               VALUES (%s, %s, %s)""",
-                            (intervention_id, tech_name, 'Assigné')
+                               (intervention_id, technicien_id, technicien_nom, statut)
+                               VALUES (%s, %s, %s, %s)""",
+                            (intervention_id, tech_id, tech_name, 'Assigné')
                         )
 
             synced.append(intervention_id)

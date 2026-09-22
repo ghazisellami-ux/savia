@@ -103,17 +103,32 @@ def assert_intervention_write_access(conn, intervention_id: int, user: dict) -> 
     ]
     if not identities:
         raise HTTPException(status_code=403, detail="Technicien non identifiable")
+    technician_id = None
+    tech_row = conn.execute(
+        """SELECT id FROM techniciens
+           WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
+              OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+              OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+           ORDER BY id LIMIT 1""",
+        (str(user.get("sub") or ""), str(user.get("nom") or ""), str(user.get("nom") or "")),
+    ).fetchone()
+    if tech_row:
+        technician_id = tech_row["id"]
     assignments = conn.execute(
-        """SELECT technicien_nom AS assigned_name
+        """SELECT technicien_id, technicien_nom AS assigned_name
            FROM interventions_techniciens
            WHERE intervention_id = %s
            UNION ALL
-           SELECT technicien AS assigned_name
+           SELECT technicien_id, technicien AS assigned_name
            FROM interventions
            WHERE id = %s""",
         (intervention_id, intervention_id),
     ).fetchall()
     for row in assignments:
+        if technician_id is not None and row.get("technicien_id") is not None:
+            if int(row["technicien_id"]) == int(technician_id):
+                return
+            continue
         # A comma separates distinct technicians. Match against each person
         # independently so words from two different names cannot be combined.
         for assigned_name in str(row.get("assigned_name") or "").split(","):

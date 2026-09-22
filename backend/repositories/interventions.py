@@ -89,7 +89,7 @@ def lire_interventions(machine=None):
         # Select only necessary columns to reduce data transfer
         # Note: start_time, end_time are TIME columns for shift tracking
         base_query = """
-            SELECT i.id, i.date, i.machine, i.equipement_id, i.technicien, i.type_intervention,
+            SELECT i.id, i.date, i.machine, i.equipement_id, i.technicien_id, i.technicien, i.type_intervention,
                    i.description, i.probleme, i.cause, i.solution,
                    i.pieces_utilisees, i.cout, i.cout_pieces, i.duree_minutes,
                    i.duree_deplacement,
@@ -362,21 +362,81 @@ def lire_planning(machine=None, statut=None, region=None, ville=None):
 
 def ajouter_planning(planning_dict):
     """Ajoute une maintenance planifiée."""
+    import json
+
     with get_db() as conn:
         equipement_id = planning_dict.get("equipement_id")
         if equipement_id in (None, "") and planning_dict.get("machine"):
-            equipment = conn.execute(
+            equipment_rows = conn.execute(
                 """SELECT id FROM equipements
                    WHERE LOWER(BTRIM(nom)) = LOWER(BTRIM(%s))
                      AND (%s = '' OR LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s)))
-                   ORDER BY id LIMIT 1""",
+                   ORDER BY id""",
                 (planning_dict.get("machine", ""), planning_dict.get("client", ""), planning_dict.get("client", "")),
-            ).fetchone()
-            equipement_id = equipment["id"] if equipment else None
+            ).fetchall()
+            if len(equipment_rows) > 1:
+                raise ValueError("Plusieurs équipements portent ce nom. Sélectionnez l'équipement par son identifiant.")
+            equipement_id = equipment_rows[0]["id"] if equipment_rows else None
+
+        if equipement_id not in (None, ""):
+            equipement_id = int(equipement_id)
+
+        technician_ids = planning_dict.get("technicien_ids") or []
+        if isinstance(technician_ids, str):
+            try:
+                technician_ids = json.loads(technician_ids)
+            except (TypeError, ValueError):
+                technician_ids = [item.strip() for item in technician_ids.split(",") if item.strip()]
+        if not isinstance(technician_ids, list):
+            technician_ids = []
+        normalized_technician_ids = []
+        for value in technician_ids:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0 and value not in normalized_technician_ids:
+                normalized_technician_ids.append(value)
+
+        # Resolve technician names once, while retaining IDs as the source of
+        # truth. Legacy clients may still send only a comma-separated name.
+        technician_names = []
+        if normalized_technician_ids:
+            tech_rows = conn.execute(
+                "SELECT id, nom, prenom, username FROM techniciens WHERE id = ANY(%s) ORDER BY id",
+                (normalized_technician_ids,),
+            ).fetchall()
+            rows_by_id = {int(row["id"]): row for row in tech_rows}
+            missing = [value for value in normalized_technician_ids if value not in rows_by_id]
+            if missing:
+                raise ValueError(f"Technicien(s) introuvable(s) : {', '.join(map(str, missing))}")
+            for tech_id in normalized_technician_ids:
+                row = rows_by_id[tech_id]
+                technician_names.append(" ".join(filter(None, [row.get("prenom"), row.get("nom")])).strip() or row.get("username", ""))
+        else:
+            raw_names = planning_dict.get("technicien_assigne") or ""
+            raw_names = [item.strip() for item in raw_names.split(",") if item.strip()]
+            for name in raw_names:
+                row = conn.execute(
+                    """SELECT id, nom, prenom, username FROM techniciens
+                       WHERE LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+                          OR LOWER(BTRIM(username)) = LOWER(BTRIM(%s))
+                       ORDER BY id LIMIT 1""",
+                    (name, name, name),
+                ).fetchone()
+                if row:
+                    normalized_technician_ids.append(int(row["id"]))
+                    technician_names.append(" ".join(filter(None, [row.get("prenom"), row.get("nom")])).strip() or row.get("username", ""))
+                else:
+                    technician_names.append(name)
+
+        technician_display = ", ".join(technician_names)
+        primary_technician_id = normalized_technician_ids[0] if normalized_technician_ids else None
         row = conn.execute("""
             INSERT INTO planning_maintenance (machine, equipement_id, client, type_maintenance, description,
-                                              date_prevue, technicien_assigne, recurrence, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                              date_prevue, technicien_id, technicien_ids, technicien_assigne, recurrence, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             planning_dict.get("machine", ""),
@@ -385,7 +445,9 @@ def ajouter_planning(planning_dict):
             planning_dict.get("type_maintenance", "Préventive"),
             planning_dict.get("description", ""),
             planning_dict.get("date_prevue", ""),
-            planning_dict.get("technicien_assigne", ""),
+            primary_technician_id,
+            json.dumps(normalized_technician_ids),
+            technician_display or planning_dict.get("technicien_assigne", ""),
             planning_dict.get("recurrence", ""),
             planning_dict.get("notes", ""),
         )).fetchone()
