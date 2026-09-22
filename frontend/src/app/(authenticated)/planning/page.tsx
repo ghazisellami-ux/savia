@@ -278,12 +278,10 @@ export default function PlanningPage() {
       const normalize = (value: unknown) => String(value || '').trim().toLocaleLowerCase('fr-FR');
       const serialForPlanningItem = (item: any) => {
         const directSerial = item.equipement_num_serie || item.num_serie || item.numero_serie || item.serial_number;
-        if (directSerial) return directSerial;
-
-        const machine = normalize(item.machine);
-        const client = normalize(item.client);
-        const equipment = equipsFlat.find(e => normalize(e.nom) === machine && (!client || normalize(e.client) === client));
-        return equipment?.numSerie || '';
+        // Never infer a serial from machine name/client: duplicate equipment
+        // names are valid. The API resolves it through equipement_id and only
+        // performs an unambiguous legacy repair.
+        return directSerial || '';
       };
 
       const mapped = (planRes as any[]).map((item: any) => ({
