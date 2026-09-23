@@ -115,3 +115,10 @@ def test_contract_billing_coverage_migration_is_registered():
 
     assert len(coverage_migrations) == 1
     assert "contract billing coverage" in coverage_migrations[0][1]
+
+
+def test_contract_cycle_billing_migration_is_registered():
+    cycle_migrations = [migration for migration in MIGRATIONS if migration[0] == "034"]
+
+    assert len(cycle_migrations) == 1
+    assert "contract cycle" in cycle_migrations[0][1]

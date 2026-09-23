@@ -21,6 +21,7 @@ from services.billing_tracking import (
 from services.contract_billing import (
     COVERAGE_LABELS,
     assess_intervention_contract_coverage,
+    sync_ready_contract_billing_cycles,
 )
 
 
@@ -140,9 +141,10 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
     rows = conn.execute(
         f"""SELECT bc.id, bc.intervention_id, bc.request_id, bc.merged_into_case_id,
                    COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, ''), e.client, '') AS client,
-                   COALESCE(NULLIF(bc.equipment, ''), i.machine, '') AS equipment,
+                   COALESCE(NULLIF(bc.equipment, ''), i.machine,
+                            CASE WHEN bc.contract_id IS NOT NULL THEN 'Contrat #' || bc.contract_id::text ELSE '' END) AS equipment,
                    bc.owner_username, bc.currency, bc.case_state, bc.block_reason,
-                   bc.contract_id, bc.coverage_status, bc.coverage_reason,
+                   bc.contract_id, bc.billing_cycle_date, bc.coverage_status, bc.coverage_reason,
                    COALESCE(bc.uncovered_labor_cost, 0) AS uncovered_labor_cost,
                    COALESCE(bc.uncovered_parts_cost, 0) AS uncovered_parts_cost,
                    COALESCE(bc.uncovered_total_cost, 0) AS uncovered_total_cost,
@@ -195,6 +197,13 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
             LEFT JOIN equipements e ON e.id = i.equipement_id
             LEFT JOIN contrats c ON c.id=bc.contract_id
             {where}
+              AND NOT (
+                  bc.intervention_id IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM planning_maintenance contract_pm
+                      WHERE contract_pm.id = i.planning_id
+                        AND contract_pm.contrat_id IS NOT NULL
+                  )
+              )
             ORDER BY bc.updated_at DESC, bc.id DESC""",
         params,
     ).fetchall()
@@ -219,20 +228,57 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
            ORDER BY effective_date, id""",
         (case_ids,),
     ).fetchall()
+    contract_member_rows = conn.execute(
+        """SELECT bci.case_id, i.id AS intervention_id, i.statut,
+                  i.date_cloture, COALESCE(i.equipement_id, pm.equipement_id) AS equipement_id,
+                  e.nom, e.num_serie
+           FROM billing_case_interventions bci
+           JOIN interventions i ON i.id = bci.intervention_id
+           LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
+           LEFT JOIN equipements e ON e.id = COALESCE(i.equipement_id, pm.equipement_id)
+           WHERE bci.case_id = ANY(%s)
+           ORDER BY bci.case_id, e.nom, e.num_serie, i.id""",
+        (case_ids,),
+    ).fetchall()
     steps_by_case: dict[int, dict[str, dict[str, Any]]] = {case_id: {} for case_id in case_ids}
     payments_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
+    equipment_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     for raw in step_rows:
         item = _dict(raw)
         steps_by_case[item["case_id"]][item["step_type"]] = item
     for raw in payment_rows:
         item = _dict(raw)
         payments_by_case[item["case_id"]].append(item)
+    for raw in contract_member_rows:
+        item = _dict(raw)
+        equipment_by_case[item["case_id"]].append({
+            "id": item.get("equipement_id"),
+            "nom": item.get("nom") or "Équipement non renseigné",
+            "num_serie": item.get("num_serie") or "",
+            "intervention_id": item.get("intervention_id"),
+            "statut": item.get("statut") or "",
+            "date_cloture": item.get("date_cloture"),
+        })
 
     result = []
     today = date.today()
     for item in base_rows:
         steps = steps_by_case[item["id"]]
         payments = payments_by_case[item["id"]]
+        contract_equipments = equipment_by_case[item["id"]]
+        # A contract-cycle case has no single intervention_id. Its completion
+        # state is derived from ID-linked member interventions.
+        if contract_equipments:
+            closed_dates = [
+                equipment["date_cloture"]
+                for equipment in contract_equipments
+                if equipment.get("date_cloture")
+            ]
+            if closed_dates:
+                item["intervention_closed_at"] = max(closed_dates)
+                item["intervention_status"] = "Clôturée"
+            if (item.get("coverage_details") or {}).get("billable_parts"):
+                item["has_parts"] = True
         paid_amount = sum(Decimal(str(payment["amount"])) for payment in payments)
         invoice = steps.get("invoice")
         invoice_amount = Decimal(str(invoice["amount"])) if invoice and invoice.get("amount") is not None else Decimal("0")
@@ -250,6 +296,7 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
         overdue = invoice_is_overdue(invoice, remaining, today)
         due_date = _parse_date((invoice or {}).get("due_date"), "date d'échéance")
         item.update({
+            "contract_equipments": contract_equipments,
             "steps": steps,
             "payments": payments,
             "paid_amount": float(paid_amount),
@@ -298,6 +345,8 @@ def _cleanup_orphan_automatic_cases(conn) -> None:
     conn.execute(
         """DELETE FROM billing_cases
            WHERE intervention_id IS NULL
+             AND contract_id IS NULL
+             AND billing_cycle_date IS NULL
              AND created_by IN (%s, %s)""",
         AUTOMATIC_CASE_CREATORS,
     )
@@ -327,6 +376,10 @@ def _sync_missing_intervention_cases(conn) -> None:
                LEFT JOIN equipements e ON e.id = i.equipement_id
                LEFT JOIN demandes_intervention d ON d.intervention_id = i.id
                WHERE COALESCE(i.is_temporary, 0) = 0
+                 AND NOT EXISTS (
+                     SELECT 1 FROM planning_maintenance pm
+                     WHERE pm.id = i.planning_id AND pm.contrat_id IS NOT NULL
+                 )
                ON CONFLICT (intervention_id) DO NOTHING
                RETURNING id, intervention_id, client, equipment
            )
@@ -346,12 +399,17 @@ def _sync_missing_intervention_cases(conn) -> None:
 
 def _sync_contract_coverage(conn) -> None:
     """Assess legacy and unresolved closed interventions lazily and safely."""
+    sync_ready_contract_billing_cycles(conn)
     rows = conn.execute(
         """SELECT bc.intervention_id
            FROM billing_cases bc
            JOIN interventions i ON i.id=bc.intervention_id
            WHERE i.statut IN ('Cloturee', 'Clôturée')
              AND bc.merged_into_case_id IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM planning_maintenance pm
+                 WHERE pm.id = i.planning_id AND pm.contrat_id IS NOT NULL
+             )
              AND (bc.coverage_assessed_at IS NULL OR bc.coverage_status IN ('unassessed', 'review'))
            ORDER BY i.date_cloture DESC NULLS LAST
            LIMIT 500"""

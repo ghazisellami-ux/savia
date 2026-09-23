@@ -949,6 +949,57 @@ def _migration_033_backfill_unambiguous_technician_ids(conn) -> None:
     )
 
 
+def _migration_034_contract_cycle_billing(conn) -> None:
+    """Replace per-equipment contract billing cases with contract-cycle cases."""
+    conn.execute("ALTER TABLE billing_cases ADD COLUMN IF NOT EXISTS billing_cycle_date DATE NULL")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_case_interventions (
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               intervention_id INTEGER NOT NULL UNIQUE REFERENCES interventions(id) ON DELETE CASCADE,
+               PRIMARY KEY (case_id, intervention_id)
+           )"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_cases_contract_cycle
+           ON billing_cases(contract_id, billing_cycle_date)
+           WHERE contract_id IS NOT NULL
+             AND billing_cycle_date IS NOT NULL
+             AND intervention_id IS NULL
+             AND merged_into_case_id IS NULL"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_billing_case_interventions_case
+           ON billing_case_interventions(case_id)"""
+    )
+    # New contract-linked interventions wait for their complete cycle. The
+    # old trigger is kept for non-contract interventions only.
+    conn.execute(
+        """CREATE OR REPLACE FUNCTION ensure_intervention_billing_case()
+           RETURNS TRIGGER AS $$
+           BEGIN
+               IF COALESCE(NEW.is_temporary, 0) = 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM planning_maintenance pm
+                      WHERE pm.id = NEW.planning_id AND pm.contrat_id IS NOT NULL
+                  ) THEN
+                   INSERT INTO billing_cases (
+                       intervention_id, client, equipment, created_by, updated_by
+                   ) VALUES (
+                       NEW.id, COALESCE(NEW.client, ''), COALESCE(NEW.machine, ''),
+                       'system', 'system'
+                   )
+                   ON CONFLICT (intervention_id) DO UPDATE SET
+                       client = CASE WHEN NULLIF(BTRIM(EXCLUDED.client), '') IS NOT NULL
+                                     THEN EXCLUDED.client ELSE billing_cases.client END,
+                       equipment = EXCLUDED.equipment,
+                       updated_at = CURRENT_TIMESTAMP;
+               END IF;
+               RETURN NEW;
+           END;
+           $$ LANGUAGE plpgsql"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1316,6 +1367,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("031", "cleanup orphan contract interventions", _migration_031_cleanup_orphan_contract_interventions),
     ("032", "cleanup orphan automatic billing cases", _migration_032_cleanup_orphan_automatic_billing_cases),
     ("033", "backfill unambiguous technician IDs", _migration_033_backfill_unambiguous_technician_ids),
+    ("034", "aggregate billing by contract cycle", _migration_034_contract_cycle_billing),
 )
 
 
