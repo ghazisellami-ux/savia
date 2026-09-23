@@ -648,7 +648,7 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
         members = conn.execute(
             """SELECT i.id AS intervention_id,
                       COALESCE(i.equipement_id, pm.equipement_id) AS equipement_id,
-                      e.nom, e.num_serie
+                      e.nom, e.num_serie, i.pieces_utilisees
                FROM interventions i
                LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
                LEFT JOIN planning_maintenance original_pm ON original_pm.id = pm.original_planning_id
@@ -706,17 +706,40 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                 (case_id, actor, intervention_ids, case_id),
             )
 
-        billable_quantities: dict[str, int] = {}
-        for assessment in assessment_results:
-            for part in (assessment.get("coverage_details") or {}).get("parts", []):
+        # Quotas apply to the total consumption of the contract, not to each
+        # intervention independently. Assessing every intervention in
+        # isolation made included quantities appear billable repeatedly.
+        contract_scope = infer_contract_scope(
+            _contract_row(conn, contract_id) or {}, linked_from_planning=True
+        )
+        used_quantities: dict[str, tuple[str, int]] = {}
+        for member in members:
+            for part in parse_used_parts(member.get("pieces_utilisees")):
                 reference = str(part.get("ref") or "").strip()
                 if not reference:
                     continue
-                quantity = max(0, int(part.get("qty") or 0) - int(part.get("covered_qty") or 0))
-                if quantity:
-                    billable_quantities[reference] = billable_quantities.get(reference, 0) + quantity
+                ref_key = _key(reference)
+                previous_reference, previous_quantity = used_quantities.get(ref_key, (reference, 0))
+                used_quantities[ref_key] = (previous_reference, previous_quantity + max(1, int(part.get("qty") or 1)))
+        billable_quantities: dict[str, int] = {}
+        included_parts = contract_scope["included_parts"]
+        for ref_key, (reference, quantity) in used_quantities.items():
+            if contract_scope["all_parts"]:
+                billable_quantity = 0
+            elif not contract_scope["parts"]:
+                billable_quantity = quantity
+            else:
+                included = included_parts.get(ref_key)
+                if not included:
+                    billable_quantity = quantity
+                elif included.get("quota") is None:
+                    billable_quantity = 0
+                else:
+                    billable_quantity = max(0, quantity - int(included["quota"]))
+            if billable_quantity:
+                billable_quantities[reference] = billable_quantity
         part_rows = conn.execute(
-            """SELECT reference, designation, fournisseur
+            """SELECT reference, designation, fournisseur, prix_unitaire
                FROM pieces_rechange WHERE LOWER(reference) = ANY(%s)""",
             ([_key(reference) for reference in billable_quantities],),
         ).fetchall() if billable_quantities else []
@@ -731,16 +754,18 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
             for reference, quantity in sorted(billable_quantities.items())
         ]
         coverage_statuses = {result.get("coverage_status") for result in assessment_results}
-        if billable_parts and "covered" in coverage_statuses:
+        has_uncovered_labor = any(
+            _money(result.get("uncovered_labor_cost")) > 0 for result in assessment_results
+        )
+        has_covered_component = bool(contract_scope["labor"] or contract_scope["parts"])
+        if (billable_parts or has_uncovered_labor) and has_covered_component:
             aggregate_coverage_status = "partial"
-        elif billable_parts:
+        elif billable_parts or has_uncovered_labor:
             aggregate_coverage_status = "billable"
-        elif assessment_results and all(result.get("coverage_status") == "covered" for result in assessment_results):
-            aggregate_coverage_status = "covered"
         elif "review" in coverage_statuses:
             aggregate_coverage_status = "review"
         else:
-            aggregate_coverage_status = "unassessed"
+            aggregate_coverage_status = "covered"
         aggregate_details = {
             "equipments": equipment,
             "billable_parts": billable_parts,
@@ -759,8 +784,15 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                 "Pièces hors couverture regroupées dans le dossier du contrat." if billable_parts
                 else "Contrat clôturé pour tous les équipements.",
                 sum(float(result.get("uncovered_labor_cost") or 0) for result in assessment_results),
-                sum(float(result.get("uncovered_parts_cost") or 0) for result in assessment_results),
-                sum(float(result.get("uncovered_total_cost") or 0) for result in assessment_results),
+                sum(
+                    float(_money(catalog.get(_key(part["reference"]), {}).get("prix_unitaire")) * part["quantite"])
+                    for part in billable_parts
+                ),
+                sum(float(result.get("uncovered_labor_cost") or 0) for result in assessment_results)
+                + sum(
+                    float(_money(catalog.get(_key(part["reference"]), {}).get("prix_unitaire")) * part["quantite"])
+                    for part in billable_parts
+                ),
                 json.dumps(aggregate_details, ensure_ascii=False), actor, case_id,
             ),
         )
