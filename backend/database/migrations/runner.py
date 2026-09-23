@@ -1000,6 +1000,27 @@ def _migration_034_contract_cycle_billing(conn) -> None:
     )
 
 
+def _migration_035_contract_global_billing(conn) -> None:
+    """Use the contract itself, not its planning dates, as the billing boundary."""
+    conn.execute("DROP INDEX IF EXISTS uq_billing_cases_contract_cycle")
+    # Existing date-split aggregate cases are reconciled by the billing sync
+    # service. Removing this temporary marker makes the global scope explicit.
+    conn.execute(
+        """UPDATE billing_cases
+           SET billing_cycle_date = NULL
+           WHERE contract_id IS NOT NULL
+             AND intervention_id IS NULL
+             AND merged_into_case_id IS NULL"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_billing_cases_contract_global
+           ON billing_cases(contract_id)
+           WHERE contract_id IS NOT NULL
+             AND intervention_id IS NULL
+             AND merged_into_case_id IS NULL"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1368,6 +1389,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("032", "cleanup orphan automatic billing cases", _migration_032_cleanup_orphan_automatic_billing_cases),
     ("033", "backfill unambiguous technician IDs", _migration_033_backfill_unambiguous_technician_ids),
     ("034", "aggregate billing by contract cycle", _migration_034_contract_cycle_billing),
+    ("035", "aggregate billing by full contract", _migration_035_contract_global_billing),
 )
 
 
