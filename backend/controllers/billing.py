@@ -571,9 +571,14 @@ def reassess_billing_coverage(case_id: int, user: dict = Depends(_verify_token))
     actor = _username(user)
     with get_db() as conn:
         case = _load_case(conn, case_id)
-        if not case.get("intervention_id"):
+        if case.get("contract_id"):
+            sync_ready_contract_billing_cycles(
+                conn, actor=actor, contract_id=int(case["contract_id"])
+            )
+        elif not case.get("intervention_id"):
             raise HTTPException(status_code=409, detail="Associez d'abord une intervention au dossier")
-        assess_intervention_contract_coverage(conn, int(case["intervention_id"]), actor=actor)
+        else:
+            assess_intervention_contract_coverage(conn, int(case["intervention_id"]), actor=actor)
         result = _load_case(conn, case_id)
     log_audit(actor, "REASSESS_CONTRACT_COVERAGE", json.dumps({"case_id": case_id}), "facturation")
     return result
