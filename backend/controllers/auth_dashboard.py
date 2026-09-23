@@ -98,6 +98,26 @@ def _password_rotation_due(password_changed_at: Any) -> bool:
     return password_changed_at <= datetime.utcnow() - timedelta(days=PASSWORD_ROTATION_DAYS)
 
 
+def _resolve_technician_id(conn, username: str, full_name: str) -> int | None:
+    """Resolve a logged-in technician without guessing between homonyms."""
+    row = conn.execute(
+        "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+        (username,),
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    if not str(full_name or "").strip():
+        return None
+    match = conn.execute(
+        """SELECT MIN(id) AS id FROM techniciens
+           WHERE LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+              OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+           HAVING COUNT(*) = 1""",
+        (full_name, full_name),
+    ).fetchone()
+    return int(match["id"]) if match and match.get("id") is not None else None
+
+
 def _issue_access_token(user_data: dict) -> str:
     now = datetime.utcnow()
     payload = {
@@ -183,11 +203,11 @@ def login(body: LoginRequest, request: Request, response: Response):
 
     user_data = dict(row)
     with get_db() as conn:
-        technician = conn.execute(
-            "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
-            (user_data["username"],),
-        ).fetchone()
-    user_data["technicien_id"] = int(technician["id"]) if technician else None
+        user_data["technicien_id"] = _resolve_technician_id(
+            conn,
+            user_data["username"],
+            user_data.get("nom_complet", ""),
+        )
     request.state.access_username = user_data.get("username", "")
     request.state.access_role = user_data.get("role", "")
     rotation_due = _password_rotation_due(user_data.get("password_changed_at"))
