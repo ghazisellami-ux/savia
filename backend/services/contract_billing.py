@@ -505,7 +505,9 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
     return result
 
 
-def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> list[dict[str, Any]]:
+def sync_ready_contract_billing_cycles(
+    conn: Any, *, actor: str = "system", contract_id: int | None = None
+) -> list[dict[str, Any]]:
     """Create one billing case for each fully completed contract.
 
     A contract is the only billing boundary: every planned equipment row of
@@ -515,35 +517,37 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
     only.
     """
     contracts = conn.execute(
-        """SELECT pm.contrat_id, c.client,
+        """SELECT c.id AS contrat_id, c.client,
                   EXISTS (
                       SELECT 1 FROM billing_cases bc
-                      WHERE bc.contract_id = pm.contrat_id
+                      WHERE bc.contract_id = c.id
                         AND bc.intervention_id IS NULL
                         AND bc.merged_into_case_id IS NULL
                   ) AS has_global_case,
-                  BOOL_AND(EXISTS (
+                  COALESCE(BOOL_AND(pm.id IS NOT NULL AND EXISTS (
                       SELECT 1 FROM interventions i
                       WHERE i.planning_id = pm.id
                         AND i.statut IN ('Cloturee', 'Clôturée')
-                  )) AS all_planned_interventions_closed
-           FROM planning_maintenance pm
-           JOIN contrats c ON c.id = pm.contrat_id
-           WHERE pm.contrat_id IS NOT NULL
-             AND COALESCE(pm.is_ghost, FALSE) = FALSE
-           GROUP BY pm.contrat_id, c.client
-           HAVING BOOL_AND(EXISTS (
+                  )), FALSE) AS all_planned_interventions_closed
+           FROM contrats c
+           LEFT JOIN planning_maintenance pm
+             ON pm.contrat_id = c.id
+            AND COALESCE(pm.is_ghost, FALSE) = FALSE
+           WHERE (%s IS NULL OR c.id = %s)
+           GROUP BY c.id, c.client
+           HAVING COALESCE(BOOL_AND(pm.id IS NOT NULL AND EXISTS (
                SELECT 1 FROM interventions i
                WHERE i.planning_id = pm.id
                  AND i.statut IN ('Cloturee', 'Clôturée')
-           ))
+           )), FALSE)
               OR EXISTS (
                   SELECT 1 FROM billing_cases bc
-                  WHERE bc.contract_id = pm.contrat_id
+                  WHERE bc.contract_id = c.id
                     AND bc.intervention_id IS NULL
                     AND bc.merged_into_case_id IS NULL
               )
-           ORDER BY pm.contrat_id"""
+           ORDER BY c.id""",
+        (contract_id, contract_id),
     ).fetchall()
     created: list[dict[str, Any]] = []
     for raw_contract in contracts:
@@ -657,7 +661,7 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                  AND (
                      COALESCE(pm.contrat_id, original_pm.contrat_id) = %s
                      OR (
-                         COALESCE(pm.contrat_id, original_pm.contrat_id) IS NULL
+                         i.planning_id IS NULL
                          AND EXISTS (
                              SELECT 1 FROM contrats_equipements ce
                              WHERE ce.contrat_id = %s
@@ -668,6 +672,17 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                ORDER BY e.nom, e.num_serie, i.id""",
             (contract_id, contract_id),
         ).fetchall()
+        # A maintenance attached to another planning must never consume the
+        # quota of this contract merely because it concerns the same asset.
+        # Remove mappings inherited from the former broad legacy fallback.
+        intervention_ids = [int(item["intervention_id"]) for item in members]
+        if intervention_ids:
+            conn.execute(
+                """DELETE FROM billing_case_interventions
+                   WHERE case_id = %s
+                     AND NOT (intervention_id = ANY(%s))""",
+                (case_id, intervention_ids),
+            )
         equipment = []
         assessment_results = []
         for member in members:
@@ -694,7 +709,6 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
         # Reconcile historical per-intervention tracking without deleting its
         # audit trail. Those old cases are kept as merged records while the
         # contract case becomes the sole active billing dossier.
-        intervention_ids = [int(item["intervention_id"]) for item in members]
         if intervention_ids:
             conn.execute(
                 """UPDATE billing_cases
