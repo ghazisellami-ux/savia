@@ -515,7 +515,18 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
     only.
     """
     contracts = conn.execute(
-        """SELECT pm.contrat_id, c.client
+        """SELECT pm.contrat_id, c.client,
+                  EXISTS (
+                      SELECT 1 FROM billing_cases bc
+                      WHERE bc.contract_id = pm.contrat_id
+                        AND bc.intervention_id IS NULL
+                        AND bc.merged_into_case_id IS NULL
+                  ) AS has_global_case,
+                  BOOL_AND(EXISTS (
+                      SELECT 1 FROM interventions i
+                      WHERE i.planning_id = pm.id
+                        AND i.statut IN ('Cloturee', 'Clôturée')
+                  )) AS all_planned_interventions_closed
            FROM planning_maintenance pm
            JOIN contrats c ON c.id = pm.contrat_id
            WHERE pm.contrat_id IS NOT NULL
@@ -526,12 +537,19 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                WHERE i.planning_id = pm.id
                  AND i.statut IN ('Cloturee', 'Clôturée')
            ))
+              OR EXISTS (
+                  SELECT 1 FROM billing_cases bc
+                  WHERE bc.contract_id = pm.contrat_id
+                    AND bc.intervention_id IS NULL
+                    AND bc.merged_into_case_id IS NULL
+              )
            ORDER BY pm.contrat_id"""
     ).fetchall()
     created: list[dict[str, Any]] = []
     for raw_contract in contracts:
         contract = dict(raw_contract)
         contract_id = int(contract["contrat_id"])
+        contract_is_ready = bool(contract.get("all_planned_interventions_closed"))
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
             (f"contract-billing:{contract_id}",),
@@ -547,6 +565,10 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
         if existing_cases:
             case_id = int(existing_cases[0]["id"])
             was_created = False
+        elif not contract_is_ready:
+            # No global case is opened before every planned intervention is
+            # closed. Existing cases above are nevertheless always repaired.
+            continue
         else:
             inserted = conn.execute(
                 """INSERT INTO billing_cases (
@@ -627,14 +649,24 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
             """SELECT i.id AS intervention_id,
                       COALESCE(i.equipement_id, pm.equipement_id) AS equipement_id,
                       e.nom, e.num_serie
-               FROM planning_maintenance pm
-               JOIN interventions i ON i.planning_id = pm.id
+               FROM interventions i
+               LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
+               LEFT JOIN planning_maintenance original_pm ON original_pm.id = pm.original_planning_id
                LEFT JOIN equipements e ON e.id = COALESCE(i.equipement_id, pm.equipement_id)
-               WHERE pm.contrat_id = %s
-                 AND COALESCE(pm.is_ghost, FALSE) = FALSE
-                 AND i.statut IN ('Cloturee', 'Clôturée')
+               WHERE i.statut IN ('Cloturee', 'Clôturée')
+                 AND (
+                     COALESCE(pm.contrat_id, original_pm.contrat_id) = %s
+                     OR (
+                         COALESCE(pm.contrat_id, original_pm.contrat_id) IS NULL
+                         AND EXISTS (
+                             SELECT 1 FROM contrats_equipements ce
+                             WHERE ce.contrat_id = %s
+                               AND ce.equipement_id = COALESCE(i.equipement_id, pm.equipement_id)
+                         )
+                     )
+                 )
                ORDER BY e.nom, e.num_serie, i.id""",
-            (contract_id,),
+            (contract_id, contract_id),
         ).fetchall()
         equipment = []
         assessment_results = []
@@ -642,7 +674,9 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
             item = dict(member)
             conn.execute(
                 """INSERT INTO billing_case_interventions (case_id, intervention_id)
-                   VALUES (%s, %s) ON CONFLICT (intervention_id) DO NOTHING""",
+                   VALUES (%s, %s)
+                   ON CONFLICT (intervention_id) DO UPDATE
+                   SET case_id = EXCLUDED.case_id""",
                 (case_id, item["intervention_id"]),
             )
             equipment.append({
