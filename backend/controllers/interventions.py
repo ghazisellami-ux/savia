@@ -204,8 +204,12 @@ def get_interventions(
                     if ids_list:
                         id_placeholders = ",".join(["%s"] * len(ids_list))
                         multi_tech_rows = conn.execute(
-                            f"""SELECT * FROM interventions WHERE id IN ({id_placeholders})""",
-                            ids_list
+                            f"""SELECT i.*, COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
+                                       e.num_serie AS equipement_num_serie
+                                FROM interventions i
+                                LEFT JOIN equipements e ON e.id = i.equipement_id
+                                WHERE i.id IN ({id_placeholders})""",
+                            ids_list,
                         ).fetchall()
                         
                         if multi_tech_rows:

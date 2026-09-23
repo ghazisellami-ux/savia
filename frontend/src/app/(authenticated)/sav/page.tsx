@@ -23,6 +23,8 @@ interface Intervention {
   id: number;
   date: string;
   machine: string;
+  equipement_id?: number | null;
+  equipement_num_serie?: string;
   client: string;
   type: string;
   technicien: string;
@@ -291,6 +293,8 @@ export default function SavPage() {
         id: Number(item.id || 0),
         date: item.date || 'N/A',
         machine: item.machine || '',
+        equipement_id: item.equipement_id ?? null,
+        equipement_num_serie: item.equipement_num_serie || '',
         client: item.client || '',
         planning_id: item.planning_id ?? null,
         type: item.type_intervention || 'Corrective',
@@ -783,7 +787,7 @@ export default function SavPage() {
       if (filterType !== 'Tous' && !i.type.toLowerCase().includes(filterType.toLowerCase())) return false;
       if (filterClient !== 'Tous' && i.client !== filterClient) return false;
       if (filterEquip !== 'Tous' && i.machine !== filterEquip) return false;
-      if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !i.machine.toLowerCase().includes(search.toLowerCase()) && !String(i.equipement_num_serie || '').toLowerCase().includes(search.toLowerCase()) && !String(i.id).includes(search) && !i.technicien.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
   }, [search, filterStatut, filterType, filterClient, filterEquip, periodMode, filterMonth, filterYear, data, isClient, user?.client]);
@@ -1056,6 +1060,7 @@ export default function SavPage() {
                     <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5"><Server className="w-3.5 h-3.5" /> Machine</div>
                     </th>
+                    <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs whitespace-nowrap">N° de série</th>
                     <th className="text-left py-2.5 px-3 text-savia-text-muted text-xs whitespace-nowrap">
                       <div className="flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5" /> Client</div>
                     </th>
@@ -1086,6 +1091,7 @@ export default function SavPage() {
                       <td className="py-2.5 px-3 font-mono text-xs font-semibold text-savia-accent">#{i.id}</td>
                       <td className="py-2.5 px-3 text-xs">{i.date.substring(0, 10)}</td>
                       <td className="py-2.5 px-3 font-semibold text-sm">{i.machine}</td>
+                      <td className="py-2.5 px-3 font-mono text-xs text-savia-text-muted">{i.equipement_num_serie || '—'}</td>
                       <td className="py-2.5 px-3 text-sm text-savia-text-muted">{i.client || '—'}</td>
                       <td className="py-2.5 px-3 text-sm">{i.technicien}</td>
                       <td className="py-2.5 px-3">
