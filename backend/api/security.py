@@ -27,6 +27,26 @@ INTERNAL_WRITE_ROLES = frozenset({"Admin", "Manager", "Responsable Technique"})
 AUTH_COOKIE_NAME = "savia_access"
 
 
+def _resolve_technician_id(conn, username: str, full_name: str) -> int | None:
+    """Resolve a technician account by username, then by one unique full name."""
+    technician = conn.execute(
+        "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
+        (username,),
+    ).fetchone()
+    if technician:
+        return int(technician["id"])
+    if not str(full_name or "").strip():
+        return None
+    match = conn.execute(
+        """SELECT MIN(id) AS id FROM techniciens
+           WHERE LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+              OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+           HAVING COUNT(*) = 1""",
+        (full_name, full_name),
+    ).fetchone()
+    return int(match["id"]) if match and match.get("id") is not None else None
+
+
 def _normalise_client(value: object) -> str:
     return " ".join(str(value or "").split()).casefold()
 
@@ -103,24 +123,24 @@ def assert_intervention_write_access(conn, intervention_id: int, user: dict) -> 
     ]
     if not identities:
         raise HTTPException(status_code=403, detail="Technicien non identifiable")
-    technician_id = None
-    tech_row = conn.execute(
-        """SELECT id FROM techniciens
-           WHERE LOWER(BTRIM(COALESCE(username, ''))) = LOWER(BTRIM(%s))
-              OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
-              OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
-           ORDER BY id LIMIT 1""",
-        (str(user.get("sub") or ""), str(user.get("nom") or ""), str(user.get("nom") or "")),
-    ).fetchone()
-    if tech_row:
-        technician_id = tech_row["id"]
+    technician_id = user.get("technicien_id")
+    if technician_id is None:
+        technician_id = _resolve_technician_id(
+            conn, str(user.get("sub") or ""), str(user.get("nom") or "")
+        )
     assignments = conn.execute(
-        """SELECT technicien_id, technicien_nom AS assigned_name
-           FROM interventions_techniciens
+        """SELECT it.technicien_id, it.technicien_nom AS assigned_name,
+                  EXISTS(
+                      SELECT 1 FROM techniciens t WHERE t.id = it.technicien_id
+                  ) AS technician_id_is_valid
+           FROM interventions_techniciens it
            WHERE intervention_id = %s
            UNION ALL
-           SELECT technicien_id, technicien AS assigned_name
-           FROM interventions
+           SELECT i.technicien_id, i.technicien AS assigned_name,
+                  EXISTS(
+                      SELECT 1 FROM techniciens t WHERE t.id = i.technicien_id
+                  ) AS technician_id_is_valid
+           FROM interventions i
            WHERE id = %s""",
         (intervention_id, intervention_id),
     ).fetchall()
@@ -128,6 +148,10 @@ def assert_intervention_write_access(conn, intervention_id: int, user: dict) -> 
         if technician_id is not None and row.get("technicien_id") is not None:
             if int(row["technicien_id"]) == int(technician_id):
                 return
+            continue
+        # Names are a migration-only fallback: an empty or dangling historic
+        # ID can be repaired by a later save, but a valid different ID wins.
+        if row.get("technicien_id") is not None and row.get("technician_id_is_valid"):
             continue
         # A comma separates distinct technicians. Match against each person
         # independently so words from two different names cannot be combined.
@@ -184,10 +208,15 @@ def _authenticated_user(
                FROM utilisateurs WHERE username = %s""",
             (payload.get("sub", ""),),
         ).fetchone()
-        technician = conn.execute(
-            "SELECT id FROM techniciens WHERE LOWER(BTRIM(username)) = LOWER(BTRIM(%s))",
-            (payload.get("sub", ""),),
-        ).fetchone()
+        technician_id = (
+            _resolve_technician_id(
+                conn,
+                str(row["username"] or ""),
+                str(row["nom_complet"] or ""),
+            )
+            if row
+            else None
+        )
     if not row or not row["actif"]:
         raise HTTPException(status_code=401, detail="Compte indisponible")
     if payload.get("pv") != row["password_version"]:
@@ -199,7 +228,7 @@ def _authenticated_user(
         "client": row["client"] or "",
         "pages_autorisees": row["pages_autorisees"] or "",
         "password_change_required": bool(row["must_change_password"]),
-        "technicien_id": int(technician["id"]) if technician else None,
+        "technicien_id": technician_id,
     })
     return payload
 
