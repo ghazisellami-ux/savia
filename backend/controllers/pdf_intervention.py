@@ -91,6 +91,66 @@ def _fiche_display_date(intervention):
     return "-"
 
 
+def _fiche_equipment_details(intervention: dict) -> tuple[dict, bool, bool]:
+    """Load PDF equipment data and coverage from the immutable equipment ID.
+
+    Equipment names are deliberately never used here: two records may have
+    the same label while their serial number, warranty, and contract coverage
+    are different.
+    """
+    try:
+        equipment_id = int(intervention.get("equipement_id"))
+    except (TypeError, ValueError):
+        return {}, False, False
+
+    reference_date = None
+    for field in ("date_cloture", "date_debut_intervention", "date"):
+        value = intervention.get(field)
+        if not value:
+            continue
+        try:
+            reference_date = datetime.strptime(str(value)[:10], "%Y-%m-%d")
+            break
+        except (TypeError, ValueError):
+            continue
+    reference_date = reference_date or datetime.now()
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, nom, num_serie, fabricant, modele,
+                      garantie_debut, garantie_duree
+               FROM equipements WHERE id = %s""",
+            (equipment_id,),
+        ).fetchone()
+        equipment = dict(row) if row else {}
+        if not equipment:
+            return {}, False, False
+        contract = conn.execute(
+            """SELECT 1
+               FROM contrats c
+               JOIN contrats_equipements ce ON ce.contrat_id = c.id
+               WHERE ce.equipement_id = %s
+                 AND LOWER(BTRIM(COALESCE(c.statut, ''))) IN ('actif', 'active')
+                 AND %s BETWEEN c.date_debut AND c.date_fin
+               LIMIT 1""",
+            (equipment_id, reference_date.date()),
+        ).fetchone()
+
+    under_warranty = False
+    try:
+        start = datetime.strptime(str(equipment.get("garantie_debut") or "")[:10], "%Y-%m-%d")
+        duration_years = int(equipment.get("garantie_duree") or 0)
+        if duration_years > 0:
+            try:
+                end = start.replace(year=start.year + duration_years)
+            except ValueError:  # 29 February on a non-leap end year
+                end = start.replace(year=start.year + duration_years, day=28)
+            under_warranty = reference_date < end
+    except (TypeError, ValueError):
+        pass
+    return equipment, under_warranty, bool(contract)
+
+
 @app.post("/api/interventions/{interv_id}/fiche-pdf")
 def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict = Depends(_verify_token)):
     """Generate a professional intervention fiche PDF with all details, logos, and signature areas.
@@ -136,59 +196,17 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         technicians = _collect_technician_names(technicien_str, tech_records, work_sessions)
         is_multi_tech = len(technicians) > 1
 
-        # Fetch equipment to determine warranty and serial number
-        df_equip = lire_equipements()
-        matched_equip = None
-        if not df_equip.empty and "Nom" in df_equip.columns:
-            machine_name = str(interv.get("machine", "")).strip()
-            if machine_name:
-                exact = df_equip[df_equip["Nom"].str.strip() == machine_name]
-                if not exact.empty:
-                    matched_equip = exact.iloc[0].to_dict()
-                else:
-                    partial = df_equip[df_equip["Nom"].str.contains(machine_name, case=False, na=False)]
-                    if not partial.empty:
-                        matched_equip = partial.iloc[0].to_dict()
-
-        # Warranty check
-        sous_garantie = False
-        if matched_equip:
-            g_debut = matched_equip.get("garantie_debut", "")
-            g_duree = int(matched_equip.get("garantie_duree", 0) or 0)
-            if g_debut and g_duree:
-                try:
-                    fin = datetime.strptime(str(g_debut)[:10], "%Y-%m-%d")
-                    fin = fin.replace(year=fin.year + g_duree)
-                    sous_garantie = fin > datetime.now()
-                except Exception:
-                    pass
-
-        # Contract check
-        sous_contrat = False
+        # The equipment ID is the sole identity source for every field shown
+        # on the PDF. A machine name is only a display label and can repeat.
+        matched_equip, sous_garantie, sous_contrat = _fiche_equipment_details(interv)
         client_name = str(interv.get("client", "")).strip()
-        if client_name:
-            df_contrats = lire_contrats()
-            if not df_contrats.empty:
-                client_col = "client" if "client" in df_contrats.columns else "Client"
-                if client_col in df_contrats.columns:
-                    client_contracts = df_contrats[df_contrats[client_col].str.strip().str.lower() == client_name.lower()]
-                    if not client_contracts.empty:
-                        for _, c in client_contracts.iterrows():
-                            fin_str = c.get("date_fin", c.get("DateFin", ""))
-                            if not fin_str:
-                                sous_contrat = True
-                                break
-                            try:
-                                if datetime.strptime(str(fin_str)[:10], "%Y-%m-%d") > datetime.now():
-                                    sous_contrat = True
-                                    break
-                            except Exception:
-                                sous_contrat = True
-                                break
-
-        # Extract fields
-        num_serie = (matched_equip or {}).get("NumSerie", "") or (matched_equip or {}).get("num_serie", "") or "-"
-        equip_type = (matched_equip or {}).get("Type", "") or (matched_equip or {}).get("type", "") or str(interv.get("type_intervention", "-"))
+        num_serie = str(matched_equip.get("num_serie") or "-")
+        equip_brand_model = " ".join(
+            value for value in (
+                str(matched_equip.get("fabricant") or "").strip(),
+                str(matched_equip.get("modele") or "").strip(),
+            ) if value
+        ) or "-"
         duree_min = int(interv.get("duree_minutes", 0) or 0)
         duree_h = round(duree_min / 60, 2) if duree_min else 0
         deplacement_min = int(interv.get("duree_deplacement", 0) or 0)
@@ -258,7 +276,7 @@ def generate_fiche_intervention_pdf(interv_id: int, body: dict = {}, user: dict 
         _write_header_field(pdf, left_x, y_start, 85, "Date", date_str)
         _write_header_field(pdf, left_x, y_start + 5, 85, "Client", client_name or "-")
         _write_header_field(pdf, left_x, y_start + 10, 85, "Equipement", str(interv.get("machine", "-"))[:35])
-        _write_header_field(pdf, left_x, y_start + 15, 85, "Marque/Modele", str(equip_type or "-")[:30])
+        _write_header_field(pdf, left_x, y_start + 15, 85, "Marque/Modele", equip_brand_model[:30])
         _write_header_field(pdf, left_x, y_start + 20, 85, "N° Serie", str(num_serie or "-")[:25])
         # RIGHT COLUMN: Technicien(s), Garantie, Contrat, Type d'intervention
         _write_header_field(pdf, right_col_x, y_start, 95, "Technicien(s)", technicien, multiline=True)
