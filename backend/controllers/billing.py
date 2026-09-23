@@ -240,9 +240,29 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
            ORDER BY bci.case_id, e.nom, e.num_serie, i.id""",
         (case_ids,),
     ).fetchall()
+    contract_technician_rows = conn.execute(
+        """SELECT DISTINCT bci.case_id, t.id AS technicien_id,
+                  CONCAT_WS(' ', t.prenom, t.nom) AS name
+           FROM billing_case_interventions bci
+           JOIN interventions_techniciens it ON it.intervention_id = bci.intervention_id
+           JOIN techniciens t ON t.id = it.technicien_id
+           WHERE bci.case_id = ANY(%s)
+             AND it.technicien_id IS NOT NULL
+           UNION
+           SELECT DISTINCT bci.case_id, t.id AS technicien_id,
+                  CONCAT_WS(' ', t.prenom, t.nom) AS name
+           FROM billing_case_interventions bci
+           JOIN interventions i ON i.id = bci.intervention_id
+           JOIN techniciens t ON t.id = i.technicien_id
+           WHERE bci.case_id = ANY(%s)
+             AND i.technicien_id IS NOT NULL
+           ORDER BY case_id, name""",
+        (case_ids, case_ids),
+    ).fetchall()
     steps_by_case: dict[int, dict[str, dict[str, Any]]] = {case_id: {} for case_id in case_ids}
     payments_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     equipment_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
+    technicians_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     for raw in step_rows:
         item = _dict(raw)
         steps_by_case[item["case_id"]][item["step_type"]] = item
@@ -258,6 +278,12 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "intervention_id": item.get("intervention_id"),
             "statut": item.get("statut") or "",
             "date_cloture": item.get("date_cloture"),
+        })
+    for raw in contract_technician_rows:
+        item = _dict(raw)
+        technicians_by_case[item["case_id"]].append({
+            "id": item["technicien_id"],
+            "name": item.get("name") or "Technicien sans nom",
         })
 
     result = []
@@ -297,6 +323,7 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
         due_date = _parse_date((invoice or {}).get("due_date"), "date d'échéance")
         item.update({
             "contract_equipments": contract_equipments,
+            "contract_technicians": technicians_by_case[item["id"]],
             "steps": steps,
             "payments": payments,
             "paid_amount": float(paid_amount),

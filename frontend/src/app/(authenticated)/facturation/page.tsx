@@ -65,6 +65,10 @@ interface BillingCase {
     statut?: string;
     date_cloture?: string | null;
   }>;
+  contract_technicians?: Array<{
+    id: number;
+    name: string;
+  }>;
   coverage_status: 'unassessed' | 'covered' | 'partial' | 'billable' | 'review';
   coverage_status_label: string;
   coverage_reason?: string;
@@ -911,7 +915,7 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
     && (!item.equipment || option.machine.toLowerCase() === item.equipment.toLowerCase())
   );
   const assignedTechnicians = [...new Set(
-    (item.intervention_technicians || [])
+    ((item.contract_technicians?.length ? item.contract_technicians : item.intervention_technicians) || [])
       .map(technician => technician.name.trim())
       .filter(Boolean),
   )];
