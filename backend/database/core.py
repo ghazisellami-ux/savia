@@ -1103,35 +1103,53 @@ def init_db():
         # Keep the text columns for display and backwards compatibility.
         try:
             conn.execute("""
+                WITH unique_matches AS (
+                    SELECT pm0.id, MIN(t.id) AS technician_id
+                    FROM planning_maintenance pm0
+                    JOIN techniciens t ON (
+                        LOWER(BTRIM(pm0.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(pm0.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(pm0.technicien_assigne)) = LOWER(BTRIM(t.username))
+                    )
+                    WHERE pm0.technicien_id IS NULL
+                      AND pm0.technicien_assigne NOT LIKE '%,%'
+                    GROUP BY pm0.id HAVING COUNT(DISTINCT t.id) = 1
+                )
                 UPDATE planning_maintenance pm
-                   SET technicien_id = t.id,
+                   SET technicien_id = m.technician_id,
                        technicien_ids = CASE WHEN pm.technicien_ids IS NULL OR pm.technicien_ids = '[]'
-                                             THEN '[' || t.id::text || ']' ELSE pm.technicien_ids END
-                  FROM techniciens t
-                 WHERE pm.technicien_id IS NULL
-                   AND pm.technicien_assigne NOT LIKE '%,%'
-                   AND (LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
-                        OR LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
-                        OR LOWER(BTRIM(pm.technicien_assigne)) = LOWER(BTRIM(t.username)))
+                                             THEN '[' || m.technician_id::text || ']' ELSE pm.technicien_ids END
+                  FROM unique_matches m WHERE pm.id = m.id
             """)
             conn.execute("""
-                UPDATE interventions i
-                   SET technicien_id = t.id
-                  FROM techniciens t
-                 WHERE i.technicien_id IS NULL
-                   AND i.technicien NOT LIKE '%,%'
-                   AND (LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
-                        OR LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
-                        OR LOWER(BTRIM(i.technicien)) = LOWER(BTRIM(t.username)))
+                WITH unique_matches AS (
+                    SELECT i0.id, MIN(t.id) AS technician_id
+                    FROM interventions i0
+                    JOIN techniciens t ON (
+                        LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(t.username))
+                    )
+                    WHERE i0.technicien_id IS NULL AND i0.technicien NOT LIKE '%,%'
+                    GROUP BY i0.id HAVING COUNT(DISTINCT t.id) = 1
+                )
+                UPDATE interventions i SET technicien_id = m.technician_id
+                FROM unique_matches m WHERE i.id = m.id
             """)
             conn.execute("""
-                UPDATE interventions_techniciens it
-                   SET technicien_id = t.id
-                  FROM techniciens t
-                 WHERE it.technicien_id IS NULL
-                   AND (LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
-                        OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
-                        OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(t.username)))
+                WITH unique_matches AS (
+                    SELECT it0.id, MIN(t.id) AS technician_id
+                    FROM interventions_techniciens it0
+                    JOIN techniciens t ON (
+                        LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                        OR LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                        OR LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(t.username))
+                    )
+                    WHERE it0.technicien_id IS NULL
+                    GROUP BY it0.id HAVING COUNT(DISTINCT t.id) = 1
+                )
+                UPDATE interventions_techniciens it SET technicien_id = m.technician_id
+                FROM unique_matches m WHERE it.id = m.id
             """)
         except Exception as e:
             logger.debug(f"Technician ID backfill skipped: {e}")

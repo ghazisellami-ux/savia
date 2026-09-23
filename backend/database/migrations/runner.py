@@ -898,6 +898,57 @@ def _migration_032_cleanup_orphan_automatic_billing_cases(conn) -> None:
     )
 
 
+def _migration_033_backfill_unambiguous_technician_ids(conn) -> None:
+    """Repair only legacy technician references that have no valid ID.
+
+    Operational lookups use ``technicien_id`` exclusively.  This migration
+    converts historic text assignments only where one, and exactly one,
+    technician matches; homonyms deliberately remain untouched for manual
+    correction rather than being assigned to an arbitrary person.
+    """
+    conn.execute(
+        """WITH unique_matches AS (
+               SELECT i0.id, MIN(t.id) AS technician_id
+               FROM interventions i0
+               JOIN techniciens t ON (
+                   LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                   OR LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                   OR LOWER(BTRIM(i0.technicien)) = LOWER(BTRIM(t.username))
+               )
+               WHERE i0.technicien NOT LIKE '%,%'
+                 AND (
+                     i0.technicien_id IS NULL
+                     OR NOT EXISTS (SELECT 1 FROM techniciens existing WHERE existing.id = i0.technicien_id)
+                 )
+               GROUP BY i0.id
+               HAVING COUNT(DISTINCT t.id) = 1
+           )
+           UPDATE interventions i
+           SET technicien_id = m.technician_id
+           FROM unique_matches m
+           WHERE i.id = m.id"""
+    )
+    conn.execute(
+        """WITH unique_matches AS (
+               SELECT it0.id, MIN(t.id) AS technician_id
+               FROM interventions_techniciens it0
+               JOIN techniciens t ON (
+                   LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                   OR LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                   OR LOWER(BTRIM(it0.technicien_nom)) = LOWER(BTRIM(t.username))
+               )
+               WHERE it0.technicien_id IS NULL
+                  OR NOT EXISTS (SELECT 1 FROM techniciens existing WHERE existing.id = it0.technicien_id)
+               GROUP BY it0.id
+               HAVING COUNT(DISTINCT t.id) = 1
+           )
+           UPDATE interventions_techniciens it
+           SET technicien_id = m.technician_id
+           FROM unique_matches m
+           WHERE it.id = m.id"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1264,6 +1315,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("030", "remove deleted intervention planning orphans", _migration_030_remove_deleted_intervention_planning_orphans),
     ("031", "cleanup orphan contract interventions", _migration_031_cleanup_orphan_contract_interventions),
     ("032", "cleanup orphan automatic billing cases", _migration_032_cleanup_orphan_automatic_billing_cases),
+    ("033", "backfill unambiguous technician IDs", _migration_033_backfill_unambiguous_technician_ids),
 )
 
 

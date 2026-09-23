@@ -124,6 +124,19 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom, tec
             except (TypeError, ValueError):
                 technician_id = None
 
+        assigned_ids = [
+            int(row["technicien_id"])
+            for row in rows
+            if row.get("technicien_id") is not None
+        ]
+        valid_assigned_ids = {
+            int(row["id"])
+            for row in conn.execute(
+                "SELECT id FROM techniciens WHERE id = ANY(%s)",
+                (assigned_ids,),
+            ).fetchall()
+        } if assigned_ids else set()
+
         # The assigned technician ID is authoritative. A name is only used to
         # repair a legacy assignment that has not yet been backfilled.
         for row in rows:
@@ -132,7 +145,10 @@ def get_or_create_interventions_techniciens(intervention_id, technicien_nom, tec
                 return row_dict
             if (
                 technician_id is not None
-                and row_dict.get("technicien_id") is None
+                and (
+                    row_dict.get("technicien_id") is None
+                    or int(row_dict["technicien_id"]) not in valid_assigned_ids
+                )
                 and names_match(row_dict.get("technicien_nom"), technicien_nom)
             ):
                 conn.execute(
