@@ -457,9 +457,9 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
     result["contract_type"] = contract.get("type_contrat") if contract else ""
     result["service_date"] = service_date.isoformat()
 
-    # A planned contract maintenance is billed as one contract cycle, never
+    # A planned contract maintenance is billed as one contract dossier, never
     # as one invoice per equipment. The aggregate case is created only after
-    # every intervention for that contract/date cycle is closed.
+    # every intervention for that contract is closed.
     if linked_from_planning:
         result["deferred_to_contract_cycle"] = True
         return result
@@ -506,62 +506,122 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
 
 
 def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> list[dict[str, Any]]:
-    """Create one billing case for each fully completed contract cycle.
+    """Create one billing case for each fully completed contract.
 
-    ``planning_maintenance`` supplies the cycle boundary: all equipment rows
-    with the same ``contrat_id`` and planned date form one global invoice.
-    Only IDs are used to join contracts, planning rows, interventions, and
-    equipment; names are presentation data only.
+    A contract is the only billing boundary: every planned equipment row of
+    that contract must have a closed intervention before its single global
+    billing dossier is created.  Only IDs are used to join contracts,
+    planning rows, interventions, and equipment; names are presentation data
+    only.
     """
-    cycles = conn.execute(
-        """SELECT pm.contrat_id, pm.date_prevue::date AS cycle_date,
-                  c.client
+    contracts = conn.execute(
+        """SELECT pm.contrat_id, c.client
            FROM planning_maintenance pm
            JOIN contrats c ON c.id = pm.contrat_id
            WHERE pm.contrat_id IS NOT NULL
              AND COALESCE(pm.is_ghost, FALSE) = FALSE
-             AND pm.date_prevue <= CURRENT_DATE
-           GROUP BY pm.contrat_id, pm.date_prevue::date, c.client
+           GROUP BY pm.contrat_id, c.client
            HAVING BOOL_AND(EXISTS (
                SELECT 1 FROM interventions i
                WHERE i.planning_id = pm.id
                  AND i.statut IN ('Cloturee', 'Clôturée')
            ))
-           ORDER BY pm.contrat_id, cycle_date"""
+           ORDER BY pm.contrat_id"""
     ).fetchall()
     created: list[dict[str, Any]] = []
-    for raw_cycle in cycles:
-        cycle = dict(raw_cycle)
-        contract_id = int(cycle["contrat_id"])
-        cycle_date = cycle["cycle_date"]
+    for raw_contract in contracts:
+        contract = dict(raw_contract)
+        contract_id = int(contract["contrat_id"])
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtext(%s))",
-            (f"contract-billing:{contract_id}:{cycle_date}",),
+            (f"contract-billing:{contract_id}",),
         )
-        existing = conn.execute(
+        existing_cases = conn.execute(
             """SELECT id FROM billing_cases
-               WHERE contract_id = %s AND billing_cycle_date = %s
-                 AND intervention_id IS NULL
-               LIMIT 1""",
-            (contract_id, cycle_date),
-        ).fetchone()
-        if existing:
-            case_id = int(existing["id"])
+               WHERE contract_id = %s AND intervention_id IS NULL
+                 AND merged_into_case_id IS NULL
+               ORDER BY id
+               FOR UPDATE""",
+            (contract_id,),
+        ).fetchall()
+        if existing_cases:
+            case_id = int(existing_cases[0]["id"])
             was_created = False
         else:
             inserted = conn.execute(
                 """INSERT INTO billing_cases (
-                       contract_id, billing_cycle_date, client, equipment,
+                       contract_id, client, equipment,
                        created_by, updated_by
-                   ) VALUES (%s, %s, %s, %s, %s, %s)
+                   ) VALUES (%s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
-                    contract_id, cycle_date, str(cycle.get("client") or ""),
+                    contract_id, str(contract.get("client") or ""),
                     f"Contrat #{contract_id}", actor, actor,
                 ),
             ).fetchone()
             case_id = int(inserted["id"])
             was_created = True
+
+        # Version 034 temporarily created one aggregate case per planned
+        # date. Consolidate those legacy aggregates into the first dossier of
+        # the contract while retaining every source case as audit history.
+        duplicate_case_ids = [int(row["id"]) for row in existing_cases[1:]]
+        if duplicate_case_ids:
+            conn.execute(
+                """UPDATE billing_case_interventions
+                   SET case_id = %s
+                   WHERE case_id = ANY(%s)""",
+                (case_id, duplicate_case_ids),
+            )
+            conn.execute(
+                """INSERT INTO billing_steps (
+                       case_id, step_type, effective_date, due_date, reference,
+                       amount, not_required, note, created_by, created_at,
+                       updated_by, updated_at
+                   )
+                   SELECT DISTINCT ON (source.step_type)
+                          %s, source.step_type, source.effective_date,
+                          source.due_date, source.reference, source.amount,
+                          source.not_required, source.note, source.created_by,
+                          source.created_at, source.updated_by, source.updated_at
+                   FROM billing_steps source
+                   WHERE source.case_id = ANY(%s)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM billing_steps target
+                         WHERE target.case_id = %s
+                           AND target.step_type = source.step_type
+                     )
+                   ORDER BY source.step_type, source.updated_at DESC, source.id DESC""",
+                (case_id, duplicate_case_ids, case_id),
+            )
+            conn.execute(
+                """INSERT INTO billing_payments (
+                       case_id, effective_date, amount, reference, payment_method,
+                       note, created_by, created_at, updated_by, updated_at
+                   )
+                   SELECT %s, effective_date, amount, reference, payment_method,
+                          note, created_by, created_at, updated_by, updated_at
+                   FROM billing_payments
+                   WHERE case_id = ANY(%s)""",
+                (case_id, duplicate_case_ids),
+            )
+            conn.execute(
+                """UPDATE billing_cases
+                   SET merged_into_case_id = %s, case_state = 'cancelled',
+                       block_reason = 'Regroupé dans le dossier global du contrat',
+                       updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ANY(%s)""",
+                (case_id, actor, duplicate_case_ids),
+            )
+            conn.execute(
+                """INSERT INTO billing_history (
+                       case_id, action, entity_type, entity_id, after_data, actor_username
+                   ) VALUES (%s, 'MERGE_CONTRACT_CASES', 'case', %s, %s::jsonb, %s)""",
+                (
+                    case_id, case_id,
+                    json.dumps({"merged_case_ids": duplicate_case_ids}, ensure_ascii=False), actor,
+                ),
+            )
 
         members = conn.execute(
             """SELECT i.id AS intervention_id,
@@ -570,11 +630,11 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
                FROM planning_maintenance pm
                JOIN interventions i ON i.planning_id = pm.id
                LEFT JOIN equipements e ON e.id = COALESCE(i.equipement_id, pm.equipement_id)
-               WHERE pm.contrat_id = %s AND pm.date_prevue::date = %s
+               WHERE pm.contrat_id = %s
                  AND COALESCE(pm.is_ghost, FALSE) = FALSE
                  AND i.statut IN ('Cloturee', 'Clôturée')
                ORDER BY e.nom, e.num_serie, i.id""",
-            (contract_id, cycle_date),
+            (contract_id,),
         ).fetchall()
         equipment = []
         assessment_results = []
@@ -599,7 +659,7 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
 
         # Reconcile historical per-intervention tracking without deleting its
         # audit trail. Those old cases are kept as merged records while the
-        # contract-cycle case becomes the sole active billing dossier.
+        # contract case becomes the sole active billing dossier.
         intervention_ids = [int(item["intervention_id"]) for item in members]
         if intervention_ids:
             conn.execute(
@@ -663,7 +723,7 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
             (
                 aggregate_coverage_status,
                 "Pièces hors couverture regroupées dans le dossier du contrat." if billable_parts
-                else "Cycle contractuel clôturé pour tous les équipements.",
+                else "Contrat clôturé pour tous les équipements.",
                 sum(float(result.get("uncovered_labor_cost") or 0) for result in assessment_results),
                 sum(float(result.get("uncovered_parts_cost") or 0) for result in assessment_results),
                 sum(float(result.get("uncovered_total_cost") or 0) for result in assessment_results),
@@ -674,18 +734,17 @@ def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> l
             conn.execute(
                 """INSERT INTO billing_history (
                        case_id, action, entity_type, entity_id, after_data, actor_username
-                   ) VALUES (%s, 'CONTRACT_CYCLE_READY', 'case', %s, %s::jsonb, %s)""",
+                   ) VALUES (%s, 'CONTRACT_READY', 'case', %s, %s::jsonb, %s)""",
                 (
                     case_id, case_id,
-                    json.dumps({"contract_id": contract_id, "cycle_date": str(cycle_date), **aggregate_details}, ensure_ascii=False),
+                    json.dumps({"contract_id": contract_id, **aggregate_details}, ensure_ascii=False),
                     actor,
                 ),
             )
             created.append({
                 "case_id": case_id,
                 "contract_id": contract_id,
-                "cycle_date": str(cycle_date),
-                "client": str(cycle.get("client") or ""),
+                "client": str(contract.get("client") or ""),
                 "equipments": equipment,
                 "billable_parts": billable_parts,
             })
