@@ -55,10 +55,27 @@ interface BillingCase {
   block_reason: string;
   created_by?: string;
   contract_id?: number | null;
+  billing_cycle_date?: string | null;
   contract_type?: string;
+  contract_equipments?: Array<{
+    id?: number | null;
+    nom: string;
+    num_serie?: string;
+    intervention_id?: number | null;
+    statut?: string;
+    date_cloture?: string | null;
+  }>;
   coverage_status: 'unassessed' | 'covered' | 'partial' | 'billable' | 'review';
   coverage_status_label: string;
   coverage_reason?: string;
+  coverage_details?: {
+    billable_parts?: Array<{
+      designation: string;
+      reference: string;
+      fournisseur: string;
+      quantite: number;
+    }>;
+  };
   labor_amount?: number;
   parts_amount?: number;
   uncovered_labor_cost: number;
@@ -900,10 +917,16 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
   )];
   const assignedTechnicianLabel = assignedTechnicians.join(', ') || item.technicien || 'non assigné';
   const coverageLocked = item.coverage_status === 'covered' || item.coverage_status === 'review';
+  const contractEquipments = item.contract_equipments || [];
+  const billableParts = Array.isArray(item.coverage_details?.billable_parts) ? item.coverage_details.billable_parts : [];
   return <div className="max-h-[78vh] space-y-5 overflow-y-auto pr-1">
     {item.reused_existing_case && <div className="flex items-start gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-200"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>Ce dossier était déjà en cours pour cet équipement. Il a été ouvert à la place de créer un doublon.</span></div>}
     {canResolveDuplicates && duplicateCases.map(duplicate => <div key={duplicate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3"><div><div className="text-sm font-bold text-amber-200">Doublon potentiel avec le dossier #{duplicate.id}</div><p className="mt-1 text-xs text-savia-text-muted">Même client et même équipement avec un cycle technique encore ouvert.</p></div><button type="button" onClick={() => onResolveDuplicate(item, duplicate)} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400">Résoudre le doublon</button></div>)}
     <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-savia-border bg-savia-surface-hover/50 p-4"><div><div className="flex items-center gap-2 font-bold"><Building2 className="h-4 w-4 text-savia-accent" />{item.client}</div><div className="mt-1 text-sm text-savia-text-muted">{item.equipment || 'Équipement non renseigné'} {item.intervention_id && `· Intervention #${item.intervention_id}`}</div><div className="mt-1 text-xs text-savia-text-dim">Technicien assigné : {assignedTechnicianLabel}</div>{item.owner_username && <div className="mt-1 text-xs text-savia-text-dim">Responsable facturation : {item.owner_username}</div>}</div><div className="text-right"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-bold ${STATUS_STYLE[item.status]}`}>{item.status_label}</span>{item.block_reason && <div className="mt-2 max-w-xs text-xs text-red-300">{item.block_reason}</div>}</div></div>
+
+    {contractEquipments.length > 0 && <section className="rounded-xl border border-savia-accent/25 bg-savia-accent/5 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><Receipt className="h-4 w-4 text-savia-accent" />Contrat #{item.contract_id} · cycle du {formatDate(item.billing_cycle_date)}</h3><p className="mt-1 text-xs text-savia-text-muted">Dossier global créé après la clôture de toutes les interventions du contrat.</p><div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-savia-border text-left text-xs text-savia-text-muted"><th className="pb-2 pr-3">Équipement</th><th className="pb-2 pr-3">N° de série</th><th className="pb-2">Intervention</th></tr></thead><tbody>{contractEquipments.map(equipment => <tr key={`${equipment.id}-${equipment.intervention_id}`} className="border-b border-savia-border/40"><td className="py-2 pr-3">{equipment.nom}</td><td className="py-2 pr-3 font-mono text-xs">{equipment.num_serie || '—'}</td><td className="py-2">#{equipment.intervention_id}</td></tr>)}</tbody></table></div></section>}
+
+    {billableParts.length > 0 && <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4"><h3 className="flex items-center gap-2 text-sm font-bold text-amber-200"><PackageCheck className="h-4 w-4" />Pièces à facturer hors contrat</h3><div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-amber-500/20 text-left text-xs text-savia-text-muted"><th className="pb-2 pr-3">Désignation</th><th className="pb-2 pr-3">Référence</th><th className="pb-2 pr-3">Fournisseur</th><th className="pb-2">Qté</th></tr></thead><tbody>{billableParts.map((part: any) => <tr key={part.reference} className="border-b border-amber-500/10"><td className="py-2 pr-3">{part.designation}</td><td className="py-2 pr-3 font-mono text-xs">{part.reference}</td><td className="py-2 pr-3">{part.fournisseur}</td><td className="py-2 font-bold">{part.quantite}</td></tr>)}</tbody></table></div></section>}
 
     {item.intervention_closed_at && <section className={`rounded-xl border p-4 ${item.coverage_status === 'covered' ? 'border-emerald-500/30 bg-emerald-500/5' : item.coverage_status === 'review' ? 'border-fuchsia-500/30 bg-fuchsia-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2 font-bold">{item.coverage_status === 'review' ? <AlertTriangle className="h-4 w-4 text-fuchsia-300" /> : <CheckCircle2 className="h-4 w-4 text-emerald-300" />}{item.coverage_status_label}</div><div className="mt-1 text-xs text-savia-text-muted">{item.contract_id ? `Contrat #${item.contract_id}${item.contract_type ? ` · ${item.contract_type}` : ''}` : 'Aucun contrat applicable'}</div><p className="mt-2 text-sm">{item.coverage_reason || 'Décision contractuelle non renseignée.'}</p></div><button type="button" onClick={() => onReassess(item)} className="rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Recalculer</button></div><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">{[['Coût de revient MO', item.labor_amount || 0], ['Coût de revient pièces', item.parts_amount || 0], ['Coût MO hors couverture', item.uncovered_labor_cost || 0], ['Coût pièces hors couverture', item.uncovered_parts_cost || 0]].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-savia-surface-hover/60 p-2.5"><div className="text-[11px] text-savia-text-muted">{label}</div><div className="mt-1 font-black">{money(Number(value), item.currency)}</div></div>)}</div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-savia-border/60 pt-3"><span className="text-sm font-semibold">Coût de revient hors couverture : {money(item.uncovered_total_cost || 0, item.currency)}</span><strong className="text-sm text-savia-accent">Prix client à renseigner dans le devis ou la facture</strong></div></section>}
 

@@ -448,6 +448,10 @@ def check_facturation_reminders():
                      AND i.date_cloture IS NOT NULL
                      AND COALESCE(i.facture_envoyee, FALSE) = FALSE
                      AND COALESCE(bc.coverage_status, 'unassessed') IN ('unassessed', 'partial', 'billable')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM planning_maintenance pm
+                         WHERE pm.id = i.planning_id AND pm.contrat_id IS NOT NULL
+                     )
                    ORDER BY i.date_cloture ASC"""
             ).fetchall()
 
