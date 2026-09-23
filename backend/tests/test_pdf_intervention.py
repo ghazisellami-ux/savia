@@ -89,3 +89,59 @@ def test_generated_pdf_shows_intervention_type_and_every_assigned_technician(mon
     assert "Technicien(s): Alice Martin, Bob Diallo" in extracted_text
     assert "Type d'intervention: Préventive" in extracted_text
     assert "Date: 2026-09-07" in extracted_text
+
+
+def test_generated_pdf_uses_equipment_id_for_identity_warranty_and_contract(monkeypatch, tmp_path):
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class FakeConnection:
+        def execute(self, query, *_args, **_kwargs):
+            if "FROM equipements WHERE id" in query:
+                return Result({
+                    "id": 84,
+                    "nom": "Respirateur de réanimation",
+                    "num_serie": "GB-11038179",
+                    "fabricant": "Mindray",
+                    "modele": "SV300",
+                    "garantie_debut": "2026-01-01",
+                    "garantie_duree": 1,
+                })
+            if "FROM contrats c" in query:
+                return Result({"exists": 1})
+            return Result()
+
+    @contextmanager
+    def fake_get_db():
+        yield FakeConnection()
+
+    intervention = {
+        "id": 40,
+        "date": "2026-09-03",
+        "client": "Hôpital A",
+        "machine": "Respirateur de réanimation",
+        "equipement_id": 84,
+        "technicien": "Alice Martin",
+        "type_intervention": "Préventive",
+        "statut": "Cloturee",
+    }
+    monkeypatch.setattr(pdf_intervention, "get_db", fake_get_db)
+    monkeypatch.setattr(pdf_intervention, "assert_resource_client_access", lambda *_args: None)
+    monkeypatch.setattr(pdf_intervention, "lire_interventions", lambda: pd.DataFrame([intervention]))
+    monkeypatch.setattr("db_engine.get_interventions_techniciens", lambda _id: [])
+    monkeypatch.setattr("db_engine.list_work_sessions", lambda _id: [])
+
+    response = pdf_intervention.generate_fiche_intervention_pdf(40, {}, {"role": "admin"})
+    output_path = tmp_path / "fiche_intervention_40.pdf"
+    output_path.write_bytes(response.body)
+    with pymupdf.open(output_path) as document:
+        extracted_text = "\n".join(page.get_text() for page in document)
+
+    assert "Marque/Modele: Mindray SV300" in extracted_text
+    assert "N° Serie: GB-11038179" in extracted_text
+    assert "Garantie: OUI" in extracted_text
+    assert "Contrat: OUI" in extracted_text
