@@ -68,6 +68,7 @@ from controllers.auth_dashboard import (
     logger,
 )
 from services.file_security import read_validated_upload
+from services.contract_billing import sync_ready_contract_billing_cycles
 from services.idempotency import (
     get_idempotent_response,
     operation_id_from_request,
@@ -701,6 +702,9 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
             if not ok:
                 raise HTTPException(status_code=400, detail=msg)
 
+            with get_db() as conn:
+                ready_contract_cycles = sync_ready_contract_billing_cycles(conn)
+
             # --- Update type_erreur if provided ---
             if body.get("type_erreur"):
                 with get_db() as conn:
@@ -716,9 +720,12 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                         """SELECT i.machine, i.equipement_id, i.client, i.technicien, i.probleme, i.cause, i.solution,
                                   i.duree_minutes, i.duree_deplacement, i.notes, i.pieces_utilisees,
                                   bc.coverage_status, bc.coverage_reason,
-                                  bc.contract_id
+                                  bc.contract_id,
+                                  COALESCE(pm.contrat_id, original_pm.contrat_id) AS scheduled_contract_id
                            FROM interventions i
                            LEFT JOIN billing_cases bc ON bc.intervention_id=i.id
+                           LEFT JOIN planning_maintenance pm ON pm.id=i.planning_id
+                           LEFT JOIN planning_maintenance original_pm ON original_pm.id=pm.original_planning_id
                            WHERE i.id = %s""",
                         (intervention_id,)
                     ).fetchone()
@@ -786,7 +793,27 @@ def update_intervention(intervention_id: int, request: Request, body: dict = Bod
                         f"ℹ️ <i>{d.get('coverage_reason') or 'Dossier disponible dans le module Suivi Facturation'}</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    send_telegram_reliably("telegram_sav", msg_sav, operation_id)
+                    if not d.get("scheduled_contract_id"):
+                        send_telegram_reliably("telegram_sav", msg_sav, operation_id)
+                for cycle in ready_contract_cycles:
+                    equipment_lines = "\n".join(
+                        f"  • {item['nom']} — N° série : {item['num_serie'] or '—'}"
+                        for item in cycle["equipments"]
+                    )
+                    parts_lines = "\n".join(
+                        f"  • {item['designation']} | Réf. {item['reference']} | {item['fournisseur']} | Qté {item['quantite']}"
+                        for item in cycle["billable_parts"]
+                    )
+                    message = (
+                        f"📋 <b>Contrat #{cycle['contract_id']} prêt pour facturation</b>\n\n"
+                        f"👤 Client : <b>{cycle['client']}</b>\n"
+                        f"📁 Dossier de facturation : <b>#{cycle['case_id']}</b>\n"
+                        f"📅 Cycle : {cycle['cycle_date']}\n\n"
+                        f"🏥 Équipements clôturés :\n{equipment_lines}"
+                    )
+                    if parts_lines:
+                        message += f"\n\n🧾 <b>Pièces à facturer hors contrat :</b>\n{parts_lines}"
+                    send_telegram_reliably("telegram_sav", message, f"contract-cycle:{cycle['case_id']}")
             except Exception as te:
                 logger.error(f"Telegram clôture erreur: {te}")
 

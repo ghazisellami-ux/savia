@@ -457,6 +457,13 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
     result["contract_type"] = contract.get("type_contrat") if contract else ""
     result["service_date"] = service_date.isoformat()
 
+    # A planned contract maintenance is billed as one contract cycle, never
+    # as one invoice per equipment. The aggregate case is created only after
+    # every intervention for that contract/date cycle is closed.
+    if linked_from_planning:
+        result["deferred_to_contract_cycle"] = True
+        return result
+
     case_row = conn.execute(
         "SELECT id, coverage_status, contract_id, uncovered_total_cost FROM billing_cases WHERE intervention_id=%s",
         (intervention_id,),
@@ -496,6 +503,193 @@ def assess_intervention_contract_coverage(conn: Any, intervention_id: int, *, ac
             (case_row["id"], case_row["id"], json.dumps(before, default=str), json.dumps(result, ensure_ascii=False), actor),
         )
     return result
+
+
+def sync_ready_contract_billing_cycles(conn: Any, *, actor: str = "system") -> list[dict[str, Any]]:
+    """Create one billing case for each fully completed contract cycle.
+
+    ``planning_maintenance`` supplies the cycle boundary: all equipment rows
+    with the same ``contrat_id`` and planned date form one global invoice.
+    Only IDs are used to join contracts, planning rows, interventions, and
+    equipment; names are presentation data only.
+    """
+    cycles = conn.execute(
+        """SELECT pm.contrat_id, pm.date_prevue::date AS cycle_date,
+                  c.client
+           FROM planning_maintenance pm
+           JOIN contrats c ON c.id = pm.contrat_id
+           WHERE pm.contrat_id IS NOT NULL
+             AND COALESCE(pm.is_ghost, FALSE) = FALSE
+             AND pm.date_prevue <= CURRENT_DATE
+           GROUP BY pm.contrat_id, pm.date_prevue::date, c.client
+           HAVING BOOL_AND(EXISTS (
+               SELECT 1 FROM interventions i
+               WHERE i.planning_id = pm.id
+                 AND i.statut IN ('Cloturee', 'Clôturée')
+           ))
+           ORDER BY pm.contrat_id, cycle_date"""
+    ).fetchall()
+    created: list[dict[str, Any]] = []
+    for raw_cycle in cycles:
+        cycle = dict(raw_cycle)
+        contract_id = int(cycle["contrat_id"])
+        cycle_date = cycle["cycle_date"]
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (f"contract-billing:{contract_id}:{cycle_date}",),
+        )
+        existing = conn.execute(
+            """SELECT id FROM billing_cases
+               WHERE contract_id = %s AND billing_cycle_date = %s
+                 AND intervention_id IS NULL
+               LIMIT 1""",
+            (contract_id, cycle_date),
+        ).fetchone()
+        if existing:
+            case_id = int(existing["id"])
+            was_created = False
+        else:
+            inserted = conn.execute(
+                """INSERT INTO billing_cases (
+                       contract_id, billing_cycle_date, client, equipment,
+                       created_by, updated_by
+                   ) VALUES (%s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    contract_id, cycle_date, str(cycle.get("client") or ""),
+                    f"Contrat #{contract_id}", actor, actor,
+                ),
+            ).fetchone()
+            case_id = int(inserted["id"])
+            was_created = True
+
+        members = conn.execute(
+            """SELECT i.id AS intervention_id,
+                      COALESCE(i.equipement_id, pm.equipement_id) AS equipement_id,
+                      e.nom, e.num_serie
+               FROM planning_maintenance pm
+               JOIN interventions i ON i.planning_id = pm.id
+               LEFT JOIN equipements e ON e.id = COALESCE(i.equipement_id, pm.equipement_id)
+               WHERE pm.contrat_id = %s AND pm.date_prevue::date = %s
+                 AND COALESCE(pm.is_ghost, FALSE) = FALSE
+                 AND i.statut IN ('Cloturee', 'Clôturée')
+               ORDER BY e.nom, e.num_serie, i.id""",
+            (contract_id, cycle_date),
+        ).fetchall()
+        equipment = []
+        assessment_results = []
+        for member in members:
+            item = dict(member)
+            conn.execute(
+                """INSERT INTO billing_case_interventions (case_id, intervention_id)
+                   VALUES (%s, %s) ON CONFLICT (intervention_id) DO NOTHING""",
+                (case_id, item["intervention_id"]),
+            )
+            equipment.append({
+                "id": item.get("equipement_id"),
+                "nom": item.get("nom") or "Équipement non renseigné",
+                "num_serie": item.get("num_serie") or "",
+                "intervention_id": item["intervention_id"],
+            })
+            assessment_results.append(
+                assess_intervention_contract_coverage(
+                    conn, int(item["intervention_id"]), actor=actor
+                )
+            )
+
+        # Reconcile historical per-intervention tracking without deleting its
+        # audit trail. Those old cases are kept as merged records while the
+        # contract-cycle case becomes the sole active billing dossier.
+        intervention_ids = [int(item["intervention_id"]) for item in members]
+        if intervention_ids:
+            conn.execute(
+                """UPDATE billing_cases
+                   SET merged_into_case_id = %s, case_state = 'cancelled',
+                       block_reason = 'Regroupé dans le dossier global du contrat',
+                       updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE intervention_id = ANY(%s) AND id <> %s
+                     AND merged_into_case_id IS NULL""",
+                (case_id, actor, intervention_ids, case_id),
+            )
+
+        billable_quantities: dict[str, int] = {}
+        for assessment in assessment_results:
+            for part in (assessment.get("coverage_details") or {}).get("parts", []):
+                reference = str(part.get("ref") or "").strip()
+                if not reference:
+                    continue
+                quantity = max(0, int(part.get("qty") or 0) - int(part.get("covered_qty") or 0))
+                if quantity:
+                    billable_quantities[reference] = billable_quantities.get(reference, 0) + quantity
+        part_rows = conn.execute(
+            """SELECT reference, designation, fournisseur
+               FROM pieces_rechange WHERE LOWER(reference) = ANY(%s)""",
+            ([_key(reference) for reference in billable_quantities],),
+        ).fetchall() if billable_quantities else []
+        catalog = {_key(row.get("reference")): dict(row) for row in part_rows}
+        billable_parts = [
+            {
+                "reference": reference,
+                "designation": catalog.get(_key(reference), {}).get("designation") or reference,
+                "fournisseur": catalog.get(_key(reference), {}).get("fournisseur") or "Non renseigné",
+                "quantite": quantity,
+            }
+            for reference, quantity in sorted(billable_quantities.items())
+        ]
+        coverage_statuses = {result.get("coverage_status") for result in assessment_results}
+        if billable_parts and "covered" in coverage_statuses:
+            aggregate_coverage_status = "partial"
+        elif billable_parts:
+            aggregate_coverage_status = "billable"
+        elif assessment_results and all(result.get("coverage_status") == "covered" for result in assessment_results):
+            aggregate_coverage_status = "covered"
+        elif "review" in coverage_statuses:
+            aggregate_coverage_status = "review"
+        else:
+            aggregate_coverage_status = "unassessed"
+        aggregate_details = {
+            "equipments": equipment,
+            "billable_parts": billable_parts,
+            "intervention_assessments": assessment_results,
+        }
+        conn.execute(
+            """UPDATE billing_cases SET
+                   coverage_status=%s, coverage_reason=%s,
+                   uncovered_labor_cost=%s, uncovered_parts_cost=%s,
+                   uncovered_total_cost=%s, coverage_details=%s::jsonb,
+                   coverage_assessed_at=CURRENT_TIMESTAMP, updated_by=%s,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE id=%s""",
+            (
+                aggregate_coverage_status,
+                "Pièces hors couverture regroupées dans le dossier du contrat." if billable_parts
+                else "Cycle contractuel clôturé pour tous les équipements.",
+                sum(float(result.get("uncovered_labor_cost") or 0) for result in assessment_results),
+                sum(float(result.get("uncovered_parts_cost") or 0) for result in assessment_results),
+                sum(float(result.get("uncovered_total_cost") or 0) for result in assessment_results),
+                json.dumps(aggregate_details, ensure_ascii=False), actor, case_id,
+            ),
+        )
+        if was_created:
+            conn.execute(
+                """INSERT INTO billing_history (
+                       case_id, action, entity_type, entity_id, after_data, actor_username
+                   ) VALUES (%s, 'CONTRACT_CYCLE_READY', 'case', %s, %s::jsonb, %s)""",
+                (
+                    case_id, case_id,
+                    json.dumps({"contract_id": contract_id, "cycle_date": str(cycle_date), **aggregate_details}, ensure_ascii=False),
+                    actor,
+                ),
+            )
+            created.append({
+                "case_id": case_id,
+                "contract_id": contract_id,
+                "cycle_date": str(cycle_date),
+                "client": str(cycle.get("client") or ""),
+                "equipments": equipment,
+                "billable_parts": billable_parts,
+            })
+    return created
 
 
 def assess_intervention_contract_coverage_in_savepoint(

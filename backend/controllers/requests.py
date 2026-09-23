@@ -56,6 +56,7 @@ from services.idempotency import (
 )
 from repositories.equipment_status import retour_site_confirmation_requise
 from repositories.interventions import find_open_intervention, lock_equipment_intervention_key
+from services.contract_billing import sync_ready_contract_billing_cycles
 
 
 _INTERVENTION_ACTION_ROLES = (
@@ -1099,13 +1100,21 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
             
             if finalize_result.get('success'):
                 logger.info(f"✅ Intervention #{intervention_id} AUTOMATICALLY CLOSED after all {status_info['total']} technicians completed")
+                with get_db() as conn:
+                    ready_contract_cycles = sync_ready_contract_billing_cycles(conn)
                 
                 # Send Telegram: INTERVENTION CLOSED - À FACTURER
                 try:
                     # Fetch updated intervention data with pieces_utilisees
                     with get_db() as conn:
                         updated_row = conn.execute(
-                            "SELECT machine, technicien, probleme, cause, solution, duree_minutes, notes, pieces_utilisees FROM interventions WHERE id = %s",
+                            """SELECT i.machine, i.technicien, i.probleme, i.cause, i.solution,
+                                      i.duree_minutes, i.notes, i.pieces_utilisees,
+                                      COALESCE(pm.contrat_id, original_pm.contrat_id) AS scheduled_contract_id
+                               FROM interventions i
+                               LEFT JOIN planning_maintenance pm ON pm.id=i.planning_id
+                               LEFT JOIN planning_maintenance original_pm ON original_pm.id=pm.original_planning_id
+                               WHERE i.id = %s""",
                             (intervention_id,)
                         ).fetchone()
                     
@@ -1140,8 +1149,28 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                         f"💰 <i>Délai de facturation : 10 jours</i>\n"
                         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                     )
-                    send_telegram_reliably("telegram_sav", msg_sav, operation_id)
-                    logger.info(f"✅ Telegram SAV message sent: Intervention #{intervention_id} à facturer")
+                    if not d.get("scheduled_contract_id"):
+                        send_telegram_reliably("telegram_sav", msg_sav, operation_id)
+                        logger.info(f"✅ Telegram SAV message sent: Intervention #{intervention_id} à facturer")
+                    for cycle in ready_contract_cycles:
+                        equipment_lines = "\n".join(
+                            f"  • {item['nom']} — N° série : {item['num_serie'] or '—'}"
+                            for item in cycle["equipments"]
+                        )
+                        parts_lines = "\n".join(
+                            f"  • {item['designation']} | Réf. {item['reference']} | {item['fournisseur']} | Qté {item['quantite']}"
+                            for item in cycle["billable_parts"]
+                        )
+                        message = (
+                            f"📋 <b>Contrat #{cycle['contract_id']} prêt pour facturation</b>\n\n"
+                            f"👤 Client : <b>{cycle['client']}</b>\n"
+                            f"📁 Dossier de facturation : <b>#{cycle['case_id']}</b>\n"
+                            f"📅 Cycle : {cycle['cycle_date']}\n\n"
+                            f"🏥 Équipements clôturés :\n{equipment_lines}"
+                        )
+                        if parts_lines:
+                            message += f"\n\n🧾 <b>Pièces à facturer hors contrat :</b>\n{parts_lines}"
+                        send_telegram_reliably("telegram_sav", message, f"contract-cycle:{cycle['case_id']}")
                     
                     # Message for technicians: INTERVENTION CLÔTURÉE
                     msg_tech = (
