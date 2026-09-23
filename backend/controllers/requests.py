@@ -1165,12 +1165,11 @@ def update_technicien_data(intervention_id: int, request: Request, body: dict = 
                             f"📋 <b>Contrat #{cycle['contract_id']} prêt pour facturation</b>\n\n"
                             f"👤 Client : <b>{cycle['client']}</b>\n"
                             f"📁 Dossier de facturation : <b>#{cycle['case_id']}</b>\n"
-                            f"📅 Cycle : {cycle['cycle_date']}\n\n"
                             f"🏥 Équipements clôturés :\n{equipment_lines}"
                         )
                         if parts_lines:
                             message += f"\n\n🧾 <b>Pièces à facturer hors contrat :</b>\n{parts_lines}"
-                        send_telegram_reliably("telegram_sav", message, f"contract-cycle:{cycle['case_id']}")
+                        send_telegram_reliably("telegram_sav", message, f"contract:{cycle['case_id']}")
                     
                     # Message for technicians: INTERVENTION CLÔTURÉE
                     msg_tech = (

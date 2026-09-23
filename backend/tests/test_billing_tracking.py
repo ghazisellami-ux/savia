@@ -122,3 +122,10 @@ def test_contract_cycle_billing_migration_is_registered():
 
     assert len(cycle_migrations) == 1
     assert "contract cycle" in cycle_migrations[0][1]
+
+
+def test_contract_global_billing_migration_is_registered():
+    global_migrations = [migration for migration in MIGRATIONS if migration[0] == "035"]
+
+    assert len(global_migrations) == 1
+    assert "full contract" in global_migrations[0][1]
