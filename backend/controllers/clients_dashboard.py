@@ -312,6 +312,16 @@ def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_ver
         return []
 
 
+_TERMINAL_INTERVENTION_STATUSES = frozenset({
+    "cloturee", "clôturée", "terminee", "terminée", "realisee", "réalisée",
+    "annulee", "annulée", "closed", "resolved", "completee", "complétée",
+})
+
+
+def _is_terminal_intervention_status(value: object) -> bool:
+    return str(value or "").strip().casefold() in _TERMINAL_INTERVENTION_STATUSES
+
+
 @app.get("/api/dashboard/availability-trend")
 def get_availability_trend(
     client: Optional[str] = None,
@@ -406,13 +416,12 @@ def get_availability_trend(
             else:
                 nb_interventions = 0
             
-            # Calculate availability: assume 100% if no issues, decrease by 2% per intervention as rough estimate
-            # More sophisticated: count "Terminée" status as available, others as not available
+            # Calculate availability: assume 100% if no issues, decrease by 2% per unfinished intervention.
             availability = 100.0
             if not df_int.empty and nb_interventions > 0:
-                # Count interventions that are NOT "Terminée" (corrective or in-progress)
+                # The application stores closures under several historical labels.
                 if "statut" in df_int.columns:
-                    unfinished = len(month_int[month_int["statut"].astype(str).str.lower() != "terminée"])
+                    unfinished = int((~month_int["statut"].map(_is_terminal_intervention_status)).sum())
                     # Rough estimate: each unfinished intervention reduces availability by 2%
                     availability = max(0, 100.0 - (unfinished * 2.0))
                 else:
