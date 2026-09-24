@@ -240,6 +240,18 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
            ORDER BY bci.case_id, e.nom, e.num_serie, i.id""",
         (case_ids,),
     ).fetchall()
+    delivery_note_rows = conn.execute(
+        """SELECT * FROM billing_delivery_notes
+           WHERE case_id = ANY(%s)
+           ORDER BY effective_date, id""",
+        (case_ids,),
+    ).fetchall()
+    invoice_rows = conn.execute(
+        """SELECT * FROM billing_invoices
+           WHERE case_id = ANY(%s)
+           ORDER BY effective_date, id""",
+        (case_ids,),
+    ).fetchall()
     contract_technician_rows = conn.execute(
         """SELECT DISTINCT bci.case_id, t.id AS technicien_id,
                   CONCAT_WS(' ', t.prenom, t.nom) AS name
@@ -261,6 +273,8 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
     ).fetchall()
     steps_by_case: dict[int, dict[str, dict[str, Any]]] = {case_id: {} for case_id in case_ids}
     payments_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
+    delivery_notes_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
+    invoices_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     equipment_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     technicians_by_case: dict[int, list[dict[str, Any]]] = {case_id: [] for case_id in case_ids}
     for raw in step_rows:
@@ -269,6 +283,12 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
     for raw in payment_rows:
         item = _dict(raw)
         payments_by_case[item["case_id"]].append(item)
+    for raw in delivery_note_rows:
+        item = _dict(raw)
+        delivery_notes_by_case[item["case_id"]].append(item)
+    for raw in invoice_rows:
+        item = _dict(raw)
+        invoices_by_case[item["case_id"]].append(item)
     for raw in contract_member_rows:
         item = _dict(raw)
         equipment_by_case[item["case_id"]].append({
@@ -291,6 +311,24 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
     for item in base_rows:
         steps = steps_by_case[item["id"]]
         payments = payments_by_case[item["id"]]
+        delivery_notes = delivery_notes_by_case[item["id"]]
+        invoices = invoices_by_case[item["id"]]
+        if delivery_notes:
+            latest_delivery = delivery_notes[-1]
+            steps["delivery_note"] = {
+                **latest_delivery,
+                "step_type": "delivery_note",
+                "not_required": False,
+            }
+        if invoices:
+            total_invoice = next((invoice for invoice in reversed(invoices) if invoice.get("is_total_invoice")), None)
+            if total_invoice:
+                steps["invoice"] = {
+                    **total_invoice,
+                    "step_type": "invoice",
+                    "amount": sum(Decimal(str(invoice.get("amount") or 0)) for invoice in invoices),
+                    "not_required": False,
+                }
         contract_equipments = equipment_by_case[item["id"]]
         # A contract-cycle case has no single intervention_id. Its completion
         # state is derived from ID-linked member interventions.
@@ -318,6 +356,9 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             intervention_status=item.get("intervention_status") or "",
             has_parts=bool(item.get("has_parts")),
             coverage_status=item.get("coverage_status") or "unassessed",
+            delivery_complete=(any(note.get("is_total_delivery") for note in delivery_notes) if delivery_notes else None),
+            invoice_complete=(any(invoice.get("is_total_invoice") for invoice in invoices) if invoices else None),
+            contract_billing=bool(item.get("contract_id") and contract_equipments),
         )
         overdue = invoice_is_overdue(invoice, remaining, today)
         due_date = _parse_date((invoice or {}).get("due_date"), "date d'échéance")
@@ -326,6 +367,10 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "contract_technicians": technicians_by_case[item["id"]],
             "steps": steps,
             "payments": payments,
+            "delivery_notes": delivery_notes,
+            "invoices": invoices,
+            "delivery_note_complete": any(note.get("is_total_delivery") for note in delivery_notes),
+            "invoice_complete": any(invoice.get("is_total_invoice") for invoice in invoices),
             "paid_amount": float(paid_amount),
             "invoice_amount": float(invoice_amount),
             "remaining_amount": float(remaining),
@@ -971,6 +1016,33 @@ def _validate_step_dates(conn, case_id: int, step_type: str, effective_date: dat
         raise HTTPException(status_code=422, detail="L'échéance ne peut pas précéder la facture")
 
 
+def _parse_document_list(body: dict, key: str, *, invoice: bool = False) -> list[dict[str, Any]]:
+    raw_documents = body.get(key)
+    if not isinstance(raw_documents, list):
+        raise HTTPException(status_code=422, detail=f"La liste des {key} est invalide")
+    parsed: list[dict[str, Any]] = []
+    total_key = "is_total_invoice" if invoice else "is_total_delivery"
+    for index, raw in enumerate(raw_documents, start=1):
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=422, detail=f"Le document n°{index} est invalide")
+        effective_date = _parse_date(raw.get("effective_date"), f"La date du document n°{index}", required=True)
+        due_date = _parse_date(raw.get("due_date"), f"La date d'échéance n°{index}", required=invoice)
+        if due_date and effective_date and due_date < effective_date:
+            raise HTTPException(status_code=422, detail=f"L'échéance du document n°{index} ne peut pas précéder sa date")
+        amount = _parse_amount(raw.get("amount"), f"Le montant du document n°{index}", required=invoice)
+        parsed.append({
+            "effective_date": effective_date,
+            "due_date": due_date,
+            "reference": str(raw.get("reference") or "").strip(),
+            "amount": amount,
+            total_key: raw.get(total_key) in (True, 1, "1", "true", "True"),
+            "note": str(raw.get("note") or "").strip(),
+        })
+    if sum(1 for document in parsed if document[total_key]) > 1:
+        raise HTTPException(status_code=422, detail="Un seul document peut être marqué comme total")
+    return sorted(parsed, key=lambda document: document["effective_date"])
+
+
 @app.put("/api/billing/cases/{case_id}/steps/{step_type}")
 def upsert_billing_step(case_id: int, step_type: str, body: dict = Body(...), user: dict = Depends(_verify_token)):
     require_roles(user, *BILLING_ROLES)
@@ -994,7 +1066,7 @@ def upsert_billing_step(case_id: int, step_type: str, body: dict = Body(...), us
     reason = str(body.get("change_reason") or "").strip()
     with get_db() as conn:
         case = _load_case(conn, case_id)
-        if step_type == "invoice" and case.get("coverage_status") == "covered":
+        if step_type == "invoice" and case.get("coverage_status") == "covered" and not case.get("contract_id"):
             raise HTTPException(status_code=409, detail="Cette intervention est entièrement couverte par le contrat")
         if step_type == "invoice" and case.get("coverage_status") == "review":
             raise HTTPException(status_code=409, detail="Vérifiez la couverture contractuelle avant de facturer")
@@ -1052,6 +1124,92 @@ def upsert_billing_step(case_id: int, step_type: str, body: dict = Body(...), us
             )
         result = _load_case(conn, case_id)
     log_audit(actor, f"BILLING_{step_type.upper()}", json.dumps({"case_id": case_id}, ensure_ascii=False), "facturation")
+    return result
+
+
+@app.put("/api/billing/cases/{case_id}/delivery-notes")
+def replace_billing_delivery_notes(case_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Store every partial BL and the optional final total delivery marker."""
+    require_roles(user, *BILLING_ROLES)
+    actor = _username(user)
+    documents = _parse_document_list(body, "delivery_notes")
+    with get_db() as conn:
+        case = _load_case(conn, case_id)
+        started = _parse_date(case.get("intervention_started_at"), "date de début")
+        for document in documents:
+            if document["effective_date"] > date.today():
+                raise HTTPException(status_code=422, detail="La date du BL ne peut pas être future")
+            if started and document["effective_date"] < started:
+                raise HTTPException(status_code=422, detail="Le bon de livraison ne peut pas précéder l'intervention")
+        before = {"delivery_notes": case.get("delivery_notes") or []}
+        conn.execute("DELETE FROM billing_delivery_notes WHERE case_id=%s", (case_id,))
+        for document in documents:
+            conn.execute(
+                """INSERT INTO billing_delivery_notes (
+                       case_id, effective_date, reference, amount, is_total_delivery,
+                       note, created_by, updated_by
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    case_id, document["effective_date"], document["reference"], document["amount"],
+                    document["is_total_delivery"], document["note"], actor, actor,
+                ),
+            )
+        conn.execute("UPDATE billing_cases SET updated_by=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (actor, case_id))
+        result = _load_case(conn, case_id)
+        _history(conn, case_id, "REPLACE_DELIVERY_NOTES", "case", case_id, actor, before=before,
+                 after={"delivery_notes": result.get("delivery_notes") or []})
+    log_audit(actor, "REPLACE_BILLING_DELIVERY_NOTES", json.dumps({"case_id": case_id}, ensure_ascii=False), "facturation")
+    return result
+
+
+@app.put("/api/billing/cases/{case_id}/invoices")
+def replace_billing_invoices(case_id: int, body: dict = Body(...), user: dict = Depends(_verify_token)):
+    """Store partial invoices and the one invoice that closes billing."""
+    require_roles(user, *BILLING_ROLES)
+    actor = _username(user)
+    documents = _parse_document_list(body, "invoices", invoice=True)
+    with get_db() as conn:
+        case = _load_case(conn, case_id)
+        if case.get("coverage_status") == "covered" and not case.get("contract_id"):
+            raise HTTPException(status_code=409, detail="Cette intervention est entièrement couverte par le contrat")
+        if case.get("coverage_status") == "review":
+            raise HTTPException(status_code=409, detail="Vérifiez la couverture contractuelle avant de facturer")
+        if case.get("has_parts") and not case.get("delivery_note_complete"):
+            raise HTTPException(status_code=422, detail="La facture ne peut être renseignée qu'après la livraison totale")
+        closed = _parse_date(case.get("intervention_closed_at"), "date de clôture")
+        latest_delivery = max(
+            (_parse_date(note.get("effective_date"), "date du bon de livraison") for note in case.get("delivery_notes") or []),
+            default=None,
+        )
+        for document in documents:
+            if document["effective_date"] > date.today():
+                raise HTTPException(status_code=422, detail="La date de facture ne peut pas être future")
+            if closed and document["effective_date"] < closed:
+                raise HTTPException(status_code=422, detail="La facture ne peut pas précéder la clôture")
+            if latest_delivery and document["effective_date"] < latest_delivery:
+                raise HTTPException(status_code=422, detail="La facture ne peut pas précéder le bon de livraison")
+        total_amount = sum((document["amount"] or Decimal("0")) for document in documents)
+        paid_amount = Decimal(str(case.get("paid_amount") or 0))
+        if paid_amount > total_amount:
+            raise HTTPException(status_code=422, detail="Le montant total des factures est inférieur aux paiements déjà enregistrés")
+        before = {"invoices": case.get("invoices") or []}
+        conn.execute("DELETE FROM billing_invoices WHERE case_id=%s", (case_id,))
+        for document in documents:
+            conn.execute(
+                """INSERT INTO billing_invoices (
+                       case_id, effective_date, due_date, reference, amount, is_total_invoice,
+                       note, created_by, updated_by
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    case_id, document["effective_date"], document["due_date"], document["reference"],
+                    document["amount"], document["is_total_invoice"], document["note"], actor, actor,
+                ),
+            )
+        conn.execute("UPDATE billing_cases SET updated_by=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (actor, case_id))
+        result = _load_case(conn, case_id)
+        _history(conn, case_id, "REPLACE_INVOICES", "case", case_id, actor, before=before,
+                 after={"invoices": result.get("invoices") or []})
+    log_audit(actor, "REPLACE_BILLING_INVOICES", json.dumps({"case_id": case_id}, ensure_ascii=False), "facturation")
     return result
 
 

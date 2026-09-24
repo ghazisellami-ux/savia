@@ -41,6 +41,33 @@ interface BillingPayment {
   created_by?: string;
 }
 
+interface BillingDeliveryNote {
+  id?: number;
+  effective_date: string;
+  reference?: string;
+  amount?: number | null;
+  is_total_delivery: boolean;
+  note?: string;
+}
+
+interface BillingInvoice {
+  id?: number;
+  effective_date: string;
+  due_date: string;
+  reference?: string;
+  amount: number;
+  is_total_invoice: boolean;
+  note?: string;
+}
+
+interface BillingDocumentSummary {
+  id?: number;
+  effective_date: string;
+  reference?: string;
+  is_total_delivery?: boolean;
+  is_total_invoice?: boolean;
+}
+
 interface BillingCase {
   id: number;
   reused_existing_case?: boolean;
@@ -114,6 +141,10 @@ interface BillingCase {
   has_parts: boolean;
   steps: Partial<Record<StepType, BillingStep>>;
   payments: BillingPayment[];
+  delivery_notes?: BillingDeliveryNote[];
+  invoices?: BillingInvoice[];
+  delivery_note_complete?: boolean;
+  invoice_complete?: boolean;
   paid_amount: number;
   invoice_amount: number;
   remaining_amount: number;
@@ -290,6 +321,9 @@ export default function FacturationPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [stepDialog, setStepDialog] = useState<{ item: BillingCase; type: StepType } | null>(null);
   const [stepForm, setStepForm] = useState(emptyStepForm());
+  const [documentDialog, setDocumentDialog] = useState<{ item: BillingCase; type: 'delivery' | 'invoice' } | null>(null);
+  const [deliveryNotesForm, setDeliveryNotesForm] = useState<BillingDeliveryNote[]>([]);
+  const [invoicesForm, setInvoicesForm] = useState<BillingInvoice[]>([]);
   const [paymentCase, setPaymentCase] = useState<BillingCase | null>(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm());
   const [newCaseOpen, setNewCaseOpen] = useState(false);
@@ -615,6 +649,33 @@ export default function FacturationPage() {
     }
   };
 
+  const openDocuments = (item: BillingCase, type: 'delivery' | 'invoice') => {
+    if (type === 'delivery') {
+      setDeliveryNotesForm((item.delivery_notes || []).map(note => ({ ...note, effective_date: note.effective_date?.slice(0, 10) || '' })));
+    } else {
+      setInvoicesForm((item.invoices || []).map(invoice => ({ ...invoice, effective_date: invoice.effective_date?.slice(0, 10) || '', due_date: invoice.due_date?.slice(0, 10) || '' })));
+    }
+    setDocumentDialog({ item, type });
+    setError('');
+  };
+
+  const saveDocuments = async () => {
+    if (!documentDialog) return;
+    setSaving(true);
+    setError('');
+    try {
+      const updated = documentDialog.type === 'delivery'
+        ? await billing.saveDeliveryNotes(documentDialog.item.id, deliveryNotesForm)
+        : await billing.saveInvoices(documentDialog.item.id, invoicesForm);
+      refreshCase(updated as unknown as BillingCase);
+      setDocumentDialog(null);
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Impossible d'enregistrer les documents."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteCase = async (item: BillingCase) => {
     if (isAutomaticBillingCase(item)) return;
     if (!window.confirm(`Supprimer définitivement le dossier #${item.id} ? Cette action supprimera aussi ses étapes, paiements et son historique.`)) return;
@@ -739,7 +800,7 @@ export default function FacturationPage() {
       </div>
 
       <Modal isOpen={!!selected} onClose={() => { setSelected(null); setHistory([]); }} title={selected ? `Dossier de facturation #${selected.id}` : ''} size="xl">
-        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} canDeleteCase={(user?.role === 'Admin' || user?.role === 'Manager') && !isAutomaticBillingCase(selected)} history={history} historyLoading={historyLoading} onStep={openStep} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} onReassess={reassessCoverage} onDeleteCase={deleteCase} />}
+        {selected && <CaseDetail item={selected} interventionOptions={interventionOptions} duplicateCases={cases.filter(candidate => candidate.id !== selected.id && hasOpenTechnicalCycle(selected) && hasOpenTechnicalCycle(candidate) && candidate.client.trim().toLocaleLowerCase('fr') === selected.client.trim().toLocaleLowerCase('fr') && candidate.equipment.trim().toLocaleLowerCase('fr') === selected.equipment.trim().toLocaleLowerCase('fr'))} canResolveDuplicates={user?.role === 'Admin' || user?.role === 'Manager'} canDeleteCase={(user?.role === 'Admin' || user?.role === 'Manager') && !isAutomaticBillingCase(selected)} history={history} historyLoading={historyLoading} onStep={openStep} onDocuments={openDocuments} onPayment={openPayment} onHistory={showHistory} onToggleBlocked={toggleBlocked} onLinkIntervention={linkIntervention} onResolveDuplicate={openDuplicateResolution} onReassess={reassessCoverage} onDeleteCase={deleteCase} />}
       </Modal>
 
       <Modal isOpen={!!stepDialog} onClose={() => setStepDialog(null)} title={stepDialog ? STEP_META[stepDialog.type].label : ''} size="md">
@@ -754,6 +815,15 @@ export default function FacturationPage() {
           <div><label className={LABEL}>{stepForm.not_required ? 'Motif *' : 'Note'}</label><textarea className={`${INPUT} min-h-20 resize-none`} value={stepForm.note} onChange={event => setStepForm(value => ({ ...value, note: event.target.value }))} /></div>
           {stepDialog.item.steps[stepDialog.type] && stepDialog.item.steps[stepDialog.type]?.created_by !== 'system-migration' && <div><label className={LABEL}>Motif de correction *</label><input className={INPUT} value={stepForm.change_reason} onChange={event => setStepForm(value => ({ ...value, change_reason: event.target.value }))} placeholder="Pourquoi cette information change-t-elle ?" /></div>}
           <div className="flex justify-end gap-2"><button onClick={() => setStepDialog(null)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving} onClick={saveStep} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Valider l&apos;étape</button></div>
+        </div>}
+      </Modal>
+
+      <Modal isOpen={!!documentDialog} onClose={() => setDocumentDialog(null)} title={documentDialog?.type === 'delivery' ? 'Bons de livraison' : 'Factures'} size="lg">
+        {documentDialog && <div className="space-y-4">
+          <p className="text-sm text-savia-text-muted">Ajoutez chaque document partiel séparément. Cochez « {documentDialog.type === 'delivery' ? 'Livraison totale' : 'Facturation totale'} » uniquement sur le document qui clôture cette étape.</p>
+          <button type="button" onClick={() => documentDialog.type === 'delivery' ? setDeliveryNotesForm(value => [...value, { effective_date: today(), reference: '', amount: null, is_total_delivery: false, note: '' }]) : setInvoicesForm(value => [...value, { effective_date: today(), due_date: '', reference: '', amount: 0, is_total_invoice: false, note: '' }])} className="inline-flex items-center gap-1.5 rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><Plus className="h-3.5 w-3.5" /> Ajouter {documentDialog.type === 'delivery' ? 'un BL' : 'une facture'}</button>
+          {documentDialog.type === 'delivery' ? <div className="space-y-3">{deliveryNotesForm.map((note, index) => <div key={note.id || index} className="grid gap-2 rounded-xl border border-savia-border p-3 md:grid-cols-[1fr_1.2fr_0.8fr_auto]"><label><span className={LABEL}>Date BL {index + 1}</span><input type="date" max={today()} className={INPUT} value={note.effective_date} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, effective_date: event.target.value } : current))} /></label><label><span className={LABEL}>Référence</span><input className={INPUT} value={note.reference || ''} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, reference: event.target.value } : current))} /></label><label><span className={LABEL}>Montant</span><input type="number" min="0" step="0.001" className={INPUT} value={note.amount ?? ''} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, amount: event.target.value === '' ? null : Number(event.target.value) } : current))} /></label><div className="flex items-end gap-2"><label className="mb-2 flex items-center gap-2 text-xs font-semibold text-savia-text-muted"><input type="checkbox" checked={note.is_total_delivery} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => ({ ...current, is_total_delivery: currentIndex === index ? event.target.checked : event.target.checked ? false : current.is_total_delivery }))) } /> Livraison totale</label><button type="button" onClick={() => setDeliveryNotesForm(value => value.filter((_, currentIndex) => currentIndex !== index))} className="mb-1 rounded-lg p-2 text-savia-text-dim hover:bg-red-500/10 hover:text-red-300"><Trash2 className="h-4 w-4" /></button></div></div>)}{deliveryNotesForm.length === 0 && <p className="rounded-lg border border-dashed border-savia-border p-4 text-center text-sm text-savia-text-muted">Aucun BL. Ajoutez la première livraison.</p>}</div> : <div className="space-y-3">{invoicesForm.map((invoice, index) => <div key={invoice.id || index} className="grid gap-2 rounded-xl border border-savia-border p-3 md:grid-cols-[1fr_1fr_1.2fr_0.8fr_auto]"><label><span className={LABEL}>Date facture {index + 1}</span><input type="date" max={today()} className={INPUT} value={invoice.effective_date} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, effective_date: event.target.value } : current))} /></label><label><span className={LABEL}>Échéance</span><input type="date" min={invoice.effective_date} className={INPUT} value={invoice.due_date} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, due_date: event.target.value } : current))} /></label><label><span className={LABEL}>Référence</span><input className={INPUT} value={invoice.reference || ''} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, reference: event.target.value } : current))} /></label><label><span className={LABEL}>Montant</span><input type="number" min="0" step="0.001" className={INPUT} value={invoice.amount} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, amount: Number(event.target.value) } : current))} /></label><div className="flex items-end gap-2"><label className="mb-2 flex items-center gap-2 text-xs font-semibold text-savia-text-muted"><input type="checkbox" checked={invoice.is_total_invoice} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => ({ ...current, is_total_invoice: currentIndex === index ? event.target.checked : event.target.checked ? false : current.is_total_invoice }))) } /> Facturation totale</label><button type="button" onClick={() => setInvoicesForm(value => value.filter((_, currentIndex) => currentIndex !== index))} className="mb-1 rounded-lg p-2 text-savia-text-dim hover:bg-red-500/10 hover:text-red-300"><Trash2 className="h-4 w-4" /></button></div></div>)}{invoicesForm.length === 0 && <p className="rounded-lg border border-dashed border-savia-border p-4 text-center text-sm text-savia-text-muted">Aucune facture. Ajoutez la première facture.</p>}</div>}
+          <div className="flex justify-end gap-2"><button onClick={() => setDocumentDialog(null)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving} onClick={saveDocuments} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Enregistrer</button></div>
         </div>}
       </Modal>
 
@@ -892,7 +962,17 @@ function InterventionPreview({ item }: { item: BillingCase }) {
   </div>;
 }
 
-function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, canDeleteCase, history, historyLoading, onStep, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate, onReassess, onDeleteCase }: {
+function DocumentCollectionRow({ title, documents, totalKey, complete, onOpen }: {
+  title: string;
+  documents: BillingDocumentSummary[];
+  totalKey: 'is_total_delivery' | 'is_total_invoice';
+  complete: boolean;
+  onOpen: () => void;
+}) {
+  return <div className="rounded-xl border border-savia-border p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-semibold">{title}</div><p className="mt-1 text-xs text-savia-text-muted">{documents.length ? `${documents.length} document${documents.length > 1 ? 's' : ''} enregistré${documents.length > 1 ? 's' : ''}${complete ? ' · total confirmé' : ' · partiel'}` : 'Aucun document enregistré.'}</p></div><button type="button" onClick={onOpen} className="rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><Plus className="mr-1 inline h-3.5 w-3.5" /> Gérer</button></div>{documents.length > 0 && <div className="mt-2 space-y-1 text-xs text-savia-text-muted">{documents.map((document, index) => <div key={String(document.id || index)}>{formatDate(String(document.effective_date || ''))} · {String(document.reference || 'Sans référence')}{document[totalKey] ? ' · Total' : ' · Partiel'}</div>)}</div>}</div>;
+}
+
+function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDuplicates, canDeleteCase, history, historyLoading, onStep, onDocuments, onPayment, onHistory, onToggleBlocked, onLinkIntervention, onResolveDuplicate, onReassess, onDeleteCase }: {
   item: BillingCase;
   interventionOptions: InterventionOption[];
   duplicateCases: BillingCase[];
@@ -901,6 +981,7 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
   history: HistoryItem[];
   historyLoading: boolean;
   onStep: (item: BillingCase, type: StepType) => void;
+  onDocuments: (item: BillingCase, type: 'delivery' | 'invoice') => void;
   onPayment: (item: BillingCase) => void;
   onHistory: (item: BillingCase) => void;
   onToggleBlocked: (item: BillingCase) => void;
@@ -920,7 +1001,7 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
       .filter(Boolean),
   )];
   const assignedTechnicianLabel = assignedTechnicians.join(', ') || item.technicien || 'non assigné';
-  const coverageLocked = item.coverage_status === 'covered' || item.coverage_status === 'review';
+  const coverageLocked = item.coverage_status === 'review' || (item.coverage_status === 'covered' && !item.contract_id);
   const contractEquipments = item.contract_equipments || [];
   const billableParts = Array.isArray(item.coverage_details?.billable_parts) ? item.coverage_details.billable_parts : [];
   return <div className="max-h-[78vh] space-y-5 overflow-y-auto pr-1">
@@ -942,8 +1023,8 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
       {!coverageLocked && <DocumentStepRow item={item} type="quote" onStep={onStep} />}
       {!coverageLocked && <DocumentStepRow item={item} type="purchase_order" onStep={onStep} />}
       <div className={`rounded-xl border p-3 ${item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) ? 'border-orange-500/30 bg-orange-500/5' : 'border-savia-border'}`}><div className="flex items-center gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-full ${item.intervention_closed_at ? 'bg-green-500/15 text-green-300' : 'bg-violet-500/15 text-violet-300'}`}><Wrench className="h-4 w-4" /></div><div className="flex-1"><div className="font-semibold">Intervention SAV</div><div className="text-xs text-savia-text-muted">Début : {formatDateTime(item.intervention_started_at)} · Clôture : {formatDateTime(item.intervention_closed_at)}</div></div>{item.intervention_id && <button type="button" onClick={() => setInterventionPreviewOpen(value => !value)} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500/10 px-3 py-2 text-xs font-bold text-teal-300 hover:bg-teal-500/20"><Eye className="h-3.5 w-3.5" /> {interventionPreviewOpen ? 'Masquer' : 'Aperçu'}</button>}</div>{item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) && <p className="mt-2 text-xs font-semibold text-orange-300">Intervention clôturée : vérifiez son compte rendu avant de renseigner l&apos;envoi de la facture.</p>}{interventionPreviewOpen && <InterventionPreview item={item} />}</div>
-      {!coverageLocked && item.has_parts && <DocumentStepRow item={item} type="delivery_note" onStep={onStep} />}
-      {!coverageLocked && <DocumentStepRow item={item} type="invoice" onStep={onStep} />}
+      {!coverageLocked && item.has_parts && <DocumentCollectionRow title="Bons de livraison" documents={item.delivery_notes || []} totalKey="is_total_delivery" complete={Boolean(item.delivery_note_complete)} onOpen={() => onDocuments(item, 'delivery')} />}
+      {!coverageLocked && <DocumentCollectionRow title="Factures" documents={item.invoices || []} totalKey="is_total_invoice" complete={Boolean(item.invoice_complete)} onOpen={() => onDocuments(item, 'invoice')} />}
       {coverageLocked && <div className="rounded-lg border border-dashed border-savia-border p-3 text-center text-sm text-savia-text-muted">{item.coverage_status === 'covered' ? 'Aucune facture d’intervention n’est requise.' : 'La facturation est suspendue jusqu’à validation de la couverture.'}</div>}
     </div></section>
 

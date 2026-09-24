@@ -1021,6 +1021,73 @@ def _migration_035_contract_global_billing(conn) -> None:
     )
 
 
+def _migration_036_multiple_billing_documents(conn) -> None:
+    """Allow partial delivery notes and invoices in billing tracking."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_delivery_notes (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               effective_date DATE NOT NULL,
+               reference TEXT NOT NULL DEFAULT '',
+               amount NUMERIC(14, 3) NULL CHECK (amount IS NULL OR amount >= 0),
+               is_total_delivery BOOLEAN NOT NULL DEFAULT FALSE,
+               note TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL DEFAULT 'system',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL DEFAULT 'system',
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS billing_invoices (
+               id BIGSERIAL PRIMARY KEY,
+               case_id BIGINT NOT NULL REFERENCES billing_cases(id) ON DELETE CASCADE,
+               effective_date DATE NOT NULL,
+               due_date DATE NOT NULL,
+               reference TEXT NOT NULL DEFAULT '',
+               amount NUMERIC(14, 3) NOT NULL CHECK (amount >= 0),
+               is_total_invoice BOOLEAN NOT NULL DEFAULT FALSE,
+               note TEXT NOT NULL DEFAULT '',
+               created_by TEXT NOT NULL DEFAULT 'system',
+               created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_by TEXT NOT NULL DEFAULT 'system',
+               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_delivery_notes_case ON billing_delivery_notes(case_id, effective_date, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_invoices_case ON billing_invoices(case_id, effective_date, id)")
+    # Preserve each legacy single BL/facture as a total document.
+    conn.execute(
+        """INSERT INTO billing_delivery_notes (
+               case_id, effective_date, reference, amount, is_total_delivery,
+               note, created_by, updated_by
+           )
+           SELECT bs.case_id, bs.effective_date, bs.reference, bs.amount, TRUE,
+                  bs.note, bs.created_by, bs.updated_by
+           FROM billing_steps bs
+           WHERE bs.step_type='delivery_note'
+             AND bs.effective_date IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM billing_delivery_notes bdn WHERE bdn.case_id=bs.case_id
+             )"""
+    )
+    conn.execute(
+        """INSERT INTO billing_invoices (
+               case_id, effective_date, due_date, reference, amount, is_total_invoice,
+               note, created_by, updated_by
+           )
+           SELECT bs.case_id, bs.effective_date, COALESCE(bs.due_date, bs.effective_date),
+                  bs.reference, COALESCE(bs.amount, 0), TRUE, bs.note,
+                  bs.created_by, bs.updated_by
+           FROM billing_steps bs
+           WHERE bs.step_type='invoice'
+             AND bs.effective_date IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM billing_invoices bi WHERE bi.case_id=bs.case_id
+             )"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1390,6 +1457,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("033", "backfill unambiguous technician IDs", _migration_033_backfill_unambiguous_technician_ids),
     ("034", "aggregate billing by contract cycle", _migration_034_contract_cycle_billing),
     ("035", "aggregate billing by full contract", _migration_035_contract_global_billing),
+    ("036", "multiple billing delivery notes and invoices", _migration_036_multiple_billing_documents),
 )
 
 
