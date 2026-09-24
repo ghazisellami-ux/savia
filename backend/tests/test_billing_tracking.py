@@ -31,7 +31,8 @@ def test_billing_status_follows_the_furthest_reliable_milestone():
     assert status(steps={"purchase_order": {"not_required": True}}) == "ready_for_intervention"
     assert status(intervention_started_at="2026-08-01") == "intervention_in_progress"
     assert status(intervention_closed_at="2026-08-03", has_parts=True) == "delivery_note_pending"
-    assert status(intervention_closed_at="2026-08-03", has_parts=False) == "invoice_pending"
+    assert status(intervention_closed_at="2026-08-03", has_parts=False) == "delivery_note_pending"
+    assert status(intervention_closed_at="2026-08-03", delivery_complete=True) == "invoice_pending"
 
 
 def test_invoice_and_payments_take_priority_over_missing_legacy_steps():
@@ -50,8 +51,8 @@ def test_blocked_and_cancelled_cases_override_progress():
 def test_contract_coverage_stops_the_invoice_workflow_until_resolved():
     assert status(intervention_closed_at="2026-08-03", coverage_status="covered") == "covered_by_contract"
     assert status(intervention_closed_at="2026-08-03", coverage_status="review") == "coverage_review"
-    assert status(intervention_closed_at="2026-08-03", coverage_status="partial") == "invoice_pending"
-    assert status(intervention_closed_at="2026-08-03", coverage_status="covered", contract_billing=True) == "invoice_pending"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="partial") == "delivery_note_pending"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="covered", contract_billing=True) == "delivery_note_pending"
 
 
 def test_lead_times_cover_the_full_quote_to_payment_cycle():

@@ -899,10 +899,7 @@ function Progress({ item }: { item: BillingCase }) {
     { key: 'quote', done: stepCompleted(item.steps.quote), title: 'Devis' },
     { key: 'purchase_order', done: stepCompleted(item.steps.purchase_order), title: 'BC' },
     { key: 'intervention', done: Boolean(item.intervention_closed_at), active: Boolean(item.intervention_started_at), title: 'Interv.' },
-    // Une intervention non créée ou non clôturée ne permet pas encore de
-    // déterminer si un BL sera nécessaire. Le BL n'est donc validé
-    // automatiquement sans pièces qu'après la clôture.
-    { key: 'delivery_note', done: Boolean(item.intervention_closed_at) && (!item.has_parts || stepCompleted(item.steps.delivery_note)), title: 'BL' },
+    { key: 'delivery_note', done: stepCompleted(item.steps.delivery_note), title: 'BL' },
     { key: 'invoice', done: stepCompleted(item.steps.invoice), title: 'Facture' },
     { key: 'payment', done: item.status === 'paid', active: item.paid_amount > 0, title: 'Paiement' },
   ];
@@ -1023,7 +1020,7 @@ function CaseDetail({ item, interventionOptions, duplicateCases, canResolveDupli
       {!coverageLocked && <DocumentStepRow item={item} type="quote" onStep={onStep} />}
       {!coverageLocked && <DocumentStepRow item={item} type="purchase_order" onStep={onStep} />}
       <div className={`rounded-xl border p-3 ${item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) ? 'border-orange-500/30 bg-orange-500/5' : 'border-savia-border'}`}><div className="flex items-center gap-3"><div className={`flex h-9 w-9 items-center justify-center rounded-full ${item.intervention_closed_at ? 'bg-green-500/15 text-green-300' : 'bg-violet-500/15 text-violet-300'}`}><Wrench className="h-4 w-4" /></div><div className="flex-1"><div className="font-semibold">Intervention SAV</div><div className="text-xs text-savia-text-muted">Début : {formatDateTime(item.intervention_started_at)} · Clôture : {formatDateTime(item.intervention_closed_at)}</div></div>{item.intervention_id && <button type="button" onClick={() => setInterventionPreviewOpen(value => !value)} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-500/10 px-3 py-2 text-xs font-bold text-teal-300 hover:bg-teal-500/20"><Eye className="h-3.5 w-3.5" /> {interventionPreviewOpen ? 'Masquer' : 'Aperçu'}</button>}</div>{item.intervention_closed_at && ['delivery_note_pending', 'invoice_pending'].includes(item.status) && <p className="mt-2 text-xs font-semibold text-orange-300">Intervention clôturée : vérifiez son compte rendu avant de renseigner l&apos;envoi de la facture.</p>}{interventionPreviewOpen && <InterventionPreview item={item} />}</div>
-      {!coverageLocked && item.has_parts && <DocumentCollectionRow title="Bons de livraison" documents={item.delivery_notes || []} totalKey="is_total_delivery" complete={Boolean(item.delivery_note_complete)} onOpen={() => onDocuments(item, 'delivery')} />}
+      {!coverageLocked && <DocumentCollectionRow title="Bons de livraison" documents={item.delivery_notes || []} totalKey="is_total_delivery" complete={Boolean(item.delivery_note_complete)} onOpen={() => onDocuments(item, 'delivery')} />}
       {!coverageLocked && <DocumentCollectionRow title="Factures" documents={item.invoices || []} totalKey="is_total_invoice" complete={Boolean(item.invoice_complete)} onOpen={() => onDocuments(item, 'invoice')} />}
       {coverageLocked && <div className="rounded-lg border border-dashed border-savia-border p-3 text-center text-sm text-savia-text-muted">{item.coverage_status === 'covered' ? 'Aucune facture d’intervention n’est requise.' : 'La facturation est suspendue jusqu’à validation de la couverture.'}</div>}
     </div></section>
