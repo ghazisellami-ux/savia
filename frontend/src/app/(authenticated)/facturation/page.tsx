@@ -60,6 +60,14 @@ interface BillingInvoice {
   note?: string;
 }
 
+interface BillingDocumentSummary {
+  id?: number;
+  effective_date: string;
+  reference?: string;
+  is_total_delivery?: boolean;
+  is_total_invoice?: boolean;
+}
+
 interface BillingCase {
   id: number;
   reused_existing_case?: boolean;
@@ -657,8 +665,8 @@ export default function FacturationPage() {
     setError('');
     try {
       const updated = documentDialog.type === 'delivery'
-        ? await billing.saveDeliveryNotes(documentDialog.item.id, deliveryNotesForm as unknown as Array<Record<string, unknown>>)
-        : await billing.saveInvoices(documentDialog.item.id, invoicesForm as unknown as Array<Record<string, unknown>>);
+        ? await billing.saveDeliveryNotes(documentDialog.item.id, deliveryNotesForm)
+        : await billing.saveInvoices(documentDialog.item.id, invoicesForm);
       refreshCase(updated as unknown as BillingCase);
       setDocumentDialog(null);
     } catch (err: unknown) {
@@ -956,7 +964,7 @@ function InterventionPreview({ item }: { item: BillingCase }) {
 
 function DocumentCollectionRow({ title, documents, totalKey, complete, onOpen }: {
   title: string;
-  documents: Array<Record<string, unknown>>;
+  documents: BillingDocumentSummary[];
   totalKey: 'is_total_delivery' | 'is_total_invoice';
   complete: boolean;
   onOpen: () => void;
