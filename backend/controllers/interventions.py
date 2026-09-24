@@ -277,8 +277,12 @@ def get_interventions(
                 if intervention_id:
                     # Get all technicians assigned via interventions_techniciens
                     multi_tech_rows = conn.execute(
-                        """SELECT DISTINCT technicien_nom, duree_minutes_tech, statut FROM interventions_techniciens
-                           WHERE intervention_id = %s ORDER BY technicien_nom""",
+                        """SELECT DISTINCT it.technicien_id, it.technicien_nom,
+                                          it.duree_minutes_tech, it.statut
+                           FROM interventions_techniciens it
+                           JOIN techniciens t ON t.id = it.technicien_id
+                           WHERE it.intervention_id = %s
+                           ORDER BY it.technicien_id""",
                         (intervention_id,)
                     ).fetchall()
                     
@@ -287,6 +291,7 @@ def get_interventions(
                         tech_names = [row['technicien_nom'] for row in multi_tech_rows]
                         record['techniciens_detail'] = [
                             {
+                                'technicien_id': row.get('technicien_id'),
                                 'nom': row.get('technicien_nom', ''),
                                 'duree_minutes': row.get('duree_minutes_tech', 0) or 0,
                                 'statut': row.get('statut', ''),
@@ -303,6 +308,66 @@ def get_interventions(
         # Continue with un-enriched records if this step fails
     
     return records
+
+
+@app.post("/api/interventions/{intervention_id}/cleanup-orphan-technicians")
+def cleanup_orphan_technicians(intervention_id: int, user: dict = Depends(_verify_token)):
+    """Purge deleted technician assignments without deleting the intervention."""
+    require_roles(user, "Admin", "Manager")
+    actor = str(user.get("sub") or "system")
+    with get_db() as conn:
+        intervention = conn.execute(
+            "SELECT id, planning_id FROM interventions WHERE id = %s FOR UPDATE", (intervention_id,)
+        ).fetchone()
+        if not intervention:
+            raise HTTPException(status_code=404, detail="Intervention introuvable")
+        orphan_rows = conn.execute(
+            """SELECT it.id, it.technicien_id FROM interventions_techniciens it
+               WHERE it.intervention_id = %s AND it.technicien_id IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM techniciens t WHERE t.id = it.technicien_id)""",
+            (intervention_id,),
+        ).fetchall()
+        orphan_ids = [int(row["id"]) for row in orphan_rows]
+        if not orphan_ids:
+            return {"ok": True, "removed": 0, "remaining_technicians": 0}
+        stock_used = conn.execute(
+            "SELECT 1 FROM interventions_techniciens WHERE id = ANY(%s) AND stock_deducted = TRUE LIMIT 1",
+            (orphan_ids,),
+        ).fetchone()
+        if stock_used:
+            raise HTTPException(status_code=409, detail="La purge est refusée : une affectation orpheline a déduit du stock")
+        remaining = conn.execute(
+            """SELECT it.technicien_id, it.technicien_nom FROM interventions_techniciens it
+               JOIN techniciens t ON t.id = it.technicien_id
+               WHERE it.intervention_id = %s AND it.id <> ALL(%s)
+               ORDER BY it.technicien_id""",
+            (intervention_id, orphan_ids),
+        ).fetchall()
+        if not remaining:
+            raise HTTPException(status_code=409, detail="La purge est refusée : aucun technicien valide ne resterait sur l'intervention")
+        conn.execute(
+            "DELETE FROM intervention_work_sessions WHERE intervention_technicien_id = ANY(%s)", (orphan_ids,)
+        )
+        conn.execute("DELETE FROM interventions_techniciens WHERE id = ANY(%s)", (orphan_ids,))
+        technician_ids = [int(row["technicien_id"]) for row in remaining]
+        technician_names = [str(row["technicien_nom"]) for row in remaining]
+        primary_id, technician_label = technician_ids[0], ", ".join(technician_names)
+        conn.execute(
+            "UPDATE interventions SET technicien_id = %s, technicien = %s WHERE id = %s",
+            (primary_id, technician_label, intervention_id),
+        )
+        if intervention.get("planning_id"):
+            import json
+            conn.execute(
+                """UPDATE planning_maintenance SET technicien_id = %s, technicien_ids = %s,
+                   technicien_assigne = %s WHERE id = %s""",
+                (primary_id, json.dumps(technician_ids), technician_label, intervention["planning_id"]),
+            )
+        removed_technician_ids = [int(row["technicien_id"]) for row in orphan_rows]
+        conn.execute("DELETE FROM notifications_pieces WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
+        conn.execute("DELETE FROM pieces_demandees WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
+        log_audit(actor, "PURGE_ORPHAN_TECHNICIAN_ASSIGNMENTS", f"intervention_id={intervention_id}; removed={len(orphan_ids)}")
+    return {"ok": True, "removed": len(orphan_ids), "remaining_technicians": len(technician_ids)}
 
 
 @app.get("/api/interventions/filter-options")
