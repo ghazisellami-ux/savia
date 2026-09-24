@@ -186,16 +186,16 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         # If it's a comma-separated string, split it
         techniciens_input = [t.strip() for t in techniciens_input.split(",")] if techniciens_input else []
     
-    # Convert all to full names
-    techniciens_fullnames = []
-    for tech_username in techniciens_input:
-        if tech_username:
-            tech_fullname = _get_technician_fullname(tech_username)
-            techniciens_fullnames.append(tech_fullname)
-    
-    # First tech (for parent intervention)
-    first_tech = techniciens_fullnames[0] if techniciens_fullnames else ""
-    statut = "Assignée" if first_tech else "En attente"
+    # Keep the submitted values only long enough to resolve the actual
+    # technician records below.  Names are display data; assignments must be
+    # persisted through ``technicien_id``.
+    technician_tokens = []
+    for technician in techniciens_input:
+        if isinstance(technician, dict):
+            technician = technician.get("id")
+        technician = str(technician or "").strip()
+        if technician and technician not in technician_tokens:
+            technician_tokens.append(technician)
     
     # Use PostgreSQL placeholder
     ph = "%s"
@@ -204,6 +204,38 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
     parent_intervention_id = None
 
     with get_db() as conn:
+        assigned_technicians = []
+        for technician_token in technician_tokens:
+            matches = conn.execute(
+                """SELECT id, prenom, nom, username
+                   FROM techniciens
+                   WHERE id::TEXT = %s
+                      OR LOWER(BTRIM(username)) = LOWER(BTRIM(%s))
+                      OR LOWER(BTRIM(CONCAT(prenom, ' ', nom))) = LOWER(BTRIM(%s))
+                      OR LOWER(BTRIM(CONCAT(nom, ' ', prenom))) = LOWER(BTRIM(%s))
+                   ORDER BY id""",
+                (technician_token, technician_token, technician_token, technician_token),
+            ).fetchall()
+            if not matches:
+                raise HTTPException(status_code=422, detail="Technicien introuvable")
+            if len(matches) > 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Plusieurs techniciens correspondent à cette valeur. Sélectionnez le technicien par son identifiant.",
+                )
+            technician = matches[0]
+            assigned_technicians.append({
+                "id": int(technician["id"]),
+                "name": " ".join(
+                    part for part in (str(technician.get("prenom") or "").strip(), str(technician.get("nom") or "").strip()) if part
+                ) or str(technician.get("username") or "").strip(),
+            })
+
+        techniciens_fullnames = [technician["name"] for technician in assigned_technicians]
+        technician_ids = [technician["id"] for technician in assigned_technicians]
+        primary_technician_id = technician_ids[0] if technician_ids else None
+        statut = "Assignée" if primary_technician_id is not None else "En attente"
+
         billing_case = None
         if billing_case_id is not None:
             billing_case = conn.execute(
@@ -351,8 +383,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             planning = conn.execute(
                 """INSERT INTO planning_maintenance
                    (machine, equipement_id, client, type_maintenance, description, date_prevue,
-                    technicien_assigne, recurrence, statut, notes)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    technicien_id, technicien_ids, technicien_assigne, recurrence, statut, notes)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
                 (
                     equipement, equipement_id,
@@ -360,6 +392,8 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                     type_intervention,
                     description,
                     date_planifiee,
+                    primary_technician_id,
+                    str(technician_ids).replace("'", '"'),
                     ", ".join(techniciens_fullnames),
                     "Aucune",
                     "Planifiée",
@@ -379,14 +413,15 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         
         conn.execute(f"""
             INSERT INTO interventions
-              (date, machine, equipement_id, technicien, type_intervention, description,
+              (date, machine, equipement_id, technicien_id, technicien, type_intervention, description,
                probleme, code_erreur, statut, priorite, notes,
                is_temporary, parent_intervention_id, client, planning_id)
-            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
         """, (
             now,
             equipement,
             equipement_id,
+            primary_technician_id,
             all_techs_str,  # Store all technician names
             type_intervention,
             description[:500],
@@ -466,13 +501,16 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
         # --- Populate interventions_techniciens table: one row per technician ---
         # This table tracks per-technician data (hours, solution, statut)
         if intervention_id:
-            for tech_fullname in techniciens_fullnames:
+            for technician in assigned_technicians:
                 conn.execute(f"""
                     INSERT INTO interventions_techniciens 
-                    (intervention_id, technicien_nom, statut)
-                    VALUES ({ph}, {ph}, 'Assigné')
-                """, (intervention_id, tech_fullname))
-                logger.info(f"[MULTI-TECH] Technician '{tech_fullname}' assigned to intervention #{intervention_id}")
+                    (intervention_id, technicien_id, technicien_nom, statut)
+                    VALUES ({ph}, {ph}, {ph}, 'Assigné')
+                """, (intervention_id, technician["id"], technician["name"]))
+                logger.info(
+                    "[MULTI-TECH] Technician id=%s ('%s') assigned to intervention #%s",
+                    technician["id"], technician["name"], intervention_id,
+                )
             
             logger.info(f"[MULTI-TECH] Intervention #{intervention_id} created as SHARED with {len(techniciens_fullnames)} technicians: {all_techs_str}")
         

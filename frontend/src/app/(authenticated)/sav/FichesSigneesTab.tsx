@@ -1,6 +1,6 @@
 'use client';
 import { Camera, CheckCircle, Clock, Eye, Download, Trash2, Upload, X } from 'lucide-react';
-import { useEffect, useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { SectionCard } from '@/components/ui/cards';
 import { interventions } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -13,45 +13,12 @@ interface Props {
 export function FichesSigneesTab({ fiches, setFiches }: Props) {
   const { user } = useAuth();
   const [uploadingId, setUploadingId] = useState<number | null>(null);
-  const [ficheUrls, setFicheUrls] = useState<Record<number, string>>({});
+  const [ficheErrors, setFicheErrors] = useState<Record<number, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   
   // Seulement celles avec photo jointe
   const fichesAvecPhoto = fiches.filter((f: any) => f.has_fiche);
-  const ficheIds = fichesAvecPhoto.map((f: any) => Number(f.id)).join(',');
-
-  useEffect(() => {
-    let active = true;
-    const objectUrls: string[] = [];
-
-    const loadFiches = async () => {
-      const entries = await Promise.all(fichesAvecPhoto.map(async (fiche: any) => {
-        try {
-          const blob = await interventions.downloadFiche(Number(fiche.id));
-          const url = URL.createObjectURL(blob);
-          objectUrls.push(url);
-          return [Number(fiche.id), url] as const;
-        } catch {
-          return null;
-        }
-      }));
-      if (active) {
-        setFicheUrls(Object.fromEntries(entries.filter(Boolean) as [number, string][]));
-      } else {
-        objectUrls.forEach(URL.revokeObjectURL);
-      }
-    };
-
-    loadFiches();
-    return () => {
-      active = false;
-      objectUrls.forEach(URL.revokeObjectURL);
-    };
-  // The IDs, rather than the array identity, determine the files to reload.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ficheIds]);
-  
   // Vérifier si l'utilisateur peut supprimer/modifier
   const canManageFiches = user?.role === 'Admin' || user?.role === 'Manager';
 
@@ -63,6 +30,28 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
       setFiches(updated);
     } catch (err: any) {
       alert(err?.message || 'Erreur lors de la validation');
+    }
+  };
+
+  const handleFicheAction = async (fiche: any, action: 'preview' | 'download') => {
+    const id = Number(fiche.id);
+    try {
+      setFicheErrors(errors => ({ ...errors, [id]: '' }));
+      const blob = await interventions.downloadFiche(id);
+      const url = URL.createObjectURL(blob);
+      if (action === 'preview') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fiche.fiche_photo_nom || `fiche_${id}.jpg`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      const message = err?.message || "Impossible de récupérer cette fiche signée.";
+      setFicheErrors(errors => ({ ...errors, [id]: message }));
     }
   };
 
@@ -147,7 +136,6 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {fichesAvecPhoto.map((f: any) => {
             const isValidee = f.fiche_validation === 'Validée';
-            const ficheUrl = ficheUrls[Number(f.id)] || '';
             return (
               <div
                 key={f.id}
@@ -159,12 +147,10 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
               >
                 {/* ── Photo ── */}
                 <div className="relative h-52 bg-savia-surface group">
-                  {ficheUrl && <img
-                    src={ficheUrl}
-                    alt={`Fiche #${f.id}`}
-                    className="w-full h-full object-cover"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />}
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-savia-text-muted">
+                    <Camera className="w-9 h-9 opacity-40" />
+                    <span className="text-xs">Fiche signée disponible</span>
+                  </div>
                   {/* Badge statut */}
                   <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 ${
                     isValidee ? 'bg-green-500 text-white' : 'bg-amber-500 text-white'
@@ -174,14 +160,14 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                   </div>
                   {/* Hover actions */}
                   <div className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
-                    {ficheUrl && <a href={ficheUrl} target="_blank" rel="noopener noreferrer"
+                    <button type="button" onClick={() => handleFicheAction(f, 'preview')}
                       className="w-11 h-11 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition-colors" title="Voir en plein écran">
                       <Eye className="w-5 h-5 text-white" />
-                    </a>}
-                    {ficheUrl && <a href={ficheUrl} download={f.fiche_photo_nom || `fiche_${f.id}.jpg`}
+                    </button>
+                    <button type="button" onClick={() => handleFicheAction(f, 'download')}
                       className="w-11 h-11 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition-colors" title="Télécharger">
                       <Download className="w-5 h-5 text-white" />
-                    </a>}
+                    </button>
                     {canManageFiches && !isValidee && (
                       <button
                         onClick={() => handleDeleteFiche(f.id)}
@@ -202,9 +188,21 @@ export function FichesSigneesTab({ fiches, setFiches }: Props) {
                   </div>
                   <p className="text-xs text-savia-text-muted">{f.technicien}</p>
                   <p className="text-xs text-savia-text-muted/60">{String(f.date || '').substring(0, 10)}</p>
+                  {ficheErrors[Number(f.id)] && <p className="text-xs text-red-400">{ficheErrors[Number(f.id)]}</p>}
                   {f.probleme && (
                     <p className="text-xs text-savia-text-muted line-clamp-2 border-t border-savia-border/20 pt-2">{f.probleme}</p>
                   )}
+
+                  <div className="flex gap-2 border-t border-savia-border/20 pt-3">
+                    <button type="button" onClick={() => handleFicheAction(f, 'preview')}
+                      className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-savia-border text-xs font-semibold text-savia-text hover:bg-savia-surface-hover transition-colors">
+                      <Eye className="w-3.5 h-3.5" /> Aperçu
+                    </button>
+                    <button type="button" onClick={() => handleFicheAction(f, 'download')}
+                      className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-savia-border text-xs font-semibold text-savia-text hover:bg-savia-surface-hover transition-colors">
+                      <Download className="w-3.5 h-3.5" /> Télécharger
+                    </button>
+                  </div>
 
                   {/* ── Validation client ── */}
                   <div className="border-t border-savia-border/20 pt-3 mt-auto">
