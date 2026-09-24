@@ -1174,7 +1174,7 @@ def replace_billing_invoices(case_id: int, body: dict = Body(...), user: dict = 
             raise HTTPException(status_code=409, detail="Cette intervention est entièrement couverte par le contrat")
         if case.get("coverage_status") == "review":
             raise HTTPException(status_code=409, detail="Vérifiez la couverture contractuelle avant de facturer")
-        if case.get("has_parts") and not case.get("delivery_note_complete"):
+        if not case.get("delivery_note_complete"):
             raise HTTPException(status_code=422, detail="La facture ne peut être renseignée qu'après la livraison totale")
         closed = _parse_date(case.get("intervention_closed_at"), "date de clôture")
         latest_delivery = max(
