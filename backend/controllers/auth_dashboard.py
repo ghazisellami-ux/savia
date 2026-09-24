@@ -289,6 +289,42 @@ def _get_client_filter(user: dict) -> Optional[str]:
     return get_client_scope(user)
 
 
+_TERMINAL_INTERVENTION_STATUSES = frozenset({
+    "cloturee", "clôturée", "terminee", "terminée", "realisee", "réalisée",
+    "annulee", "annulée", "closed", "resolved", "completee", "complétée",
+})
+
+
+def _is_terminal_intervention_status(value: object) -> bool:
+    """Return whether a status closes an intervention for availability purposes."""
+    return str(value or "").strip().casefold() in _TERMINAL_INTERVENTION_STATUSES
+
+
+def _filter_interventions_for_equipments(df_int, df_eq):
+    """Scope interventions to equipment IDs, retaining a name fallback for legacy rows."""
+    if df_int.empty:
+        return df_int
+    if df_eq.empty:
+        return df_int.iloc[0:0].copy()
+
+    if "equipement_id" in df_int.columns and "id" in df_eq.columns:
+        equipment_ids = pd.to_numeric(df_eq["id"], errors="coerce").dropna().astype(int)
+        intervention_ids = pd.to_numeric(df_int["equipement_id"], errors="coerce")
+        matches_equipment_id = intervention_ids.isin(equipment_ids)
+
+        # Older records without an equipment_id can still be included, but only
+        # as a compatibility fallback. New records are always matched by ID.
+        matches_legacy_name = pd.Series(False, index=df_int.index)
+        if "machine" in df_int.columns and "Nom" in df_eq.columns:
+            names = df_eq["Nom"].dropna().astype(str).tolist()
+            matches_legacy_name = intervention_ids.isna() & df_int["machine"].isin(names)
+        return df_int[matches_equipment_id | matches_legacy_name].copy()
+
+    if "machine" in df_int.columns and "Nom" in df_eq.columns:
+        return df_int[df_int["machine"].isin(df_eq["Nom"].dropna().tolist())].copy()
+    return df_int.iloc[0:0].copy()
+
+
 # ==========================================
 # DASHBOARD — Aggregated KPIs
 # ==========================================
@@ -403,16 +439,15 @@ def get_dashboard_kpis(
             df_eq_for_status = df_eq_for_status[df_eq_for_status["Type"].notna() & (df_eq_for_status["Type"].astype(str).str.lower().str.strip() == equipment_type.lower().strip())]
             logger.info(f"After equipment_type filter: {len(df_eq)} equipements")
 
-        # Filter interventions by client (via matching machines)
-        if effective_client and not df_eq.empty and not df_int.empty and "machine" in df_int.columns:
-            machines_client = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
-            df_int = df_int[df_int["machine"].isin(machines_client)]
+        # Scope interventions by the equipment ID. Machine names are not unique
+        # enough to identify an asset reliably.
+        if effective_client:
+            df_int = _filter_interventions_for_equipments(df_int, df_eq)
             logger.info(f"After client intervention filter: {len(df_int)} interventions")
 
-        # Filter interventions by region/ville/type (via matching machines)
-        if (region or ville or equipment_type) and not df_int.empty and "machine" in df_int.columns:
-            machines_filtered = df_eq["Nom"].tolist() if (not df_eq.empty and "Nom" in df_eq.columns) else []
-            df_int = df_int[df_int["machine"].isin(machines_filtered)]
+        # Apply the same ID-based scope for the other equipment dimensions.
+        if region or ville or equipment_type:
+            df_int = _filter_interventions_for_equipments(df_int, df_eq)
             logger.info(f"After region/ville/type intervention filter: {len(df_int)} interventions")
 
         # Operational indicators (open work, SLA and preventive planning) are
@@ -457,7 +492,7 @@ def get_dashboard_kpis(
                 availability = 100.0
                 if nb_month_interventions > 0:
                     if "statut" in df_int.columns:
-                        unfinished = len(month_int[month_int["statut"].astype(str).str.lower() != "terminée"])
+                        unfinished = int((~month_int["statut"].map(_is_terminal_intervention_status)).sum())
                         availability = max(0.0, 100.0 - (unfinished * 2.0))
                     else:
                         availability = max(0.0, 100.0 - (nb_month_interventions * 2.0))
@@ -760,8 +795,9 @@ def get_health_scores(
         # Load only necessary intervention columns for scoring
         with get_db() as conn:
             int_query = """
-            SELECT i.machine, i.type_intervention, i.date, i.date_cloture, i.statut
+            SELECT i.machine, i.equipement_id, i.type_intervention, i.date, i.date_cloture, i.statut
             FROM interventions i
+            WHERE COALESCE(i.is_temporary, 0) = 0
             ORDER BY i.date DESC
             """
             df_int = read_sql(int_query, conn)
@@ -859,15 +895,11 @@ def get_health_scores(
                 "prevent", "preven", "controle", "inspection", "maintenance preventive",
             ])
 
-        seen_keys = set()
         for _, eq in df_eq.iterrows():
             nom = eq.get("Nom", "")
             client_val = str(eq.get("Client", "") or "")
             statut = _norm(eq.get("Statut", ""))
-            dedup_key = (_norm(nom), _norm(client_val))
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
+            equipment_id = pd.to_numeric(pd.Series([eq.get("id")]), errors="coerce").iloc[0]
 
             pannes = 0
             open_correctives = 0
@@ -876,8 +908,24 @@ def get_health_scores(
             corrective_penalty = 0
             preventive_bonus = 0
 
-            if not df_int.empty and "machine" in df_int.columns:
-                df_machine = df_int[df_int["machine"].map(_norm) == _norm(nom)]
+            if not df_int.empty:
+                if pd.notna(equipment_id) and "equipement_id" in df_int.columns:
+                    intervention_equipment_ids = pd.to_numeric(df_int["equipement_id"], errors="coerce")
+                    # Name matching is retained only for unmigrated historical
+                    # rows that have no equipment_id yet.
+                    legacy_name_match = pd.Series(False, index=df_int.index)
+                    if "machine" in df_int.columns:
+                        legacy_name_match = (
+                            intervention_equipment_ids.isna()
+                            & (df_int["machine"].map(_norm) == _norm(nom))
+                        )
+                    df_machine = df_int[
+                        (intervention_equipment_ids == int(equipment_id)) | legacy_name_match
+                    ]
+                elif "machine" in df_int.columns:
+                    df_machine = df_int[df_int["machine"].map(_norm) == _norm(nom)]
+                else:
+                    df_machine = df_int.iloc[0:0]
 
                 for _, intervention in df_machine.iterrows():
                     intervention_type = intervention.get("type_intervention", "")
@@ -936,7 +984,7 @@ def get_health_scores(
                 score = min(score, 25)
             elif statut in {"critique", "en panne"}:
                 score = min(score, 45)
-            elif statut == "en atelier":
+            elif statut in {"en atelier", "en maintenance", "maintenance"}:
                 score = min(score, 60)
 
             tendance = "stable"
@@ -946,6 +994,7 @@ def get_health_scores(
                 tendance = "hausse"
 
             scores.append({
+                "equipment_id": int(equipment_id) if pd.notna(equipment_id) else None,
                 "machine": nom,
                 "score": score,
                 "tendance": tendance,

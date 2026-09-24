@@ -62,6 +62,8 @@ from controllers.auth_dashboard import (
     logger,
     pd,
     read_sql,
+    _filter_interventions_for_equipments,
+    _is_terminal_intervention_status,
 )
 
 @app.get("/api/clients")
@@ -312,27 +314,18 @@ def get_dashboard_villes(region: Optional[str] = None, user: dict = Depends(_ver
         return []
 
 
-_TERMINAL_INTERVENTION_STATUSES = frozenset({
-    "cloturee", "clôturée", "terminee", "terminée", "realisee", "réalisée",
-    "annulee", "annulée", "closed", "resolved", "completee", "complétée",
-})
-
-
-def _is_terminal_intervention_status(value: object) -> bool:
-    return str(value or "").strip().casefold() in _TERMINAL_INTERVENTION_STATUSES
-
-
 @app.get("/api/dashboard/availability-trend")
 def get_availability_trend(
     client: Optional[str] = None,
     region: Optional[str] = None,
     ville: Optional[str] = None,
     equipment_type: Optional[str] = None,
+    date_start: Optional[str] = None,
+    date_end: Optional[str] = None,
     user: dict = Depends(_verify_token),
 ):
-    """Calculate real availability trend for the last 6 months based on interventions."""
+    """Calculate availability for the six calendar months ending with the selected period."""
     try:
-        from datetime import datetime, timedelta
         import calendar
         
         df_eq = lire_equipements()
@@ -380,38 +373,39 @@ def get_availability_trend(
         
         # If no equipment, return default data
         if nb_eq == 0:
-            today = datetime.now()
+            anchor_date = pd.to_datetime(date_end, errors="coerce") if date_end else pd.Timestamp.now()
+            if pd.isna(anchor_date):
+                anchor_date = pd.Timestamp.now()
+            months = pd.period_range(end=anchor_date.to_period("M"), periods=6, freq="M")
             trend_data = []
-            for i in range(5, -1, -1):
-                month_date = today - timedelta(days=30*i)
-                month_name = calendar.month_name[month_date.month][:3]
+            for month in months:
+                month_name = calendar.month_name[month.month][:3]
                 trend_data.append({"mois": month_name, "dispo": 0})
             return {"ok": True, "trend": trend_data}
         
-        # Get all machines for filtered equipements
-        machines = df_eq["Nom"].tolist() if "Nom" in df_eq.columns else []
-        
-        # Filter interventions by machines
-        if machines and not df_int.empty and "machine" in df_int.columns:
-            df_int = df_int[df_int["machine"].isin(machines)]
+        # Use equipment IDs as the source of truth. A name fallback only keeps
+        # historical records that predate the equipment_id migration visible.
+        df_int = _filter_interventions_for_equipments(df_int, df_eq)
         
         # Parse dates
         if not df_int.empty and "date" in df_int.columns:
             df_int["date"] = pd.to_datetime(df_int["date"], errors="coerce")
         
         # Calculate availability for each month
-        today = datetime.now()
+        anchor_date = pd.to_datetime(date_end, errors="coerce") if date_end else pd.Timestamp.now()
+        if pd.isna(anchor_date):
+            anchor_date = pd.Timestamp.now()
+        months = pd.period_range(end=anchor_date.to_period("M"), periods=6, freq="M")
         trend_data = []
         
-        for i in range(5, -1, -1):
-            month_date = today - timedelta(days=30*i)
-            month_name = calendar.month_name[month_date.month][:3]
-            month_start = month_date.replace(day=1)
-            month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        for month in months:
+            month_name = calendar.month_name[month.month][:3]
+            month_start = month.to_timestamp()
+            month_end = (month + 1).to_timestamp()
             
             # Count interventions in this month
             if not df_int.empty:
-                month_int = df_int[(df_int["date"] >= month_start) & (df_int["date"] <= month_end)]
+                month_int = df_int[(df_int["date"] >= month_start) & (df_int["date"] < month_end)]
                 nb_interventions = len(month_int)
             else:
                 nb_interventions = 0
@@ -434,11 +428,13 @@ def get_availability_trend(
         import traceback
         logger.error(f"Erreur get_availability_trend: {e}\n{traceback.format_exc()}")
         # Return default trend data on error
-        today = datetime.now()
+        anchor_date = pd.to_datetime(date_end, errors="coerce") if date_end else pd.Timestamp.now()
+        if pd.isna(anchor_date):
+            anchor_date = pd.Timestamp.now()
+        months = pd.period_range(end=anchor_date.to_period("M"), periods=6, freq="M")
         trend_data = []
-        for i in range(5, -1, -1):
-            month_date = today - timedelta(days=30*i)
-            month_name = calendar.month_name[month_date.month][:3]
+        for month in months:
+            month_name = calendar.month_name[month.month][:3]
             trend_data.append({"mois": month_name, "dispo": 0})
         return {"ok": True, "trend": trend_data}
 
