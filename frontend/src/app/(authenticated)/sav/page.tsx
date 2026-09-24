@@ -656,7 +656,15 @@ export default function SavPage() {
 
       // Get currency from localStorage (set in admin settings)
       const devise = typeof window !== 'undefined' ? localStorage.getItem('savia_devise') || 'USD' : 'USD';
-      const res = await ai.analyzeSav(sav_data, devise);
+      const res = await ai.analyzeSav(sav_data, devise, {
+        year: filterYear,
+        month: periodMode === 'mensuel' ? filterMonth + 1 : undefined,
+        client: filterClient !== 'Tous' ? filterClient : undefined,
+        equipment: filterEquip !== 'Tous' ? filterEquip : undefined,
+        type: filterType !== 'Tous' ? filterType : undefined,
+        status: filterStatut !== 'Tous' ? filterStatut : undefined,
+        search: search || undefined,
+      });
       if (res.ok && res.result) {
         const parsedResult = typeof res.result === 'string' ? JSON.parse(res.result) : res.result;
         if (!parsedResult || typeof parsedResult !== 'object') {
@@ -1432,6 +1440,15 @@ export default function SavPage() {
           {/* Results */}
           {aiResult && (
             <div className="ai-analysis space-y-5">
+              {aiResult.donnees_exploitees && <div className="glass rounded-xl border border-savia-accent/20 p-4"><div className="text-xs font-bold uppercase tracking-wider text-savia-accent">Données réellement analysées</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-savia-text-muted">{[
+                ['Interventions', aiResult.donnees_exploitees.interventions],
+                ['Équipements', aiResult.donnees_exploitees.equipements],
+                ['Techniciens', aiResult.donnees_exploitees.techniciens_analyses],
+                ['Codes erreurs', aiResult.donnees_exploitees.codes_erreurs],
+                ['Causes', aiResult.donnees_exploitees.causes_recurrentes],
+                ['Contrats', aiResult.donnees_exploitees.contrats],
+                ['Références stock', aiResult.donnees_exploitees.references_stock],
+              ].map(([label, value]) => <span key={String(label)}><strong className="text-savia-text">{label} :</strong> {Number(value || 0)}</span>)}</div></div>}
               {/* Score + Résumé */}
               <div className="glass rounded-xl p-6 border border-purple-500/20">
                 <div className="flex items-start gap-4">

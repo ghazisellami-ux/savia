@@ -4,6 +4,7 @@ import json
 import math
 import re
 import unicodedata
+from collections import Counter, defaultdict
 from datetime import date
 
 from api.runtime import (
@@ -30,6 +31,7 @@ from api.runtime import (
 )
 from api.security import (
     _verify_token,
+    get_client_scope,
     require_roles,
 )
 from services.ai_governance import governed_ai_endpoint
@@ -1386,6 +1388,299 @@ RÉPONDS UNIQUEMENT en JSON valide (pas de markdown, texte avant/après):
     return {"ok": True, "result": result}
 
 
+def _normalise_sav_status(value: object) -> str:
+    """Match the SAV status vocabulary without trusting client-side labels."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character)).casefold()
+    if "atelier" in text or "transfert" in text:
+        return "Transfert vers l'atelier"
+    if "clotur" in text or "termin" in text or "resolu" in text or "realise" in text:
+        return "Cloturee"
+    if "attente" in text and "piec" in text:
+        return "En attente de piece"
+    if "cours" in text:
+        return "En cours"
+    if "planif" in text:
+        return "Planifiee"
+    return str(value or "").strip()
+
+
+def _build_sav_analysis_context(user: dict, filters: object) -> dict:
+    """Build an auditable SAV AI context from database records and stable IDs.
+
+    Browser rows are paginated and contain display fields.  This snapshot is
+    deliberately rebuilt server-side so the AI sees the complete requested
+    scope and follows intervention/equipment/technician IDs for every join.
+    """
+    filters = filters if isinstance(filters, dict) else {}
+    client_scope = get_client_scope(user)
+    requested_client = str(filters.get("client") or "").strip()
+    client = client_scope or ("" if requested_client.casefold() == "tous" else requested_client)
+    equipment_name = str(filters.get("equipment") or "").strip()
+    type_filter = str(filters.get("type") or "").strip()
+    status_filter = str(filters.get("status") or "").strip()
+    search = str(filters.get("search") or "").strip().casefold()
+    try:
+        year = int(filters["year"]) if filters.get("year") else None
+    except (TypeError, ValueError):
+        year = None
+    try:
+        month = int(filters["month"]) if filters.get("month") else None
+    except (TypeError, ValueError):
+        month = None
+    if month not in range(1, 13):
+        month = None
+
+    where = ["COALESCE(i.is_temporary, 0) = 0"]
+    params: list[object] = []
+    if client:
+        where.append("LOWER(BTRIM(COALESCE(NULLIF(i.client, ''), e.client, ''))) = LOWER(BTRIM(%s))")
+        params.append(client)
+    if year:
+        where.append("EXTRACT(YEAR FROM i.date) = %s")
+        params.append(year)
+    if month:
+        where.append("EXTRACT(MONTH FROM i.date) = %s")
+        params.append(month)
+    if equipment_name and equipment_name.casefold() != "tous":
+        # This is a UI filter only.  The subsequent analysis still groups and
+        # links every record through equipement_id, never through this label.
+        where.append("LOWER(BTRIM(i.machine)) = LOWER(BTRIM(%s))")
+        params.append(equipment_name)
+    if type_filter and type_filter.casefold() != "tous":
+        where.append("LOWER(COALESCE(i.type_intervention, '')) LIKE LOWER(%s)")
+        params.append(f"%{type_filter}%")
+
+    with get_db() as conn:
+        intervention_rows = conn.execute(
+            f"""SELECT i.id, i.date, i.equipement_id, i.machine, i.technicien_id,
+                       i.technicien, i.type_intervention, i.statut, i.priorite,
+                       i.probleme, i.cause, i.solution, i.code_erreur, i.type_erreur,
+                       i.pieces_utilisees, i.duree_minutes, i.duree_deplacement,
+                       i.cout, i.cout_pieces,
+                       COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
+                       e.num_serie, e.type AS equipement_type, e.fabricant, e.modele,
+                       e.statut AS equipement_statut, e.date_installation
+                FROM interventions i
+                LEFT JOIN equipements e ON e.id = i.equipement_id
+                WHERE {' AND '.join(where)}
+                ORDER BY i.date DESC, i.id DESC""",
+            tuple(params),
+        ).fetchall()
+
+        equipment_where = []
+        equipment_params: list[object] = []
+        if client:
+            equipment_where.append("LOWER(BTRIM(COALESCE(e.client, ''))) = LOWER(BTRIM(%s))")
+            equipment_params.append(client)
+        if equipment_name and equipment_name.casefold() != "tous":
+            equipment_where.append("LOWER(BTRIM(e.nom)) = LOWER(BTRIM(%s))")
+            equipment_params.append(equipment_name)
+        equipment_sql = """SELECT e.id, e.nom, e.client, e.num_serie, e.type, e.fabricant,
+                                  e.modele, e.statut, e.date_installation, e.derniere_maintenance
+                           FROM equipements e"""
+        if equipment_where:
+            equipment_sql += " WHERE " + " AND ".join(equipment_where)
+        equipment_sql += " ORDER BY e.client, e.nom, e.num_serie LIMIT 500"
+        equipment_rows = conn.execute(equipment_sql, tuple(equipment_params)).fetchall()
+
+        intervention_ids = [int(row["id"]) for row in intervention_rows]
+        assignment_rows = []
+        if intervention_ids:
+            assignment_rows = conn.execute(
+                """SELECT it.intervention_id, it.technicien_id,
+                          CONCAT_WS(' ', t.prenom, t.nom) AS technician_name,
+                          it.duree_minutes_tech, it.statut
+                   FROM interventions_techniciens it
+                   JOIN techniciens t ON t.id = it.technicien_id
+                   WHERE it.intervention_id = ANY(%s)
+                   ORDER BY it.intervention_id, it.technicien_id""",
+                (intervention_ids,),
+            ).fetchall()
+
+        parts_rows = conn.execute(
+            """SELECT reference, designation, equipement_type, fournisseur, prix_unitaire,
+                      stock_actuel, stock_minimum
+               FROM pieces_rechange
+               WHERE COALESCE(stock_actuel, 0) <= COALESCE(stock_minimum, 0)
+               ORDER BY stock_actuel ASC, designation
+               LIMIT 100"""
+        ).fetchall()
+        rate_row = conn.execute(
+            "SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'"
+        ).fetchone()
+        contract_where = "WHERE c.statut = 'Actif'"
+        contract_params: list[object] = []
+        if client:
+            contract_where += " AND LOWER(BTRIM(COALESCE(c.client, ''))) = LOWER(BTRIM(%s))"
+            contract_params.append(client)
+        contract_rows = conn.execute(
+            f"""SELECT c.id, c.client, c.equipement, c.type_contrat, c.avec_pieces,
+                       c.pieces_incluses, c.interventions_incluses, c.montant,
+                       c.date_debut, c.date_fin, c.statut,
+                       ARRAY_REMOVE(ARRAY_AGG(ce.equipement_id), NULL) AS equipment_ids
+                FROM contrats c
+                LEFT JOIN contrats_equipements ce ON ce.contrat_id = c.id
+                {contract_where}
+                GROUP BY c.id
+                ORDER BY c.date_fin DESC
+                LIMIT 100""",
+            tuple(contract_params),
+        ).fetchall()
+
+    interventions = [dict(row) for row in intervention_rows]
+    if status_filter and status_filter.casefold() != "tous":
+        interventions = [
+            row for row in interventions
+            if _normalise_sav_status(row.get("statut")) == status_filter
+        ]
+    if search:
+        interventions = [
+            row for row in interventions
+            if search in " ".join(str(row.get(field) or "").casefold() for field in (
+                "id", "machine", "num_serie", "technicien", "client", "code_erreur"
+            ))
+        ]
+    intervention_ids = {int(row["id"]) for row in interventions}
+    assignments_by_intervention: dict[int, list[dict]] = defaultdict(list)
+    for raw in assignment_rows:
+        assignment = dict(raw)
+        if assignment.get("intervention_id") in intervention_ids:
+            assignments_by_intervention[int(assignment["intervention_id"])].append(assignment)
+
+    hourly_rate = _cost_number((rate_row or {}).get("valeur")) or 0.0
+    error_counts: Counter[str] = Counter()
+    cause_counts: Counter[str] = Counter()
+    solution_counts: Counter[str] = Counter()
+    equipment_stats: dict[int, dict] = {}
+    technician_stats: dict[int, dict] = {}
+    intervention_details: list[dict] = []
+    total_labor = total_parts = 0.0
+    total_duration = 0
+    closed_count = in_progress_count = corrective_count = preventive_count = installation_count = 0
+
+    for row in interventions:
+        intervention_id = int(row["id"])
+        duration = int(row.get("duree_minutes") or 0)
+        parts_cost = _cost_number(row.get("cout_pieces")) or 0.0
+        labor_cost = (duration / 60.0 * hourly_rate) if hourly_rate > 0 and duration > 0 else (_cost_number(row.get("cout")) or 0.0)
+        normalized_status = _normalise_sav_status(row.get("statut"))
+        is_closed = normalized_status == "Cloturee"
+        total_duration += duration
+        total_labor += labor_cost
+        total_parts += parts_cost
+        closed_count += int(is_closed)
+        in_progress_count += int(normalized_status == "En cours")
+        intervention_type = str(row.get("type_intervention") or "")
+        type_key = intervention_type.casefold()
+        corrective_count += int("correct" in type_key)
+        preventive_count += int("prevent" in _cost_normalize(type_key))
+        installation_count += int("install" in type_key)
+        if row.get("code_erreur"):
+            error_counts[str(row["code_erreur"]).strip()] += 1
+        if row.get("cause"):
+            cause_counts[str(row["cause"]).strip()[:180]] += 1
+        if row.get("solution"):
+            solution_counts[str(row["solution"]).strip()[:180]] += 1
+
+        equipment_id = row.get("equipement_id")
+        if equipment_id is not None:
+            equipment_id = int(equipment_id)
+            stats = equipment_stats.setdefault(equipment_id, {
+                "id": equipment_id, "nom": row.get("machine") or "Équipement", "num_serie": row.get("num_serie") or "",
+                "type": row.get("equipement_type") or "", "fabricant": row.get("fabricant") or "",
+                "modele": row.get("modele") or "", "client": row.get("client") or "",
+                "interventions": 0, "cloturees": 0, "correctives": 0, "duree_minutes": 0, "cout_total": 0.0,
+            })
+            stats["interventions"] += 1
+            stats["cloturees"] += int(is_closed)
+            stats["correctives"] += int("correct" in type_key)
+            stats["duree_minutes"] += duration
+            stats["cout_total"] += labor_cost + parts_cost
+
+        assignments = assignments_by_intervention.get(intervention_id, [])
+        if not assignments and row.get("technicien_id") is not None:
+            assignments = [{
+                "technicien_id": int(row["technicien_id"]),
+                "technician_name": row.get("technicien") or "Technicien",
+                "duree_minutes_tech": duration,
+            }]
+        assigned_minutes = sum(int(assignment.get("duree_minutes_tech") or 0) for assignment in assignments)
+        for assignment in assignments:
+            technician_id = assignment.get("technicien_id")
+            if technician_id is None:
+                continue
+            technician_id = int(technician_id)
+            technician = technician_stats.setdefault(technician_id, {
+                "id": technician_id, "nom": assignment.get("technician_name") or "Technicien",
+                "interventions": 0, "cloturees": 0, "duree_minutes": 0, "cout_main_oeuvre": 0.0,
+            })
+            technician["interventions"] += 1
+            technician["cloturees"] += int(is_closed)
+            technician_minutes = int(assignment.get("duree_minutes_tech") or 0)
+            technician["duree_minutes"] += technician_minutes
+            if assigned_minutes > 0:
+                technician["cout_main_oeuvre"] += labor_cost * technician_minutes / assigned_minutes
+
+        intervention_details.append({
+            "id": intervention_id, "date": str(row.get("date") or "")[:10],
+            "equipement_id": row.get("equipement_id"), "machine": row.get("machine") or "",
+            "num_serie": row.get("num_serie") or "", "client": row.get("client") or "",
+            "type": intervention_type, "statut": normalized_status, "priorite": row.get("priorite") or "",
+            "techniciens": [{"id": item.get("technicien_id"), "nom": item.get("technician_name") or ""} for item in assignments],
+            "duree_minutes": duration, "cout_main_oeuvre": round(labor_cost, 3), "cout_pieces": round(parts_cost, 3),
+            "probleme": row.get("probleme") or "", "cause": row.get("cause") or "", "solution": row.get("solution") or "",
+            "code_erreur": row.get("code_erreur") or "", "type_erreur": row.get("type_erreur") or "",
+            "pieces_utilisees": row.get("pieces_utilisees") or "",
+        })
+
+    equipment_by_id = {int(row["id"]): dict(row) for row in equipment_rows}
+    equipment_details = []
+    for equipment_id, equipment in equipment_by_id.items():
+        stats = equipment_stats.get(equipment_id, {})
+        equipment_details.append({
+            "id": equipment_id, "nom": equipment.get("nom") or "", "num_serie": equipment.get("num_serie") or "",
+            "client": equipment.get("client") or "", "type": equipment.get("type") or "",
+            "fabricant": equipment.get("fabricant") or "", "modele": equipment.get("modele") or "",
+            "statut": equipment.get("statut") or "", "date_installation": str(equipment.get("date_installation") or "")[:10],
+            **stats,
+        })
+    for equipment_id, stats in equipment_stats.items():
+        if equipment_id not in equipment_by_id:
+            equipment_details.append(stats)
+
+    technician_details = []
+    for technician in technician_stats.values():
+        completed = technician["cloturees"]
+        technician_details.append({
+            **technician,
+            "taux_resolution": round(100 * completed / technician["interventions"], 1) if technician["interventions"] else 0,
+            "mttr_h": round(technician["duree_minutes"] / completed / 60, 2) if completed else 0,
+            "cout_main_oeuvre": round(technician["cout_main_oeuvre"], 3),
+        })
+
+    return {
+        "nb_total": len(interventions), "nb_interventions": len(interventions),
+        "nb_cloturees": closed_count, "nb_en_cours": in_progress_count,
+        "nb_correctives": corrective_count, "nb_preventives": preventive_count, "nb_installations": installation_count,
+        "taux_resolution": round(100 * closed_count / len(interventions), 1) if interventions else 0,
+        "mttr_h": round(total_duration / closed_count / 60, 2) if closed_count else 0,
+        "duree_totale_h": round(total_duration / 60, 2),
+        "cout_main_oeuvre": round(total_labor, 3), "cout_pieces": round(total_parts, 3),
+        "cout_total": round(total_labor + total_parts, 3),
+        "cout_moyen": round((total_labor + total_parts) / len(interventions), 3) if interventions else 0,
+        "interventions_detail": intervention_details[:80],
+        "machines_detail": sorted(equipment_stats.values(), key=lambda item: (-item["interventions"], item["id"]))[:80],
+        "erreurs_recurrentes": [{"code": code, "occurrences": count} for code, count in error_counts.most_common(20)],
+        "causes_recurrentes": [{"cause": cause, "occurrences": count} for cause, count in cause_counts.most_common(20)],
+        "solutions_recurrentes": [{"solution": solution, "occurrences": count} for solution, count in solution_counts.most_common(20)],
+        "tech_details": sorted(technician_details, key=lambda item: (-item["interventions"], item["id"]))[:80],
+        "equipements_detail": sorted(equipment_details, key=lambda item: (-item.get("interventions", 0), item["id"]))[:120],
+        "contrats_detail": [dict(row) for row in contract_rows][:80],
+        "stock_detail": [dict(row) for row in parts_rows][:100],
+    }
+
+
 @app.post("/api/ai/analyze-sav")
 @governed_ai_endpoint("sav", ("Admin", "Manager", "Responsable Technique"))
 def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: Optional[str] = Header(None)):
@@ -1399,6 +1694,15 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
         raise HTTPException(status_code=503, detail="L'IA n'est pas disponible.")
 
     sav_data = body.get("sav_data", {})
+    if not isinstance(sav_data, dict):
+        raise HTTPException(status_code=422, detail="Les données SAV sont invalides")
+    try:
+        # Server-side data wins over the paginated browser snapshot. It also
+        # preserves the authenticated user's client scope.
+        sav_data = {**sav_data, **_build_sav_analysis_context(user, body.get("filters"))}
+    except Exception as context_error:
+        logger.exception("Impossible de construire le contexte IA SAV complet: %s", context_error)
+        raise HTTPException(status_code=503, detail="Le contexte SAV complet n'a pas pu être chargé")
     sym = body.get("sym", "TND")
     lang = _get_app_language(x_savia_lang, body)
     nb_total = sav_data.get("nb_total", sav_data.get("nb_interventions", 0))
@@ -1410,6 +1714,7 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
     machines_detail = sav_data.get("machines_detail", [])
     errors_detail = sav_data.get("erreurs_recurrentes", [])
     causes_detail = sav_data.get("causes_recurrentes", [])
+    solutions_detail = sav_data.get("solutions_recurrentes", [])
     tech_detail = sav_data.get("tech_details", sav_data.get("performance_equipe", []))
     equipment_detail = sav_data.get("equipements_detail", [])
     contracts_detail = sav_data.get("contrats_detail", [])
@@ -1419,12 +1724,13 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
         machines_json = json.dumps(machines_detail[:30], ensure_ascii=False, default=str)
         errors_json = json.dumps(errors_detail[:10], ensure_ascii=False, default=str)
         causes_json = json.dumps(causes_detail[:10], ensure_ascii=False, default=str)
+        solutions_json = json.dumps(solutions_detail[:10], ensure_ascii=False, default=str)
         tech_json = json.dumps(tech_detail[:20] if isinstance(tech_detail, list) else tech_detail, ensure_ascii=False, default=str)
         equipment_json = json.dumps(equipment_detail[:50], ensure_ascii=False, default=str)
         contracts_json = json.dumps(contracts_detail[:30], ensure_ascii=False, default=str)
         stock_json = json.dumps(stock_detail[:50], ensure_ascii=False, default=str)
     except (TypeError, ValueError):
-        interventions_json = machines_json = errors_json = causes_json = "[]"
+        interventions_json = machines_json = errors_json = causes_json = solutions_json = "[]"
         tech_json = equipment_json = contracts_json = stock_json = "[]"
 
     configured_countries = _configured_country_names()
@@ -1466,6 +1772,7 @@ Règle de lecture : un coût de service additionnel à 0 est normal lorsqu'aucun
 === CODES ERREURS ET CAUSES RÉCURRENTES ===
 Codes : {errors_json}
 Causes : {causes_json}
+Solutions appliquées : {solutions_json}
 
 === PARC, CONTRATS ET STOCK DISPONIBLE ===
 Équipements : {equipment_json}
@@ -1547,6 +1854,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
             "techniciens_analyses": len(tech_detail) if isinstance(tech_detail, list) else 0,
             "codes_erreurs": len(errors_detail),
             "causes_recurrentes": len(causes_detail),
+            "solutions_recurrentes": len(solutions_detail),
             "contrats": len(contracts_detail),
             "references_stock": len(stock_detail),
         }
