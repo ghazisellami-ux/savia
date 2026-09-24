@@ -108,7 +108,7 @@ def compute_case_status(
         for token in ("clotur", "clôtur", "termin")
     )
     if closed:
-        if has_parts and not delivery_complete:
+        if not delivery_complete:
             return "delivery_note_pending"
         return "invoice_pending"
 
