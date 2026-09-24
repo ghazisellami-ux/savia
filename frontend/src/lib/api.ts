@@ -574,6 +574,10 @@ export const billing = {
     request<Record<string, unknown>>('/api/billing/cases/resolve-duplicate', { method: 'POST', body: data }),
   saveStep: (caseId: number, stepType: string, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}/steps/${encodeURIComponent(stepType)}`, { method: 'PUT', body: data }),
+  saveDeliveryNotes: (caseId: number, deliveryNotes: Array<Record<string, unknown>>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/delivery-notes`, { method: 'PUT', body: { delivery_notes: deliveryNotes } }),
+  saveInvoices: (caseId: number, invoices: Array<Record<string, unknown>>) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/invoices`, { method: 'PUT', body: { invoices } }),
   addPayment: (caseId: number, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}/payments`, { method: 'POST', body: data }),
   updatePayment: (caseId: number, paymentId: number, data: Record<string, unknown>) =>

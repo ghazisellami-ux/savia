@@ -51,6 +51,7 @@ def test_contract_coverage_stops_the_invoice_workflow_until_resolved():
     assert status(intervention_closed_at="2026-08-03", coverage_status="covered") == "covered_by_contract"
     assert status(intervention_closed_at="2026-08-03", coverage_status="review") == "coverage_review"
     assert status(intervention_closed_at="2026-08-03", coverage_status="partial") == "invoice_pending"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="covered", contract_billing=True) == "invoice_pending"
 
 
 def test_lead_times_cover_the_full_quote_to_payment_cycle():
@@ -129,3 +130,10 @@ def test_contract_global_billing_migration_is_registered():
 
     assert len(global_migrations) == 1
     assert "full contract" in global_migrations[0][1]
+
+
+def test_multiple_billing_documents_migration_is_registered():
+    document_migrations = [migration for migration in MIGRATIONS if migration[0] == "036"]
+
+    assert len(document_migrations) == 1
+    assert "multiple billing" in document_migrations[0][1]

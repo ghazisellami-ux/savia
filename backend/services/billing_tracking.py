@@ -76,6 +76,9 @@ def compute_case_status(
     intervention_status: str,
     has_parts: bool,
     coverage_status: str = "unassessed",
+    delivery_complete: bool | None = None,
+    invoice_complete: bool | None = None,
+    contract_billing: bool = False,
 ) -> str:
     """Return the furthest reliable business state without trusting UI input."""
     if case_state == "blocked":
@@ -84,7 +87,9 @@ def compute_case_status(
         return "cancelled"
 
     invoice = steps.get("invoice")
-    if step_is_complete(invoice):
+    invoice_complete = step_is_complete(invoice) if invoice_complete is None else invoice_complete
+    delivery_complete = step_is_complete(steps.get("delivery_note")) if delivery_complete is None else delivery_complete
+    if invoice_complete and invoice:
         invoice_amount = _as_decimal(invoice.get("amount")) if invoice else Decimal("0")
         paid = _as_decimal(paid_amount)
         if invoice_amount > 0 and paid >= invoice_amount:
@@ -93,7 +98,7 @@ def compute_case_status(
             return "partial_payment"
         return "payment_pending"
 
-    if coverage_status == "covered":
+    if coverage_status == "covered" and not contract_billing:
         return "covered_by_contract"
     if coverage_status == "review":
         return "coverage_review"
@@ -103,7 +108,7 @@ def compute_case_status(
         for token in ("clotur", "clôtur", "termin")
     )
     if closed:
-        if has_parts and not step_is_complete(steps.get("delivery_note")):
+        if has_parts and not delivery_complete:
             return "delivery_note_pending"
         return "invoice_pending"
 
