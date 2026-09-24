@@ -343,6 +343,20 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
                 item["intervention_status"] = "Clôturée"
             if (item.get("coverage_details") or {}).get("billable_parts"):
                 item["has_parts"] = True
+        is_contract_billing = bool(item.get("contract_id") and contract_equipments)
+        automatic_contract_delivery = bool(is_contract_billing and item.get("intervention_closed_at"))
+        if automatic_contract_delivery and not delivery_notes:
+            # The BL is intentionally a virtual completed milestone: a
+            # maintenance-contract dossier is billed globally after its last
+            # intervention closes, without creating a fictitious document.
+            steps["delivery_note"] = {
+                "step_type": "delivery_note",
+                "effective_date": item["intervention_closed_at"],
+                "reference": "",
+                "amount": None,
+                "not_required": True,
+                "note": "Validé automatiquement après la clôture de toutes les interventions du contrat",
+            }
         paid_amount = sum(Decimal(str(payment["amount"])) for payment in payments)
         invoice = steps.get("invoice")
         invoice_amount = Decimal(str(invoice["amount"])) if invoice and invoice.get("amount") is not None else Decimal("0")
@@ -356,9 +370,12 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             intervention_status=item.get("intervention_status") or "",
             has_parts=bool(item.get("has_parts")),
             coverage_status=item.get("coverage_status") or "unassessed",
-            delivery_complete=(any(note.get("is_total_delivery") for note in delivery_notes) if delivery_notes else None),
+            delivery_complete=(
+                True if automatic_contract_delivery
+                else (any(note.get("is_total_delivery") for note in delivery_notes) if delivery_notes else None)
+            ),
             invoice_complete=(any(invoice.get("is_total_invoice") for invoice in invoices) if invoices else None),
-            contract_billing=bool(item.get("contract_id") and contract_equipments),
+            contract_billing=is_contract_billing,
         )
         overdue = invoice_is_overdue(invoice, remaining, today)
         due_date = _parse_date((invoice or {}).get("due_date"), "date d'échéance")
@@ -369,7 +386,7 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "payments": payments,
             "delivery_notes": delivery_notes,
             "invoices": invoices,
-            "delivery_note_complete": any(note.get("is_total_delivery") for note in delivery_notes),
+            "delivery_note_complete": automatic_contract_delivery or any(note.get("is_total_delivery") for note in delivery_notes),
             "invoice_complete": any(invoice.get("is_total_invoice") for invoice in invoices),
             "paid_amount": float(paid_amount),
             "invoice_amount": float(invoice_amount),
