@@ -472,8 +472,8 @@ export const ai = {
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-performance', { method: 'POST', body: {kpis, sym} }),
   analyzeDiagnostic: (machine: string, code_erreur: string, message_erreur: string, log_context: string = "", equipment_type: string = "") =>
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-diagnostic', { method: 'POST', body: { machine, code_erreur, message_erreur, log_context, equipment_type } }),
-  analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND") =>
-    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym } }),
+  analyzeSav: (sav_data: Record<string, unknown>, sym: string = "TND", filters: Record<string, unknown> = {}) =>
+    request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-sav', { method: 'POST', body: { sav_data, sym, filters } }),
   analyzePieces: (pieces: Array<Record<string, unknown>>, sym: string = "USD", domain: string = "", equipment_type: string = "") =>
     request<{ok: boolean, result: Record<string, unknown>}>('/api/ai/analyze-pieces', { method: 'POST', body: { pieces, sym, domain, equipment_type } }),
   chat: (message: string, history: Array<{role: string, content: string}> = []) =>
