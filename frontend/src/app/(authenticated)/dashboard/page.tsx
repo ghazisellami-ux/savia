@@ -40,6 +40,7 @@ interface KpiData {
 }
 
 interface HealthScore {
+  equipment_id?: number | null;
   machine: string;
   score: number;
   tendance: string;
@@ -404,7 +405,10 @@ export default function DashboardPage() {
   useEffect(() => {
     const loadTrendData = async () => {
       try {
-        const params: any = {};
+        const params: Record<string, string> = {
+          date_start: dateRange.date_start,
+          date_end: dateRange.date_end,
+        };
         if (selectedClient) params.client = selectedClient;
         if (selectedEquipType) params.equipment_type = selectedEquipType;
         
@@ -424,7 +428,7 @@ export default function DashboardPage() {
     };
     
     loadTrendData();
-  }, [selectedClient, selectedEquipType]);
+  }, [selectedClient, selectedEquipType, dateRange.date_start, dateRange.date_end]);
 
   // --- Computed values ---
   const scoreGlobal = useMemo(() => {
@@ -867,7 +871,7 @@ export default function DashboardPage() {
               </thead>
               <tbody>
                 {[...healthScores].sort((a, b) => a.score - b.score).map((h, index) => (
-                  <tr key={`${h.machine}-${index}`} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
+                  <tr key={h.equipment_id ?? `${h.machine}-${index}`} className="border-b border-savia-border/50 hover:bg-savia-surface-hover/50 transition-colors">
                     <td className="py-2.5 px-3 font-medium">{h.machine}</td>
                     <td className="py-2.5 px-3 text-xs text-savia-text-muted">{h.client || '—'}</td>
                     <td className="py-2.5 px-3 text-center">
