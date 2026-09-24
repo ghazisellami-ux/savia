@@ -1088,6 +1088,11 @@ def _migration_036_multiple_billing_documents(conn) -> None:
     )
 
 
+def _migration_037_refresh_technician_assignment_ids(conn) -> None:
+    """Backfill IDs for multi-tech assignments created after migration 033."""
+    _migration_033_backfill_unambiguous_technician_ids(conn)
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1458,6 +1463,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("034", "aggregate billing by contract cycle", _migration_034_contract_cycle_billing),
     ("035", "aggregate billing by full contract", _migration_035_contract_global_billing),
     ("036", "multiple billing delivery notes and invoices", _migration_036_multiple_billing_documents),
+    ("037", "refresh unambiguous technician assignment IDs", _migration_037_refresh_technician_assignment_ids),
 )
 
 

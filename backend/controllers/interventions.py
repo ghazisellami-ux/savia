@@ -323,8 +323,19 @@ def cleanup_orphan_technicians(intervention_id: int, user: dict = Depends(_verif
             raise HTTPException(status_code=404, detail="Intervention introuvable")
         orphan_rows = conn.execute(
             """SELECT it.id, it.technicien_id FROM interventions_techniciens it
-               WHERE it.intervention_id = %s AND it.technicien_id IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM techniciens t WHERE t.id = it.technicien_id)""",
+               WHERE it.intervention_id = %s
+                 AND (
+                     (it.technicien_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM techniciens t WHERE t.id = it.technicien_id))
+                     OR
+                     (it.technicien_id IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM techniciens t
+                          WHERE LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.prenom, ' ', t.nom)))
+                             OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(CONCAT(t.nom, ' ', t.prenom)))
+                             OR LOWER(BTRIM(it.technicien_nom)) = LOWER(BTRIM(t.username))
+                      ))
+                 )""",
             (intervention_id,),
         ).fetchall()
         orphan_ids = [int(row["id"]) for row in orphan_rows]
@@ -363,9 +374,10 @@ def cleanup_orphan_technicians(intervention_id: int, user: dict = Depends(_verif
                    technicien_assigne = %s WHERE id = %s""",
                 (primary_id, json.dumps(technician_ids), technician_label, intervention["planning_id"]),
             )
-        removed_technician_ids = [int(row["technicien_id"]) for row in orphan_rows]
-        conn.execute("DELETE FROM notifications_pieces WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
-        conn.execute("DELETE FROM pieces_demandees WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
+        removed_technician_ids = [int(row["technicien_id"]) for row in orphan_rows if row.get("technicien_id") is not None]
+        if removed_technician_ids:
+            conn.execute("DELETE FROM notifications_pieces WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
+            conn.execute("DELETE FROM pieces_demandees WHERE technicien_id = ANY(%s)", (removed_technician_ids,))
         log_audit(actor, "PURGE_ORPHAN_TECHNICIAN_ASSIGNMENTS", f"intervention_id={intervention_id}; removed={len(orphan_ids)}")
     return {"ok": True, "removed": len(orphan_ids), "remaining_technicians": len(technician_ids)}
 
