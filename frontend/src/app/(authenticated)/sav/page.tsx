@@ -300,6 +300,7 @@ export default function SavPage() {
         planning_id: item.planning_id ?? null,
         type: item.type_intervention || 'Corrective',
         technicien: item.technicien || 'Non assigné',
+        technicien_id: item.technicien_id == null ? null : Number(item.technicien_id),
         duree: Math.round((Number(item.duree_minutes) || 0) / 60),
         duree_minutes: Number(item.duree_minutes) || 0,
         duree_deplacement: Number(item.duree_deplacement) || 0,
@@ -319,6 +320,7 @@ export default function SavPage() {
         cout: Number(item.cout) || 0,
         techniciens_detail: Array.isArray(item.techniciens_detail)
           ? item.techniciens_detail.map((detail: any) => ({
+              technicien_id: detail.technicien_id == null ? null : Number(detail.technicien_id),
               nom: String(detail.nom || ''),
               duree_minutes: Number(detail.duree_minutes) || 0,
               statut: detail.statut || '',
