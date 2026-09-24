@@ -28,6 +28,7 @@ interface Intervention {
   client: string;
   type: string;
   technicien: string;
+  technicien_id?: number | null;
   duree: number;
   duree_minutes: number;
   duree_deplacement: number;
@@ -47,7 +48,7 @@ interface Intervention {
   pieces_utilisees: string;
   coutPieces: number;
   cout: number;
-  techniciens_detail?: { nom: string; duree_minutes: number; statut?: string }[];
+  techniciens_detail?: { technicien_id?: number | null; nom: string; duree_minutes: number; statut?: string }[];
 }
 
 const INPUT_CLS = "w-full bg-savia-surface-hover border border-savia-border rounded-lg px-4 py-2.5 text-savia-text placeholder:text-savia-text-dim focus:ring-2 focus:ring-savia-accent/40 outline-none transition-all";
@@ -120,6 +121,7 @@ export default function SavPage() {
   const [savTechDropdownOpen, setSavTechDropdownOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<Intervention | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCleaningOrphans, setIsCleaningOrphans] = useState(false);
   const openedDirectInterventionId = useRef<number | null>(null);
   const [pdfDateFrom, setPdfDateFrom] = useState(() => {
     const d = new Date(); d.setMonth(d.getMonth() - 1);
@@ -230,36 +232,35 @@ export default function SavPage() {
   const getInterventionTotalCost = useCallback((intervention: Intervention): number => {
     return getInterventionLaborCost(intervention) + getInterventionPartsCost(intervention);
   }, [getInterventionLaborCost, getInterventionPartsCost]);
-  const splitTechnicians = useCallback((technicien?: string): string[] => {
-    const names = String(technicien || '')
-      .split(',')
-      .map(name => name.trim())
-      .filter(Boolean);
-    return names.length > 0 ? names : ['Inconnu'];
-  }, []);
-  const getTechnicianLaborShares = useCallback((intervention: Intervention): { nom: string; duree: number; cout: number }[] => {
+  const getTechnicianLaborShares = useCallback((intervention: Intervention): { id: number; nom: string; duree: number; cout: number }[] => {
     const details = (intervention.techniciens_detail || [])
       .map(detail => ({
+        id: Number(detail.technicien_id),
         nom: String(detail.nom || '').trim(),
         duree: toNumber(detail.duree_minutes),
       }))
-      .filter(detail => detail.nom);
+      .filter(detail => Number.isInteger(detail.id) && detail.id > 0 && detail.nom);
     const detailDuration = details.reduce((sum, detail) => sum + detail.duree, 0);
 
     if (details.length > 0 && detailDuration > 0) {
       const totalLaborCost = getInterventionLaborCost(intervention);
-      return details.map(detail => ({
-        nom: detail.nom,
+        return details.map(detail => ({
+          id: detail.id,
+          nom: detail.nom,
         duree: detail.duree,
         cout: tauxHoraire > 0 ? (detail.duree / 60.0) * tauxHoraire : totalLaborCost * (detail.duree / detailDuration),
       }));
     }
 
-    const techNames = splitTechnicians(intervention.technicien);
-    const durationShare = toNumber(intervention.duree_minutes) / techNames.length;
-    const costShare = getInterventionLaborCost(intervention) / techNames.length;
-    return techNames.map(nom => ({ nom, duree: durationShare, cout: costShare }));
-  }, [getInterventionLaborCost, splitTechnicians, tauxHoraire, toNumber]);
+    const technicianId = Number(intervention.technicien_id);
+    if (!Number.isInteger(technicianId) || technicianId <= 0) return [];
+    return [{
+      id: technicianId,
+      nom: String(intervention.technicien || 'Technicien').trim(),
+      duree: toNumber(intervention.duree_minutes),
+      cout: getInterventionLaborCost(intervention),
+    }];
+  }, [getInterventionLaborCost, toNumber]);
 
   const loadData = useCallback(async (pageOffset: number = 0, append: boolean = false) => {
     if (pageOffset === 0) setIsLoading(true);
@@ -596,22 +597,22 @@ export default function SavPage() {
       const tauxRes = nb_total > 0 ? Math.round((nb_cloturees / nb_total) * 100) : 0;
 
       // Build tech details string
-      const techMap = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
+      const techMap = new Map<number, {nom: string, nb: number, clot: number, duree: number, cout: number}>();
       allInterv.forEach(i => {
         getTechnicianLaborShares(i).forEach(share => {
-          const prev = techMap.get(share.nom) || {nb: 0, clot: 0, duree: 0, cout: 0};
+          const prev = techMap.get(share.id) || {nom: share.nom, nb: 0, clot: 0, duree: 0, cout: 0};
           prev.nb++;
           if (i.statut.toLowerCase().includes('tur')) prev.clot++;
           prev.duree += share.duree;
           prev.cout += share.cout;
-          techMap.set(share.nom, prev);
+          techMap.set(share.id, prev);
         });
       });
       let tech_details = '';
-      techMap.forEach((s, nom) => {
+      techMap.forEach((s) => {
         const taux = s.nb > 0 ? Math.round((s.clot / s.nb) * 100) : 0;
         const mttr = s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0;
-        tech_details += `- ${nom}: ${s.nb} interventions, ${s.clot} clôturées, taux=${taux}%, MTTR=${mttr}h, coût=${s.cout} TND\n`;
+        tech_details += `- ${s.nom}: ${s.nb} interventions, ${s.clot} clôturées, taux=${taux}%, MTTR=${mttr}h, coût=${s.cout} TND\n`;
       });
 
       // Build machine details
@@ -812,19 +813,19 @@ export default function SavPage() {
 
   // Tech performance
   const techStats = useMemo(() => {
-    const map = new Map<string, {nb: number, clot: number, duree: number, cout: number}>();
+    const map = new Map<number, {nom: string, nb: number, clot: number, duree: number, cout: number}>();
     filtered.forEach(i => {
       getTechnicianLaborShares(i).forEach(share => {
-        const prev = map.get(share.nom) || {nb: 0, clot: 0, duree: 0, cout: 0};
+        const prev = map.get(share.id) || {nom: share.nom, nb: 0, clot: 0, duree: 0, cout: 0};
         prev.nb++;
         if (i.statut.toLowerCase().includes('tur')) prev.clot++;
         prev.duree += share.duree;
         prev.cout += share.cout;
-        map.set(share.nom, prev);
+        map.set(share.id, prev);
       });
     });
-    return Array.from(map.entries()).map(([nom, s]) => ({
-      nom, nb: s.nb, clot: s.clot,
+    return Array.from(map.entries()).map(([id, s]) => ({
+      id, nom: s.nom, nb: s.nb, clot: s.clot,
       taux: s.nb > 0 ? Math.round((s.clot / s.nb) * 100) : 0,
       mttr: s.clot > 0 ? Math.round(s.duree / s.clot / 60 * 10) / 10 : 0,
       cout: s.cout,
@@ -856,6 +857,24 @@ export default function SavPage() {
       alert(err?.message || 'Erreur lors de la suppression.');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleCleanupOrphanTechnicians = async (intervention: Intervention) => {
+    if (!confirm("Retirer définitivement les techniciens supprimés de cette intervention ? Les autres techniciens et l'intervention seront conservés.")) return;
+    setIsCleaningOrphans(true);
+    try {
+      const result = await interventions.cleanupOrphanTechnicians(intervention.id);
+      if (result.removed === 0) {
+        alert("Aucun technicien supprimé n'est rattaché à cette intervention.");
+        return;
+      }
+      await loadData();
+      setIntervDetailItem(null);
+    } catch (err: any) {
+      alert(err?.message || "Impossible de nettoyer les affectations supprimées.");
+    } finally {
+      setIsCleaningOrphans(false);
     }
   };
 
@@ -1221,7 +1240,7 @@ export default function SavPage() {
                 </thead>
                 <tbody>
                   {techStats.map(t => (
-                    <tr key={t.nom} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50">
+                    <tr key={t.id} className="border-b border-savia-border/30 hover:bg-savia-surface-hover/50">
                       <td className="py-2.5 px-3 font-bold">{t.nom}</td>
                       <td className="py-2.5 px-3 font-mono">{t.nb}</td>
                       <td className="py-2.5 px-3 font-mono text-green-400">{t.clot}</td>
@@ -1272,7 +1291,7 @@ export default function SavPage() {
               {techStats.map(t => {
                 const pct = coutMainOeuvre > 0 ? (t.cout / coutMainOeuvre * 100) : 0;
                 return (
-                  <div key={t.nom} className="flex items-center gap-4">
+                  <div key={t.id} className="flex items-center gap-4">
                     <div className="w-40 font-semibold text-sm truncate">{t.nom}</div>
                     <div className="flex-1 bg-savia-surface-hover rounded-full h-3 overflow-hidden">
                       <div className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct)}%` }} />
@@ -2023,6 +2042,11 @@ export default function SavPage() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
+              {canDelete && <button onClick={() => handleCleanupOrphanTechnicians(intervDetailItem)} disabled={isCleaningOrphans}
+                className="px-4 py-2 rounded-lg text-sm font-bold bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 cursor-pointer transition-colors"
+              >
+                <Users className="w-4 h-4 inline mr-1" /> {isCleaningOrphans ? 'Nettoyage...' : 'Retirer technicien supprimé'}
+              </button>}
               <button onClick={() => handleDownloadFicheIntervention(intervDetailItem)}
                 className="px-4 py-2 rounded-lg text-sm font-bold bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 cursor-pointer transition-colors"
               >

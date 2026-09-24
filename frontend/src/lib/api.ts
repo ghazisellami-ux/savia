@@ -175,6 +175,8 @@ export const interventions = {
     request<{ ok: boolean; message: string }>('/api/interventions', { method: 'POST', body: data }),
   update: (id: number, data: Record<string, unknown>) =>
     request<{ ok: boolean; message: string }>(`/api/interventions/${id}`, { method: 'PUT', body: data }),
+  cleanupOrphanTechnicians: (id: number) =>
+    request<{ ok: boolean; removed: number; remaining_technicians: number }>(`/api/interventions/${id}/cleanup-orphan-technicians`, { method: 'POST' }),
 
   // Fiche signée
   uploadFiche: async (id: number, file: File): Promise<{ ok: boolean; filename: string }> => {
