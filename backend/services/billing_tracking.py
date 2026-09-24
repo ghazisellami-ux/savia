@@ -108,6 +108,12 @@ def compute_case_status(
         for token in ("clotur", "clôtur", "termin")
     )
     if closed:
+        # A maintenance contract is invoiced as a single global dossier only
+        # once every linked intervention is closed.  There is no delivery-note
+        # milestone to collect in that workflow: the closure is the delivery
+        # confirmation, so billing can begin immediately.
+        if contract_billing:
+            return "invoice_pending"
         if not delivery_complete:
             return "delivery_note_pending"
         return "invoice_pending"

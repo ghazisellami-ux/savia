@@ -52,7 +52,7 @@ def test_contract_coverage_stops_the_invoice_workflow_until_resolved():
     assert status(intervention_closed_at="2026-08-03", coverage_status="covered") == "covered_by_contract"
     assert status(intervention_closed_at="2026-08-03", coverage_status="review") == "coverage_review"
     assert status(intervention_closed_at="2026-08-03", coverage_status="partial") == "delivery_note_pending"
-    assert status(intervention_closed_at="2026-08-03", coverage_status="covered", contract_billing=True) == "delivery_note_pending"
+    assert status(intervention_closed_at="2026-08-03", coverage_status="covered", contract_billing=True) == "invoice_pending"
 
 
 def test_lead_times_cover_the_full_quote_to_payment_cycle():
