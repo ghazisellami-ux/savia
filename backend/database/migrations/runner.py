@@ -1093,6 +1093,79 @@ def _migration_037_refresh_technician_assignment_ids(conn) -> None:
     _migration_033_backfill_unambiguous_technician_ids(conn)
 
 
+def _migration_038_billing_case_identity_links(conn) -> None:
+    """Persist billing-case client and equipment identities independently of labels."""
+    conn.execute(
+        """ALTER TABLE billing_cases
+           ADD COLUMN IF NOT EXISTS client_id INTEGER NULL
+               REFERENCES clients(id) ON DELETE SET NULL"""
+    )
+    conn.execute(
+        """ALTER TABLE billing_cases
+           ADD COLUMN IF NOT EXISTS equipment_id INTEGER NULL
+               REFERENCES equipements(id) ON DELETE SET NULL"""
+    )
+    # An intervention link is the only authoritative source for historic
+    # cases.  Do not guess an equipment ID from a repeated display name.
+    conn.execute(
+        """UPDATE billing_cases bc
+           SET equipment_id = COALESCE(i.equipement_id, pm.equipement_id)
+           FROM interventions i
+           LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
+           WHERE bc.intervention_id = i.id
+             AND bc.equipment_id IS NULL
+             AND COALESCE(i.equipement_id, pm.equipement_id) IS NOT NULL"""
+    )
+    # The legacy equipment table keeps its client as text.  Backfill a client
+    # ID only where that legacy label identifies exactly one client row.
+    conn.execute(
+        """WITH unique_clients AS (
+               SELECT LOWER(BTRIM(nom)) AS client_key, MIN(id) AS id
+               FROM clients
+               WHERE NULLIF(BTRIM(nom), '') IS NOT NULL
+               GROUP BY LOWER(BTRIM(nom))
+               HAVING COUNT(*) = 1
+           )
+           UPDATE billing_cases bc
+           SET client_id = uc.id
+           FROM unique_clients uc
+           LEFT JOIN equipements e ON e.id = bc.equipment_id
+           WHERE bc.client_id IS NULL
+             AND uc.client_key = LOWER(BTRIM(COALESCE(NULLIF(e.client, ''), bc.client, '')))"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_billing_cases_client_id_updated
+           ON billing_cases(client_id, updated_at DESC)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS idx_billing_cases_equipment_id
+           ON billing_cases(equipment_id)"""
+    )
+
+
+def _migration_039_billing_invoice_total_amount(conn) -> None:
+    """Store the agreed invoice total independently from partial invoices."""
+    conn.execute(
+        """ALTER TABLE billing_cases
+           ADD COLUMN IF NOT EXISTS invoice_total_amount NUMERIC(14, 3) NULL
+               CHECK (invoice_total_amount IS NULL OR invoice_total_amount > 0)"""
+    )
+    # Existing completed invoices already represent their full agreed amount.
+    conn.execute(
+        """WITH completed_totals AS (
+               SELECT case_id, SUM(amount) AS total
+               FROM billing_invoices
+               GROUP BY case_id
+               HAVING BOOL_OR(is_total_invoice)
+           )
+           UPDATE billing_cases bc
+           SET invoice_total_amount = completed_totals.total
+           FROM completed_totals
+           WHERE bc.id = completed_totals.case_id
+             AND bc.invoice_total_amount IS NULL"""
+    )
+
+
 def _migration_022_intervention_work_sessions(conn) -> None:
     """Store every dated work period instead of one time pair per technician."""
     # Fresh databases reach recorded migrations before the legacy runtime
@@ -1464,6 +1537,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("035", "aggregate billing by full contract", _migration_035_contract_global_billing),
     ("036", "multiple billing delivery notes and invoices", _migration_036_multiple_billing_documents),
     ("037", "refresh unambiguous technician assignment IDs", _migration_037_refresh_technician_assignment_ids),
+    ("038", "billing case client and equipment identity links", _migration_038_billing_case_identity_links),
+    ("039", "billing invoice total amount", _migration_039_billing_invoice_total_amount),
 )
 
 

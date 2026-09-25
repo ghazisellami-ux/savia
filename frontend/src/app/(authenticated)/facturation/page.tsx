@@ -8,7 +8,7 @@ import {
   Loader2, PackageCheck, Plus, Receipt, RefreshCw, Search, Send,
   Trash2, Users, WalletCards, Wrench, X,
 } from 'lucide-react';
-import { billing, clients as clientsApi, equipements, interventions, settings as settingsApi } from '@/lib/api';
+import { billing, clients as clientsApi, interventions, settings as settingsApi } from '@/lib/api';
 import { Modal } from '@/components/ui/modal';
 import { useAuth } from '@/lib/auth-context';
 import { useRoleGuard } from '@/lib/use-role-guard';
@@ -145,6 +145,9 @@ interface BillingCase {
   invoices?: BillingInvoice[];
   delivery_note_complete?: boolean;
   invoice_complete?: boolean;
+  invoice_total_amount?: number | null;
+  invoiced_amount?: number;
+  remaining_to_invoice?: number | null;
   paid_amount: number;
   invoice_amount: number;
   remaining_amount: number;
@@ -180,7 +183,12 @@ interface InterventionOption {
 interface EquipmentOption {
   id: number;
   name: string;
-  client: string;
+  numSerie: string;
+}
+
+interface ClientOption {
+  id: number;
+  name: string;
 }
 
 interface ResponsibleOption {
@@ -303,7 +311,7 @@ export default function FacturationPage() {
   useRoleGuard('facturation');
   const { user } = useAuth();
   const [cases, setCases] = useState<BillingCase[]>([]);
-  const [clients, setClients] = useState<string[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>([]);
   const [responsibles, setResponsibles] = useState<ResponsibleOption[]>([]);
   const [selectedCurrency, setSelectedCurrency] = useState('TND');
@@ -324,11 +332,17 @@ export default function FacturationPage() {
   const [documentDialog, setDocumentDialog] = useState<{ item: BillingCase; type: 'delivery' | 'invoice' } | null>(null);
   const [deliveryNotesForm, setDeliveryNotesForm] = useState<BillingDeliveryNote[]>([]);
   const [invoicesForm, setInvoicesForm] = useState<BillingInvoice[]>([]);
+  const [invoiceTotalAmount, setInvoiceTotalAmount] = useState('');
   const [paymentCase, setPaymentCase] = useState<BillingCase | null>(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm());
   const [newCaseOpen, setNewCaseOpen] = useState(false);
-  const [newCaseForm, setNewCaseForm] = useState({ client: '', equipment: '', owner_username: '', currency: 'TND' });
+  const [newCaseForm, setNewCaseForm] = useState({ client_id: '', equipment_id: '', owner_username: '', currency: 'TND' });
   const [duplicateDialog, setDuplicateDialog] = useState<DuplicateResolutionState | null>(null);
+  const invoicedInForm = invoicesForm.reduce((sum, invoice) => sum + (Number(invoice.amount) || 0), 0);
+  const parsedInvoiceTotal = Number(invoiceTotalAmount);
+  const hasInvoiceTotal = invoiceTotalAmount.trim() !== '' && Number.isFinite(parsedInvoiceTotal) && parsedInvoiceTotal > 0;
+  const remainingToInvoiceInForm = hasInvoiceTotal ? Math.max(0, parsedInvoiceTotal - invoicedInForm) : null;
+  const invoicesExceedTotal = hasInvoiceTotal && invoicedInForm > parsedInvoiceTotal;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -354,14 +368,10 @@ export default function FacturationPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     clientsApi.list()
-      .then(data => setClients([...new Set((data as Array<Record<string, unknown>>).map(item => String(item.nom || item.client || '')).map(value => value.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'))))
-      .catch(() => {});
-    equipements.list()
-      .then(data => setEquipmentOptions((data as Array<Record<string, unknown>>).map((item, index) => ({
-        id: Number(item.id) || index,
-        name: String(item.Nom || item.nom || item.name || '').trim(),
-        client: String(item.Client || item.client || '').trim(),
-      })).filter(item => item.name)))
+      .then(data => setClients((data as Array<Record<string, unknown>>)
+        .map(item => ({ id: Number(item.id), name: String(item.nom || item.client || '').trim() }))
+        .filter(item => item.id > 0 && item.name)
+        .sort((a, b) => a.name.localeCompare(b.name, 'fr'))))
       .catch(() => {});
     billing.responsibles()
       .then(data => setResponsibles((data as Array<Record<string, unknown>>).map(item => ({
@@ -411,28 +421,40 @@ export default function FacturationPage() {
     setNewCaseOpen(true);
   };
 
-  const equipmentForSelectedClient = useMemo(
-    () => equipmentOptions.filter(item => item.client.toLowerCase() === newCaseForm.client.toLowerCase()),
-    [equipmentOptions, newCaseForm.client],
-  );
-
-  const selectClient = (client: string) => {
-    const matching = equipmentOptions.filter(item => item.client.toLowerCase() === client.toLowerCase());
-    setNewCaseForm(value => ({ ...value, client, equipment: matching.length === 1 ? matching[0].name : '' }));
+  const selectClient = async (clientId: string) => {
+    setNewCaseForm(value => ({ ...value, client_id: clientId, equipment_id: '' }));
+    setEquipmentOptions([]);
+    const parsedClientId = Number(clientId);
+    if (!Number.isInteger(parsedClientId) || parsedClientId <= 0) return;
+    try {
+      const data = await billing.equipmentOptions(parsedClientId);
+      const options = (data as Array<Record<string, unknown>>)
+        .map(item => ({
+          id: Number(item.id),
+          name: String(item.nom || item.name || '').trim(),
+          numSerie: String(item.num_serie || item.NumSerie || '').trim(),
+        }))
+        .filter(item => item.id > 0 && item.name);
+      setEquipmentOptions(options);
+      if (options.length === 1) {
+        setNewCaseForm(value => value.client_id === clientId
+          ? { ...value, equipment_id: String(options[0].id) }
+          : value);
+      }
+    } catch (err) {
+      console.error('Impossible de charger les équipements du client', err);
+    }
   };
 
   const availableEquipmentFilters = useMemo(() => {
     const selectedClient = clientFilter.toLocaleLowerCase('fr');
     const equipmentNames = [
-      ...equipmentOptions
-        .filter(item => !selectedClient || item.client.toLocaleLowerCase('fr') === selectedClient)
-        .map(item => item.name),
       ...cases
         .filter(item => !selectedClient || item.client.toLocaleLowerCase('fr') === selectedClient)
         .map(item => item.equipment),
     ].map(value => value.trim()).filter(Boolean);
     return [...new Set(equipmentNames)].sort((a, b) => a.localeCompare(b, 'fr'));
-  }, [cases, clientFilter, equipmentOptions]);
+  }, [cases, clientFilter]);
 
   const filteredCases = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -531,7 +553,8 @@ export default function FacturationPage() {
       const created = await billing.create(newCaseForm) as unknown as BillingCase;
       setCases(previous => [created, ...previous.filter(item => item.id !== created.id)]);
       setNewCaseOpen(false);
-      setNewCaseForm({ client: '', equipment: '', owner_username: responsibles.find(item => item.username === user?.username)?.username || responsibles[0]?.username || '', currency: selectedCurrency });
+      setNewCaseForm({ client_id: '', equipment_id: '', owner_username: responsibles.find(item => item.username === user?.username)?.username || responsibles[0]?.username || '', currency: selectedCurrency });
+      setEquipmentOptions([]);
       setSelected(created);
       if (created.reused_existing_case) {
         setNotice(`Le dossier #${created.id} était déjà en cours pour cet équipement : aucun nouveau dossier n'a été créé.`);
@@ -654,6 +677,7 @@ export default function FacturationPage() {
       setDeliveryNotesForm((item.delivery_notes || []).map(note => ({ ...note, effective_date: note.effective_date?.slice(0, 10) || '' })));
     } else {
       setInvoicesForm((item.invoices || []).map(invoice => ({ ...invoice, effective_date: invoice.effective_date?.slice(0, 10) || '', due_date: invoice.due_date?.slice(0, 10) || '' })));
+      setInvoiceTotalAmount(item.invoice_total_amount === null || item.invoice_total_amount === undefined ? '' : String(item.invoice_total_amount));
     }
     setDocumentDialog({ item, type });
     setError('');
@@ -666,7 +690,11 @@ export default function FacturationPage() {
     try {
       const updated = documentDialog.type === 'delivery'
         ? await billing.saveDeliveryNotes(documentDialog.item.id, deliveryNotesForm)
-        : await billing.saveInvoices(documentDialog.item.id, invoicesForm);
+        : await billing.saveInvoices(
+          documentDialog.item.id,
+          invoicesForm,
+          invoiceTotalAmount === '' ? null : Number(invoiceTotalAmount),
+        );
       refreshCase(updated as unknown as BillingCase);
       setDocumentDialog(null);
     } catch (err: unknown) {
@@ -761,7 +789,7 @@ export default function FacturationPage() {
 
       <div className="glass grid grid-cols-1 gap-3 rounded-xl p-3 xl:grid-cols-[minmax(260px,1fr)_minmax(180px,0.55fr)_minmax(180px,0.55fr)_minmax(210px,0.65fr)_auto]">
         <div className="relative min-w-0"><Search className="absolute left-3 top-2.5 h-4 w-4 text-savia-text-dim" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Client, équipement, technicien, référence…" className={`${INPUT} pl-9`} /></div>
-        <select value={clientFilter} onChange={event => { setClientFilter(event.target.value); setEquipmentFilter(''); }} className={`${INPUT} min-w-0`}><option value="">Tous les clients</option>{[...new Set([...clients, ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
+        <select value={clientFilter} onChange={event => { setClientFilter(event.target.value); setEquipmentFilter(''); }} className={`${INPUT} min-w-0`}><option value="">Tous les clients</option>{[...new Set([...clients.map(client => client.name), ...cases.map(item => item.client)])].filter(Boolean).sort().map(client => <option key={client}>{client}</option>)}</select>
         <select value={equipmentFilter} onChange={event => setEquipmentFilter(event.target.value)} disabled={availableEquipmentFilters.length === 0} className={`${INPUT} min-w-0 disabled:cursor-not-allowed disabled:opacity-50`}><option value="">Tous les équipements</option>{availableEquipmentFilters.map(equipment => <option key={equipment}>{equipment}</option>)}</select>
         <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={`${INPUT} min-w-0`}>
           <option value="">Tous les statuts</option>
@@ -821,9 +849,10 @@ export default function FacturationPage() {
       <Modal isOpen={!!documentDialog} onClose={() => setDocumentDialog(null)} title={documentDialog?.type === 'delivery' ? 'Bons de livraison' : 'Factures'} size="lg">
         {documentDialog && <div className="space-y-4">
           <p className="text-sm text-savia-text-muted">Ajoutez chaque document partiel séparément. Cochez « {documentDialog.type === 'delivery' ? 'Livraison totale' : 'Facturation totale'} » uniquement sur le document qui clôture cette étape.</p>
+          {documentDialog.type === 'invoice' && <div className="rounded-xl border border-savia-accent/30 bg-savia-accent/5 p-3"><label><span className={LABEL}>Montant global à facturer</span><input type="number" min="0.001" step="0.001" className={INPUT} value={invoiceTotalAmount} onChange={event => setInvoiceTotalAmount(event.target.value)} placeholder="Montant total convenu avec le client" /></label>{hasInvoiceTotal && <div className={`mt-3 flex flex-wrap justify-between gap-2 text-sm ${invoicesExceedTotal ? 'text-red-300' : 'text-savia-text-muted'}`}><span>Factures saisies : <strong>{money(invoicedInForm, documentDialog.item.currency)}</strong></span><span>Reste à facturer : <strong className={invoicesExceedTotal ? 'text-red-300' : 'text-yellow-300'}>{money(remainingToInvoiceInForm || 0, documentDialog.item.currency)}</strong></span></div>}{invoicesExceedTotal && <p className="mt-2 text-xs font-semibold text-red-300">Le total des factures dépasse le montant global saisi.</p>}</div>}
           <button type="button" onClick={() => documentDialog.type === 'delivery' ? setDeliveryNotesForm(value => [...value, { effective_date: today(), reference: '', amount: null, is_total_delivery: false, note: '' }]) : setInvoicesForm(value => [...value, { effective_date: today(), due_date: '', reference: '', amount: 0, is_total_invoice: false, note: '' }])} className="inline-flex items-center gap-1.5 rounded-lg border border-savia-border px-3 py-2 text-xs font-bold text-savia-accent hover:bg-savia-surface-hover"><Plus className="h-3.5 w-3.5" /> Ajouter {documentDialog.type === 'delivery' ? 'un BL' : 'une facture'}</button>
           {documentDialog.type === 'delivery' ? <div className="space-y-3">{deliveryNotesForm.map((note, index) => <div key={note.id || index} className="grid gap-2 rounded-xl border border-savia-border p-3 md:grid-cols-[1fr_1.2fr_0.8fr_auto]"><label><span className={LABEL}>Date BL {index + 1}</span><input type="date" max={today()} className={INPUT} value={note.effective_date} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, effective_date: event.target.value } : current))} /></label><label><span className={LABEL}>Référence</span><input className={INPUT} value={note.reference || ''} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, reference: event.target.value } : current))} /></label><label><span className={LABEL}>Montant</span><input type="number" min="0" step="0.001" className={INPUT} value={note.amount ?? ''} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, amount: event.target.value === '' ? null : Number(event.target.value) } : current))} /></label><div className="flex items-end gap-2"><label className="mb-2 flex items-center gap-2 text-xs font-semibold text-savia-text-muted"><input type="checkbox" checked={note.is_total_delivery} onChange={event => setDeliveryNotesForm(value => value.map((current, currentIndex) => ({ ...current, is_total_delivery: currentIndex === index ? event.target.checked : event.target.checked ? false : current.is_total_delivery }))) } /> Livraison totale</label><button type="button" onClick={() => setDeliveryNotesForm(value => value.filter((_, currentIndex) => currentIndex !== index))} className="mb-1 rounded-lg p-2 text-savia-text-dim hover:bg-red-500/10 hover:text-red-300"><Trash2 className="h-4 w-4" /></button></div></div>)}{deliveryNotesForm.length === 0 && <p className="rounded-lg border border-dashed border-savia-border p-4 text-center text-sm text-savia-text-muted">Aucun BL. Ajoutez la première livraison.</p>}</div> : <div className="space-y-3">{invoicesForm.map((invoice, index) => <div key={invoice.id || index} className="grid gap-2 rounded-xl border border-savia-border p-3 md:grid-cols-[1fr_1fr_1.2fr_0.8fr_auto]"><label><span className={LABEL}>Date facture {index + 1}</span><input type="date" max={today()} className={INPUT} value={invoice.effective_date} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, effective_date: event.target.value } : current))} /></label><label><span className={LABEL}>Échéance</span><input type="date" min={invoice.effective_date} className={INPUT} value={invoice.due_date} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, due_date: event.target.value } : current))} /></label><label><span className={LABEL}>Référence</span><input className={INPUT} value={invoice.reference || ''} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, reference: event.target.value } : current))} /></label><label><span className={LABEL}>Montant</span><input type="number" min="0" step="0.001" className={INPUT} value={invoice.amount} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => currentIndex === index ? { ...current, amount: Number(event.target.value) } : current))} /></label><div className="flex items-end gap-2"><label className="mb-2 flex items-center gap-2 text-xs font-semibold text-savia-text-muted"><input type="checkbox" checked={invoice.is_total_invoice} onChange={event => setInvoicesForm(value => value.map((current, currentIndex) => ({ ...current, is_total_invoice: currentIndex === index ? event.target.checked : event.target.checked ? false : current.is_total_invoice }))) } /> Facturation totale</label><button type="button" onClick={() => setInvoicesForm(value => value.filter((_, currentIndex) => currentIndex !== index))} className="mb-1 rounded-lg p-2 text-savia-text-dim hover:bg-red-500/10 hover:text-red-300"><Trash2 className="h-4 w-4" /></button></div></div>)}{invoicesForm.length === 0 && <p className="rounded-lg border border-dashed border-savia-border p-4 text-center text-sm text-savia-text-muted">Aucune facture. Ajoutez la première facture.</p>}</div>}
-          <div className="flex justify-end gap-2"><button onClick={() => setDocumentDialog(null)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving} onClick={saveDocuments} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Enregistrer</button></div>
+          <div className="flex justify-end gap-2"><button onClick={() => setDocumentDialog(null)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving || (documentDialog.type === 'invoice' && invoicesExceedTotal)} onClick={saveDocuments} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Enregistrer</button></div>
         </div>}
       </Modal>
 
@@ -841,10 +870,10 @@ export default function FacturationPage() {
       <Modal isOpen={newCaseOpen} onClose={() => setNewCaseOpen(false)} title="Nouveau dossier de facturation" size="md">
         <div className="space-y-4">
           <p className="text-sm text-savia-text-muted">Utilisez ce formulaire lorsqu&apos;un devis existe avant la création de l&apos;intervention SAV.</p>
-          <div><label className={LABEL}>Client *</label><select className={INPUT} value={newCaseForm.client} onChange={event => selectClient(event.target.value)}><option value="">Sélectionner un client</option>{clients.map(client => <option key={client} value={client}>{client}</option>)}</select>{!clients.length && <p className="mt-1 text-xs text-amber-300">Aucun client disponible depuis l&apos;API.</p>}</div>
-          <div><label className={LABEL}>Équipement</label><select className={INPUT} value={newCaseForm.equipment} disabled={!newCaseForm.client} onChange={event => setNewCaseForm(value => ({ ...value, equipment: event.target.value }))}><option value="">{newCaseForm.client ? (equipmentForSelectedClient.length ? 'Sélectionner un équipement' : 'Aucun équipement pour ce client') : 'Sélectionnez d’abord un client'}</option>{equipmentForSelectedClient.map(item => <option key={`${item.id}-${item.name}`} value={item.name}>{item.name}</option>)}</select></div>
+          <div><label className={LABEL}>Client *</label><select className={INPUT} value={newCaseForm.client_id} onChange={event => void selectClient(event.target.value)}><option value="">Sélectionner un client</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>{!clients.length && <p className="mt-1 text-xs text-amber-300">Aucun client disponible depuis l&apos;API.</p>}</div>
+          <div><label className={LABEL}>Équipement</label><select className={INPUT} value={newCaseForm.equipment_id} disabled={!newCaseForm.client_id} onChange={event => setNewCaseForm(value => ({ ...value, equipment_id: event.target.value }))}><option value="">{newCaseForm.client_id ? (equipmentOptions.length ? 'Sélectionner un équipement' : 'Aucun équipement pour ce client') : 'Sélectionnez d’abord un client'}</option>{equipmentOptions.map(item => <option key={item.id} value={item.id}>{item.name} — N° série : {item.numSerie || 'non renseigné'}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-3"><div><label className={LABEL}>Responsable</label><select className={INPUT} value={newCaseForm.owner_username} onChange={event => setNewCaseForm(value => ({ ...value, owner_username: event.target.value }))}><option value="">Non assigné</option>{responsibles.map(item => <option key={item.username} value={item.username}>{item.display_name} · {item.role}</option>)}</select></div><div><label className={LABEL}>Devise</label><input readOnly className={`${INPUT} cursor-not-allowed opacity-75`} value={newCaseForm.currency} title="Devise définie dans les paramètres" /><p className="mt-1 text-[11px] text-savia-text-dim">Synchronisée avec les paramètres</p></div></div>
-          <div className="flex justify-end gap-2"><button onClick={() => setNewCaseOpen(false)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving || !newCaseForm.client.trim()} onClick={createCase} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Créer</button></div>
+          <div className="flex justify-end gap-2"><button onClick={() => setNewCaseOpen(false)} className="rounded-lg border border-savia-border px-4 py-2 text-sm">Annuler</button><button disabled={saving || !newCaseForm.client_id} onClick={createCase} className="flex items-center gap-2 rounded-lg bg-savia-accent px-4 py-2 text-sm font-bold text-savia-bg disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Créer</button></div>
         </div>
       </Modal>
 
