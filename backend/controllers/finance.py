@@ -41,6 +41,7 @@ from services.scheduled_jobs import (
     lire_planning,
     logger,
     pd,
+    sync_planning_to_interventions,
 )
 from controllers.auth_dashboard import (
     Depends,
@@ -556,6 +557,9 @@ def sla_status(client: Optional[str] = None, user: dict = Depends(_verify_token)
     """Suivi SLA temps réel : interventions ouvertes vs engagements contractuels."""
     effective_client = resolve_client_scope(user, client)
     try:
+        # Keep the SLA page current even when the scheduler has not yet run.
+        sync_planning_to_interventions(notify=False)
+
         df_contrats = lire_contrats()
         df_interv = lire_interventions()
         df_equip = lire_equipements()
