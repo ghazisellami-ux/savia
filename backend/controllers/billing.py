@@ -44,6 +44,31 @@ def list_billing_responsibles(user: dict = Depends(_verify_token)):
     return [_dict(row) for row in rows]
 
 
+@app.get("/api/billing/equipment-options")
+def list_billing_equipment_options(client_id: int, user: dict = Depends(_verify_token)):
+    """List a client's equipment by the selected client ID.
+
+    Names and serial numbers are display fields only.  The UI submits the
+    returned equipment ID when it creates a billing case.
+    """
+    require_roles(user, *BILLING_ROLES)
+    with get_db() as conn:
+        client = conn.execute(
+            "SELECT id, nom FROM clients WHERE id = %s",
+            (client_id,),
+        ).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client introuvable")
+        rows = conn.execute(
+            """SELECT id, nom, num_serie
+               FROM equipements
+               WHERE LOWER(BTRIM(COALESCE(client, ''))) = LOWER(BTRIM(%s))
+               ORDER BY LOWER(nom), LOWER(num_serie), id""",
+            (client["nom"],),
+        ).fetchall()
+    return [_dict(row) for row in rows]
+
+
 def _username(user: dict) -> str:
     return str(user.get("sub") or user.get("nom") or "unknown")
 
@@ -140,10 +165,12 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
         params = (case_id,)
     rows = conn.execute(
         f"""SELECT bc.id, bc.intervention_id, bc.request_id, bc.merged_into_case_id,
-                   COALESCE(NULLIF(bc.client, ''), NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, ''), e.client, '') AS client,
-                   COALESCE(NULLIF(bc.equipment, ''), i.machine,
+                   bc.client_id, bc.equipment_id,
+                   COALESCE(NULLIF(billing_client.nom, ''), NULLIF(bc.client, ''), NULLIF(i.client, ''), NULLIF(d.client, ''), NULLIF(pm.client, ''), e.client, '') AS client,
+                   COALESCE(NULLIF(billing_equipment.nom, ''), NULLIF(bc.equipment, ''), i.machine,
                             CASE WHEN bc.contract_id IS NOT NULL THEN 'Contrat #' || bc.contract_id::text ELSE '' END) AS equipment,
                    bc.owner_username, bc.currency, bc.case_state, bc.block_reason,
+                   bc.invoice_total_amount,
                    bc.contract_id, bc.billing_cycle_date, bc.coverage_status, bc.coverage_reason,
                    COALESCE(bc.uncovered_labor_cost, 0) AS uncovered_labor_cost,
                    COALESCE(bc.uncovered_parts_cost, 0) AS uncovered_parts_cost,
@@ -195,6 +222,8 @@ def _load_rows(conn, case_id: int | None = None) -> list[dict[str, Any]]:
             ) d ON TRUE
             LEFT JOIN planning_maintenance pm ON pm.id = i.planning_id
             LEFT JOIN equipements e ON e.id = i.equipement_id
+            LEFT JOIN clients billing_client ON billing_client.id = bc.client_id
+            LEFT JOIN equipements billing_equipment ON billing_equipment.id = bc.equipment_id
             LEFT JOIN contrats c ON c.id=bc.contract_id
             {where}
               AND NOT (
@@ -358,6 +387,12 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
                 "note": "Validé automatiquement après la clôture de toutes les interventions du contrat",
             }
         paid_amount = sum(Decimal(str(payment["amount"])) for payment in payments)
+        invoiced_amount = sum(Decimal(str(invoice.get("amount") or 0)) for invoice in invoices)
+        configured_invoice_total = (
+            Decimal(str(item["invoice_total_amount"]))
+            if item.get("invoice_total_amount") is not None
+            else None
+        )
         invoice = steps.get("invoice")
         invoice_amount = Decimal(str(invoice["amount"])) if invoice and invoice.get("amount") is not None else Decimal("0")
         remaining = max(Decimal("0"), invoice_amount - paid_amount)
@@ -386,6 +421,11 @@ def _hydrate_cases(conn, base_rows: list[dict[str, Any]]) -> list[dict[str, Any]
             "payments": payments,
             "delivery_notes": delivery_notes,
             "invoices": invoices,
+            "invoiced_amount": float(invoiced_amount),
+            "remaining_to_invoice": (
+                float(max(Decimal("0"), configured_invoice_total - invoiced_amount))
+                if configured_invoice_total is not None else None
+            ),
             "delivery_note_complete": automatic_contract_delivery or any(note.get("is_total_delivery") for note in delivery_notes),
             "invoice_complete": any(invoice.get("is_total_invoice") for invoice in invoices),
             "paid_amount": float(paid_amount),
@@ -650,18 +690,38 @@ def reassess_billing_coverage(case_id: int, user: dict = Depends(_verify_token))
 def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_token)):
     require_roles(user, *BILLING_ROLES)
     actor = _username(user)
-    client = str(body.get("client") or "").strip()
-    equipment = str(body.get("equipment") or "").strip()
+    try:
+        client_id = int(body.get("client_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Un identifiant client valide est obligatoire")
+    raw_equipment_id = body.get("equipment_id")
+    try:
+        equipment_id = int(raw_equipment_id) if raw_equipment_id not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Identifiant équipement invalide")
+    if client_id <= 0 or (equipment_id is not None and equipment_id <= 0):
+        raise HTTPException(status_code=422, detail="Les identifiants client et équipement doivent être positifs")
     intervention_id = body.get("intervention_id") or None
     request_id = body.get("request_id") or None
     currency = str(body.get("currency") or "TND").strip().upper()
     if len(currency) != 3 or not currency.isalpha():
         raise HTTPException(status_code=422, detail="La devise doit contenir trois lettres")
     with get_db() as conn:
+        client_row = conn.execute(
+            "SELECT id, nom FROM clients WHERE id = %s",
+            (client_id,),
+        ).fetchone()
+        if not client_row:
+            raise HTTPException(status_code=404, detail="Client introuvable")
+        client = str(client_row["nom"] or "").strip()
+        if not client:
+            raise HTTPException(status_code=422, detail="Le client sélectionné est incomplet")
+        equipment = ""
         if intervention_id:
             intervention = conn.execute(
-                """SELECT i.id, COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
-                          i.machine
+                """SELECT i.id, i.equipement_id,
+                          COALESCE(NULLIF(i.client, ''), e.client, '') AS client,
+                          COALESCE(NULLIF(e.nom, ''), i.machine, '') AS equipment
                    FROM interventions i
                    LEFT JOIN equipements e ON e.id = i.equipement_id
                    WHERE i.id = %s""",
@@ -675,19 +735,30 @@ def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_tok
             ).fetchone()
             if existing:
                 return _load_case(conn, existing["id"])
-            client = client or intervention["client"]
-            equipment = equipment or intervention["machine"]
-        if not client:
-            raise HTTPException(status_code=422, detail="Le client est obligatoire")
-        if equipment:
-            duplicate_key = f"{client.casefold()}::{equipment.casefold()}"
+            if str(intervention["client"] or "").strip() and str(intervention["client"]).strip().casefold() != client.casefold():
+                raise HTTPException(status_code=422, detail="Le client ne correspond pas à l'intervention")
+            if intervention["equipement_id"]:
+                intervention_equipment_id = int(intervention["equipement_id"])
+                if equipment_id is not None and equipment_id != intervention_equipment_id:
+                    raise HTTPException(status_code=422, detail="L'équipement ne correspond pas à l'intervention")
+                equipment_id = intervention_equipment_id
+        if equipment_id is not None:
+            equipment_row = conn.execute(
+                "SELECT id, nom, client FROM equipements WHERE id = %s",
+                (equipment_id,),
+            ).fetchone()
+            if not equipment_row:
+                raise HTTPException(status_code=404, detail="Équipement introuvable")
+            if str(equipment_row["client"] or "").strip().casefold() != client.casefold():
+                raise HTTPException(status_code=422, detail="L'équipement sélectionné n'appartient pas au client")
+            equipment = str(equipment_row["nom"] or "").strip()
+            duplicate_key = f"equipment:{equipment_id}"
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (duplicate_key,))
             existing_open_case = conn.execute(
                 """SELECT bc.id
                    FROM billing_cases bc
                    LEFT JOIN interventions i ON i.id = bc.intervention_id
-                   WHERE LOWER(BTRIM(bc.client)) = LOWER(BTRIM(%s))
-                     AND LOWER(BTRIM(bc.equipment)) = LOWER(BTRIM(%s))
+                   WHERE bc.equipment_id = %s
                      AND bc.merged_into_case_id IS NULL
                      AND bc.case_state <> 'cancelled'
                      AND (
@@ -707,7 +778,7 @@ def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_tok
                    ORDER BY bc.updated_at DESC, bc.id DESC
                    LIMIT 1
                    FOR UPDATE OF bc""",
-                (client, equipment),
+                (equipment_id,),
             ).fetchone()
             if existing_open_case:
                 existing = _load_case(conn, existing_open_case["id"])
@@ -717,12 +788,12 @@ def create_billing_case(body: dict = Body(...), user: dict = Depends(_verify_tok
         _validate_owner(conn, owner_username)
         row = conn.execute(
             """INSERT INTO billing_cases (
-                   intervention_id, request_id, client, equipment, owner_username,
+                   intervention_id, request_id, client_id, equipment_id, client, equipment, owner_username,
                    currency, created_by, updated_by
-               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
-                intervention_id, request_id, client, equipment,
+                intervention_id, request_id, client_id, equipment_id, client, equipment,
                 owner_username, currency, actor, actor,
             ),
         ).fetchone()
@@ -1185,6 +1256,9 @@ def replace_billing_invoices(case_id: int, body: dict = Body(...), user: dict = 
     require_roles(user, *BILLING_ROLES)
     actor = _username(user)
     documents = _parse_document_list(body, "invoices", invoice=True)
+    invoice_total_amount = _parse_amount(body.get("invoice_total_amount"), "Le montant total à facturer")
+    if invoice_total_amount is not None and invoice_total_amount <= 0:
+        raise HTTPException(status_code=422, detail="Le montant total à facturer doit être positif")
     with get_db() as conn:
         case = _load_case(conn, case_id)
         if case.get("coverage_status") == "covered" and not case.get("contract_id"):
@@ -1206,10 +1280,24 @@ def replace_billing_invoices(case_id: int, body: dict = Body(...), user: dict = 
             if latest_delivery and document["effective_date"] < latest_delivery:
                 raise HTTPException(status_code=422, detail="La facture ne peut pas précéder le bon de livraison")
         total_amount = sum((document["amount"] or Decimal("0")) for document in documents)
+        if invoice_total_amount is not None and total_amount > invoice_total_amount:
+            raise HTTPException(status_code=422, detail="Le total des factures partielles dépasse le montant global à facturer")
+        if (
+            invoice_total_amount is not None
+            and any(document["is_total_invoice"] for document in documents)
+            and total_amount != invoice_total_amount
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="La facturation totale doit correspondre au montant global à facturer",
+            )
         paid_amount = Decimal(str(case.get("paid_amount") or 0))
         if paid_amount > total_amount:
             raise HTTPException(status_code=422, detail="Le montant total des factures est inférieur aux paiements déjà enregistrés")
-        before = {"invoices": case.get("invoices") or []}
+        before = {
+            "invoices": case.get("invoices") or [],
+            "invoice_total_amount": case.get("invoice_total_amount"),
+        }
         conn.execute("DELETE FROM billing_invoices WHERE case_id=%s", (case_id,))
         for document in documents:
             conn.execute(
@@ -1222,10 +1310,18 @@ def replace_billing_invoices(case_id: int, body: dict = Body(...), user: dict = 
                     document["amount"], document["is_total_invoice"], document["note"], actor, actor,
                 ),
             )
-        conn.execute("UPDATE billing_cases SET updated_by=%s, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (actor, case_id))
+        conn.execute(
+            """UPDATE billing_cases
+               SET invoice_total_amount=%s, updated_by=%s, updated_at=CURRENT_TIMESTAMP
+               WHERE id=%s""",
+            (invoice_total_amount, actor, case_id),
+        )
         result = _load_case(conn, case_id)
         _history(conn, case_id, "REPLACE_INVOICES", "case", case_id, actor, before=before,
-                 after={"invoices": result.get("invoices") or []})
+                 after={
+                     "invoices": result.get("invoices") or [],
+                     "invoice_total_amount": result.get("invoice_total_amount"),
+                 })
     log_audit(actor, "REPLACE_BILLING_INVOICES", json.dumps({"case_id": case_id}, ensure_ascii=False), "facturation")
     return result
 

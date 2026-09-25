@@ -556,6 +556,8 @@ export const domaines_custom = {
 // --- Suivi facturation ---
 export const billing = {
   responsibles: () => request<Array<Record<string, unknown>>>('/api/billing/responsibles'),
+  equipmentOptions: (clientId: number) =>
+    request<Array<Record<string, unknown>>>(`/api/billing/equipment-options?client_id=${clientId}`),
   list: (filters?: { status?: string; client?: string; search?: string }) => {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
@@ -593,8 +595,11 @@ export const billing = {
     amount: number;
     is_total_invoice: boolean;
     note?: string;
-  }>) =>
-    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/invoices`, { method: 'PUT', body: { invoices } }),
+  }>, invoiceTotalAmount?: number | null) =>
+    request<Record<string, unknown>>(`/api/billing/cases/${caseId}/invoices`, {
+      method: 'PUT',
+      body: { invoices, invoice_total_amount: invoiceTotalAmount ?? null },
+    }),
   addPayment: (caseId: number, data: Record<string, unknown>) =>
     request<Record<string, unknown>>(`/api/billing/cases/${caseId}/payments`, { method: 'POST', body: data }),
   updatePayment: (caseId: number, paymentId: number, data: Record<string, unknown>) =>
