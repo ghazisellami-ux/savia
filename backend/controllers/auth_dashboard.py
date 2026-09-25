@@ -37,6 +37,7 @@ from services.sla_tracking import (
     sla_contract_for,
     sla_start_value,
 )
+from services.scheduled_jobs import sync_planning_to_interventions
 from api.security import (
     ChangePasswordRequest,
     LoginRequest,
@@ -341,6 +342,14 @@ def get_dashboard_kpis(
 ):
     """Compute real KPIs from the database, optionally filtered by client, region, ville, equipment type, and date range."""
     try:
+        # Synchronize due maintenance before every dashboard calculation. This
+        # prevents the dashboard from showing figures that only become current
+        # after the user opens the interventions or SLA page.
+        try:
+            sync_planning_to_interventions(notify=False)
+        except Exception as exc:
+            logger.warning("Planning sync before dashboard KPIs failed: %s", exc)
+
         df_eq = lire_equipements()
         df_int = lire_interventions()
         df_clients = db_lire_clients()  # Get ALL clients from clients table
@@ -595,57 +604,19 @@ def get_dashboard_kpis(
         except Exception as exc:
             logger.warning("Unable to compute preventive dashboard KPIs: %s", exc)
 
-        # SLA: use the same contract-resolution rules as the dedicated SLA
-        # page. The rate combines closed cases in the selected period with
-        # currently open commitments; only work covered by a contract is used.
+        # SLA: the dedicated SLA endpoint is the sole authority for these
+        # real-time metrics, including active requests and breached cases.
+        # Calling it here prevents its total from drifting from the dashboard.
         sla_respect_pct = 100.0
         sla_hors_delai = 0
         sla_suivies = 0
         try:
-            contractual_slas = active_sla_contracts(
-                lire_contrats().to_dict("records"), get_contract_equipements,
-            )
-            machine_clients = {}
-            if not df_eq_for_status.empty and {"Nom", "Client"}.issubset(df_eq_for_status.columns):
-                machine_clients = dict(zip(df_eq_for_status["Nom"], df_eq_for_status["Client"]))
+            from controllers.finance import sla_status
 
-            active_sla_items = []
-            if not df_int_current.empty:
-                for _, intervention in df_int_current.iterrows():
-                    if _is_closed_status(intervention.get("statut")):
-                        continue
-                    machine = intervention.get("machine", "")
-                    client_name = intervention.get("client", "") or machine_clients.get(machine, "")
-                    contract = sla_contract_for(contractual_slas, client_name, machine, intervention.get("type_intervention", ""))
-                    if not contract:
-                        continue
-                    elapsed = elapsed_hours(sla_start_value(intervention), datetime.now(), business_day_start_hour=8)
-                    if elapsed is None:
-                        continue
-                    active_sla_items.append({"breached": elapsed > contract["sla_h"]})
-
-            historical_compliant = 0
-            historical_total = 0
-            if not df_int.empty:
-                for _, intervention in df_int.iterrows():
-                    if not _is_closed_status(intervention.get("statut")):
-                        continue
-                    start = pd.to_datetime(intervention.get("date_debut_intervention"), errors="coerce")
-                    end = pd.to_datetime(intervention.get("date_cloture"), errors="coerce")
-                    if pd.isna(start) or pd.isna(end):
-                        continue
-                    machine = intervention.get("machine", "")
-                    client_name = intervention.get("client", "") or machine_clients.get(machine, "")
-                    contract = sla_contract_for(contractual_slas, client_name, machine, intervention.get("type_intervention", ""))
-                    if not contract:
-                        continue
-                    historical_total += 1
-                    if (end - start).total_seconds() <= contract["sla_h"] * 3600:
-                        historical_compliant += 1
-
-            sla_hors_delai = sum(1 for item in active_sla_items if item["breached"])
-            sla_suivies = historical_total + len(active_sla_items)
-            sla_respect_pct = compliance_percentage(historical_compliant, historical_total, active_sla_items)
+            sla_kpis = sla_status(client=effective_client, user=user).get("kpis", {})
+            sla_respect_pct = float(sla_kpis.get("compliance_pct", 100.0))
+            sla_hors_delai = int(sla_kpis.get("nb_breached", 0))
+            sla_suivies = int(sla_kpis.get("total_active", 0))
         except Exception as exc:
             logger.warning("Unable to compute SLA dashboard KPIs: %s", exc)
         
