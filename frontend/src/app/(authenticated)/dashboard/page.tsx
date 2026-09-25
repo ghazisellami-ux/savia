@@ -48,6 +48,24 @@ interface HealthScore {
   client?: string;
 }
 
+interface DashboardData {
+  kpis: KpiData;
+  healthScores: HealthScore[];
+  interventions: any[];
+  rangeKey: string;
+}
+
+interface DashboardSnapshot {
+  cachedAt: number;
+  kpis: KpiData;
+  healthScores: HealthScore[];
+}
+
+// The dashboard is refreshed every 30 seconds. Keeping the latest verified
+// response for a very short time lets users return to this page without a
+// blank KPI grid, while still replacing it immediately with a fresh response.
+const DASHBOARD_SNAPSHOT_MAX_AGE_MS = 45_000;
+
 const clientKey = (client: string) => client.trim().toLocaleLowerCase();
 
 // --- Chart theme ---
@@ -210,13 +228,11 @@ export default function DashboardPage() {
 
   // --- Computed date range ---
   const dateRange = useMemo(() => getDateRange(periodMode, selectedMonth, selectedYear), [periodMode, selectedMonth, selectedYear]);
+  const dashboardRangeKey = `${dateRange.date_start}:${dateRange.date_end}`;
+  const dashboardSnapshotKey = `savia_dashboard_snapshot:${user?.username || 'anonymous'}:${dashboardRangeKey}`;
 
   // --- Cache for full unfiltered data (loaded once per date range) ---
-  const [fullData, setFullData] = useState<{
-    kpis: any;
-    healthScores: any;
-    interventions: any;
-  } | null>(null);
+  const [fullData, setFullData] = useState<DashboardData | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -238,9 +254,43 @@ export default function DashboardPage() {
 
   // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
+    let isCurrentRequest = true;
+
+    // A snapshot is only a display baseline. It never replaces the API call
+    // below and expires before the next two normal refresh cycles.
+    try {
+      const stored = localStorage.getItem(dashboardSnapshotKey);
+      if (stored) {
+        const snapshot = JSON.parse(stored) as DashboardSnapshot;
+        if (
+          Number.isFinite(snapshot.cachedAt)
+          && Date.now() - snapshot.cachedAt >= 0
+          && Date.now() - snapshot.cachedAt < DASHBOARD_SNAPSHOT_MAX_AGE_MS
+          && snapshot.kpis
+          && Array.isArray(snapshot.healthScores)
+        ) {
+          const snapshotData: DashboardData = {
+            kpis: snapshot.kpis,
+            healthScores: snapshot.healthScores,
+            interventions: [],
+            rangeKey: dashboardRangeKey,
+          };
+          setFullData(snapshotData);
+          // Set card values in the same update, rather than waiting for the
+          // filtering effect after the first render.
+          setKpis(snapshot.kpis);
+          setHealthScores(snapshot.healthScores);
+          setIsInitialLoading(false);
+          setIsLoading(false);
+        }
+      }
+    } catch (err) {
+      // A malformed or unavailable browser cache must never prevent the
+      // dashboard from loading from the server.
+      console.warn('Unable to restore dashboard snapshot', err);
+    }
+
     const loadFullData = async () => {
-      setIsInitialLoading(true);
-      
       try {
         // ALWAYS load with date range parameters, even without filters
         const [kpiData, healthData] = await Promise.all([
@@ -248,19 +298,35 @@ export default function DashboardPage() {
           dashboard.healthScores({ date_start: dateRange.date_start, date_end: dateRange.date_end }),
         ]);
         
-        const newData = {
-          kpis: kpiData,
-          healthScores: healthData,
+        const newData: DashboardData = {
+          kpis: kpiData as unknown as KpiData,
+          healthScores: healthData as HealthScore[],
           interventions: [],
+          rangeKey: dashboardRangeKey,
         };
 
-        // Set data immediately with empty interventions
-        setFullData(newData);
+        // Set current operational values immediately. Preserve an already
+        // loaded intervention list during the silent KPI refresh.
+        if (!isCurrentRequest) return;
+        setFullData(previous => ({
+          ...newData,
+          interventions: previous?.rangeKey === dashboardRangeKey ? previous.interventions : [],
+        }));
+        try {
+          localStorage.setItem(dashboardSnapshotKey, JSON.stringify({
+            cachedAt: Date.now(),
+            kpis: kpiData as unknown as KpiData,
+            healthScores: healthData as HealthScore[],
+          } satisfies DashboardSnapshot));
+        } catch (err) {
+          console.warn('Unable to save dashboard snapshot', err);
+        }
         setIsInitialLoading(false);
         
         // Load interventions in background (can be slow)
         try {
           const intervData = await interventionsApi.list();
+          if (!isCurrentRequest) return;
           setFullData(prev => prev ? {
             ...prev,
             interventions: intervData || [],
@@ -270,15 +336,18 @@ export default function DashboardPage() {
         }
       } catch (err) {
         console.error("Failed to load KPIs and health scores", err);
-        setIsInitialLoading(false);
+        if (isCurrentRequest) setIsInitialLoading(false);
       }
     };
     loadFullData();
-  }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi, refreshVersion]);
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [dashboardRangeKey, dashboardSnapshotKey, dashboard, interventionsApi, refreshVersion]);
 
   // --- Filter cached data when filters change (instant update) ---
   useEffect(() => {
-    if (!fullData) return;
+    if (!fullData || fullData.rangeKey !== dashboardRangeKey) return;
 
     // A client filter is resolved by the API so all operational KPI rules stay consistent.
     if (selectedClient && !selectedEquipType) {
@@ -383,7 +452,7 @@ export default function DashboardPage() {
       }
     };
     loadFilteredData();
-  }, [selectedClient, selectedEquipType, fullData, dateRange, dashboard, interventionsApi]);
+  }, [selectedClient, selectedEquipType, fullData, dashboardRangeKey, dateRange, dashboard, interventionsApi]);
 
   // --- Load availability trend data ---
   useEffect(() => {
@@ -427,7 +496,7 @@ export default function DashboardPage() {
   const mtbfStr = kpis.mtbf >= 24
     ? `${Math.floor(kpis.mtbf / 24)}j ${Math.round(kpis.mtbf % 24)}h`
     : `${kpis.mtbf.toFixed(0)}h`;
-  const showKpiLoading = !fullData || isInitialLoading;
+  const showKpiLoading = !fullData || fullData.rangeKey !== dashboardRangeKey || isInitialLoading;
 
   // Monthly bar chart data — compute from real interventions
   const monthlyChartData = useMemo(() => {
