@@ -1129,9 +1129,12 @@ def _migration_038_billing_case_identity_links(conn) -> None:
            UPDATE billing_cases bc
            SET client_id = uc.id
            FROM unique_clients uc
-           LEFT JOIN equipements e ON e.id = bc.equipment_id
            WHERE bc.client_id IS NULL
-             AND uc.client_key = LOWER(BTRIM(COALESCE(NULLIF(e.client, ''), bc.client, '')))"""
+             AND uc.client_key = LOWER(BTRIM(COALESCE(
+                 NULLIF((SELECT e.client FROM equipements e WHERE e.id = bc.equipment_id), ''),
+                 bc.client,
+                 ''
+             )))"""
     )
     conn.execute(
         """CREATE INDEX IF NOT EXISTS idx_billing_cases_client_id_updated
