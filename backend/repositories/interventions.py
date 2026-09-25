@@ -17,6 +17,7 @@ __all__ = [
     "InterventionAlreadyOpenError",
     "lock_equipment_intervention_key",
     "find_open_intervention",
+    "can_open_urgent_corrective_alongside_preventive",
     "lire_planning",
     "ajouter_planning",
     "update_planning_statut",
@@ -39,6 +40,50 @@ CLOSED_INTERVENTION_STATUSES = (
     "Résolue",
     "Resolue",
 )
+
+
+def _normalise_intervention_value(value: object) -> str:
+    return " ".join(str(value or "").casefold().replace("é", "e").replace("è", "e").split())
+
+
+def is_preventive_intervention(value: object) -> bool:
+    return "prevent" in _normalise_intervention_value(value)
+
+
+def is_urgent_corrective(value: object, priority: object) -> bool:
+    return (
+        "correct" in _normalise_intervention_value(value)
+        and _normalise_intervention_value(priority) in {"haute", "critique"}
+    )
+
+
+def can_open_urgent_corrective_alongside_preventive(
+    conn,
+    equipment_id: int,
+    client: str,
+    intervention_type: object,
+    priority: object,
+) -> bool:
+    """Allow only urgent corrective work to coexist with open preventive work.
+
+    The check is ID-scoped and all existing open interventions must be
+    preventive.  A second corrective intervention therefore remains blocked.
+    """
+    if not is_urgent_corrective(intervention_type, priority):
+        return False
+    closed_placeholders = ", ".join(["%s"] * len(CLOSED_INTERVENTION_STATUSES))
+    rows = conn.execute(
+        f"""
+        SELECT i.type_intervention
+        FROM interventions i
+        LEFT JOIN equipements e ON e.id = i.equipement_id
+        WHERE i.equipement_id = %s
+          AND LOWER(BTRIM(COALESCE(NULLIF(i.client, ''), e.client, ''))) = LOWER(BTRIM(%s))
+          AND COALESCE(i.statut, '') NOT IN ({closed_placeholders})
+        """,
+        (int(equipment_id), client, *CLOSED_INTERVENTION_STATUSES),
+    ).fetchall()
+    return bool(rows) and all(is_preventive_intervention(row["type_intervention"]) for row in rows)
 
 
 class InterventionAlreadyOpenError(ValueError):
@@ -192,7 +237,13 @@ def ajouter_intervention(intervention_dict):
             client = str(intervention_dict.get("client") or "").strip()
             lock_equipment_intervention_key(conn, equipment_id)
             existing = find_open_intervention(conn, equipment_id, client)
-            if existing:
+            if existing and not can_open_urgent_corrective_alongside_preventive(
+                conn,
+                equipment_id,
+                client,
+                intervention_dict.get("type_intervention", "Corrective"),
+                intervention_dict.get("priorite"),
+            ):
                 raise InterventionAlreadyOpenError(existing["id"])
 
         new_intervention = conn.execute("""
