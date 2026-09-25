@@ -2,6 +2,8 @@ from repositories.interventions import (
     CLOSED_INTERVENTION_STATUSES,
     InterventionAlreadyOpenError,
     find_open_intervention,
+    is_preventive_intervention,
+    is_urgent_corrective,
     lock_equipment_intervention_key,
 )
 
@@ -44,3 +46,11 @@ def test_duplicate_error_contains_existing_intervention_number():
 
     assert error.intervention_id == 91
     assert str(error) == "Une intervention est déjà ouverte #91 pour cet équipement."
+
+
+def test_only_high_or_critical_corrective_work_can_coexist_with_preventive_work():
+    assert is_preventive_intervention("Maintenance Préventive") is True
+    assert is_urgent_corrective("Corrective", "Haute") is True
+    assert is_urgent_corrective("Corrective", "Critique") is True
+    assert is_urgent_corrective("Corrective", "Moyenne") is False
+    assert is_urgent_corrective("Préventive", "Critique") is False
