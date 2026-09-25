@@ -55,7 +55,13 @@ from services.idempotency import (
     save_idempotent_response,
 )
 from repositories.equipment_status import retour_site_confirmation_requise
-from repositories.interventions import find_open_intervention, lock_equipment_intervention_key
+from repositories.interventions import (
+    can_open_urgent_corrective_alongside_preventive,
+    find_open_intervention,
+    is_preventive_intervention,
+    is_urgent_corrective,
+    lock_equipment_intervention_key,
+)
 from services.contract_billing import sync_ready_contract_billing_cycles
 
 
@@ -308,7 +314,9 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
             if equipement_id is not None:
                 lock_equipment_intervention_key(conn, equipement_id)
                 existing_intervention = find_open_intervention(conn, equipement_id, client)
-                if existing_intervention:
+                if existing_intervention and not can_open_urgent_corrective_alongside_preventive(
+                    conn, equipement_id, client, type_intervention, priorite,
+                ):
                     raise HTTPException(
                         status_code=409,
                         detail=(
@@ -328,8 +336,9 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                 "AND LOWER(BTRIM(d.equipement)) = LOWER(BTRIM(%s))"
             )
             equipment_params = (equipement_id,) if equipement_id is not None else (client, equipement)
-            existing_request = conn.execute(
+            existing_requests = conn.execute(
                 f"""SELECT d.id, d.intervention_id, d.statut,
+                          COALESCE(NULLIF(d.type_intervention, ''), i.type_intervention, '') AS type_intervention,
                           COALESCE(
                               (SELECT bc.id FROM billing_cases bc
                                WHERE bc.request_id = d.id ORDER BY bc.id LIMIT 1),
@@ -341,11 +350,19 @@ def create_demande(body: dict, user: dict = Depends(_verify_token)):
                    WHERE {equipment_match}
                      AND COALESCE(d.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
                      AND COALESCE(i.statut, '') !~* '(résol|resol|réalis|realis|clôt|clot|termin|annul)'
-                   ORDER BY d.id DESC
-                   LIMIT 1""",
+                   ORDER BY d.id DESC""",
                 equipment_params,
-            ).fetchone()
-            if existing_request:
+            ).fetchall()
+            existing_request = existing_requests[0] if existing_requests else None
+            preventive_requests_only = bool(existing_requests) and all(
+                is_preventive_intervention(request.get("type_intervention"))
+                for request in existing_requests
+            )
+            allows_urgent_corrective_request = (
+                is_urgent_corrective(type_intervention, priorite)
+                and preventive_requests_only
+            )
+            if existing_request and not allows_urgent_corrective_request:
                 existing_case = existing_request.get("billing_case_id")
                 case_suffix = f" dans le dossier #{existing_case}" if existing_case else ""
                 raise HTTPException(
