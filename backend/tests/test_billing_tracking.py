@@ -138,3 +138,17 @@ def test_multiple_billing_documents_migration_is_registered():
 
     assert len(document_migrations) == 1
     assert "multiple billing" in document_migrations[0][1]
+
+
+def test_billing_case_identity_migration_is_registered():
+    identity_migrations = [migration for migration in MIGRATIONS if migration[0] == "038"]
+
+    assert len(identity_migrations) == 1
+    assert "identity" in identity_migrations[0][1]
+
+
+def test_billing_invoice_total_migration_is_registered():
+    total_migrations = [migration for migration in MIGRATIONS if migration[0] == "039"]
+
+    assert len(total_migrations) == 1
+    assert "invoice total" in total_migrations[0][1]
