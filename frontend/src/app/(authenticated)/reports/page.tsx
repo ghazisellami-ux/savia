@@ -6,7 +6,7 @@ import {
   AlertTriangle, Calendar, Wrench, TrendingUp, DollarSign, CheckCircle2,
   ClipboardList, Target, Activity, ShieldCheck, Bot, ChevronRight
 } from 'lucide-react';
-import { interventions, equipements, ai, finances, contrats, pieces, settings } from '@/lib/api';
+import { interventions, equipements, ai, finances, contrats, pieces, settings, clients as clientsApi } from '@/lib/api';
 import { TrendingDown, PieChart as PieChartIcon } from 'lucide-react';
 
 const TAB_CLS = "px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-all cursor-pointer border-b-2";
@@ -20,6 +20,7 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [data, setData] = useState<any[]>([]);
   const [equips, setEquips] = useState<any[]>([]);
+  const [clientIdsByName, setClientIdsByName] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
@@ -51,9 +52,18 @@ export default function ReportsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [intv, eqs] = await Promise.all([interventions.list(), equipements.list()]);
+      const [intv, eqs, clientRows] = await Promise.all([
+        interventions.list(),
+        equipements.list(),
+        clientsApi.list().catch(() => []),
+      ]);
       setData(intv);
       setEquips(eqs);
+      setClientIdsByName(Object.fromEntries(
+        (clientRows as Array<Record<string, unknown>>)
+          .map((client): [string, number] => [String(client.nom || ''), Number(client.id)])
+          .filter(([name, id]) => Boolean(name) && Number.isInteger(id) && id > 0),
+      ));
       const cls = [...new Set((eqs as any[]).map((e: any) => e.Client).filter(Boolean))].sort();
       if (cls.length > 0) setSelClient(cls[0] as string);
     } catch (err) { console.error(err); }
@@ -335,7 +345,14 @@ export default function ReportsPage() {
         equipements_detail: selectedEquipments.map((equipment: any) => ({ nom: equipment.Nom || equipment.nom, client: equipment.Client || equipment.client, type: equipment.Type || equipment.type, statut: equipment.Statut || equipment.statut, score_sante: equipment.Score_Sante ?? equipment.score_sante ?? null })),
         contrats_detail: (contractsData as any[]).map((contract: any) => ({ client: contract.client || contract.Client, equipement: contract.equipement || contract.Equipement, type: contract.type_contrat || contract.Type_Contrat, statut: contract.statut || contract.Statut, avec_pieces: Boolean(contract.avec_pieces), date_fin: contract.date_fin || contract.Date_Fin })),
         stock_detail: scopedParts,
-      }, currencyCode);
+      }, currencyCode, {
+        // The server resolves the client from this stable ID before building
+        // the report context. The label remains only a display fallback.
+        client_id: iaClient === 'Tous les clients' ? undefined : clientIdsByName[iaClient],
+        client: iaClient === 'Tous les clients' ? undefined : iaClient,
+        year: iaAnnee,
+        month: iaPeriode === 'Mensuel' ? iaMois : undefined,
+      });
 
       if (res.ok && res.result) {
         setAiReport(res.result);
