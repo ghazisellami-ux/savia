@@ -219,33 +219,27 @@ export default function DashboardPage() {
   } | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // --- Load cached KPI data on mount ---
+  const [refreshVersion, setRefreshVersion] = useState(0);
+
+  // Dashboard operational KPIs must stay current without navigating through
+  // another page. Refresh while visible and immediately after returning here.
   useEffect(() => {
-    // Note: Cache is removed to ensure fresh data when date range changes
-    // This was causing stale data to be displayed when switching months/years
-    setIsInitialLoading(false);
+    const refresh = () => setRefreshVersion((version) => version + 1);
+    const interval = window.setInterval(refresh, 30000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   // --- Load full unfiltered data once when date range changes ---
   useEffect(() => {
-    const cacheKey = `dashboard_kpi_cache:${dateRange.date_start}:${dateRange.date_end}`;
-    let hasCachedData = false;
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed?.kpis && Array.isArray(parsed.healthScores)) {
-          setFullData({ kpis: parsed.kpis, healthScores: parsed.healthScores, interventions: [] });
-          setIsInitialLoading(false);
-          hasCachedData = true;
-        }
-      }
-    } catch (err) {
-      console.warn('Unable to read dashboard KPI cache', err);
-    }
-    
     const loadFullData = async () => {
-      if (!hasCachedData) setIsInitialLoading(true);
+      setIsInitialLoading(true);
       
       try {
         // ALWAYS load with date range parameters, even without filters
@@ -260,16 +254,6 @@ export default function DashboardPage() {
           interventions: [],
         };
 
-        try {
-          localStorage.setItem(cacheKey, JSON.stringify({
-            kpis: kpiData,
-            healthScores: healthData,
-            cachedAt: new Date().toISOString(),
-          }));
-        } catch (err) {
-          console.warn('Unable to write dashboard KPI cache', err);
-        }
-        
         // Set data immediately with empty interventions
         setFullData(newData);
         setIsInitialLoading(false);
@@ -290,7 +274,7 @@ export default function DashboardPage() {
       }
     };
     loadFullData();
-  }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi]);
+  }, [dateRange.date_start, dateRange.date_end, dashboard, interventionsApi, refreshVersion]);
 
   // --- Filter cached data when filters change (instant update) ---
   useEffect(() => {
