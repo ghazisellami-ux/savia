@@ -35,6 +35,7 @@ from api.security import (
     require_roles,
 )
 from services.ai_governance import governed_ai_endpoint
+from services.contract_billing import parse_used_parts
 
 
 _AI_COUNTRY_NAMES = {
@@ -1414,8 +1415,29 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
     """
     filters = filters if isinstance(filters, dict) else {}
     client_scope = get_client_scope(user)
+    try:
+        requested_client_id = int(filters["client_id"]) if filters.get("client_id") else None
+    except (TypeError, ValueError):
+        requested_client_id = None
     requested_client = str(filters.get("client") or "").strip()
-    client = client_scope or ("" if requested_client.casefold() == "tous" else requested_client)
+    client = client_scope or ""
+    if not client and requested_client_id:
+        with get_db() as conn:
+            client_row = conn.execute(
+                "SELECT nom FROM clients WHERE id = %s",
+                (requested_client_id,),
+            ).fetchone()
+        if not client_row:
+            raise HTTPException(status_code=422, detail="Client introuvable")
+        client = str(client_row.get("nom") or "").strip()
+    if not client and requested_client.casefold() != "tous":
+        # Compatibility path for older screens while the client foreign-key
+        # migration is completed. New report requests send client_id above.
+        client = requested_client
+    try:
+        equipment_id = int(filters["equipment_id"]) if filters.get("equipment_id") else None
+    except (TypeError, ValueError):
+        equipment_id = None
     equipment_name = str(filters.get("equipment") or "").strip()
     type_filter = str(filters.get("type") or "").strip()
     status_filter = str(filters.get("status") or "").strip()
@@ -1442,9 +1464,12 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
     if month:
         where.append("EXTRACT(MONTH FROM i.date) = %s")
         params.append(month)
-    if equipment_name and equipment_name.casefold() != "tous":
-        # This is a UI filter only.  The subsequent analysis still groups and
-        # links every record through equipement_id, never through this label.
+    if equipment_id:
+        where.append("i.equipement_id = %s")
+        params.append(equipment_id)
+    elif equipment_name and equipment_name.casefold() != "tous":
+        # Compatibility path for older screens that have not yet supplied the
+        # equipment ID. Aggregations below still use equipement_id exclusively.
         where.append("LOWER(BTRIM(i.machine)) = LOWER(BTRIM(%s))")
         params.append(equipment_name)
     if type_filter and type_filter.casefold() != "tous":
@@ -1473,7 +1498,10 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
         if client:
             equipment_where.append("LOWER(BTRIM(COALESCE(e.client, ''))) = LOWER(BTRIM(%s))")
             equipment_params.append(client)
-        if equipment_name and equipment_name.casefold() != "tous":
+        if equipment_id:
+            equipment_where.append("e.id = %s")
+            equipment_params.append(equipment_id)
+        elif equipment_name and equipment_name.casefold() != "tous":
             equipment_where.append("LOWER(BTRIM(e.nom)) = LOWER(BTRIM(%s))")
             equipment_params.append(equipment_name)
         equipment_sql = """SELECT e.id, e.nom, e.client, e.num_serie, e.type, e.fabricant,
@@ -1509,11 +1537,26 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
         rate_row = conn.execute(
             "SELECT valeur FROM config_client WHERE cle = 'taux_horaire_technicien'"
         ).fetchone()
-        contract_where = "WHERE c.statut = 'Actif'"
+        contract_conditions = ["COALESCE(c.statut, '') NOT IN ('Annule', 'Annulée')"]
         contract_params: list[object] = []
         if client:
-            contract_where += " AND LOWER(BTRIM(COALESCE(c.client, ''))) = LOWER(BTRIM(%s))"
+            contract_conditions.append("LOWER(BTRIM(COALESCE(c.client, ''))) = LOWER(BTRIM(%s))")
             contract_params.append(client)
+        if year:
+            period_start = date(year, month or 1, 1)
+            period_end = date(year, month or 12, 1)
+            if month:
+                period_end = date(year + int(month == 12), (month % 12) + 1, 1)
+            else:
+                period_end = date(year + 1, 1, 1)
+            contract_conditions.extend([
+                "(c.date_debut IS NULL OR c.date_debut < %s)",
+                "(c.date_fin IS NULL OR c.date_fin >= %s)",
+            ])
+            contract_params.extend([period_end, period_start])
+        elif not client:
+            contract_conditions.append("c.statut = 'Actif'")
+        contract_where = "WHERE " + " AND ".join(contract_conditions)
         contract_rows = conn.execute(
             f"""SELECT c.id, c.client, c.equipement, c.type_contrat, c.avec_pieces,
                        c.pieces_incluses, c.interventions_incluses, c.montant,
@@ -1527,6 +1570,17 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
                 LIMIT 100""",
             tuple(contract_params),
         ).fetchall()
+
+    selected_equipment_types = {
+        _cost_normalize(row.get("type"))
+        for row in equipment_rows
+        if _cost_normalize(row.get("type"))
+    }
+    stock_details = [
+        dict(row) for row in parts_rows
+        if not selected_equipment_types
+        or _cost_normalize(row.get("equipement_type")) in selected_equipment_types
+    ]
 
     interventions = [dict(row) for row in intervention_rows]
     if status_filter and status_filter.casefold() != "tous":
@@ -1554,6 +1608,7 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
     solution_counts: Counter[str] = Counter()
     equipment_stats: dict[int, dict] = {}
     technician_stats: dict[int, dict] = {}
+    used_parts: Counter[str] = Counter()
     intervention_details: list[dict] = []
     total_labor = total_parts = 0.0
     total_duration = 0
@@ -1582,6 +1637,10 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
             cause_counts[str(row["cause"]).strip()[:180]] += 1
         if row.get("solution"):
             solution_counts[str(row["solution"]).strip()[:180]] += 1
+        for part in parse_used_parts(row.get("pieces_utilisees")):
+            reference = str(part.get("ref") or "").strip()
+            if reference:
+                used_parts[reference] += max(1, int(part.get("qty") or 1))
 
         equipment_id = row.get("equipement_id")
         if equipment_id is not None:
@@ -1659,6 +1718,26 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
             "cout_main_oeuvre": round(technician["cout_main_oeuvre"], 3),
         })
 
+    used_part_details = []
+    if used_parts:
+        with get_db() as conn:
+            catalog_rows = conn.execute(
+                """SELECT reference, designation, fournisseur, prix_unitaire
+                   FROM pieces_rechange
+                   WHERE reference = ANY(%s)""",
+                (list(used_parts),),
+            ).fetchall()
+        catalog_by_reference = {str(row.get("reference") or ""): dict(row) for row in catalog_rows}
+        for reference, quantity in used_parts.most_common(50):
+            catalog = catalog_by_reference.get(reference, {})
+            used_part_details.append({
+                "reference": reference,
+                "designation": catalog.get("designation") or "",
+                "fournisseur": catalog.get("fournisseur") or "",
+                "quantite": quantity,
+                "prix_unitaire": _cost_number(catalog.get("prix_unitaire")) or 0.0,
+            })
+
     return {
         "nb_total": len(interventions), "nb_interventions": len(interventions),
         "nb_cloturees": closed_count, "nb_en_cours": in_progress_count,
@@ -1677,7 +1756,8 @@ def _build_sav_analysis_context(user: dict, filters: object) -> dict:
         "tech_details": sorted(technician_details, key=lambda item: (-item["interventions"], item["id"]))[:80],
         "equipements_detail": sorted(equipment_details, key=lambda item: (-item.get("interventions", 0), item["id"]))[:120],
         "contrats_detail": [dict(row) for row in contract_rows][:80],
-        "stock_detail": [dict(row) for row in parts_rows][:100],
+        "stock_detail": stock_details[:100],
+        "pieces_consommees": used_part_details,
     }
 
 
@@ -1719,6 +1799,7 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
     equipment_detail = sav_data.get("equipements_detail", [])
     contracts_detail = sav_data.get("contrats_detail", [])
     stock_detail = sav_data.get("stock_detail", [])
+    consumed_parts_detail = sav_data.get("pieces_consommees", [])
     try:
         interventions_json = json.dumps(interventions_detail[:50], ensure_ascii=False, default=str)
         machines_json = json.dumps(machines_detail[:30], ensure_ascii=False, default=str)
@@ -1729,9 +1810,10 @@ def analyze_sav(body: dict, user: dict = Depends(_verify_token), x_savia_lang: O
         equipment_json = json.dumps(equipment_detail[:50], ensure_ascii=False, default=str)
         contracts_json = json.dumps(contracts_detail[:30], ensure_ascii=False, default=str)
         stock_json = json.dumps(stock_detail[:50], ensure_ascii=False, default=str)
+        consumed_parts_json = json.dumps(consumed_parts_detail[:50], ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         interventions_json = machines_json = errors_json = causes_json = solutions_json = "[]"
-        tech_json = equipment_json = contracts_json = stock_json = "[]"
+        tech_json = equipment_json = contracts_json = stock_json = consumed_parts_json = "[]"
 
     configured_countries = _configured_country_names()
     prompt = f"""{_ai_language_instruction(lang)}
@@ -1778,6 +1860,9 @@ Solutions appliquées : {solutions_json}
 Équipements : {equipment_json}
 Contrats : {contracts_json}
 Stock : {stock_json}
+
+=== PIÈCES RÉELLEMENT CONSOMMÉES SUR LA PÉRIODE ===
+{consumed_parts_json}
 
 IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure exacte :
 {{{{
@@ -1857,6 +1942,7 @@ IMPORTANT: Analyse en profondeur et produis un JSON STRICT avec cette structure 
             "solutions_recurrentes": len(solutions_detail),
             "contrats": len(contracts_detail),
             "references_stock": len(stock_detail),
+            "references_consommees": len(consumed_parts_detail),
         }
     return {"ok": True, "result": result}
 

@@ -26,6 +26,10 @@ const nextConfig: NextConfig = {
     // proxy allowance just above that transport size; the Python API remains
     // the authority that enforces the real 20 MiB file limit.
     proxyClientMaxBodySize: '28mb',
+    // The default Next.js rewrite proxy timeout is 30 seconds. Detailed AI
+    // reports can legitimately take longer (the backend completed this one
+    // in 50 seconds), so keep the proxy aligned with the client AI timeout.
+    proxyTimeout: 300000,
   },
   // Proxy API requests to the Python backend
   async rewrites() {
